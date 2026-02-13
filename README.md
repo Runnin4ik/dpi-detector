@@ -54,8 +54,10 @@ pip install -r requirements.txt
 python dpi_detector.py
 ```
 
+## 🪟 Windows
+Для тех кто не хочет ставить себе python к каждому релизу прикреплен [.exe файл](https://github.com/Runnin4ik/dpi-detector/releases/download/v1.0.0/dpi_detector.exe)
 
-**Кастомизация:**
+## Кастомизация:
 ```bash
 # Отредактируйте domains.txt для добавления своих доменов
 domains.txt
