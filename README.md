@@ -8,6 +8,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://github.com/Runnin4ik/dpi-detector/pkgs/container/dpi-detector)
 
+![Пример результатов](https://raw.githubusercontent.com/Runnin4ik/dpi-detector/main/images/screenshot.png)
+
 ## 🎯 Возможности
 
 - ✅ **Анализ TLS** - Проверка работы TLS 1.2 и TLS 1.3, обнаружение подмены сертификатов (MITM) и блокировки по SNI
@@ -15,6 +17,9 @@
 - ✅ **TCP 16-20KB блокировка** - обнаруживает обрыв соединения после передачи 14-34KB
 - ✅ **Классификация ошибок** - TCP Reset (RST), Connection Abort, Handshake/Read Timeout, TLS alerts, SNI blocking, MITM (подмена сертификата), HTTP 451 и редиректы провайдера.
 - ✅ **Поддержка IPv4-only режима** - для изоляции от IPv6
+
+## 🪟 Windows
+Для тех кто не хочет ставить себе python к каждому релизу прикреплен [.exe файл](https://github.com/Runnin4ik/dpi-detector/releases/download/v1.0.0/dpi_detector.exe)
 
 ## Docker
 
@@ -53,9 +58,6 @@ pip install -r requirements.txt
 ```bash
 python dpi_detector.py
 ```
-
-## 🪟 Windows
-Для тех кто не хочет ставить себе python к каждому релизу прикреплен [.exe файл](https://github.com/Runnin4ik/dpi-detector/releases/download/v1.0.0/dpi_detector.exe)
 
 ## Кастомизация:
 ```bash
