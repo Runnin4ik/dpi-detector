@@ -4,10 +4,10 @@
 
 # === Основные настройки ===
 USE_IPV4_ONLY = True
-MAX_CONCURRENT = 150
+MAX_CONCURRENT = 50
 
 # === Таймауты ===
-TIMEOUT = 6.0
+TIMEOUT = 7.0
 TIMEOUT_TCP_16_20 = 12.0
 
 # === Повторные попытки ===
@@ -51,3 +51,18 @@ WSAEHOSTUNREACH = 10065
 WSAECONNABORTED = 10053
 WSAENETDOWN = 10050
 WSAEACCES = 10013
+
+# === DNS проверка ===
+DNS_CHECK_ENABLED = True
+DNS_CHECK_TIMEOUT = 3.0
+DNS_CHECK_DOMAINS = [
+    "rutor.info",
+    "ej.ru",
+    "flibusta.is",
+    "clubtone.do.am",
+    "proton.me",
+    "rezka.ag",
+    "shikimori.one",
+]
+DNS_GOOGLE_IP = "8.8.8.8"
+DNS_DOH_URL = "https://8.8.8.8/resolve"
