@@ -4,7 +4,7 @@
 
 # === Основные настройки ===
 USE_IPV4_ONLY = True
-MAX_CONCURRENT = 50
+MAX_CONCURRENT = 70
 
 # === Таймауты ===
 TIMEOUT = 7.0
