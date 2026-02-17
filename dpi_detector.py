@@ -1819,9 +1819,9 @@ async def main():
     tcp_table = Table(
         show_header=True, header_style="bold magenta", border_style="dim"
     )
-    tcp_table.add_column("ID", style="white", width=14)
-    tcp_table.add_column("Провайдер", style="cyan", width=18)
-    tcp_table.add_column("Статус", justify="center", width=16)
+    tcp_table.add_column("ID", style="white")
+    tcp_table.add_column("Провайдер", style="cyan")
+    tcp_table.add_column("Статус", justify="center")
     tcp_table.add_column("Ошибка / Детали", style="dim")
 
     with Progress(
@@ -1847,10 +1847,31 @@ async def main():
             )
 
     # Сортируем по провайдеру
+    provider_counts = {}
+
+    def get_group_name(provider_str):
+        # Пример: "🇫🇷 Akamai (AS16625)" -> "Akamai AS16625"
+        clean = re.sub(r'[^\w\s\.-]', '', provider_str).strip()
+
+        # Берем первое слово как идентификатор группы
+        parts = clean.split()
+        if parts:
+            return parts[0]
+        return clean
+
+    for row in tcp_results:
+        group = get_group_name(row[1])
+        provider_counts[group] = provider_counts.get(group, 0) + 1
+
     def sort_key(row):
-        provider = row[1]
-        clean_provider = re.sub(r'[^\w\s]', '', provider).strip()
-        return (clean_provider, row[0])
+        group = get_group_name(row[1])
+        count = provider_counts.get(group, 0)
+
+        # Ключи сортировки:
+        # 1. -count: Минус означает сортировку по убыванию (чем больше целей, тем выше)
+        # 2. group: Алфавитный порядок имени группы (для одинакового кол-ва)
+        # 3. row[1]: Алфавитный порядок полного имени провайдера
+        return (-count, group, row[1])
 
     tcp_results.sort(key=sort_key)
 
