@@ -18,13 +18,13 @@ TCP_16_20_CHECK_RETRIES = 1
 DPI_VARIANCE_THRESHOLD = 10  # %
 
 # === TCP блокировка ===
-TCP_BLOCK_MIN_KB = 4
-TCP_BLOCK_MAX_KB = 60
+TCP_BLOCK_MIN_KB = 1
+TCP_BLOCK_MAX_KB = 69
 
 # === Отображение ===
 SHOW_DATA_SIZE = False
 BODY_INSPECT_LIMIT = 8192
-DATA_READ_THRESHOLD = 64 * 1024
+DATA_READ_THRESHOLD = 70 * 1024
 
 # === User Agent ===
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
@@ -60,9 +60,29 @@ DNS_CHECK_DOMAINS = [
     "ej.ru",
     "flibusta.is",
     "clubtone.do.am",
-    "proton.me",
     "rezka.ag",
     "shikimori.one",
 ]
-DNS_GOOGLE_IP = "8.8.8.8"
-DNS_DOH_URL = "https://8.8.8.8/resolve"
+
+DNS_UDP_SERVERS = [
+    ("8.8.8.8",        "Google"),
+    ("11.1.1.1",       "Cloudflare"),
+    ("19.9.9.9",       "Quad9"),
+    ("194.140.14.14",  "AdGuard"),
+    ("77.88.8.8",      "Yandex"),
+    ("223.5.5.5",      "Alibaba"),
+    ("208.67.222.222", "OpenDNS"),    # Cisco
+    ("76.76.2.0",      "ControlD"),
+    ("194.242.2.2",    "Mullvad"),
+]
+
+# Формат: (URL, "Название")
+DNS_DOH_SERVERS = [
+   ("https://8.8.8.8/resolve",              "Google (IP)"),
+   ("https://dns.google/resolve",           "Google"),
+   ("https://1.1.1.1/dns-query",            "Cloudflare (IP)"),
+   ("https://cloudflare-dns.com/dns-query", "Cloudflare"),
+   ("https://one.one.one.one/dns-query",    "Cloudflare"),
+   ("https://dns.adguard-dns.com/resolve",  "AdGuard"),
+   ("https://dns.alidns.com/resolve",       "Alibaba"),
+]
