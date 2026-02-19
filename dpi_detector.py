@@ -1606,75 +1606,90 @@ def clean_hostname(url_or_domain: str) -> str:
 
     return host
 
-async def worker(domain_raw, semaphore: asyncio.Semaphore, stub_ips: set = None):
-    if stub_ips is None:
-        stub_ips = set()
-
+async def resolve_worker(domain_raw: str, semaphore: asyncio.Semaphore, stub_ips: set) -> dict:
+    """Фаза 0: DNS-резолв домена. Возвращает словарь с начальным состоянием записи."""
     domain = clean_hostname(domain_raw)
-
     async with semaphore:
         resolved_ip = await get_resolved_ip(domain)
 
-        if resolved_ip is None:
-            return [domain, "[yellow]DNS FAIL[/yellow]", "[yellow]DNS FAIL[/yellow]", "[yellow]DNS FAIL[/yellow]", "Домен не найден (timeout/error)", None]
+    entry = {
+        "domain": domain,
+        "resolved_ip": resolved_ip,
+        "dns_fake": False,
+        "t13_res": ("[dim]—[/dim]", "", 0.0),
+        "t12_res": ("[dim]—[/dim]", "", 0.0),
+        "http_res": ("[dim]—[/dim]", ""),
+    }
 
-        if stub_ips and resolved_ip in stub_ips:
-            status = "[bold red]DNS FAKE[/bold red]"
-            detail = f"DNS подмена -> {resolved_ip}"
-            # Мы НЕ идем дальше, так как знаем, что там заглушка. Экономим время.
-            return [domain, status, status, status, detail, resolved_ip]
+    if resolved_ip is None:
+        fail = "[yellow]DNS FAIL[/yellow]"
+        entry["t13_res"] = (fail, "Домен не найден", 0.0)
+        entry["t12_res"] = (fail, "Домен не найден", 0.0)
+        entry["http_res"] = (fail, "Домен не найден")
+        entry["dns_fake"] = None  # sentinel: DNS failed
+    elif stub_ips and resolved_ip in stub_ips:
+        fake = "[bold red]DNS FAKE[/bold red]"
+        detail = f"DNS подмена -> {resolved_ip}"
+        entry["t13_res"] = (fake, detail, 0.0)
+        entry["t12_res"] = (fake, detail, 0.0)
+        entry["http_res"] = (fake, detail)
+        entry["dns_fake"] = True
 
-        try:
-            t13_res = await check_tcp_tls(domain, "TLSv1.3", semaphore=asyncio.Semaphore(1))
-        except Exception:
-            t13_res = ("[dim]ERR[/dim]", "Unknown error", 0.0)
-
-        await asyncio.sleep(0.3)
-
-        try:
-            t12_res = await check_tcp_tls(domain, "TLSv1.2", semaphore=asyncio.Semaphore(1))
-        except Exception:
-            t12_res = ("[dim]ERR[/dim]", "Unknown error", 0.0)
-
-        await asyncio.sleep(0.3) # Маленькая пауза между запросами
+    return entry
 
 
+async def tls_phase_worker(entry: dict, tls_version: str, semaphore: asyncio.Semaphore) -> None:
+    """Фаза TLS: проверяет один домен одной версией TLS, пишет результат в entry in-place."""
+    # Пропускаем домены с проблемами DNS
+    if entry["dns_fake"] is not False:
+        return
 
-        try:
-            http_res = await check_http_injection(domain, semaphore=asyncio.Semaphore(1))
-        except Exception:
-            http_res = ("[dim]ERR[/dim]", "Unknown error")
+    domain = entry["domain"]
+    key = "t13_res" if tls_version == "TLSv1.3" else "t12_res"
+    try:
+        result = await check_tcp_tls(domain, tls_version, semaphore)
+    except Exception:
+        result = ("[dim]ERR[/dim]", "Unknown error", 0.0)
+    entry[key] = result
 
-        t12_status, t12_detail, t12_elapsed = t12_res
-        t13_status, t13_detail, t13_elapsed = t13_res
-        http_status, http_detail = http_res
 
-        # Логика для серверов, не поддерживающих TLS 1.3
-        #if "OK" in t12_status:
-        #    if "TLS DPI" in t13_status or "TLS BLOCK" in t13_status:
-        #        t13_status = "[yellow]UNSUPP[/yellow]"
-        #        t13_detail = "TLS1.3 not supported"
+async def http_phase_worker(entry: dict, semaphore: asyncio.Semaphore) -> None:
+    """Фаза HTTP: проверяет HTTP-инжекцию для одного домена, пишет результат в entry in-place."""
+    if entry["dns_fake"] is not False:
+        return
 
-        # Сборка колонки "Детали"
-        details = []
-        d12 = _clean_detail(t12_detail)
-        d13 = _clean_detail(t13_detail)
+    domain = entry["domain"]
+    try:
+        result = await check_http_injection(domain, semaphore)
+    except Exception:
+        result = ("[dim]ERR[/dim]", "Unknown error")
+    entry["http_res"] = result
 
-        if d12 or d13:
-            if d12 == d13:
-                details.append(d12)
-            else:
-                if d12: details.append(f"T12:{d12}")
-                if d13: details.append(f"T13:{d13}")
 
-        # Добавляем время самого долгого (обычно T13) запроса
-        request_time = max(t12_elapsed, t13_elapsed)
-        if request_time > 0:
-            details.append(f"{request_time:.1f}s")
+def _build_row(entry: dict) -> list:
+    """Собирает финальную строку таблицы из entry."""
+    domain = entry["domain"]
+    t12_status, t12_detail, t12_elapsed = entry["t12_res"]
+    t13_status, t13_detail, t13_elapsed = entry["t13_res"]
+    http_status, http_detail = entry["http_res"]
 
-        detail_str = " | ".join([d for d in details if d])
+    details = []
+    d12 = _clean_detail(t12_detail)
+    d13 = _clean_detail(t13_detail)
 
-        return [domain, t12_status, t13_status, http_status, detail_str, resolved_ip]
+    if d12 or d13:
+        if d12 == d13:
+            details.append(d12)
+        else:
+            if d12: details.append(f"T12:{d12}")
+            if d13: details.append(f"T13:{d13}")
+
+    request_time = max(t12_elapsed, t13_elapsed)
+    if request_time > 0:
+        details.append(f"{request_time:.1f}s")
+
+    detail_str = " | ".join([d for d in details if d])
+    return [domain, t12_status, t13_status, http_status, detail_str, entry["resolved_ip"]]
 
 
 async def tcp_16_20_worker(item: dict, semaphore: asyncio.Semaphore, stub_ips: set = None):
@@ -1753,6 +1768,10 @@ async def main():
     console.print(
         "[bold]Проверка доменов (TLS + HTTP injection)[/bold]\n"
     )
+    console.print(
+        "[dim]Горизонтальное сканирование: сначала все домены на TLS1.3, "
+        "затем TLS1.2, затем HTTP[/dim]\n"
+    )
 
     table = Table(
         show_header=True, header_style="bold magenta", border_style="dim"
@@ -1763,26 +1782,84 @@ async def main():
     table.add_column("HTTP", justify="center", width=10)
     table.add_column("Детали", style="dim", no_wrap=True)
 
+    # ── Фаза 0: DNS-резолв всех доменов ──────────────────────────────────────
+    entries: list[dict] = []
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         transient=True,
     ) as progress:
-        task_id = progress.add_task("Проверка доменов...", total=len(DOMAINS))
-        tasks = [worker(d, semaphore, stub_ips) for d in DOMAINS]
-
-        results = []
+        task_id = progress.add_task("Фаза 0/3: DNS-резолв...", total=len(DOMAINS))
+        dns_tasks = [resolve_worker(d, semaphore, stub_ips) for d in DOMAINS]
         completed = 0
-        for future in asyncio.as_completed(tasks):
-            res = await future
-            results.append(res)
+        for future in asyncio.as_completed(dns_tasks):
+            entry = await future
+            entries.append(entry)
             completed += 1
             progress.update(
                 task_id,
                 completed=completed,
-                description=f"Проверка доменов ({completed}/{len(DOMAINS)})...",
+                description=f"Фаза 0/3: DNS-резолв ({completed}/{len(DOMAINS)})...",
             )
 
+    # Сортируем по домену, чтобы порядок был стабильным между фазами
+    entries.sort(key=lambda e: e["domain"])
+
+    # ── Фаза 1: TLS 1.3 для всех доменов ─────────────────────────────────────
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+    ) as progress:
+        task_id = progress.add_task("Фаза 1/3: TLS 1.3...", total=len(entries))
+        t13_tasks = [tls_phase_worker(e, "TLSv1.3", semaphore) for e in entries]
+        completed = 0
+        for future in asyncio.as_completed(t13_tasks):
+            await future
+            completed += 1
+            progress.update(
+                task_id,
+                completed=completed,
+                description=f"Фаза 1/3: TLS 1.3 ({completed}/{len(entries)})...",
+            )
+
+    # ── Фаза 2: TLS 1.2 для всех доменов ─────────────────────────────────────
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+    ) as progress:
+        task_id = progress.add_task("Фаза 2/3: TLS 1.2...", total=len(entries))
+        t12_tasks = [tls_phase_worker(e, "TLSv1.2", semaphore) for e in entries]
+        completed = 0
+        for future in asyncio.as_completed(t12_tasks):
+            await future
+            completed += 1
+            progress.update(
+                task_id,
+                completed=completed,
+                description=f"Фаза 2/3: TLS 1.2 ({completed}/{len(entries)})...",
+            )
+
+    # ── Фаза 3: HTTP injection для всех доменов ───────────────────────────────
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+    ) as progress:
+        task_id = progress.add_task("Фаза 3/3: HTTP...", total=len(entries))
+        http_tasks = [http_phase_worker(e, semaphore) for e in entries]
+        completed = 0
+        for future in asyncio.as_completed(http_tasks):
+            await future
+            completed += 1
+            progress.update(
+                task_id,
+                completed=completed,
+                description=f"Фаза 3/3: HTTP ({completed}/{len(entries)})...",
+            )
+
+    results = [_build_row(e) for e in entries]
     results.sort(key=lambda x: x[0])
 
     # Подсчитываем DNS FAIL и собираем resolved IPs
