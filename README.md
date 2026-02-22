@@ -115,3 +115,13 @@ config.py
 ## 🙏 Благодарности
 
 Вдохновлено проектом [hyperion-cs/dpi-checkers](https://github.com/hyperion-cs/dpi-checkers) и частично используются его домены для проверки TCP16-20 блокировок
+
+## Star History
+
+<a href="https://www.star-history.com/#Runnin4ik/dpi-detector&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Runnin4ik/dpi-detector&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Runnin4ik/dpi-detector&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Runnin4ik/dpi-detector&type=date&legend=top-left" />
+ </picture>
+</a>
