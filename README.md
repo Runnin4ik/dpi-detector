@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Runnin4ik/dpi-detector/main/images/logo.png" width="100%">
+  <img src="https://raw.githubusercontent.com/Runnin4ik/dpi-detector/main/images/logo.jpg" width="100%">
   <br>
   <i>«Маяк на скале у гаснущего горизонта свободного интернета»</i><br>
   Сквозь цифровые сумерки. Смотритель маяка, <a href="https://github.com/Runnin4ik"><b>Runni</b></a>
