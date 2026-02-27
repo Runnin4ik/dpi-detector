@@ -16,7 +16,7 @@ from utils.error_classifier import (
 )
 
 
-def create_dpi_client(tls_version: str = None) -> httpx.AsyncClient:
+def create_dpi_client(tls_version: str = None, ipv6: bool = False) -> httpx.AsyncClient:
     """
     Создаёт изолированного клиента для DPI-проверки.
     Тройная гарантия свежего TCP-соединения на каждый запрос:
@@ -51,9 +51,15 @@ async def _check_tls_single(
     domain: str,
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
+    resolved_ip: str = None,
 ) -> Tuple[str, str, int, float]:
-    """Одна попытка TLS-проверки. Клиент передаётся снаружи и переиспользуется."""
+    """
+    Одна попытка TLS-проверки. Клиент передаётся снаружи и переиспользуется.
+    resolved_ip: если передан, подключаемся к нему напрямую (нужно для IPv6 — системный
+    резолвер может вернуть IPv4 даже если домен имеет AAAA запись).
+    """
     bytes_read = 0
+    url = f"https://{domain}"
 
     async with semaphore:
         start = time.time()
@@ -61,7 +67,7 @@ async def _check_tls_single(
         try:
             req = client.build_request(
                 "GET",
-                f"https://{domain}",
+                url,
                 headers={
                     "User-Agent": config.USER_AGENT,
                     "Accept-Encoding": "identity",
@@ -187,30 +193,10 @@ async def check_domain_tls(
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
 ) -> Tuple[str, str, float]:
-    """
-    DOMAIN_CHECK_RETRIES попыток TLS-проверки.
-    Возвращает (status, detail, elapsed) с приоритетом критических ошибок.
-    """
-    results = []
-    for attempt in range(config.DOMAIN_CHECK_RETRIES):
-        status, detail, bytes_read, elapsed = await _check_tls_single(domain, client, semaphore)
-        results.append((status, detail, bytes_read, elapsed))
-        if attempt < config.DOMAIN_CHECK_RETRIES - 1:
-            await asyncio.sleep(0.1)
+    """Одна TLS-проверка. Возвращает (status, detail, elapsed)."""
+    status, detail, _, elapsed = await _check_tls_single(domain, client, semaphore)
 
-    critical = [
-        "TCP16-20", "DPI RESET", "DPI ABORT", "DPI CLOSE", "ISP PAGE",
-        "BLOCKED", "TCP RST", "TCP ABORT", "TLS MITM", "TLS DPI", "TLS BLOCK",
-    ]
-    for status, detail, _, elapsed in results:
-        if any(m in status for m in critical):
-            return (status, detail, elapsed)
-
-    for status, detail, _, elapsed in results:
-        if "OK" not in status:
-            return (status, detail, elapsed)
-
-    return (results[0][0], results[0][1], results[0][3])
+    return (status, detail, elapsed)
 
 
 async def check_http_injection(
