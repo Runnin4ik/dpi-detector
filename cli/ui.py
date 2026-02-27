@@ -20,36 +20,37 @@ def clean_hostname(url_or_domain: str) -> str:
 def build_domain_row(entry: dict) -> list:
     """Собирает строку таблицы доменов из entry."""
     domain = entry["domain"]
-    t12_status, t12_detail, t12_elapsed = entry["t12_res"]
-    t13_status, t13_detail, t13_elapsed = entry["t13_res"]
-    http_status, http_detail = entry["http_res"]
+    http_status,  http_detail               = entry["http_res"]
+    t12_status,   t12_detail,  t12_elapsed  = entry["t12_res"]
+    t13v4_status, t13v4_detail, t13v4_elapsed = entry["t13v4_res"]
+    t13v6_status, t13v6_detail, t13v6_elapsed = entry["t13v6_res"]
 
     details = []
-    d12 = clean_detail(t12_detail)
-    d13 = clean_detail(t13_detail)
+    d12   = clean_detail(t12_detail)
+    d13v4 = clean_detail(t13v4_detail)
+    d13v6 = clean_detail(t13v6_detail)
 
-    if d12 or d13:
-        if d12 == d13:
-            details.append(d12)
-        else:
-            if d12:
-                details.append(f"T12:{d12}")
-            if d13:
-                details.append(f"T13:{d13}")
+    all_details = {d for d in (d12, d13v4, d13v6) if d}
+    if len(all_details) == 1:
+        details.append(all_details.pop())
+    else:
+        if d12:   details.append(f"T12:{d12}")
+        if d13v4: details.append(f"T13v4:{d13v4}")
+        if d13v6: details.append(f"T13v6:{d13v6}")
 
-    times = [t for t in (t12_elapsed, t13_elapsed) if t > 0]
+    times = [t for t in (t12_elapsed, t13v4_elapsed, t13v6_elapsed) if t > 0]
     if times:
         details.append(f"{min(times):.1f}s")
 
     detail_str = " | ".join(d for d in details if d)
-    return [domain, t12_status, t13_status, http_status, detail_str, entry["resolved_ip"]]
+    return [domain, http_status, t12_status, t13v4_status, t13v6_status, detail_str, entry["resolved_ipv4"]]
 
 
 async def ask_test_selection() -> str:
     valid = {"1", "2", "3", "12", "13", "23", "123"}
     console.print(
         "\n[bold]Какие тесты запустить?[/bold]\n"
-        "  [cyan]1[/cyan]   — Проверка подмены DNS\n"
+        "  [cyan]1[/cyan]   — DNS целостность\n"
         "  [cyan]2[/cyan]   — Проверка доменов (TLS + HTTP injection)\n"
         "  [cyan]3[/cyan]   — TCP 16-20KB блокировка\n"
         "  [cyan]123[/cyan] — Все тесты [dim](по умолчанию)[/dim]"
