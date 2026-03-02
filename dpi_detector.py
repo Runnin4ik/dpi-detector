@@ -22,6 +22,13 @@ from cli.ui import ask_test_selection, print_legend
 from cli.runners import run_domains_test, run_tcp_test, run_whitelist_sni_test
 from core.dns_scanner import check_dns_integrity, collect_stub_ips_silently
 from utils.files import load_domains, load_tcp_targets, load_whitelist_sni, get_base_dir
+from metrics.prometheus import (
+    start_metrics_server,
+    record_dns,
+    record_domains,
+    record_tcp,
+    record_run_timestamp,
+)
 
 CURRENT_VERSION = "2.0.1"
 GITHUB_REPO     = "Runnin4ik/dpi-detector"
@@ -29,6 +36,11 @@ GITHUB_REPO     = "Runnin4ik/dpi-detector"
 DOMAINS         = load_domains()
 TCP_16_20_ITEMS = load_tcp_targets()
 WHITELIST_SNI   = load_whitelist_sni()
+
+# Start metrics server if running inside Docker / daemon mode
+_DOCKER_MODE = os.environ.get("DOCKER_MODE", "0").lower() in ("1", "true", "yes")
+if _DOCKER_MODE:
+    start_metrics_server()
 
 
 async def _fetch_latest_version() -> Optional[str]:
@@ -47,7 +59,6 @@ async def _fetch_latest_version() -> Optional[str]:
 
 def fast_exit_handler(sig, frame):
     """Принудительный выход по первому Ctrl+C."""
-    # Используем системный принт, т.к. rich может быть заблокирован
     sys.stdout.write("\n\033[91m\033[1mПрервано пользователем.\033[0m\n")
     sys.stdout.flush()
     os._exit(0)
@@ -67,7 +78,6 @@ def _flush_stdin() -> None:
         import termios
         termios.tcflush(sys.stdin, termios.TCIFLUSH)
     except Exception:
-        # Windows и другие окружения — лучшее что можно сделать без блокировки
         try:
             import msvcrt
             while msvcrt.kbhit():
@@ -159,18 +169,17 @@ async def main():
     save_to_file = False
     result_path  = None
 
-    try:
-        sys.stdout.write("\nСохранять результаты в файл? [y/N]: ")
-        sys.stdout.flush()
-
-        raw = await _readline_cancelable()
-        raw = raw.strip().lower()
-    except KeyboardInterrupt:
-        raise
-
-    if raw in ("y", "yes", "д", "да"):
-        save_to_file = True
-        result_path = os.path.join(get_base_dir(), "dpi_detector_results.txt")
+    if not _DOCKER_MODE:
+        try:
+            sys.stdout.write("\nСохранять результаты в файл? [y/N]: ")
+            sys.stdout.flush()
+            raw = await _readline_cancelable()
+            raw = raw.strip().lower()
+        except KeyboardInterrupt:
+            raise
+        if raw in ("y", "yes", "д", "да"):
+            save_to_file = True
+            result_path = os.path.join(get_base_dir(), "dpi_detector_results.txt")
 
     semaphore = asyncio.Semaphore(config.MAX_CONCURRENT)
     first_run = True
@@ -185,15 +194,36 @@ async def main():
         elif config.DNS_CHECK_ENABLED and (run_domains or run_tcp):
             stub_ips = await collect_stub_ips_silently()
 
+        if run_dns and config.DNS_CHECK_ENABLED:
+            total_dns = len(config.DNS_CHECK_DOMAINS)
+            record_dns(
+                total=total_dns,
+                intercepted=dns_intercept_count,
+                ok=total_dns - dns_intercept_count,
+            )
+
         # ── Домены ────────────────────────────────────────────────────────────
         domain_stats = None
         if run_domains:
             domain_stats = await run_domains_test(semaphore, stub_ips, DOMAINS)
+            record_domains(
+                total=domain_stats["total"],
+                ok=domain_stats["ok"],
+                blocked=domain_stats["blocked"],
+                timeout=domain_stats["timeout"],
+                dns_fail=domain_stats["dns_fail"],
+            )
 
         # ── TCP 16-20KB ───────────────────────────────────────────────────────
         tcp_stats = None
         if run_tcp:
             tcp_stats = await run_tcp_test(semaphore, TCP_16_20_ITEMS)
+            record_tcp(
+                total=tcp_stats["total"],
+                ok=tcp_stats["ok"],
+                blocked=tcp_stats["blocked"],
+                mixed=tcp_stats["mixed"],
+            )
 
         # ── Белые SNI ─────────────────────────────────────────────────────────
         if run_wl_sni:
@@ -201,6 +231,9 @@ async def main():
                 await run_whitelist_sni_test(semaphore, TCP_16_20_ITEMS, WHITELIST_SNI)
             else:
                 console.print("[yellow]Файл whitelist_sni.txt пуст или не найден — тест 4 пропущен.[/yellow]")
+
+        # ── Обновляем timestamp последнего запуска ────────────────────────────
+        record_run_timestamp()
 
         # ── Итоговая сводка ───────────────────────────────────────────────────
         active_tests = sum([run_dns, run_domains, run_tcp, run_wl_sni])
@@ -243,12 +276,20 @@ async def main():
             except Exception as e:
                 console.print(f"[yellow]Не удалось сохранить файл: {e}[/yellow]")
 
+        # ── В Docker режиме: ждём METRICS_INTERVAL секунд перед повтором ──────
+        if _DOCKER_MODE:
+            interval = int(os.environ.get("CHECK_INTERVAL", "300"))
+            console.print(f"[dim]Docker mode: следующий прогон через {interval}s...[/dim]")
+            await asyncio.sleep(interval)
+            console.print()
+            continue
+
         # ── Предложение повторить ─────────────────────────────────────────────
         console.print(
             "\nНажмите [bold green]Enter[/bold green] чтобы повторить проверку "
             "или [bold red]Ctrl+C[/bold red] для выхода"
         )
-        _flush_stdin()  # сбрасываем накопившиеся Enter чтобы не было авто-перезапуска
+        _flush_stdin()
         try:
             await _readline_cancelable()
         except KeyboardInterrupt:

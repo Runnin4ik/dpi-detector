@@ -1,0 +1,15 @@
+services:
+  dpi-detector:
+    build: .
+    container_name: dpi-detector
+    restart: unless-stopped
+    environment:
+      DOCKER_MODE: "1"
+      CHECK_INTERVAL: "300"       # интервал между проверками, секунды
+      METRICS_PORT: "9090"
+      METRICS_USER: "prometheus"  # Basic Auth логин
+      METRICS_PASSWORD: "secret"  # Basic Auth пароль — СМЕНИТЕ!
+    ports:
+      - "9090:9090"
+    # Выбор тестов задаётся через TEST_SELECTION (по умолчанию — все: 1234)
+    # Если нужны только тесты 2 и 3: TEST_SELECTION=23
