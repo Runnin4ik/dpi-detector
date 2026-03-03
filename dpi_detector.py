@@ -78,14 +78,20 @@ def _flush_stdin() -> None:
 
 def _format_summary(
     run_dns: bool, run_domains: bool, run_tcp: bool,
-    dns_intercept: int, domain_stats: Optional[Dict], tcp_stats: Optional[Dict]
+    dns_intercept: int, domain_stats, tcp_stats,
+    doh_unavailable=False,
 ) -> List[str]:
     lines = []
 
     if run_dns:
         total_dns = len(config.DNS_CHECK_DOMAINS)
         ok_dns = total_dns - dns_intercept
-        if dns_intercept == 0:
+        if doh_unavailable:
+            lines.append(
+                f"[bold]DNS[/bold]          "
+                f"[red]× DoH заблокирован провайдером[/red]"
+            )
+        elif dns_intercept == 0:
             lines.append(
                 f"[bold]DNS[/bold]          "
                 f"[green]√ {ok_dns}/{total_dns} не подменяется[/green]"
@@ -179,11 +185,18 @@ async def main():
         # ── DNS ───────────────────────────────────────────────────────────────
         stub_ips: set = set()
         dns_intercept_count = 0
+        doh_unavailable = False
 
         if run_dns and config.DNS_CHECK_ENABLED:
-            stub_ips, dns_intercept_count = await check_dns_integrity()
+            stub_ips, dns_intercept_count, doh_unavailable = await check_dns_integrity()
         elif config.DNS_CHECK_ENABLED and (run_domains or run_tcp):
-            stub_ips = await collect_stub_ips_silently()
+            try:
+                stub_ips = await asyncio.wait_for(
+                    collect_stub_ips_silently(),
+                    timeout=config.STUB_IPS_TIMEOUT  # или вынести в config.py
+                )
+            except asyncio.TimeoutError:
+                stub_ips = set()
 
         # ── Домены ────────────────────────────────────────────────────────────
         domain_stats = None
@@ -204,19 +217,20 @@ async def main():
 
         # ── Итоговая сводка ───────────────────────────────────────────────────
         active_tests = sum([run_dns, run_domains, run_tcp, run_wl_sni])
-        if active_tests >= 2:
-            console.print()
-            summary_lines = _format_summary(
-                run_dns, run_domains, run_tcp,
-                dns_intercept_count, domain_stats, tcp_stats,
-            )
-            console.print(Panel(
-                "\n".join(summary_lines),
-                title="[bold]Итог[/bold]",
-                border_style="cyan",
-                padding=(0, 1),
-                expand=False,
-            ))
+        console.print()
+        summary_lines = _format_summary(
+            run_dns, run_domains, run_tcp,
+            dns_intercept_count, domain_stats, tcp_stats,
+            doh_unavailable=doh_unavailable,
+        )
+        console.print(Panel(
+            "\n".join(summary_lines),
+            title="[bold]Итог[/bold]",
+            border_style="cyan",
+            padding=(0, 1),
+            expand=False,
+        ))
+
 
         if first_run:
             print_legend()

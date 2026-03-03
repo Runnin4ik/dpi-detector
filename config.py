@@ -55,8 +55,21 @@ DNS_CHECK_DOMAINS = [
     "flibusta.is",
     "clubtone.do.am",
     "rezka.ag",
-    "shikimori.one"
+    "shikimori.one",
+    "www.lgbt.org.ua",
+    "www.fastmail.com",
+    "newtime.ua",
+    "fast-die.kiev.ua",
+    "church.ua",
 ]
+
+""" Доп домены на которые провайдер выдает NX
+    "www.youtube.com",
+    "youtube.com",
+    "m.youtube.com",
+    "limetorrents.pro",
+    "www.whatsapp.com",
+"""
 
 DNS_UDP_SERVERS = [
     ("8.8.8.8",        "Google"),

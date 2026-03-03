@@ -2,10 +2,11 @@ import os
 import struct
 import socket
 import asyncio
-from typing import Tuple, List, Union
+from typing import Tuple, List, Union, Optional
 import httpx
 import config
 from cli.console import console
+
 
 def _build_dns_query(domain: str) -> bytes:
     tx_id = os.urandom(2)
@@ -107,8 +108,34 @@ async def _resolve_udp_native(nameserver: str, domain: str, timeout: float) -> U
 
 # ── Probe-функции ─────────────────────────────────────────────────────────────
 
-async def _probe_udp_server(nameserver: str, domains: list) -> dict:
-    """Параллельно резолвит домены через UDP DNS."""
+async def _probe_udp_single(nameserver: str, domain: str) -> Optional[List[str]]:
+    """Резолвит один домен через UDP. Возвращает список IP или None при ошибке."""
+    try:
+        res = await _resolve_udp_native(nameserver, domain, config.DNS_CHECK_TIMEOUT)
+        return res if isinstance(res, list) else None
+    except Exception:
+        return None
+
+
+async def _probe_doh_single(doh_url: str, domain: str) -> Optional[List[str]]:
+    """Резолвит один домен через DoH. Возвращает список IP или None при ошибке."""
+    headers = {"Accept": "application/dns-json", "User-Agent": config.USER_AGENT}
+    try:
+        async with httpx.AsyncClient(timeout=config.DNS_CHECK_TIMEOUT, verify=False, headers=headers) as client:
+            resp = await client.get(doh_url, params={"name": domain, "type": "A"})
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            if data.get("Status") == 3:
+                return None
+            ips = [a["data"] for a in data.get("Answer", []) if a.get("type") == 1]
+            return ips if ips else None
+    except Exception:
+        return None
+
+
+async def _probe_udp_all(nameserver: str, domains: list) -> dict:
+    """Параллельно резолвит все домены через UDP DNS."""
     async def _query(domain):
         try:
             res = await _resolve_udp_native(nameserver, domain, config.DNS_CHECK_TIMEOUT)
@@ -136,8 +163,8 @@ async def _probe_udp_server(nameserver: str, domains: list) -> dict:
     return {"ok": ok, "timeout": timeout_cnt, "error": error, "results": results}
 
 
-async def _probe_doh_server(doh_url: str, domains: list) -> dict:
-    """Параллельно резолвит домены через DoH, переиспользуя одно соединение."""
+async def _probe_doh_all(doh_url: str, domains: list) -> dict:
+    """Параллельно резолвит все домены через DoH."""
     headers = {"Accept": "application/dns-json", "User-Agent": config.USER_AGENT}
 
     async def _query(client, domain):
@@ -180,7 +207,7 @@ async def collect_stub_ips_silently() -> set:
     """Тихо собирает IP заглушек провайдера (если DNS-тест не запущен)."""
     probe = None
     for udp_ip, _ in config.DNS_UDP_SERVERS:
-        probe = await _probe_udp_server(udp_ip, config.DNS_CHECK_DOMAINS)
+        probe = await _probe_udp_all(udp_ip, config.DNS_CHECK_DOMAINS)
         if probe["ok"] > 0:
             break
 
@@ -200,51 +227,136 @@ async def check_dns_integrity() -> Tuple[set, int]:
         return set(), 0
 
     total = len(config.DNS_CHECK_DOMAINS)
+    probe_domain = config.DNS_CHECK_DOMAINS[0]
+
     console.print(
         f"\n[bold]Проверка подмены DNS[/bold]  "
         f"[dim]Целей: {total} | timeout: {config.DNS_CHECK_TIMEOUT}s[/dim]"
     )
     console.print("[dim]Проверяем, перехватывает ли провайдер DNS запросы...[/dim]\n")
 
-    udp_probe, udp_label = None, "UDP DNS (недоступен)"
-    doh_probe, doh_label = None, "DoH (недоступен)"
+    # ── Фаза 1: быстрый параллельный пинг всех серверов одним доменом ────────
+    udp_servers  = config.DNS_UDP_SERVERS   # [(ip, name), ...]
+    doh_servers  = config.DNS_DOH_SERVERS   # [(url, name), ...]
 
-    with console.status("[bold cyan]Инициализация проверок...[/bold cyan]") as status:
+    async def _quick_udp(ip, name):
+        res = await _probe_udp_single(ip, probe_domain)
+        return ip, name, res  # res = List[str] или None
 
-        for udp_ip, udp_name in config.DNS_UDP_SERVERS:
-            status.update(f"[cyan]Поиск UDP DNS:[/cyan] проверяю [yellow]{udp_ip} ({udp_name})[/yellow] ...")
-            probe = await _probe_udp_server(udp_ip, config.DNS_CHECK_DOMAINS)
-            bad = probe["timeout"] + probe["error"]
-            if total - bad >= max(1, total // 2):
-                udp_probe = probe
-                udp_label = "UDP DNS"
-                console.print(f"[dim]• UDP сервер выбран: [green]{udp_ip} ({udp_name})[/green][/dim]")
-                break
+    async def _quick_doh(url, name):
+        res = await _probe_doh_single(url, probe_domain)
+        return url, name, res
+
+    quick_udp_tasks = [_quick_udp(ip, name) for ip, name in udp_servers]
+    quick_doh_tasks = [_quick_doh(url, name) for url, name in doh_servers]
+
+    quick_results = await asyncio.gather(*quick_udp_tasks, *quick_doh_tasks)
+
+    n_udp = len(udp_servers)
+    udp_quick = quick_results[:n_udp]   # (ip, name, ips_or_None)
+    doh_quick = quick_results[n_udp:]   # (url, name, ips_or_None)
+
+    # ── Фаза 2: для тех, кто вернул None на быстром пинге — полный тест ──────
+    # (параллельно для всех «сомнительных»)
+
+    async def _full_udp_check(ip, name):
+        probe = await _probe_udp_all(ip, config.DNS_CHECK_DOMAINS)
+        return ip, name, probe["ok"] > 0
+
+    async def _full_doh_check(url, name):
+        probe = await _probe_doh_all(url, config.DNS_CHECK_DOMAINS)
+        return url, name, probe["ok"] > 0
+
+    needs_full_udp = [(ip, name) for ip, name, res in udp_quick if res is None]
+    needs_full_doh = [(url, name) for url, name, res in doh_quick if res is None]
+
+    full_udp_results = {}
+    full_doh_results = {}
+
+    if needs_full_udp or needs_full_doh:
+        full_tasks = (
+            [_full_udp_check(ip, name) for ip, name in needs_full_udp] +
+            [_full_doh_check(url, name) for url, name in needs_full_doh]
+        )
+        full_done = await asyncio.gather(*full_tasks)
+        n_full_udp = len(needs_full_udp)
+        for ip, name, ok in full_done[:n_full_udp]:
+            full_udp_results[(ip, name)] = ok
+        for url, name, ok in full_done[n_full_udp:]:
+            full_doh_results[(url, name)] = ok
+
+    # ── Определяем финальный статус каждого сервера ───────────────────────────
+    # UDP
+    udp_working = []
+    udp_log_lines = []
+    for ip, name, quick_res in udp_quick:
+        if quick_res is not None:
+            udp_working.append((ip, name))
+        else:
+            if full_udp_results.get((ip, name), False):
+                udp_working.append((ip, name))
             else:
-                console.print(f"[dim]• UDP [yellow]{udp_ip} ({udp_name})[/yellow] недоступен. Пропуск.[/dim]")
+                udp_log_lines.append(f"[dim]• UDP [yellow]{ip} ({name})[/yellow] недоступен[/dim]")
 
-        if udp_probe is None:
-            console.print("[red]× Все UDP DNS-серверы недоступны[/red]")
-            udp_probe = {"results": {d: "UNAVAIL" for d in config.DNS_CHECK_DOMAINS}}
-
-        for doh_url, doh_name in config.DNS_DOH_SERVERS:
-            status.update(f"[cyan]Поиск DoH DNS:[/cyan] проверяю [yellow]{doh_name}[/yellow] ...")
-            probe = await _probe_doh_server(doh_url, config.DNS_CHECK_DOMAINS)
-            bad = probe["timeout"] + probe.get("blocked", 0)
-            if total - bad >= max(1, total // 2):
-                doh_probe = probe
-                doh_label = "DoH"
-                console.print(f"[dim]• DoH сервер выбран: [green]{doh_url} ({doh_name})[/green][/dim]\n")
-                break
+    # DoH
+    doh_working = []
+    doh_log_lines = []
+    for url, name, quick_res in doh_quick:
+        if quick_res is not None:
+            doh_working.append((url, name))
+        else:
+            if full_doh_results.get((url, name), False):
+                doh_working.append((url, name))
             else:
-                console.print(f"[dim]• DoH [yellow]{doh_url} ({doh_name})[/yellow] недоступен. Пропуск.[/dim]")
+                doh_log_lines.append(f"[dim]• DoH [yellow]{url} ({name})[/yellow] недоступен[/dim]")
 
-        if doh_probe is None:
-            console.print("[red]× Все DoH-серверы недоступны[/red]")
-            doh_probe = {"results": {d: "UNAVAIL" for d in config.DNS_CHECK_DOMAINS}}
+    # Выводим список только если есть проблемные серверы
+    all_log = udp_log_lines + doh_log_lines
+    if all_log:
+        for line in all_log:
+            console.print(line)
+        console.print()
+
+    # ── Выбираем по одному серверу для полного теста ──────────────────────────
+    # Всегда берём первый из конфига если он рабочий, иначе первый из рабочих
+    def _pick_preferred(working_list, all_list):
+        if not working_list:
+            return None, None
+        first_key = all_list[0][0]
+        for key, name in working_list:
+            if key == first_key:
+                return key, name
+        return working_list[0]
+
+    udp_key, udp_name_chosen = _pick_preferred(udp_working, udp_servers)
+    doh_key, doh_name_chosen = _pick_preferred(doh_working, doh_servers)
+
+    # ── Полный тест выбранными серверами ──────────────────────────────────────
+    udp_probe = None
+    doh_probe = None
+
+    if udp_key:
+        console.print(f"[dim]Выбран UDP: [cyan]{udp_key} ({udp_name_chosen})[/cyan] — резолвим все домены...[/dim]")
+        udp_probe = await _probe_udp_all(udp_key, config.DNS_CHECK_DOMAINS)
+        udp_label = f"UDP {udp_key}"
+    else:
+        console.print("[red]× Все UDP DNS-серверы недоступны[/red]")
+        udp_probe = {"results": {d: "UNAVAIL" for d in config.DNS_CHECK_DOMAINS}}
+        udp_label = "UDP DNS (недоступен)"
+
+    if doh_key:
+        console.print(f"[dim]Выбран DoH: [cyan]{doh_key} ({doh_name_chosen})[/cyan] — резолвим все домены...[/dim]")
+        doh_probe = await _probe_doh_all(doh_key, config.DNS_CHECK_DOMAINS)
+        doh_label = f"DoH {doh_name_chosen}"
+    else:
+        console.print("[red]× Все DoH-серверы недоступны[/red]")
+        doh_probe = {"results": {d: "UNAVAIL" for d in config.DNS_CHECK_DOMAINS}}
+        doh_label = "DoH (недоступен)"
+
+    console.print()
 
     # ── Анализ результатов ────────────────────────────────────────────────────
-    dns_intercept_count = doh_blocked_count = timeout_count = 0
+    dns_intercept_count = doh_blocked_count = 0
     udp_ips_collection: dict = {}
     rows = []
 
@@ -261,34 +373,36 @@ async def check_dns_integrity() -> Tuple[set, int]:
         udp_str = ", ".join(udp_ips[:2]) if udp_ips else str(udp_res or "—")
         doh_str = ", ".join(doh_ips[:2]) if doh_ips else str(doh_res or "—")
 
-        if udp_res == "TIMEOUT":
-            timeout_count += 1
         if doh_res == "BLOCKED":
             doh_blocked_count += 1
 
+        # Логика статуса: OK только если оба ответили и IP совпали
         if doh_ips and udp_ips:
             if set(doh_ips) == set(udp_ips):
                 row_status = "[green]√ DNS OK[/green]"
             else:
                 row_status = "[red]× DNS ПОДМЕНА[/red]"
                 dns_intercept_count += 1
-        elif doh_ips:
-            # UDP вернул не-IP — признак перехвата
+        elif doh_ips and not udp_ips:
+            # DoH работает, UDP нет — UDP перехвачен/заблокирован
             intercept_labels = {
                 "TIMEOUT":  "[red]× DNS ПЕРЕХВАТ[/red]",
                 "NXDOMAIN": "[red]× FAKE NXDOMAIN[/red]",
                 "EMPTY":    "[red]× FAKE EMPTY[/red]",
+                "UNAVAIL":  "[yellow]× UDP недоступен[/yellow]",
             }
-            if udp_res in intercept_labels:
-                row_status = intercept_labels[udp_res]
+            row_status = intercept_labels.get(str(udp_res), "[red]× UDP БЛОК[/red]")
+            if udp_res not in ("UNAVAIL",):
                 dns_intercept_count += 1
-            else:
-                row_status = "[yellow]× UDP недоступен[/yellow]"
-        elif udp_ips:
+        elif udp_ips and not doh_ips:
+            # UDP работает, DoH нет — DoH заблокирован провайдером
             reason = "заблокирован" if doh_res == "BLOCKED" else "недоступен"
-            row_status = f"[yellow]× DoH {reason}[/yellow]"
+            row_status = f"[red]× DoH {reason}[/red]"
+            dns_intercept_count += 1
         else:
+            # Оба не ответили
             row_status = "[red]× Оба недоступны[/red]"
+            dns_intercept_count += 1
 
         rows.append([domain, doh_str, udp_str, row_status])
 
@@ -323,4 +437,4 @@ async def check_dns_integrity() -> Tuple[set, int]:
     if doh_blocked_count > 0:
         console.print("[bold red][!] DoH заблокирован[/bold red] — провайдер блокирует зашифрованный DNS\n")
 
-    return stub_ips, dns_intercept_count
+    return stub_ips, dns_intercept_count, not bool(doh_working)
