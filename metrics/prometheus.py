@@ -18,8 +18,8 @@ _metrics: Dict[str, object] = {}
 _lock = threading.Lock()
 _last_run_ts: float = 0.0
 
-# Per-domain: {domain: status_string}  e.g. "ok" | "blocked" | "timeout" | "dns_fail"
-_domain_status: Dict[str, str] = {}
+# Per-domain: {domain: {"http": str, "tls12": str, "tls13": str, "https": str}}
+_domain_status: Dict[str, Dict[str, str]] = {}
 
 # Per-TCP-target: {target_id: {"provider": str, "asn": str, "status": str}}
 # status: "ok" | "blocked" | "mixed" | "unknown"
@@ -44,17 +44,16 @@ def record_domains(total: int, ok: int, blocked: int, timeout: int, dns_fail: in
         _metrics["dpi_domains_dns_fail"] = dns_fail
 
 
-def record_domain_statuses(statuses: List[Tuple[str, str]]) -> None:
+def record_domain_statuses(statuses: List[Tuple[str, Dict[str, str]]]) -> None:
     """Update per-domain availability metrics.
 
     Args:
-        statuses: list of (domain, status) where status is one of:
-                  "ok", "blocked", "timeout", "dns_fail"
+        statuses: list of (domain, status_dict)
     """
     with _lock:
         _domain_status.clear()
-        for domain, status in statuses:
-            _domain_status[domain] = status
+        for domain, status_dict in statuses:
+            _domain_status[domain] = status_dict
 
 
 def record_tcp(total: int, ok: int, blocked: int, mixed: int) -> None:
@@ -135,26 +134,40 @@ def _render_metrics() -> str:
     lines.append(f"dpi_last_run_timestamp_seconds {ts:.3f}")
 
     # ── Per-domain availability ────────────────────────────────────────────────
-    # dpi_domain_available{domain="example.com", status="ok"} 1
-    # Emits one time series per domain with value 1 (current status as label).
-    # Also emits dpi_domain_ok{domain="..."} 1|0 for easy alerting.
     if domain_snap:
-        lines.append("# HELP dpi_domain_available Per-domain availability status (1=current state)")
+        lines.append("# HELP dpi_domain_available Per-domain availability status (HTTPS overall, 1=current state)")
         lines.append("# TYPE dpi_domain_available gauge")
-        for domain, status in sorted(domain_snap.items()):
+        for domain, statuses in sorted(domain_snap.items()):
+            if isinstance(statuses, dict):
+                s = statuses.get("https", "unknown")
+            else:
+                s = statuses
             d_esc = _escape_label(domain)
-            s_esc = _escape_label(status)
+            s_esc = _escape_label(s)
             lines.append(f'dpi_domain_available{{domain="{d_esc}",status="{s_esc}"}} 1')
 
         lines.append("# HELP dpi_domain_ok Per-domain reachability: 1=ok, 0=not ok")
         lines.append("# TYPE dpi_domain_ok gauge")
-        for domain, status in sorted(domain_snap.items()):
+        for domain, statuses in sorted(domain_snap.items()):
             d_esc = _escape_label(domain)
-            value = 1 if status == "ok" else 0
-            lines.append(f'dpi_domain_ok{{domain="{d_esc}"}} {value}')
+            if isinstance(statuses, dict):
+                val = 1 if statuses.get("https") == "ok" else 0
+            else:
+                val = 1 if statuses == "ok" else 0
+            lines.append(f'dpi_domain_ok{{domain="{d_esc}"}} {val}')
+
+        lines.append("# HELP dpi_domain_tls_status Per-domain TLS version status")
+        lines.append("# TYPE dpi_domain_tls_status gauge")
+        for domain, statuses in sorted(domain_snap.items()):
+            if not isinstance(statuses, dict):
+                continue
+            d_esc = _escape_label(domain)
+            t12_esc = _escape_label(statuses.get("tls12", "unknown"))
+            t13_esc = _escape_label(statuses.get("tls13", "unknown"))
+            lines.append(f'dpi_domain_tls_status{{domain="{d_esc}",tls_version="1.2",status="{t12_esc}"}} 1')
+            lines.append(f'dpi_domain_tls_status{{domain="{d_esc}",tls_version="1.3",status="{t13_esc}"}} 1')
 
     # ── Per-TCP-target status ──────────────────────────────────────────────────
-    # dpi_tcp_target_ok{id="...", provider="...", asn="..."} 1|0
     if tcp_snap:
         lines.append("# HELP dpi_tcp_target_status Per-TCP-target DPI status (1=current state)")
         lines.append("# TYPE dpi_tcp_target_status gauge")

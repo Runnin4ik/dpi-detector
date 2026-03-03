@@ -192,13 +192,13 @@ def _build_domain_statuses(domain_stats: Dict, domains: list) -> list:
 
     Uses domain_stats keys: per_domain (if present) or falls back to aggregate
     status inference. Expected domain_stats to contain 'per_domain' dict:
-      {domain: status}  where status in ("ok", "blocked", "timeout", "dns_fail")
+      {domain: status_dict}
     """
     per = domain_stats.get("per_domain")
     if per:
         return list(per.items())
     # Fallback: mark all domains with unknown status (shouldn't happen if runners updated)
-    return [(d, "unknown") for d in domains]
+    return [(d, {"https": "unknown", "tls12": "unknown", "tls13": "unknown", "http": "unknown"}) for d in domains]
 
 
 def _build_tcp_target_statuses(tcp_results_raw: list) -> list:

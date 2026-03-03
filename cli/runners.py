@@ -136,24 +136,43 @@ async def _run_phase_with_progress(tasks: list, description: str) -> None:
             progress.update(task_id, completed=completed, description=f"{description} ({completed}/{total})...")
 
 
-def _classify_domain_status(row: list, stub_ips: set) -> str:
+def _classify_domain_status(row: list, stub_ips: set) -> dict:
     """Определяет итоговый статус домена по строке таблицы (индексы 1=HTTP, 2=TLS1.2, 3=TLS1.3)."""
-    # DNS FAKE / DNS FAIL
-    if any("DNS FAKE" in str(row[col]) for col in (1, 2, 3)):
-        return "dns_fail"
-    if any("DNS FAIL" in str(row[col]) for col in (1, 2, 3)):
-        return "dns_fail"
-    # Блокировка
     block_markers = ("TLS DPI", "TLS MITM", "TLS BLOCK", "ISP PAGE", "BLOCKED", "TCP RST", "TCP ABORT")
-    if any(m in str(row[c]) for c in (1, 2, 3) for m in block_markers):
-        return "blocked"
-    # Таймаут
-    if "TIMEOUT" in str(row[3]) or "TIMEOUT" in str(row[2]):
-        return "timeout"
-    # OK
-    if "OK" in str(row[3]) or "OK" in str(row[2]):
-        return "ok"
-    return "unknown"
+
+    def get_status(col_val: str) -> str:
+        s = str(col_val)
+        if "DNS FAKE" in s or "DNS FAIL" in s:
+            return "dns_fail"
+        if "OK" in s or "REDIR" in s:
+            return "ok"
+        if any(m in s for m in block_markers):
+            return "blocked"
+        if "TIMEOUT" in s:
+            return "timeout"
+        return "unknown"
+
+    http_stat = get_status(row[1])
+    tls12_stat = get_status(row[2])
+    tls13_stat = get_status(row[3])
+
+    if tls12_stat == "ok" or tls13_stat == "ok":
+        https_stat = "ok"
+    elif tls12_stat == "blocked" or tls13_stat == "blocked":
+        https_stat = "blocked"
+    elif tls12_stat == "timeout" or tls13_stat == "timeout":
+        https_stat = "timeout"
+    elif tls12_stat == "dns_fail" or tls13_stat == "dns_fail":
+        https_stat = "dns_fail"
+    else:
+        https_stat = "unknown"
+
+    return {
+        "http": http_stat,
+        "tls12": tls12_stat,
+        "tls13": tls13_stat,
+        "https": https_stat
+    }
 
 
 # ── Тест 2: домены ────────────────────────────────────────────────────────────
