@@ -55,7 +55,6 @@ def clean_detail(detail: str) -> str:
     if not detail or detail in ("OK", "Error"):
         return ""
     detail = detail.replace("The operation did not complete", "TLS Aborted")
-    #detail = re.sub(r"\s*\([^)]*\)?\s*", " ", detail)
     detail = re.sub(r"\s*\(_*\s*$", "", detail)
     detail = re.sub(r"\s+", " ", detail).strip()
     detail = detail.replace("Err None: ", "").replace("Conn failed: ", "")
@@ -76,7 +75,7 @@ def classify_ssl_error(error: ssl.SSLError, bytes_read: int) -> Tuple[str, str, 
         "decryption failed", "decrypt"
     ]
     if any(m in msg for m in dpi_interruption):
-        detail = "Обрыв при передаче" if bytes_read > 0 else "Обрыв handshake"
+        detail = "Обрыв при передаче" if bytes_read > 0 else "Handshake aborted"
         return ("[bold red]TLS DPI[/bold red]", detail, bytes_read)
 
     # DPI: манипуляции с handshake
@@ -87,9 +86,9 @@ def classify_ssl_error(error: ssl.SSLError, bytes_read: int) -> Tuple[str, str, 
         "bad key share", "bad_key_share"
     ]):
         if "bad key share" in msg or "bad_key_share" in msg:
-            return ("[yellow]SSL ERR[/yellow]", "[SSL] Bad key share", bytes_read)
+            return ("[yellow]SSL ERR[/yellow]", "Bad key share", bytes_read)
         if "record layer failure" in msg or "record_layer_failure" in msg:
-            return ("[yellow]SSL ERR[/yellow]", "[SSL] Record layer fail", bytes_read)
+            return ("[yellow]SSL ERR[/yellow]", "Record layer fail", bytes_read)
         return ("[bold red]TLS DPI[/bold red]", "Подмена handshake", bytes_read)
 
     if "unrecognized name" in msg or "unrecognized_name" in msg:
@@ -113,7 +112,7 @@ def classify_ssl_error(error: ssl.SSLError, bytes_read: int) -> Tuple[str, str, 
         if verify_code == 10 or "expired" in msg:
             return ("[bold red]TLS MITM[/bold red]", "Cert expired", bytes_read)
         elif verify_code in (18, 19) or "self-signed" in msg or "self signed" in msg:
-            return ("[bold red]TLS MITM[/bold red]", "Self-signed", bytes_read)
+            return ("[bold red]TLS MITM[/bold red]", "Self-signed cert", bytes_read)
         elif verify_code == 20 or "unknown ca" in msg:
             return ("[bold red]TLS MITM[/bold red]", "Unknown CA", bytes_read)
         elif verify_code == 62 or "hostname mismatch" in msg:
@@ -135,13 +134,14 @@ def classify_ssl_error(error: ssl.SSLError, bytes_read: int) -> Tuple[str, str, 
         return ("[bold red]TLS MITM[/bold red]", "Cipher mismatch", bytes_read)
 
     if "version" in msg or "protocol version" in msg:
-        return ("[bold red]TLS BLOCK[/bold red]", "Version block", bytes_read)
+        return ("[bold red]BLOCK[/bold red]", "TLS version block", bytes_read)
 
     if isinstance(error, ssl.SSLZeroReturnError):
-        return ("[bold red]TLS CLOSE[/bold red]", "Close notify", bytes_read)
+        # Close notify в неожиданный момент — признак DPI или блокировки
+        return ("[bold red]TLS DPI[/bold red]", "Неожиданный close notify", bytes_read)
 
     if "internal error" in msg:
-        return ("[red]SSL INT[/red]", "Internal error", bytes_read)
+        return ("[red]SSL ERR[/red]", "Internal error", bytes_read)
 
     if "handshake" in msg:
         return ("[red]TLS ERR[/red]", "Handshake error", bytes_read)
@@ -155,10 +155,10 @@ def classify_connect_error(error: Exception, bytes_read: int) -> Tuple[str, str,
     err_errno = get_errno_from_chain(error)
 
     if isinstance(error, httpx.PoolTimeout) or "pool timeout" in full_text:
-        return ("[magenta]SYS OVERLOAD[/magenta]", "Нехватка сокетов (Pool Timeout)", bytes_read)
+        return ("[magenta]POOL TIMEOUT[/magenta]", "Нехватка сокетов, снизьте параллелизм", bytes_read)
 
     if isinstance(error, httpx.ConnectTimeout) or "connect timeout" in full_text:
-        return ("[red]TCP TIMEOUT[/red]", "Таймаут (SYN Drop)", bytes_read)
+        return ("[red]TIMEOUT[/red]", "TCP timeout (SYN Drop)", bytes_read)
 
     # DNS
     gai = find_cause(error, socket.gaierror)
@@ -196,106 +196,60 @@ def classify_connect_error(error: Exception, bytes_read: int) -> Tuple[str, str,
 
     # TCP ОШИБКИ (L4)
     if find_cause(error, ConnectionRefusedError) is not None or err_errno in (errno.ECONNREFUSED, config.WSAECONNREFUSED) or "refused" in full_text:
-        return ("[bold red]TCP REFUSED[/bold red]", "Порт закрыт / Active RST", bytes_read)
+        return ("[bold red]REFUSED[/bold red]", "TCP соединение отклонено", bytes_read)
 
     if find_cause(error, ConnectionResetError) is not None or err_errno in (errno.ECONNRESET, config.WSAECONNRESET) or "connection reset" in full_text:
-        return ("[bold red]TCP RST[/bold red]", "RST при handshake", bytes_read)
+        return ("[bold red]RST[/bold red]", "TCP соединение сброшено", bytes_read)
 
     if find_cause(error, ConnectionAbortedError) is not None or err_errno in (getattr(errno, 'ECONNABORTED', 103), config.WSAECONNABORTED) or "connection aborted" in full_text:
-        return ("[bold red]TCP ABORT[/bold red]", "Соединение прервано", bytes_read)
+        return ("[bold red]ABORT[/bold red]", "TCP соединение прервано", bytes_read)
 
     if find_cause(error, TimeoutError) is not None or err_errno in (errno.ETIMEDOUT, config.WSAETIMEDOUT) or "timed out" in full_text:
-        return ("[red]TCP TIMEOUT[/red]", "Таймаут (SYN Drop)", bytes_read)
+        return ("[red]TIMEOUT[/red]", "TCP timeout (SYN Drop)", bytes_read)
 
     if err_errno in (errno.ENETUNREACH, config.WSAENETUNREACH) or "network is unreachable" in full_text:
-        return ("[red]NET UNREACH[/red]", "Сеть недоступна", bytes_read)
+        return ("[red]NET UNREACH[/red]", "Нет маршрута (ICMP unreach)", bytes_read)
 
     if err_errno in (errno.EHOSTUNREACH, config.WSAEHOSTUNREACH) or "no route to host" in full_text:
-        return ("[red]HOST UNREACH[/red]", "Хост недоступен", bytes_read)
+        return ("[red]HOST UNREACH[/red]", "Нет маршрута до хоста", bytes_read)
 
     if "all connection attempts failed" in full_text:
-        return ("[bold red]TCP FAIL[/bold red]", "Все IP недоступны", bytes_read)
+        return ("[bold red]REFUSED[/bold red]", "TCP соединение отклонено", bytes_read)
 
     return ("[red]CONN ERR[/red]", clean_detail(str(error)[:40]), bytes_read)
 
 
 def classify_read_error(error: Exception, bytes_read: int) -> Tuple[str, str, int]:
-    kb_read = math.ceil(bytes_read / 1024)
     full_text = collect_error_text(error)
     err_errno = get_errno_from_chain(error)
-
-    in_tcp_range = config.TCP_BLOCK_MIN_KB <= kb_read <= config.TCP_BLOCK_MAX_KB
 
     if find_cause(error, ConnectionResetError) is not None \
             or err_errno in (errno.ECONNRESET, config.WSAECONNRESET) \
             or "connection reset" in full_text:
-        if in_tcp_range:
-            return ("[bold red]TCP16-20[/bold red]", f"RST at {kb_read:.1f}KB", bytes_read)
-        elif kb_read > 0:
-            return ("[bold red]DPI RESET[/bold red]", f"RST at {kb_read:.1f}KB", bytes_read)
-        else:
-            return ("[bold red]TCP RST[/bold red]", "RST before data", bytes_read)
+        return ("[bold red]RST[/bold red]", "TCP соединение сброшено", bytes_read)
 
     if find_cause(error, ConnectionAbortedError) is not None \
             or err_errno in (getattr(errno, 'ECONNABORTED', 103), config.WSAECONNABORTED) \
             or "connection aborted" in full_text:
-        if in_tcp_range:
-            return ("[bold red]TCP16-20[/bold red]", f"Abort at {kb_read:.1f}KB", bytes_read)
-        elif kb_read > 0:
-            return ("[bold red]DPI ABORT[/bold red]", f"Abort at {kb_read:.1f}KB", bytes_read)
-        else:
-            return ("[bold red]TCP ABORT[/bold red]", "Abort before data", bytes_read)
+        return ("[bold red]ABORT[/bold red]", "TCP соединение прервано", bytes_read)
 
     if find_cause(error, BrokenPipeError) is not None \
             or err_errno == errno.EPIPE \
             or "broken pipe" in full_text:
-        if in_tcp_range:
-            return ("[bold red]TCP16-20[/bold red]", f"Pipe broken {kb_read:.1f}KB", bytes_read)
-        elif kb_read > 0:
-            return ("[bold red]DPI PIPE[/bold red]", f"Pipe {kb_read:.1f}KB", bytes_read)
-        else:
-            return ("[bold red]BROKEN PIPE[/bold red]", "Pipe broken", bytes_read)
+        return ("[bold red]RST[/bold red]", "Broken pipe", bytes_read)
 
     if isinstance(error, httpx.RemoteProtocolError) or "remoteprotocolerror" in full_text:
         if "peer closed" in full_text or "connection closed" in full_text:
-            if in_tcp_range:
-                return ("[bold red]TCP16-20[/bold red]", f"FIN at {kb_read:.1f}KB", bytes_read)
-            elif kb_read > 0:
-                return ("[bold red]DPI CLOSE[/bold red]", f"Closed at {kb_read:.1f}KB", bytes_read)
-            else:
-                return ("[bold red]PEER CLOSE[/bold red]", "Closed early", bytes_read)
+            return ("[bold red]ABORT[/bold red]", "Closed early", bytes_read)
         elif "incomplete" in full_text:
-            if in_tcp_range:
-                return ("[bold red]TCP16-20[/bold red]", f"Incomplete {kb_read:.1f}KB", bytes_read)
-            elif kb_read > 0:
-                return ("[bold red]DPI TRUNC[/bold red]", f"Truncated {kb_read:.1f}KB", bytes_read)
-            else:
-                return ("[bold red]INCOMPLETE[/bold red]", "Incomplete response", bytes_read)
+            return ("[bold red]ABORT[/bold red]", "Incomplete response", bytes_read)
         else:
-            if in_tcp_range:
-                return ("[bold red]TCP16-20[/bold red]", f"Proto err {kb_read:.1f}KB", bytes_read)
-            elif kb_read > 0:
-                return ("[bold red]DPI PROTO[/bold red]", f"Proto err {kb_read:.1f}KB", bytes_read)
-            else:
-                return ("[red]PROTO ERR[/red]", "Protocol error", bytes_read)
+            return ("[red]PROTO ERR[/red]", "Protocol error", bytes_read)
 
     if isinstance(error, httpx.ReadError):
         ssl_err = find_cause(error, ssl.SSLError)
         if ssl_err is not None:
-            label, detail, _ = classify_ssl_error(ssl_err, bytes_read)
-            if in_tcp_range:
-                return ("[bold red]TCP16-20[/bold red]", f"TLS err {kb_read:.1f}KB", bytes_read)
-            return (label, f"{detail} at {kb_read:.1f}KB" if kb_read > 0 else detail, bytes_read)
-        if in_tcp_range:
-            return ("[bold red]TCP16-20[/bold red]", f"Read err {kb_read:.1f}KB", bytes_read)
-        elif kb_read > 0:
-            return ("[bold red]DPI RESET[/bold red]", f"Read err {kb_read:.1f}KB", bytes_read)
-        else:
-            return ("[red]READ ERR[/red]", "Read error", bytes_read)
+            return classify_ssl_error(ssl_err, bytes_read)
+        return ("[red]READ ERR[/red]", "Read error", bytes_read)
 
-    if in_tcp_range:
-        return ("[bold red]TCP16-20[/bold red]", f"Error at {kb_read:.1f}KB", bytes_read)
-    elif kb_read > 0:
-        return ("[bold red]DPI RESET[/bold red]", f"Error at {kb_read:.1f}KB", bytes_read)
-    else:
-        return ("[red]READ ERR[/red]", f"{type(error).__name__}", bytes_read)
+    return ("[red]READ ERR[/red]", f"{type(error).__name__}", bytes_read)
