@@ -67,8 +67,7 @@
     {"id": "GCR-03", "asn": "199524", "provider": "Gcore", "ip": "185.145.113.133", "port": 443},
     {"id": "GCR-04", "asn": "199524", "provider": "Gcore", "ip": "82.117.228.93", "port": 443},
 
-    {"id": "GCR-05", "asn": "202422", "provider": "Gcore", "ip": "213.156.150.25", "port": 443},
-    {"id": "GCR-06", "asn": "202422", "provider": "Gcore", "ip": "5.188.190.167", "port": 443},
+    {"id": "GCR-05", "asn": "202422", "provider": "Gcore", "ip": "5.188.190.167", "port": 443},
 
     {"id": "OR-01", "asn": "31898", "provider": "Oracle Cloud", "ip": "152.67.64.161", "port": 443},
     {"id": "OR-02", "asn": "31898", "provider": "Oracle Cloud", "ip": "67.222.57.149", "port": 443},
