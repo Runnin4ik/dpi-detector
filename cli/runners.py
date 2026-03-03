@@ -197,13 +197,17 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
 
     confirmed_stubs = {ip: c for ip, c in resolved_ips_counter.items() if stub_ips and ip in stub_ips}
     if confirmed_stubs or dns_fail_count > 0:
-        console.print(f"\n[bold yellow][i] ВОЗМОЖНО НЕ НАСТРОЕН DoH:[/bold yellow]")
+        console.print(f"\n[bold yellow][i][!] НА ВАШЕМ УСТРОЙСТВЕ/РОУТЕРЕ НЕ НАСТРОЕН DoH:[/bold yellow]")
         if confirmed_stubs:
-            ips_text = [f"[red]{ip}[/red] у {c} домен(ов)" for ip, c in confirmed_stubs.items()]
+            ips_text = [f"[red]{ip}[/red] у {c} доменов" for ip, c in confirmed_stubs.items()]
             console.print(f"DNS вернул IP заглушки: {', '.join(ips_text)}")
         if dns_fail_count > 0:
             console.print(f"У {dns_fail_count} сайтов обнаружен DNS FAIL (Домен не найден)")
-        console.print("[yellow]Рекомендация: Настройте DoH/DoT на вашем устройстве, роутере или VPN[/yellow]\n")
+        console.print("[yellow]Рекомендация: Настройте DoH на вашем устройстве и роутере[/yellow]\n")
+        console.print("После настройки сбросьте кеш DNS:")
+        console.print("Windows: [dim]ipconfig /flushdns[/dim]")
+        console.print("MacOS: [dim]sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder[/dim]")
+        console.print("Linux: [dim]sudo resolvectl flush-caches[/dim]\n")
 
     block_markers = ("TLS DPI", "TLS MITM", "TLS BLOCK", "ISP PAGE", "BLOCKED", "TCP RST", "TCP ABORT")
     return {
