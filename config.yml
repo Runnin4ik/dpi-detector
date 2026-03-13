@@ -71,7 +71,6 @@ WSAENETDOWN: 10050
 WSAEACCES: 10013
 
 # === Настройки DNS проверки ===
-DNS_CHECK_ENABLED: true
 DNS_CHECK_TIMEOUT: 5.0
 
 # Список доменов для теста доступности и подмены DNS

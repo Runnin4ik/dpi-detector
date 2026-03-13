@@ -237,9 +237,6 @@ async def collect_stub_ips_silently() -> set:
 
 
 async def check_dns_integrity() -> Tuple[set, int]:
-    if not config.DNS_CHECK_ENABLED:
-        return set(), 0
-
     total = len(config.DNS_CHECK_DOMAINS)
     probe_domain = config.DNS_CHECK_DOMAINS[0]
 
