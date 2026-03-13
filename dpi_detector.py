@@ -6,6 +6,7 @@ import traceback
 import warnings
 import httpx
 import signal
+import argparse
 
 warnings.filterwarnings("ignore")
 
@@ -30,10 +31,25 @@ DOMAINS         = load_domains()
 TCP_16_20_ITEMS = load_tcp_targets()
 WHITELIST_SNI   = load_whitelist_sni()
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="DPI Detector — Анализатор блокировок трафика",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+
+    parser.add_argument("-t", "--tests", type=str, help="Список тестов для запуска (например: 123 или 24). Пропускает стартовое меню.")
+    parser.add_argument("-p", "--proxy", type=str, help="URL прокси (напр: socks5://127.0.0.1:1080) (PROXY_URL)")
+    parser.add_argument("-c", "--concurrency", type=int, help="Максимальное количество параллельных запросов (MAX_CONCURRENT)")
+    parser.add_argument("-d", "--domain", type=str, action="append", help="Проверить конкретный домен(ы), игнорируя domains.txt.\nМожно указывать несколько раз: -d vk.com -d ya.ru")
+    parser.add_argument("-o", "--output", type=str, help="Путь для автосохранения отчета (например: report.txt).")
+    parser.add_argument("--batch", action="store_true", help="Отключает паузы и вопросы")
+
+    return parser.parse_args()
 
 async def _fetch_latest_version() -> Optional[str]:
     """Запрашивает последний тег с GitHub API. Возвращает строку версии или None."""
     url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+    proxy_url = getattr(config, "PROXY_URL", None)
     try:
         async with httpx.AsyncClient(timeout=3.0, proxy=proxy_url, trust_env=False) as client:
             resp = await client.get(url, headers={"Accept": "application/vnd.github+json"})
@@ -148,15 +164,34 @@ def is_newer(latest: str, current: str) -> bool:
         return False
 
 async def main():
-    console.clear()
+    args = parse_arguments()
 
+    if args.proxy:
+        config.PROXY_URL = args.proxy
+    if args.concurrency:
+        config.MAX_CONCURRENT = args.concurrency
+
+    global DOMAINS
+    if args.domain:
+        from cli.ui import clean_hostname
+        DOMAINS = [clean_hostname(d) for d in args.domain]
+        config.DNS_CHECK_DOMAINS = DOMAINS
+
+    console.clear()
     console.print(f"[bold cyan]DPI Detector v{CURRENT_VERSION}[/bold cyan]")
     console.print(f"[dim]Параллельных запросов: {config.MAX_CONCURRENT}[/dim]")
+
+    if config.PROXY_URL:
+        console.print(f"[dim]Используется прокси: [yellow]{config.PROXY_URL}[/yellow][/dim]")
 
     version_task = asyncio.create_task(_fetch_latest_version())
     latest_version_notified = False
 
-    selection = await ask_test_selection()
+    if args.tests:
+        selection = args.tests
+    else:
+        selection = await ask_test_selection()
+
     run_dns     = "1" in selection
     run_domains = "2" in selection
     run_tcp     = "3" in selection
@@ -165,18 +200,19 @@ async def main():
     save_to_file = False
     result_path  = None
 
-    try:
-        sys.stdout.write("\nСохранять результаты в файл? [y/N]: ")
-        sys.stdout.flush()
-
-        raw = await _readline_cancelable()
-        raw = raw.strip().lower()
-    except KeyboardInterrupt:
-        raise
-
-    if raw in ("y", "yes", "д", "да"):
+    if args.output:
         save_to_file = True
-        result_path = os.path.join(get_base_dir(), "dpi_detector_results.txt")
+        result_path = args.output
+    elif not args.batch:
+        try:
+            sys.stdout.write("\nСохранять результаты в файл? [y/N]: ")
+            sys.stdout.flush()
+            raw = await _readline_cancelable()
+            if raw.strip().lower() in ("y", "yes", "д", "да"):
+                save_to_file = True
+                result_path = os.path.join(get_base_dir(), "dpi_detector_results.txt")
+        except KeyboardInterrupt:
+            raise
 
     semaphore = asyncio.Semaphore(config.MAX_CONCURRENT)
     first_run = True
@@ -257,7 +293,9 @@ async def main():
             except Exception as e:
                 console.print(f"[yellow]Не удалось сохранить файл: {e}[/yellow]")
 
-        # ── Предложение повторить ─────────────────────────────────────────────
+        if args.batch:
+            break
+
         console.print(
             "\nНажмите [bold green]Enter[/bold green] чтобы повторить проверку "
             "или [bold red]Ctrl+C[/bold red] для выхода"

@@ -38,6 +38,17 @@
 > [!WARNING]  
 > Если у вас запущены средства обхода блокировок (например, zapret или GoodbyeDPI), результаты тестов будут искажены. Чтобы узнать реальное состояние фильтров вашего провайдера, выключите их перед началом проверки или убедитесь, что они работают в режиме обработки всех пакетов (режим ALL), а не только по списку.
 
+## ⚙️ Запуск с параметрами (CLI)
+
+| Параметр              | Описание                                                            | Пример использования         |
+|:----------------------|:--------------------------------------------------------------------|:-----------------------------|
+| `-t`, `--tests`       | Указать номера тестов (без меню).                                   | `-t 123` или `-t 4`          |
+| `-p`, `--proxy`       | Использовать прокси (переопределяет `PROXY_URL`).                   | `-p socks5://127.0.0.1:1080` |
+| `-d`, `--domain`      | Проверка отдельных доменов. Игнорирует `domains.txt`                | `-d vk.com -d youtube.com`   |
+| `-c`, `--concurrency` | Количество конкурентных запросов (переопределяет `MAX_CONCURRENT`). | `-c 50`                      |
+| `-o`, `--output`      | Автоматически сохранить лог в указанный файл.                       | `-o report_log.txt`          |
+| `--batch`             | Отключает все вопросы и паузы в консоли.                            | `--batch`                    |
+
 ## 🐋 Docker (Рекомендовано)
 
 ### Быстрый старт
@@ -61,7 +72,7 @@ docker run --rm -it --pull=always \
   -v $(pwd)/tcp16.json:/app/tcp16.json \
   -v $(pwd)/config.yml:/app/config.yml \
   -v $(pwd)/whitelist_sni.txt:/app/whitelist_sni.txt \
-  ghcr.io/runnin4ik/dpi-detector:latest
+  ghcr.io/runnin4ik/dpi-detector:latest -t 123 -d discord.com
 ```
 <details>
 <summary>Команды для PowerShell и CMD</summary>
@@ -101,6 +112,8 @@ python -m pip install -r requirements.txt
 **Запуск:**
 ```bash
 python dpi_detector.py
+# или с параметрами
+python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
 ```
 
 ## 🪟 Windows (Готовые сборки)
