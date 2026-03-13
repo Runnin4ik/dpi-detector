@@ -67,14 +67,23 @@ async def _check_tls_single(
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
     resolved_ip: str = None,
+    stub_ips: set = None,
 ) -> Tuple[str, str, int, float]:
     """
     Одна попытка TLS-проверки. Клиент передаётся снаружи и переиспользуется.
-    resolved_ip: если передан, подключаемся к нему напрямую (нужно для IPv6 — системный
-    резолвер может вернуть IPv4 даже если домен имеет AAAA запись).
+    stub_ips: если передан, редирект на IP из этого набора помечается как ISP PAGE.
+    resolved_ip: если передан, подключаемся к нему напрямую.
+
+    Логика редиректов:
+      - Редирект на тот же домен или поддомен → зелёный REDIR (ОК)
+      - Редирект на чужой домен → красный REDIR (подозрительно)
+      - Если resolved_ip входит в stub_ips → ISP PAGE
     """
     bytes_read = 0
     url = f"https://{domain}"
+
+    if stub_ips and resolved_ip and resolved_ip in stub_ips:
+        return ("[bold red]ISP PAGE[/bold red]", f"DNS заглушка {resolved_ip}", 0, 0.0)
 
     async with semaphore:
         start = time.time()
@@ -97,66 +106,31 @@ async def _check_tls_single(
                 await response.aclose()
                 return ("[bold red]BLOCKED[/bold red]", "HTTP 451", bytes_read, time.time() - start)
 
-            if location:
-                location_lower = location.lower()
-                if any(m in location_lower for m in config.BLOCK_MARKERS):
-                    await response.aclose()
-                    return ("[bold red]ISP PAGE[/bold red]", "Редирект на блок-страницу", bytes_read, time.time() - start)
-
+            if location and 300 <= status_code < 400:
+                await response.aclose()
+                elapsed = time.time() - start
                 try:
                     parsed_loc = urlparse(
                         location if location.startswith('http') else f'https://{location}'
                     )
-                    loc_domain = parsed_loc.netloc.lower()
-                    clean_domain = domain.lower().replace('www.', '')
-                    clean_loc = loc_domain.replace('www.', '')
+                    loc_domain = parsed_loc.netloc.lower().split(':')[0]
+                    clean_domain = domain.lower()
+                    norm_loc = loc_domain.removeprefix('www.')
+                    norm_dom = clean_domain.removeprefix('www.')
 
-                    if loc_domain and clean_loc != clean_domain \
-                            and not clean_loc.endswith('.' + clean_domain):
-                        cdn_patterns = [
-                            'cloudflare', 'akamai', 'fastly', 'cdn', 'cloudfront',
-                            'auth', 'login', 'accounts', 'id.', 'sso.',
-                        ]
-                        if not any(p in clean_loc for p in cdn_patterns):
-                            await response.aclose()
-                            return (
-                                "[bold red]ISP PAGE[/bold red]",
-                                f"→ {loc_domain[:20]}",
-                                bytes_read,
-                                time.time() - start,
-                            )
+                    if norm_loc == norm_dom or norm_loc.endswith('.' + norm_dom):
+                        return ("[green]REDIR[/green]", f"→ {loc_domain[:30]}", bytes_read, elapsed)
+                    else:
+                        return ("[bold red]REDIR[/bold red]", f"→ {loc_domain[:30]}", bytes_read, elapsed)
                 except Exception:
-                    pass
+                    return ("[bold red]REDIR[/bold red]", f"→ {location[:30]}", bytes_read, elapsed)
 
             if 300 <= status_code < 400:
                 await response.aclose()
-                return ("[green]OK[/green]", "", bytes_read, time.time() - start)
-
-            elapsed = time.time() - start
-
-            if status_code == 200:
-                content_length = response.headers.get("content-length", "")
-                try:
-                    content_len = int(content_length) if content_length else 0
-                except Exception:
-                    content_len = 0
-
-                if 0 < content_len < config.BODY_INSPECT_LIMIT:
-                    body = b""
-                    try:
-                        async for chunk in response.aiter_bytes(chunk_size=128):
-                            body += chunk
-                            if len(body) >= config.BODY_INSPECT_LIMIT:
-                                break
-                    except Exception:
-                        pass
-
-                    body_text = body.decode("utf-8", errors="ignore").lower()
-                    if any(m in body_text for m in config.BODY_BLOCK_MARKERS):
-                        await response.aclose()
-                        return ("[bold red]ISP PAGE[/bold red]", "Блок-страница в теле", len(body), elapsed)
+                return ("[green]REDIR[/green]", "", bytes_read, time.time() - start)
 
             await response.aclose()
+            elapsed = time.time() - start
 
             if 200 <= status_code < 500:
                 return ("[green]OK[/green]", "", bytes_read, elapsed)
@@ -204,10 +178,13 @@ async def check_domain_tls(
     domain: str,
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
+    stub_ips: set = None,
+    resolved_ip: str = None,
 ) -> Tuple[str, str, float]:
     """Одна TLS-проверка. Возвращает (status, detail, elapsed)."""
-    status, detail, _, elapsed = await _check_tls_single(domain, client, semaphore)
-
+    status, detail, _, elapsed = await _check_tls_single(
+        domain, client, semaphore, resolved_ip=resolved_ip, stub_ips=stub_ips
+    )
     return (status, detail, elapsed)
 
 
@@ -215,6 +192,7 @@ async def check_http_injection(
     domain: str,
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
+    stub_ips: set = None,
 ) -> Tuple[str, str]:
     """Проверяет HTTP-инжекцию (plain HTTP). Клиент передаётся снаружи."""
     clean_domain = domain.replace("https://", "").replace("http://", "")
@@ -237,31 +215,31 @@ async def check_http_injection(
             await response.aclose()
             return ("[bold red]BLOCKED[/bold red]", "HTTP 451")
 
-        if any(m in location.lower() for m in config.BLOCK_MARKERS):
+        if location and 300 <= status_code < 400:
             await response.aclose()
-            return ("[bold red]ISP PAGE[/bold red]", "Блок-страница")
-
-        if 200 <= status_code < 300:
-            body = b""
             try:
-                async for chunk in response.aiter_bytes(chunk_size=128):
-                    body += chunk
-                    if len(body) >= config.BODY_INSPECT_LIMIT:
-                        break
+                parsed_loc = urlparse(
+                    location if location.startswith('http') else f'https://{location}'
+                )
+                loc_domain = parsed_loc.netloc.lower().split(':')[0]
+                norm_loc = loc_domain.removeprefix('www.')
+                norm_dom = clean_domain.lower().removeprefix('www.')
+                if norm_loc == norm_dom or norm_loc.endswith('.' + norm_dom):
+                    return ("[green]REDIR[/green]", f"{status_code}")
+                else:
+                    return ("[bold red]REDIR[/bold red]", f"→ {loc_domain[:30]}")
             except Exception:
-                pass
-            await response.aclose()
-
-            body_text = body.decode("utf-8", errors="ignore").lower()
-            if any(m in body_text for m in config.BODY_BLOCK_MARKERS):
-                return ("[bold red]ISP PAGE[/bold red]", "Блок-страница (HTTP)")
-            return ("[green]OK[/green]", f"{status_code}")
+                return ("[bold red]REDIR[/bold red]", f"→ {location[:30]}")
 
         if 300 <= status_code < 400:
             await response.aclose()
             return ("[green]REDIR[/green]", f"{status_code}")
 
         await response.aclose()
+
+        if 200 <= status_code < 300:
+            return ("[green]OK[/green]", f"{status_code}")
+
         return ("[green]OK[/green]", f"{status_code}")
 
     except (httpx.ConnectTimeout, httpx.ConnectError) as e:

@@ -66,12 +66,16 @@ async def _tls_worker(
     client: httpx.AsyncClient,
     tls_key: str,
     semaphore: asyncio.Semaphore,
+    stub_ips: set = None,
 ) -> None:
     """Фаза TLS: пишет результат в entry in-place."""
     if entry["dns_fake"] is not False:
         return
     try:
-        result = await check_domain_tls(entry["domain"], client, semaphore)
+        result = await check_domain_tls(
+            entry["domain"], client, semaphore,
+            stub_ips=stub_ips, resolved_ip=entry.get("resolved_ipv4")
+        )
     except Exception:
         result = ("[dim]ERR[/dim]", "Unknown error", 0.0)
     entry[tls_key] = result
@@ -81,13 +85,14 @@ async def _http_worker(
     entry: dict,
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
+    stub_ips: set = None,
 ) -> None:
     """Фаза HTTP: пишет результат в entry in-place."""
     if entry["dns_fake"] is not False:
         return
     async with semaphore:
         try:
-            result = await check_http_injection(entry["domain"], client, semaphore)
+            result = await check_http_injection(entry["domain"], client, semaphore, stub_ips=stub_ips)
         except Exception:
             result = ("[dim]ERR[/dim]", "Unknown error")
     entry["http_res"] = result
@@ -164,15 +169,15 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
 
     try:
         await _run_phase_with_progress(
-            [_tls_worker(e, client_t13, "t13v4_res", semaphore) for e in entries],
+            [_tls_worker(e, client_t13, "t13v4_res", semaphore, stub_ips) for e in entries],
             "Фаза 1/3: TLS 1.3..."
         )
         await _run_phase_with_progress(
-            [_tls_worker(e, client_t12, "t12_res", semaphore) for e in entries],
+            [_tls_worker(e, client_t12, "t12_res", semaphore, stub_ips) for e in entries],
             "Фаза 2/3: TLS 1.2..."
         )
         await _run_phase_with_progress(
-            [_http_worker(e, client_http, semaphore) for e in entries],
+            [_http_worker(e, client_http, semaphore, stub_ips) for e in entries],
             "Фаза 3/3: HTTP..."
         )
     finally:

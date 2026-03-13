@@ -29,36 +29,7 @@ FAT_DEFAULT_SNI: "example.com"
 FAT_CONNECT_TIMEOUT: 8.0
 FAT_READ_TIMEOUT: 12.0
 
-# === Отображение и анализ ===
-BODY_INSPECT_LIMIT: 8192
 USER_AGENT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
-
-# === Маркеры блокировок HTTP (в URL и заголовках) ===
-BLOCK_MARKERS:
-  - "lawfilter"
-  - "warning.rt.ru"
-  - "blocked"
-  - "access-denied"
-  - "eais"
-  - "zapret-info"
-  - "rkn.gov.ru"
-  - "mvd.ru"
-
-# === Маркеры блокировок в теле страницы (HTML) ===
-BODY_BLOCK_MARKERS:
-  - "blocked"
-  - "заблокирован"
-  - "запрещён"
-  - "запрещен"
-  - "ограничен"
-  - "единый реестр"
-  - "роскомнадзор"
-  - "rkn.gov.ru"
-  - "nap.gov.ru"
-  - "eais.rkn.gov.ru"
-  - "warning.rt.ru"
-  - "blocklist"
-  - "решению суда"
 
 # === Windows-специфичные errno коды ===
 WSAECONNRESET: 10054
