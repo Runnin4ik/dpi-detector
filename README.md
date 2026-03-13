@@ -131,9 +131,13 @@ python dpi_detector.py
 - Проекту [hyperion-cs/dpi-checkers](https://github.com/hyperion-cs/dpi-checkers) за вдохновение
 - **0ka** за помощь и консультации
 
+## 👀Похожие проекты
+Советуем также взглянуть:
+- [hyperion-cs/dpi-ch](https://github.com/hyperion-cs/dpi-checkers/tree/main/ru/dpi-ch) — _DPI comprehensive checker (go)_
+
 ## 💖 Поддержка проекта
 
-### [Чаевые картой или по СБП](https://pay.cloudtips.ru/p/1421d4c7)
+### [Картой или по СБП](https://pay.cloudtips.ru/p/1421d4c7)
 
 | Валюта   | Сеть   | Адрес                                              |
 |----------|--------|----------------------------------------------------|
