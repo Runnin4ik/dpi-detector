@@ -10,13 +10,16 @@ except ImportError:
 
 from pathlib import Path
 
+
 def load_config():
     if getattr(sys, 'frozen', False):
-        base_dir = Path(sys.executable).parent
+        exe_dir = Path(sys.executable).parent
+        external = exe_dir / "config.yml"
+        bundled  = Path(getattr(sys, '_MEIPASS', exe_dir)) / "config.yml"
+        yml_path = external if external.exists() else bundled
     else:
         base_dir = Path(__file__).resolve().parent.parent
-
-    yml_path = base_dir / "config.yml"
+        yml_path = base_dir / "config.yml"
 
     if not yml_path.exists():
         print(f"[!] КРИТИЧЕСКАЯ ОШИБКА: Файл конфигурации не найден!")
