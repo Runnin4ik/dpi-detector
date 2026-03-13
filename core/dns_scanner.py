@@ -4,7 +4,7 @@ import socket
 import asyncio
 from typing import Tuple, List, Union, Optional
 import httpx
-import config
+from utils import config
 from cli.console import console
 
 

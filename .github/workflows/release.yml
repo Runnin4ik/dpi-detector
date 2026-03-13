@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install httpx rich pyinstaller
+          pip install "httpx[socks]" rich pyinstaller pyyaml
 
       - name: Build with PyInstaller
         shell: bash
@@ -42,9 +42,11 @@ jobs:
           python -m PyInstaller --onefile --console --clean \
             --collect-all rich \
             --collect-all httpx \
+            --collect-all yaml \
             --add-data "domains.txt;." \
             --add-data "tcp16.json;." \
             --add-data "whitelist_sni.txt;." \
+            --add-data "config.yml;." \
             --name "$EXE_NAME" \
             dpi_detector.py
 

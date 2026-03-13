@@ -6,7 +6,7 @@ import string
 import time
 from typing import Tuple, Optional
 import httpx
-import config
+from utils import config
 from utils.error_classifier import classify_connect_error, classify_read_error
 
 # Предварительно генерируем пул случайных символов (100 КБ).

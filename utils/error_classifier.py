@@ -6,7 +6,7 @@ from typing import Tuple, Optional
 
 import httpx
 
-import config
+from utils import config
 
 
 # ── Утилиты для обхода цепочки исключений ────────────────────────────────────

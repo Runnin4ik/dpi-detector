@@ -11,7 +11,7 @@ COPY utils/ ./utils/
 COPY dpi_detector.py .
 COPY domains.txt .
 COPY tcp16.json .
-COPY config.py .
+COPY config.yml .
 COPY whitelist_sni.txt .
 
 CMD ["python", "dpi_detector.py"]

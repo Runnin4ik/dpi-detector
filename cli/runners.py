@@ -8,7 +8,7 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.live import Live
 
-import config
+from utils import config
 from cli.console import console
 from cli.ui import clean_hostname, build_domain_row
 from core.tls_scanner import check_domain_tls, check_http_injection, create_dpi_client

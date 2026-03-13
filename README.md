@@ -32,7 +32,7 @@
 
 1.  `domains.txt` — список доменов для проверки.
 2.  `tcp16.json` — цели для теста TCP 16-20KB.
-3.  `config.py` — конфигурация.
+3.  `config.yml` — конфигурация.
 4.  `whitelist_sni.txt` — список белых SNI для подбора рабочих
 
 > [!WARNING]  
@@ -59,7 +59,7 @@ docker run --rm -it ghcr.io/runnin4ik/dpi-detector:2.1.0
 docker run --rm -it --pull=always \
   -v $(pwd)/domains.txt:/app/domains.txt \
   -v $(pwd)/tcp16.json:/app/tcp16.json \
-  -v $(pwd)/config.py:/app/config.py \
+  -v $(pwd)/config.yml:/app/config.yml \
   -v $(pwd)/whitelist_sni.txt:/app/whitelist_sni.txt \
   ghcr.io/runnin4ik/dpi-detector:latest
 ```
@@ -71,7 +71,7 @@ PowerShell (Windows)
 docker run --rm -it --pull=always `
   -v ${PWD}/domains.txt:/app/domains.txt `
   -v ${PWD}/tcp16.json:/app/tcp16.json `
-  -v ${PWD}/config.py:/app/config.py `
+  -v ${PWD}/config.yml:/app/config.yml `
   -v ${PWD}/whitelist_sni.txt:/app/whitelist_sni.txt `
   ghcr.io/runnin4ik/dpi-detector:latest
 ```
@@ -81,14 +81,14 @@ CMD (Windows)
 docker run --rm -it --pull=always ^
   -v %cd%/domains.txt:/app/domains.txt ^
   -v %cd%/tcp16.json:/app/tcp16.json ^
-  -v %cd%/config.py:/app/config.py ^
+  -v %cd%/config.yml:/app/config.yml ^
   -v %cd%/whitelist_sni.txt:/app/whitelist_sni.txt ^
   ghcr.io/runnin4ik/dpi-detector:latest
 ```
 </details>
 
 ## 🐍 Python 3.8+
-**Требования:** httpx>=0.28, rich>=14.3
+**Требования:** httpx[socks]>=0.28.1, rich>=14.3.2, PyYAML>=6.0.3
 
 **Установка:**
 ```bash
@@ -112,7 +112,7 @@ python dpi_detector.py
 
 #### С кастомизацией
 
-Переопределите нужные файлы: `domains.txt`, `tcp16.json`, `config.py`, `whitelist_sni.txt`
+Переопределите нужные файлы: `domains.txt`, `tcp16.json`, `config.yml`, `whitelist_sni.txt`
 И положите их в папку рядом с `.exe` файлом.
 
 ## 🤝 Вклад в проект

@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-import config
+from utils import config
 from utils.error_classifier import (
     classify_ssl_error, classify_connect_error, classify_read_error,
     collect_error_text, find_cause, get_errno_from_chain,

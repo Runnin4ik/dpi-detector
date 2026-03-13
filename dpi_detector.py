@@ -16,7 +16,7 @@ except ImportError as e:
     print("Установите зависимости: python -m pip install -r requirements.txt")
     sys.exit(1)
 
-import config
+from utils import config
 from cli.console import console
 from cli.ui import ask_test_selection, print_legend
 from cli.runners import run_domains_test, run_tcp_test, run_whitelist_sni_test
