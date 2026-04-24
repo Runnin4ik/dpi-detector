@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "httpx[socks]" rich pyinstaller pyyaml
+          pip install "httpx[socks,http2]" rich pyinstaller pyyaml
 
       - name: Build with PyInstaller
         shell: bash
