@@ -16,7 +16,7 @@ RANDOM_POOL = "".join(random.choices(string.ascii_letters + string.digits, k=100
 async def _fat_probe_keepalive(
     client: httpx.AsyncClient, ip: str, port: int, sni: Optional[str],
     hint_rtt: Optional[float] = None,
-) -> Tuple[str, str, str]:
+) -> Tuple[str, str, str, Optional[float]]:
     """
     hint_rtt: если передан известный RTT (сек) — пропускаем фазу измерения
     и сразу используем его для dynamic_timeout. Ускоряет перебор SNI.
@@ -47,6 +47,8 @@ async def _fat_probe_keepalive(
     if sni and port != 80:
         extensions["sni_hostname"] = sni
 
+    measured_rtt = hint_rtt
+
     for i in range(chunks_count):
         headers = base_headers.copy()
         # i=0 — чистый запрос без X-Pad: только проверяем что сервер живой.
@@ -75,6 +77,8 @@ async def _fat_probe_keepalive(
 
             if i == 0:
                 alive_str = "[green]Да[/green]"
+                if measured_rtt is None:
+                    measured_rtt = elapsed
 
             # Измеряем RTT на первых 2 запросах только если hint не был передан
             if hint_rtt is None and i < 2:
@@ -89,29 +93,29 @@ async def _fat_probe_keepalive(
         except (httpx.ConnectTimeout, httpx.ConnectError) as e:
             label, detail, _ = classify_connect_error(e, 0)
             if i == 0:
-                return "[red]Нет[/red]", label, detail
-            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*4}KB"
+                return "[red]Нет[/red]", label, detail, measured_rtt
+            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*4}KB", measured_rtt
 
         except (httpx.ReadTimeout, httpx.WriteTimeout) as e:
             err_type = "Read Timeout" if isinstance(e, httpx.ReadTimeout) else "Write Timeout"
             if i == 0:
-                return "[green]Да[/green]", f"[red]{err_type.upper()}[/red]", err_type
-            return alive_str, "[bold red]DETECTED[/bold red]", f"{err_type} at {i*4}KB"
+                return "[green]Да[/green]", f"[red]{err_type.upper()}[/red]", err_type, measured_rtt
+            return alive_str, "[bold red]DETECTED[/bold red]", f"{err_type} at {i*4}KB", measured_rtt
 
         except Exception as e:
             # Для ReadError, WriteError, RemoteProtocolError и любых других
             label, detail, _ = classify_read_error(e, 0)
             if i == 0:
-                return "[green]Да[/green]", label, detail
-            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*4}KB"
+                return "[green]Да[/green]", label, detail, measured_rtt
+            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*4}KB", measured_rtt
 
-    return alive_str, "[green]OK[/green]", ""
+    return alive_str, "[green]OK[/green]", "", measured_rtt
 
 
 async def check_tcp_16_20(
     ip: str, port: int, sni: Optional[str], semaphore: asyncio.Semaphore,
     hint_rtt: Optional[float] = None,
-) -> Tuple[str, str, str]:
+) -> Tuple[str, str, str, Optional[float]]:
     async with semaphore:
         verify_ctx = ssl.create_default_context()
         verify_ctx.check_hostname = False
