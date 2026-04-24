@@ -99,7 +99,7 @@ docker run --rm -it --pull=always ^
 </details>
 
 ## 🐍 Python 3.8+
-**Требования:** httpx[socks]>=0.28.1, rich>=14.3.2, PyYAML>=6.0.3
+**Требования:** httpx[socks,http2]>=0.28.1, rich>=14.3.2, PyYAML>=6.0.3
 
 **Установка:**
 ```bash
