@@ -4,6 +4,7 @@ import math
 import errno
 import asyncio
 import socket
+from utils.network import get_fake_ip_type
 from typing import Tuple
 from urllib.parse import urlparse
 
@@ -82,8 +83,17 @@ async def _check_tls_single(
     bytes_read = 0
     url = f"https://{domain}"
 
-    if stub_ips and resolved_ip and resolved_ip in stub_ips:
-        return ("[bold red]ISP PAGE[/bold red]", f"DNS заглушка {resolved_ip}", 0, 0.0)
+    if resolved_ip:
+        fake_type = get_fake_ip_type(resolved_ip)
+
+        # Если это не Fake-IP, но адрес есть в заглушках провайдера -> это ISP
+        if fake_type != "fakeip" and stub_ips and resolved_ip in stub_ips:
+            fake_type = "isp"
+
+        if fake_type == "isp":
+            return ("[bold red]ISP PAGE[/bold red]", f"Заглушка провайдера {resolved_ip}", 0, 0.0)
+        elif fake_type == "local":
+            return ("[bold yellow]LOCAL IP[/bold yellow]", f"Локальный IP {resolved_ip}", 0, 0.0)
 
     async with semaphore:
         start = time.time()
