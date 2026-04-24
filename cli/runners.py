@@ -14,7 +14,7 @@ from cli.ui import clean_hostname, build_domain_row
 from core.tls_scanner import check_domain_tls, check_http_injection, create_dpi_client
 from core.tcp16_scanner import check_tcp_16_20, check_tcp_16_20_with_rtt
 from core.telegram_scanner import run_telegram_test as _run_telegram_test
-from utils.network import get_resolved_ip
+from utils.network import get_resolved_ip, get_fake_ip_type
 
 
 # ── Воркеры ──────────────────────────────────────────────────────────────────
@@ -51,16 +51,28 @@ async def _resolve_worker(domain_raw: str, semaphore: asyncio.Semaphore, stub_ip
         entry["dns_fake"]  = None
         return entry
 
-    if stub_ips and resolved_ipv4 in stub_ips:
-        fake = "[bold red]DNS FAKE[/bold red]"
-        detail = f"DNS подмена -> {resolved_ipv4}"
-        entry["t13v4_res"] = (fake, detail, 0.0)
-        entry["t12_res"]   = (fake, detail, 0.0)
-        entry["http_res"]  = (fake, detail)
-        entry["dns_fake"]  = True
+        fake_type = get_fake_ip_type(resolved_ipv4)
+        if fake_type != "fakeip" and stub_ips and resolved_ipv4 in stub_ips:
+            fake_type = "isp"
+
+        if fake_type == "isp":
+            fake = "[bold red]DNS FAKE[/bold red]"
+            detail = f"Заглушка провайдера -> {resolved_ipv4}"
+            entry["t13v4_res"] = (fake, detail, 0.0)
+            entry["t12_res"]   = (fake, detail, 0.0)
+            entry["http_res"]  = (fake, detail)
+            entry["dns_fake"]  = True
+        elif fake_type == "local":
+            fake = "[bold yellow]LOCAL IP[/bold yellow]"
+            detail = f"Локальный IP -> {resolved_ipv4}"
+            entry["t13v4_res"] = (fake, detail, 0.0)
+            entry["t12_res"]   = (fake, detail, 0.0)
+            entry["http_res"]  = (fake, detail)
+            entry["dns_fake"]  = True
+
+        return entry
 
     return entry
-
 
 async def _tls_worker(
     entry: dict,
@@ -104,7 +116,7 @@ async def _tcp16_worker(item: dict, semaphore: asyncio.Semaphore) -> list:
     port = int(item.get("port", 443))
     sni  = None if port == 80 else (item.get("sni") or config.FAT_DEFAULT_SNI)
 
-    alive_str, status, detail = await check_tcp_16_20(ip, port, sni, semaphore)
+    alive_str, status, detail, rtt = await check_tcp_16_20(ip, port, sni, semaphore)
 
     asn_raw = str(item.get("asn", "")).strip()
     asn_str = (
@@ -112,6 +124,11 @@ async def _tcp16_worker(item: dict, semaphore: asyncio.Semaphore) -> list:
         if asn_raw and not asn_raw.upper().startswith("AS")
         else asn_raw.upper()
     ) or "-"
+
+    if rtt is not None:
+        rtt_ms = f"{int(rtt * 1000)}мс"
+        detail = f"{detail}"
+        #detail = f"{detail} | {rtt_ms}" if detail else rtt_ms
 
     return [item["id"], asn_str, item["provider"], alive_str, status, detail]
 
@@ -187,13 +204,25 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
         await client_http.aclose()
 
     rows = sorted([build_domain_row(e) for e in entries], key=lambda x: x[0])
-
     dns_fail_count = 0
-    resolved_ips_counter: dict = {}
+    isp_stubs = {}
+    local_stubs = {}
+    fakeip_stubs = {}
+
     for r in rows:
         resolved_ip = r[5] if len(r) > 5 else None
-        if resolved_ip and stub_ips and resolved_ip in stub_ips:
-            resolved_ips_counter[resolved_ip] = resolved_ips_counter.get(resolved_ip, 0) + 1
+        if resolved_ip:
+            ftype = get_fake_ip_type(resolved_ip)
+            if ftype != "fakeip" and stub_ips and resolved_ip in stub_ips:
+                ftype = "isp"
+
+            if ftype == "isp":
+                isp_stubs[resolved_ip] = isp_stubs.get(resolved_ip, 0) + 1
+            elif ftype == "local":
+                local_stubs[resolved_ip] = local_stubs.get(resolved_ip, 0) + 1
+            elif ftype == "fakeip":
+                fakeip_stubs[resolved_ip] = fakeip_stubs.get(resolved_ip, 0) + 1
+
         if any("DNS FAIL" in r[col] for col in (1, 2, 3)):
             dns_fail_count += 1
 
@@ -201,19 +230,38 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
         table.add_row(*r[:5])
     console.print(table)
 
-    confirmed_stubs = {ip: c for ip, c in resolved_ips_counter.items() if stub_ips and ip in stub_ips}
-    if confirmed_stubs or dns_fail_count > 0:
-        console.print(f"\n[bold yellow][i][!] НА ВАШЕМ УСТРОЙСТВЕ/РОУТЕРЕ НЕ НАСТРОЕН DoH:[/bold yellow]")
-        if confirmed_stubs:
-            ips_text = [f"[red]{ip}[/red] у {c} доменов" for ip, c in confirmed_stubs.items()]
-            console.print(f"DNS вернул IP заглушки: {', '.join(ips_text)}")
+    if isp_stubs or local_stubs or fakeip_stubs or dns_fail_count > 0:
+        console.print(f"\n[bold yellow][i][!] ИНФОРМАЦИЯ О DNS РЕЗОЛВЕ:[/bold yellow]")
+
+        if fakeip_stubs:
+            total_fake = sum(fakeip_stubs.values())
+            console.print(f"Трафик перехватывается Fake-IP: у [green]{total_fake}[/green] доменов")
+
+        if isp_stubs:
+            total_isp = sum(isp_stubs.values())
+            if len(isp_stubs) <= 3:
+                ips_text = [f"[red]{ip}[/red]" for ip in isp_stubs.keys()]
+                console.print(f"DNS вернул IP заглушки провайдера ({', '.join(ips_text)}): у {total_isp} доменов")
+            else:
+                console.print(f"DNS вернул IP заглушки провайдера: у [red]{total_isp}[/red] доменов")
+
+        if local_stubs:
+            total_local = sum(local_stubs.values())
+            if len(local_stubs) <= 3:
+                ips_text = [f"[yellow]{ip}[/yellow]" for ip in local_stubs.keys()]
+                console.print(f"DNS вернул локальные IP (работает AdGuard/hosts?): ({', '.join(ips_text)}): у {total_local} доменов")
+            else:
+                console.print(f"DNS вернул локальные IP (AdGuard/hosts/Pi-hole?): у [yellow]{total_local}[/yellow] доменов")
+
         if dns_fail_count > 0:
             console.print(f"У {dns_fail_count} сайтов обнаружен DNS FAIL (Домен не найден)")
-        console.print("[yellow]Рекомендация: Настройте DoH на вашем устройстве и роутере[/yellow]\n")
-        console.print("После настройки сбросьте кеш DNS:")
-        console.print("Windows: [dim]ipconfig /flushdns[/dim]")
-        console.print("MacOS: [dim]sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder[/dim]")
-        console.print("Linux: [dim]sudo resolvectl flush-caches[/dim]\n")
+
+        if isp_stubs or dns_fail_count > 0:
+            console.print("[yellow]Рекомендация: Настройте DoH на вашем устройстве и роутере[/yellow]\n")
+            console.print("После настройки сбросьте кеш DNS:")
+            console.print("Windows: [dim]ipconfig /flushdns[/dim]")
+            console.print("MacOS: [dim]sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder[/dim]")
+            console.print("Linux: [dim]sudo resolvectl flush-caches[/dim]\n")
 
     block_markers = ("TLS DPI", "TLS MITM", "TLS BLOCK", "ISP PAGE", "BLOCKED", "TCP RST", "TCP ABORT")
     return {
@@ -402,7 +450,7 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
 
         # Шаг 0: без SNI
         try:
-            _a, st0, d0 = await check_tcp_16_20(ip, 443, "", semaphore, hint_rtt=hint)
+            _a, st0, d0, _rtt = await check_tcp_16_20(ip, 443, "", semaphore, hint_rtt=hint)
             if "OK" in st0:
                 found.append(("(без SNI)", 0))
             elif "DETECTED" not in st0 and "at " not in d0:
@@ -422,7 +470,7 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
                     break
 
                 async def _one(sni: str):
-                    _a, s, d = await check_tcp_16_20(ip, 443, sni, semaphore, hint_rtt=hint)
+                    _a, s, d, _rtt = await check_tcp_16_20(ip, 443, sni, semaphore, hint_rtt=hint)
                     return sni, s, d
 
                 results = await asyncio.gather(

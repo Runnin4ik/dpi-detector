@@ -134,7 +134,7 @@ def classify_ssl_error(error: ssl.SSLError, bytes_read: int) -> Tuple[str, str, 
         return ("[bold red]TLS MITM[/bold red]", "Cipher mismatch", bytes_read)
 
     if "version" in msg or "protocol version" in msg:
-        return ("[bold red]BLOCK[/bold red]", "TLS version block", bytes_read)
+        return ("[bold red]NO TLS1.3[/bold red]", "Server has no TLS 1.3", bytes_read)
 
     if isinstance(error, ssl.SSLZeroReturnError):
         # Close notify в неожиданный момент — признак DPI или блокировки

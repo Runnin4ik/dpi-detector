@@ -22,7 +22,11 @@ from utils import config
 from cli.console import console
 from cli.ui import ask_test_selection, print_legend
 from cli.runners import run_domains_test, run_tcp_test, run_whitelist_sni_test, run_telegram_test
-from core.dns_scanner import check_dns_integrity, collect_stub_ips_silently
+from core.dns_scanner import (
+    check_dns_integrity,
+    check_dns_availability,
+    collect_stub_ips_silently,
+)
 from utils.files import load_domains, load_tcp_targets, load_whitelist_sni, get_base_dir
 
 CURRENT_VERSION = "3.1.0"
@@ -37,15 +41,14 @@ def parse_arguments():
         description="DPI Detector — Анализатор блокировок трафика",
         formatter_class=argparse.RawTextHelpFormatter
     )
-
-    parser.add_argument("-t", "--tests", type=str, help="Список тестов для запуска (например: 123 или 24). Пропускает стартовое меню.")
-    parser.add_argument("-p", "--proxy", type=str, help="URL прокси (напр: socks5://127.0.0.1:1080) (PROXY_URL)")
+    parser.add_argument("-t", "--tests",       type=str, help="Список тестов для запуска (например: 123 или 24). Пропускает стартовое меню.")
+    parser.add_argument("-p", "--proxy",       type=str, help="URL прокси (напр: socks5://127.0.0.1:1080) (PROXY_URL)")
     parser.add_argument("-c", "--concurrency", type=int, help="Максимальное количество параллельных запросов (MAX_CONCURRENT)")
-    parser.add_argument("-d", "--domain", type=str, action="append", help="Проверить конкретный домен(ы), игнорируя domains.txt.\nМожно указывать несколько раз: -d vk.com -d ya.ru")
-    parser.add_argument("-o", "--output", type=str, help="Путь для автосохранения отчета (например: report.txt).")
-    parser.add_argument("--batch", action="store_true", help="Отключает паузы и вопросы")
-
+    parser.add_argument("-d", "--domain",      type=str, action="append", help="Проверить конкретный домен(ы), игнорируя domains.txt.\nМожно указывать несколько раз: -d vk.com -d ya.ru")
+    parser.add_argument("-o", "--output",      type=str, help="Путь для автосохранения отчета (например: report.txt).")
+    parser.add_argument("--batch",             action="store_true", help="Отключает паузы и вопросы")
     return parser.parse_args()
+
 
 async def _fetch_latest_version() -> Optional[str]:
     """Запрашивает последний тег с GitHub API. Возвращает строку версии или None."""
@@ -63,11 +66,10 @@ async def _fetch_latest_version() -> Optional[str]:
 
 
 def fast_exit_handler(sig, frame):
-    """Принудительный выход по первому Ctrl+C."""
-    # Используем системный принт, т.к. rich может быть заблокирован
     sys.stdout.write("\n\033[91m\033[1mПрервано пользователем.\033[0m\n")
     sys.stdout.flush()
     os._exit(0)
+
 
 async def _readline_cancelable() -> str:
     loop = asyncio.get_running_loop()
@@ -78,13 +80,12 @@ async def _readline_cancelable() -> str:
     except asyncio.CancelledError:
         raise KeyboardInterrupt
 
+
 def _flush_stdin() -> None:
-    """Сбрасывает накопившиеся данные в stdin чтобы буферные Enter не перезапускали тест."""
     try:
         import termios
         termios.tcflush(sys.stdin, termios.TCIFLUSH)
     except Exception:
-        # Windows и другие окружения — лучшее что можно сделать без блокировки
         try:
             import msvcrt
             while msvcrt.kbhit():
@@ -94,43 +95,70 @@ def _flush_stdin() -> None:
 
 
 def _format_summary(
-    run_dns: bool, run_domains: bool, run_tcp: bool, run_telegram: bool,
-    dns_intercept: int, domain_stats, tcp_stats,
+    run_dns: bool,
+    run_dns_avail: bool,
+    run_domains: bool,
+    run_tcp: bool,
+    run_telegram: bool,
+    dns_intercept: int,
+    domain_stats,
+    tcp_stats,
     telegram_stats=None,
-    doh_unavailable=False,
+    doh_unavailable: bool = False,
+    dns_avail_stats=None,
 ) -> List[str]:
     lines = []
 
+    # ── Тест 1: подмена DNS ───────────────────────────────────────────────────
     if run_dns:
         total_dns = len(config.DNS_CHECK_DOMAINS)
         ok_dns = total_dns - dns_intercept
         if doh_unavailable:
             lines.append(
-                f"[bold]DNS[/bold]          "
+                f"[bold]DNS подмена[/bold]      "
                 f"[red]× DoH заблокирован провайдером[/red]"
             )
         elif dns_intercept == 0:
             lines.append(
-                f"[bold]DNS[/bold]          "
+                f"[bold]DNS подмена[/bold]      "
                 f"[green]√ {ok_dns}/{total_dns} не подменяется[/green]"
             )
         elif dns_intercept == total_dns:
             lines.append(
-                f"[bold]DNS[/bold]          "
+                f"[bold]DNS подмена[/bold]      "
                 f"[red]× {dns_intercept}/{total_dns} подменяется провайдером[/red]"
             )
         else:
             lines.append(
-                f"[bold]DNS[/bold]          "
+                f"[bold]DNS подмена[/bold]      "
                 f"[green]√ {ok_dns}/{total_dns} OK[/green]"
-                f"  [red]× {dns_intercept}/{total_dns} подменяется провайдером[/red]"
+                f"  [red]× {dns_intercept}/{total_dns} подменяется[/red]"
             )
 
+    # ── Тест 2: доступность DNS ───────────────────────────────────────────────
+    if run_dns_avail:
+        if dns_avail_stats:
+            d = dns_avail_stats
+            doh_color = "green" if d["doh_ok"] == d["doh_total"] else (
+                "red" if d["doh_ok"] == 0 else "yellow"
+            )
+            udp_color = "green" if d["udp_ok"] == d["udp_total"] else (
+                "red" if d["udp_ok"] == 0 else "yellow"
+            )
+            lines.append(
+                f"[bold]DNS доступность[/bold]  "
+                f"[{doh_color}]{d['doh_ok']}/{d['doh_total']} DoH[/{doh_color}]"
+                f"  [{udp_color}]{d['udp_ok']}/{d['udp_total']} UDP[/{udp_color}]"
+            )
+        else:
+            lines.append("[bold]DNS доступность[/bold]  [dim]—[/dim]")
+
+    # ── Тест 3: домены ────────────────────────────────────────────────────────
     if domain_stats:
         d = domain_stats
         pct = int(d["ok"] / d["total"] * 100) if d["total"] else 0
         line = (
-            f"[bold]Домены[/bold]       "
+            f"[bold]Домены[/bold]           "
             f"[green]√ {d['ok']}/{d['total']} OK[/green]"
             + (f"  [red]× {d['blocked']} блок.[/red]" if d['blocked'] else "")
             + (f"  [yellow]⏱ {d['timeout']} таймаут[/yellow]" if d['timeout'] else "")
@@ -138,11 +166,12 @@ def _format_summary(
         )
         lines.append(line)
 
+    # ── Тест 4: TCP 16-20KB ───────────────────────────────────────────────────
     if tcp_stats:
         t = tcp_stats
         pct = int(t["ok"] / t["total"] * 100) if t["total"] else 0
         line = (
-            f"[bold]TCP 16-20KB[/bold]  "
+            f"[bold]TCP 16-20KB[/bold]      "
             f"[green]√ {t['ok']}/{t['total']} OK[/green]"
             + (f"  [red]× {t['blocked']} блок.[/red]" if t['blocked'] else "")
             + (f"  [yellow]≈ {t['mixed']} смеш.[/yellow]" if t['mixed'] else "")
@@ -150,18 +179,18 @@ def _format_summary(
         )
         lines.append(line)
 
+    # ── Тест 6: Telegram ──────────────────────────────────────────────────────
     if run_telegram and telegram_stats:
         t = telegram_stats
         dl_data = t.get("download", {})
         ul_data = t.get("upload", {})
         dc_r, dc_t = t.get("dc_reachable", 0), t.get("dc_total", 0)
 
-        def format_tg_line(label, data, speed_key, size_key):
-            st = data.get("status")
-            avg = data.get(speed_key, 0)
+        def _fmt_tg(label, data, speed_key, size_key):
+            st   = data.get("status")
+            avg  = data.get(speed_key, 0)
             size = data.get(size_key, 0)
             drop = data.get("drop_at_sec")
-
             if st == "ok":
                 raw_st, color = "ОК", "green"
             elif st == "stalled":
@@ -172,18 +201,13 @@ def _format_summary(
                 raw_st, color = "НЕДОСТУПНО", "red"
             else:
                 raw_st, color = "ОШИБКА", "red"
-
-            status_text = f"[{color}]{raw_st:<16}[/{color}]"
-
             metrics = f"ср. {_tg_fmt(avg)}, {_tg_size(size)}"
             if drop:
                 metrics += f", обрыв на {drop}с"
+            return f"[bold]{label:<13}[/bold] [{color}]{raw_st:<16}[/{color}] {metrics}"
 
-            return f"[bold]{label:<13}[/bold] {status_text} {metrics}"
-
-        lines.append(format_tg_line("TG Скачивание", dl_data, "avg_bps", "bytes_total"))
-        lines.append(format_tg_line("TG Загрузка", ul_data, "bps", "sent"))
-
+        lines.append(_fmt_tg("TG Скачивание", dl_data, "avg_bps", "bytes_total"))
+        lines.append(_fmt_tg("TG Загрузка",   ul_data, "bps",     "sent"))
         dc_color = "green" if dc_r == dc_t else ("red" if dc_r == 0 else "yellow")
         lines.append(f"[bold]{'TG Датацентры':<13}[/bold] [{dc_color}]ОК {dc_r}/{dc_t}[/{dc_color}]")
 
@@ -191,16 +215,13 @@ def _format_summary(
 
 
 def is_newer(latest: str, current: str) -> bool:
-    """Сравнивает версии. Возвращает True, если на GitHub версия выше текущей."""
     try:
         def parse(v):
             return tuple(int(x) for x in v.replace('v', '').split('.') if x.isdigit())
-
-        l_parts = parse(latest)
-        c_parts = parse(current)
-        return l_parts > c_parts
+        return parse(latest) > parse(current)
     except Exception:
         return False
+
 
 async def main():
     args = parse_arguments()
@@ -231,13 +252,16 @@ async def main():
     else:
         selection = await ask_test_selection()
 
-    run_dns     = "1" in selection
-    run_domains = "2" in selection
-    run_tcp     = "3" in selection
-    run_wl_sni  = "4" in selection
-    run_telegram = "5" in selection
-    run_legend  = "6" in selection
-    only_legend = run_legend and not any([run_dns, run_domains, run_tcp, run_wl_sni, run_telegram])
+    run_dns       = "1" in selection   # Тест 1: подмена DNS
+    run_dns_avail = "2" in selection   # Тест 2: доступность DNS-серверов
+    run_domains   = "3" in selection   # Тест 3: доступность доменов (TLS/HTTP)
+    run_tcp       = "4" in selection   # Тест 4: TCP 16-20KB блокировка
+    run_wl_sni    = "5" in selection   # Тест 5: белые SNI для ASN
+    run_telegram  = "6" in selection   # Тест 6: Telegram
+    run_legend    = "7" in selection   # Тест 7: Легенда
+    only_legend   = run_legend and not any([
+        run_dns, run_dns_avail, run_domains, run_tcp, run_wl_sni, run_telegram
+    ])
 
     if only_legend:
         print_legend()
@@ -268,7 +292,7 @@ async def main():
     semaphore = asyncio.Semaphore(config.MAX_CONCURRENT)
 
     while True:
-        # ── DNS ───────────────────────────────────────────────────────────────
+        # ── Тест 1: подмена DNS ───────────────────────────────────────────────
         stub_ips: set = set()
         dns_intercept_count = 0
         doh_unavailable = False
@@ -284,36 +308,47 @@ async def main():
             except asyncio.TimeoutError:
                 stub_ips = set()
 
-        # ── Домены ────────────────────────────────────────────────────────────
+        # ── Тест 2: доступность DNS-серверов ─────────────────────────────────
+        dns_avail_stats = None
+        if run_dns_avail:
+            dns_avail_stats = await check_dns_availability()
+
+        # ── Тест 3: домены ────────────────────────────────────────────────────
         domain_stats = None
         if run_domains:
             domain_stats = await run_domains_test(semaphore, stub_ips, DOMAINS)
 
-        # ── TCP 16-20KB ───────────────────────────────────────────────────────
+        # ── Тест 4: TCP 16-20KB ───────────────────────────────────────────────
         tcp_stats = None
         if run_tcp:
             tcp_stats = await run_tcp_test(semaphore, TCP_16_20_ITEMS)
 
-        # ── Белые SNI ─────────────────────────────────────────────────────────
+        # ── Тест 5: белые SNI ─────────────────────────────────────────────────
         if run_wl_sni:
             if WHITELIST_SNI:
                 await run_whitelist_sni_test(semaphore, TCP_16_20_ITEMS, WHITELIST_SNI)
             else:
-                console.print("[yellow]Файл whitelist_sni.txt пуст или не найден — тест 4 пропущен.[/yellow]")
+                console.print("[yellow]Файл whitelist_sni.txt пуст или не найден — тест 5 пропущен.[/yellow]")
 
-
-        # ── Telegram ──────────────────────────────────────────────────────────
+        # ── Тест 6: Telegram ──────────────────────────────────────────────────
         telegram_stats = None
         if run_telegram:
             telegram_stats = await run_telegram_test(semaphore)
+
         # ── Итоговая сводка ───────────────────────────────────────────────────
-        active_tests = sum([run_dns, run_domains, run_tcp, run_wl_sni, run_telegram])
         console.print()
         summary_lines = _format_summary(
-            run_dns, run_domains, run_tcp, run_telegram,
-            dns_intercept_count, domain_stats, tcp_stats,
+            run_dns=run_dns,
+            run_dns_avail=run_dns_avail,
+            run_domains=run_domains,
+            run_tcp=run_tcp,
+            run_telegram=run_telegram,
+            dns_intercept=dns_intercept_count,
+            domain_stats=domain_stats,
+            tcp_stats=tcp_stats,
             telegram_stats=telegram_stats,
             doh_unavailable=doh_unavailable,
+            dns_avail_stats=dns_avail_stats,
         )
         console.print(Panel(
             "\n".join(summary_lines),
@@ -323,10 +358,9 @@ async def main():
             expand=False,
         ))
 
-
         console.print("\n[bold green]Проверка завершена.[/bold green]")
 
-        # ── Уведомление о новой версии ────────────────────────
+        # ── Уведомление о новой версии ────────────────────────────────────────
         if not latest_version_notified:
             try:
                 latest = await asyncio.wait_for(asyncio.shield(version_task), timeout=0.1)
@@ -352,7 +386,7 @@ async def main():
             "\nНажмите [bold green]Enter[/bold green] чтобы повторить проверку "
             "или [bold red]Ctrl+C[/bold red] для выхода"
         )
-        _flush_stdin()  # сбрасываем накопившиеся Enter чтобы не было авто-перезапуска
+        _flush_stdin()
         try:
             await _readline_cancelable()
         except KeyboardInterrupt:
