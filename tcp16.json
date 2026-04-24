@@ -3,7 +3,6 @@
     {"id": "HE-02", "asn": "24940☆", "provider": "Hetzner", "ip": "46.62.154.37", "port": 443},
     {"id": "HE-02", "asn": "24940☆", "provider": "Hetzner HTTP", "ip": "185.189.229.124", ",port": 80},
     {"id": "HE-03", "asn": "213230", "provider": "Hetzner Cloud 2", "ip": "5.161.249.234", "port": 443},
-    {"id": "HE-04", "asn": "213230", "provider": "Hetzner Cloud 2", "ip": "178.156.198.203", "port": 443},
     {"id": "HE-05", "asn": "212317", "provider": "Hetzner Cloud 3", "ip": "5.78.155.139", "port": 443},
     {"id": "HE-06", "asn": "212317", "provider": "Hetzner Cloud 3", "ip": "5.78.82.109", "port": 443},
     {"id": "HE-07", "asn": "215859", "provider": "Hetzner Cloud 4", "ip": "5.223.45.178", "port": 443},
@@ -51,7 +50,6 @@
     {"id": "CNT-03", "asn": "51167", "provider": "Contabo 1", "ip": "185.211.6.51", "port": 443},
     {"id": "CNT-04", "asn": "51167", "provider": "Contabo 1", "ip": "5.189.159.58", "port": 443},
 
-    {"id": "CNT-05", "asn": "141995", "provider": "Contabo 2", "ip": "217.217.252.183", "port": 443},
     {"id": "CNT-06", "asn": "141995", "provider": "Contabo 2", "ip": "147.93.153.44", "port": 443},
     {"id": "CNT-07", "asn": "141995", "provider": "Contabo 2", "ip": "94.136.190.9", "port": 443},
 
@@ -103,7 +101,6 @@
 
     {"id": "DO-01", "asn": "14061", "provider": "DigitalOcean 1", "ip": "157.230.91.62", "port": 443},
     {"id": "DO-02", "asn": "14061", "provider": "DigitalOcean 1", "ip": "138.68.63.162", "port": 443},
-    {"id": "DO-03", "asn": "14061", "provider": "DigitalOcean 1", "ip": "159.203.180.157", "port": 443},
     {"id": "DO-04", "asn": "14061", "provider": "DigitalOcean 1", "ip": "147.182.168.41", "port": 443},
     {"id": "DO-05", "asn": "14061", "provider": "DigitalOcean 1", "ip": "45.55.107.70", "port": 443},
 
@@ -118,7 +115,6 @@
     {"id": "MBC-01", "asn": "8849", "provider": "Melbicom 1", "ip": "193.35.224.194", "port": 443},
     {"id": "MBC-03", "asn": "56630", "provider": "Melbicom 2", "ip": "185.6.14.1", "port": 443},
 
-    {"id": "FT-01", "asn": "53667", "provider": "FranTech", "ip": "104.244.74.134", "port": 443},
     {"id": "FT-02", "asn": "53667", "provider": "FranTech", "ip": "198.251.88.98", "port": 443},
 
     {"id": "СV-01", "asn": "62240", "provider": "Clouvider", "ip": "130.185.249.20", "port": 443},
