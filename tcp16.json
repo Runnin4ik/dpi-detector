@@ -20,7 +20,7 @@
     {"id": "CDN-03", "asn": "60068", "provider": "CDN77 #1", "ip": "169.150.239.5", "port": 443},
     {"id": "CDN-04", "asn": "60068", "provider": "CDN77 #1 HTTP", "ip": "84.17.50.100", "port": 80},
 
-    {"id": "CDN-05", "asn": "212238", "provider": "CDN77 #2", "ip": "82.27.130.121", "port": 443},
+    {"id": "CDN-05", "asn": "212238", "provider": "CDN77 #2", "ip": "169.150.208.1", "port": 443},
     {"id": "CDN-06", "asn": "212238", "provider": "CDN77 #2", "ip": "194.32.146.68", "port": 443},
     {"id": "CDN-07", "asn": "212238", "provider": "CDN77 #2", "ip": "173.211.70.143", "port": 443},
 
@@ -32,18 +32,15 @@
     {"id": "AK-06", "asn": "16625", "provider": "Akamai 2", "ip": "184.31.208.5", "port": 443},
     {"id": "AK-07", "asn": "12222", "provider": "Akamai 3", "ip": "23.62.225.111", "port": 443},
     {"id": "AK-08", "asn": "12222", "provider": "Akamai 3", "ip": "88.221.209.114", "port": 443},
-    {"id": "AK-09", "asn": "33905", "provider": "Akamai 4", "ip": "23.11.41.163", "port": 443, "sni": "media.miele.com"},
-    {"id": "AK-10", "asn": "63949", "provider": "Akamai Cloud", "ip": "172.236.2.30", "port": 443, "sni": "media.miele.com"},
-    {"id": "AK-11", "asn": "63949", "provider": "Akamai Cloud", "ip": "212.71.233.10", "port": 443, "sni": "media.miele.com"},
+    {"id": "AK-09", "asn": "33905", "provider": "Akamai 4", "ip": "23.1.106.160", "port": 443},
     {"id": "AK-10", "asn": "63949", "provider": "Akamai Cloud", "ip": "172.236.2.30", "port": 443},
     {"id": "AK-11", "asn": "63949", "provider": "Akamai Cloud", "ip": "212.71.233.10", "port": 443},
 
-    {"id": "AWS-01", "asn": "16509☆", "provider": "AWS 1", "ip": "16.15.219.241", "port": 443},
     {"id": "AWS-02", "asn": "16509☆", "provider": "AWS 1", "ip": "76.223.67.41", "port": 443},
     {"id": "AWS-03", "asn": "16509☆", "provider": "AWS 1", "ip": "168.100.27.4", "port": 443},
     {"id": "AWS-04", "asn": "14618", "provider": "AWS 2", "ip": "54.196.100.238", "port": 443},
     {"id": "AWS-05", "asn": "14618", "provider": "AWS 2", "ip": "148.5.72.176", "port": 443},
-    {"id": "AWS-06", "asn": "8987", "provider": "AWS 3", "ip": "198.22.163.54", "port": 443},
+    {"id": "AWS-06", "asn": "8987", "provider": "AWS 3", "ip": "52.119.209.76", "port": 443},
     {"id": "AWS-07", "asn": "8987", "provider": "AWS 3", "ip": "108.175.48.27", "port": 443},
 
     {"id": "CNT-01", "asn": "51167", "provider": "Contabo 1", "ip": "173.249.28.198", "port": 443},
@@ -51,7 +48,7 @@
     {"id": "CNT-03", "asn": "51167", "provider": "Contabo 1", "ip": "185.211.6.51", "port": 443},
     {"id": "CNT-04", "asn": "51167", "provider": "Contabo 1", "ip": "5.189.159.58", "port": 443},
 
-    {"id": "CNT-05", "asn": "141995", "provider": "Contabo 2", "ip": "217.217.252.183", "port": 443},
+    {"id": "CNT-05", "asn": "141995", "provider": "Contabo 2", "ip": "62.72.43.174", "port": 443},
     {"id": "CNT-06", "asn": "141995", "provider": "Contabo 2", "ip": "147.93.153.44", "port": 443},
     {"id": "CNT-07", "asn": "141995", "provider": "Contabo 2", "ip": "94.136.190.9", "port": 443},
 
@@ -99,11 +96,12 @@
     {"id": "SW-04", "asn": "12876", "provider": "Scaleway 1 HTTP", "ip": "163.172.223.99", "port": 80},
     {"id": "SW-05", "asn": "29447", "provider": "Scaleway 2", "ip": "81.56.227.171", "port": 443},
     {"id": "SW-06", "asn": "29447", "provider": "Scaleway 2", "ip": "83.158.240.200", "port": 443},
-    {"id": "SW-07", "asn": "29447", "provider": "Scaleway 2", "ip": "81.56.11.201", "port": 443},
+    {"id": "SW-07", "asn": "29447", "provider": "Scaleway 2", "ip": "81.57.105.106", "port": 443},
+    {"id": "SW-08", "asn": "29447", "provider": "Scaleway 2", "ip": "81.56.32.219", "port": 443},
 
     {"id": "DO-01", "asn": "14061", "provider": "DigitalOcean 1", "ip": "157.230.91.62", "port": 443},
     {"id": "DO-02", "asn": "14061", "provider": "DigitalOcean 1", "ip": "138.68.63.162", "port": 443},
-    {"id": "DO-03", "asn": "14061", "provider": "DigitalOcean 1", "ip": "159.203.180.157", "port": 443},
+    {"id": "DO-03", "asn": "14061", "provider": "DigitalOcean 1", "ip": "165.245.210.202", "port": 443},
     {"id": "DO-04", "asn": "14061", "provider": "DigitalOcean 1", "ip": "147.182.168.41", "port": 443},
     {"id": "DO-05", "asn": "14061", "provider": "DigitalOcean 1", "ip": "45.55.107.70", "port": 443},
 
@@ -118,20 +116,21 @@
     {"id": "MBC-01", "asn": "8849", "provider": "Melbicom 1", "ip": "193.35.224.194", "port": 443},
     {"id": "MBC-03", "asn": "56630", "provider": "Melbicom 2", "ip": "185.6.14.1", "port": 443},
 
-    {"id": "FT-01", "asn": "53667", "provider": "FranTech", "ip": "104.244.74.134", "port": 443},
+    {"id": "FT-01", "asn": "53667", "provider": "FranTech", "ip": "107.189.29.143", "port": 443},
     {"id": "FT-02", "asn": "53667", "provider": "FranTech", "ip": "198.251.88.98", "port": 443},
 
     {"id": "СV-01", "asn": "62240", "provider": "Clouvider", "ip": "130.185.249.20", "port": 443},
-    {"id": "CV-02", "asn": "62240", "provider": "Clouvider", "ip": "194.127.178.154", "port": 443},
+    {"id": "CV-02", "asn": "62240", "provider": "Clouvider", "ip": "80.73.109.187", "port": 443},
 
     {"id": "ME-01", "asn": "9009", "provider": "M247 Europe SRL", "ip": "146.70.158.22", "port": 443},
 
-    {"id": "IM-01", "asn": "20860", "provider": "IOMART 1", "ip": "213.175.200.210", "port": 443},
+    {"id": "IM-01", "asn": "20860", "provider": "IOMART 1", "ip": "31.187.70.18", "port": 443},
     {"id": "IM-02", "asn": "21130", "provider": "IOMART 2", "ip": "185.224.199.82", "port": 443},
 
     {"id": "ZL-01", "asn": "21859", "provider": "Zenlayer", "ip": "193.118.45.137", "port": 443},
 
     {"id": "CN-01", "asn": "51765", "provider": "CreaNova", "ip": "185.212.149.82", "port": 443},
 
-    {"id": "SCA-01", "asn": "58061", "provider": "Scalaxy", "ip": "5.61.55.146", "port": 443}
+    {"id": "SCA-01", "asn": "58061", "provider": "Scalaxy", "ip": "5.61.55.146", "port": 443},
+    {"id": "FRX-01", "asn": "48040", "provider": "Fornex", "ip": "199.68.199.16", "port": 443, "sni": "h2t.toppayplay.fun"}
 ]
