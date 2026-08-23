@@ -74,11 +74,18 @@ DNS_UDP_SERVERS:
   - ["208.67.222.222", "OpenDNS"]
   - ["76.76.2.0", "ControlD"]
   - ["194.242.2.2", "Mullvad"]
+  - ["185.228.168.9", "CleanBrowsing"]
+  - ["76.223.122.150", "NextDNS"]
+  - ["185.222.222.222", "DNS.SB"]
+  - ["193.110.81.0", "DNS0.eu"]
+  - ["176.9.93.198", "dnsforge"]
 
 # Публичные DoH JSON API серверы (HTTPS)
 DNS_DOH_SERVERS:
   - ["https://8.8.8.8/resolve", "Google"]
   - ["https://dns.google/resolve", "Google"]
+  - ["https://freedns.controld.com/p0", "ControlD"]
+  - ["https://doh.sb/dns-query", "DNS.SB"]
   - ["https://1.1.1.1/dns-query", "Cloudflare"]
   - ["https://cloudflare-dns.com/dns-query", "Cloudflare"]
   - ["https://one.one.one.one/dns-query", "Cloudflare"]
@@ -99,6 +106,10 @@ DNS_AVAILABILITY_SERVERS:
   # ── UDP ──────────────────────────────────────────────────────────────────────
   - ["8.8.8.8",          "Google",        "udp"]
   - ["1.1.1.1",          "Cloudflare",    "udp"]
+  - ["223.5.5.5",        "Alibaba",       "udp"]
+  - ["185.222.222.222",  "DNS.SB",        "udp"]
+  - ["193.110.81.0",     "DNS0.eu",       "udp"]
+  - ["176.9.93.198",     "dnsforge",      "udp"]
   - ["9.9.9.9",          "Quad9",         "udp"]
   - ["94.140.14.14",     "AdGuard",       "udp"]
   - ["77.88.8.8",        "Yandex",        "udp"]
@@ -108,7 +119,7 @@ DNS_AVAILABILITY_SERVERS:
   - ["76.223.122.150",   "NextDNS",       "udp"]
 
 #   - ["194.242.2.2", "Mullvad", "udp"] - походу заблочен
-#  - [ "https://doh.mullvad.net/dns-query", "Mullvad", "doh_wire" ]
+#  - [ "https://dns.mullvad.net/dns-query", "Mullvad", "doh_wire" ] - походу заблочен
 
   # ── DoH Wire (RFC 8484, POST/GET application/dns-message) ───────────────────
   - ["https://dns.google/dns-query",                      "Google",          "doh_wire"]
@@ -123,3 +134,6 @@ DNS_AVAILABILITY_SERVERS:
   - ["https://dns.sb/dns-query",                          "DNS.SB",          "doh_wire"]
   - ["https://doh.dns.sb/dns-query",                      "DNS.SB (alt)",    "doh_wire"]
   - ["https://doh.libredns.gr/dns-query",                 "LibreDNS",        "doh_wire"]
+  - ["https://freedns.controld.com/p0",                   "ControlD",        "doh_wire"]
+  - ["https://dns0.eu/dns-query",                         "DNS0.eu",         "doh_wire"]
+  - ["https://dnsforge.de/dns-query",                     "dnsforge.de",     "doh_wire"]
