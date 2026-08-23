@@ -24,7 +24,7 @@ STUB_IPS_TIMEOUT: 5.0
 
 # === Настройки теста TCP 16-20KB ===
 TCP_BLOCK_MIN_KB: 12 # Минимальный порог данных для анализа
-TCP_BLOCK_MAX_KB: 69 # Максимальный порог данных для анализа
+TCP_BLOCK_MAX_KB: 36 # Максимальный порог данных для анализа
 FAT_DEFAULT_SNI: "example.com"
 FAT_CONNECT_TIMEOUT: 8.0
 FAT_READ_TIMEOUT: 12.0

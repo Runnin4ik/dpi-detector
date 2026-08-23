@@ -58,6 +58,7 @@
     {"id": "FST-04", "asn": "54113", "provider": "Fastly GitHub 109", "ip": "185.199.109.133", "port": 443, "sni": "release-assets.githubusercontent.com"},
     {"id": "FST-05", "asn": "54113", "provider": "Fastly GitHub 110", "ip": "185.199.110.133", "port": 443, "sni": "release-assets.githubusercontent.com"},
     {"id": "FST-06", "asn": "54113", "provider": "Fastly GitHub 111", "ip": "185.199.111.133", "port": 443, "sni": "release-assets.githubusercontent.com"},
+    {"id": "FST-07", "asn": "54113", "provider": "Fastly Gog", "ip": "151.101.1.55", "port": 443, "sni": "gog.com"},
 
     {"id": "GC-01", "asn": "396982", "provider": "Google Cloud", "ip": "147.189.239.240", "port": 443},
     {"id": "GC-02", "asn": "396982", "provider": "Google Cloud", "ip": "35.227.66.60", "port": 443},
