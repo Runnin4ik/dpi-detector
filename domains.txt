@@ -13,7 +13,6 @@ www.svoboda.org
 holod.media
 www.euronews.com
 www.torproject.org
-proton.me
 protonvpn.com
 amnezia.org
 nnmclub.to
@@ -29,12 +28,10 @@ www.messenger.com
 www.themoscowtimes.com
 www.linuxserver.io
 danbooru.donmai.us
-gelbooru.com/script/application.grid.js
 browserleaks.com
 www.cdn77.com
 shikimori.io
-mos-gorsud.co
 kinopub.online
-kino.pub
 vk.ru
 www.google.com
+aws.amazon.com
