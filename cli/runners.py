@@ -263,13 +263,23 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
             console.print("MacOS: [dim]sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder[/dim]")
             console.print("Linux: [dim]sudo resolvectl flush-caches[/dim]\n")
 
+    # Статистика по колонкам: зелёные OK и зелёный REDIR (редирект на свой домен) считаются успехом
+    def _col_ok(col: int) -> int:
+        return sum(1 for r in rows if "[green]" in r[col])
+
+    stats_extra = {
+        "http_ok": _col_ok(1),
+        "t12_ok":  _col_ok(2),
+        "t13_ok":  _col_ok(3),
+    }
     block_markers = ("TLS DPI", "TLS MITM", "TLS BLOCK", "ISP PAGE", "BLOCKED", "TCP RST", "TCP ABORT")
+    stats_extra["blocked"]  = sum(1 for r in rows if any(m in r[c] for c in (1,2,3) for m in block_markers))
     return {
         "total":    len(domains),
         "ok":       sum(1 for r in rows if "OK" in r[3] or "OK" in r[2]),
-        "blocked":  sum(1 for r in rows if any(m in r[c] for c in (1,2,3) for m in block_markers)),
         "timeout":  sum(1 for r in rows if "TIMEOUT" in r[3] or "TIMEOUT" in r[2]),
         "dns_fail": sum(1 for r in rows if "DNS FAIL" in r[3]),
+        **stats_extra,
     }
 
 

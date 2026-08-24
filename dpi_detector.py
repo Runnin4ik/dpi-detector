@@ -156,15 +156,17 @@ def _format_summary(
     # ── Тест 3: домены ────────────────────────────────────────────────────────
     if domain_stats:
         d = domain_stats
-        pct = int(d["ok"] / d["total"] * 100) if d["total"] else 0
-        line = (
+
+        def _stat(label, ok):
+            color = "green" if ok == d["total"] else ("red" if ok == 0 else "yellow")
+            return f"[{color}]{ok}/{d['total']} {label}[/{color}]"
+
+        lines.append(
             f"[bold]Домены[/bold]           "
-            f"[green]√ {d['ok']}/{d['total']} OK[/green]"
-            + (f"  [red]× {d['blocked']} блок.[/red]" if d['blocked'] else "")
-            + (f"  [yellow]⏱ {d['timeout']} таймаут[/yellow]" if d['timeout'] else "")
-            + f"  [dim]({pct}% ОК)[/dim]"
+            + _stat("HTTP", d["http_ok"])
+            + f"  {_stat('TLS1.2', d['t12_ok'])}"
+            + f"  {_stat('TLS1.3', d['t13_ok'])}"
         )
-        lines.append(line)
 
     # ── Тест 4: TCP 16-20KB ───────────────────────────────────────────────────
     if tcp_stats:
