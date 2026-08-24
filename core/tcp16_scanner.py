@@ -113,12 +113,16 @@ async def _fat_probe_keepalive(
             label, detail, _ = classify_connect_error(e, 0, stage=connection_state["stage"])
             if i == 0:
                 return "[red]Нет[/red]", label, detail, measured_rtt
+            if i < 3:  # <12КБ — вне детект-диапазона DPI, обычный обрыв
+                return alive_str, "[red]TIMEOUT[/red]", detail, measured_rtt
             return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*4}KB", measured_rtt
 
         except (httpx.ReadTimeout, httpx.WriteTimeout) as e:
             err_type = "Read Timeout" if isinstance(e, httpx.ReadTimeout) else "Write Timeout"
             if i == 0:
                 return "[green]Да[/green]", f"[red]{err_type.upper()}[/red]", err_type, measured_rtt
+            if i < 3:  # <12КБ — вне детект-диапазона DPI
+                return alive_str, "[red]TIMEOUT[/red]", err_type, measured_rtt
             return alive_str, "[bold red]DETECTED[/bold red]", f"{err_type} at {i*4}KB", measured_rtt
 
         except Exception as e:
@@ -126,6 +130,8 @@ async def _fat_probe_keepalive(
             label, detail, _ = classify_read_error(e, 0, stage=connection_state["stage"])
             if i == 0:
                 return "[green]Да[/green]", label, detail, measured_rtt
+            if i < 3:  # <12КБ — вне детект-диапазона DPI
+                return alive_str, "[red]TIMEOUT[/red]", detail, measured_rtt
             return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*4}KB", measured_rtt
 
     return alive_str, "[green]OK[/green]", "", measured_rtt
