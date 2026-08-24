@@ -4,7 +4,7 @@ import socket
 import asyncio
 import base64
 import time
-from typing import Tuple, List, Union, Optional
+from typing import Tuple, List, Union, Optional, Dict
 import httpx
 from utils import config
 from cli.console import console
@@ -681,15 +681,15 @@ async def check_dns_availability() -> dict:
     doh_servers  = wire_servers  # только Wire
 
     # ── Уникальные имена провайдеров в порядке появления ─────────────────────
-    all_names: list[str] = []
-    seen: set[str] = set()
+    all_names: List[str] = []
+    seen: Set[str] = set()
     for _, n in (doh_servers + udp_servers):
         if n not in seen:
             all_names.append(n)
             seen.add(n)
 
-    doh_by_name: dict[str, list[str]] = {}
-    udp_by_name: dict[str, list[str]] = {}
+    doh_by_name: Dict[str, List[str]] = {}
+    udp_by_name: Dict[str, List[str]] = {}
     for a, n in doh_servers:
         doh_by_name.setdefault(n, []).append(a)
     for a, n in udp_servers:
@@ -742,7 +742,7 @@ async def check_dns_availability() -> dict:
     # ── raw[(kind, addr, name)][domain] = elapsed_ms or None ─────────────────
     # None = сервер есть, но запрос не прошёл (TIMEOUT/ERR/NXDOMAIN)
     # Ключ отсутствует = этот тип у данного имени не определён
-    raw: dict[tuple, dict[str, Optional[int]]] = {}
+    raw: Dict[tuple, Dict[str, Optional[int]]] = {}
 
     # ── UDP probe ─────────────────────────────────────────────────────────────
     # Фиксы:
@@ -774,7 +774,7 @@ async def check_dns_availability() -> dict:
                 if not self.fut.done():
                     self.fut.set_exception(err)
 
-        async def _wait(domain: str) -> tuple[str, Optional[float]]:
+        async def _wait(domain: str) -> Tuple[str, Optional[float]]:
             async with udp_sem:
                 q = _build_dns_query(domain)
                 tx_id = q[:2]
@@ -812,7 +812,7 @@ async def check_dns_availability() -> dict:
         cli_timeout = httpx.Timeout(timeout, connect=timeout, pool=2.0)
         doh_sem = asyncio.Semaphore(20)
 
-        async def _one(domain: str, client: httpx.AsyncClient) -> tuple[str, Optional[float]]:
+        async def _one(domain: str, client: httpx.AsyncClient) -> Tuple[str, Optional[float]]:
             async with doh_sem:
                 t0 = time.perf_counter()
                 try:
@@ -858,7 +858,7 @@ async def check_dns_availability() -> dict:
 
         # Выносим всю логику во внутреннюю функцию, чтобы обернуть её в жесткий таймаут
         async def _do_probe() -> list:
-            async def _one(domain: str, client: httpx.AsyncClient) -> tuple[str, Optional[float]]:
+            async def _one(domain: str, client: httpx.AsyncClient) -> Tuple[str, Optional[float]]:
                 async with doh_sem:
                     query = _build_dns_query(domain)
                     tx_id = query[:2]
