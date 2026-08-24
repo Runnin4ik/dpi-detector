@@ -51,7 +51,7 @@ async def _fat_probe_keepalive(
             connection_state["stage"] = "reading_data"
 
     alive_str = "[dim]—[/dim]"
-    chunks_count = 16
+    chunks_count = 10   # 10 × 4KB = 40KB суммарно
     chunk_size = 4000
 
     rtt_measurements = []
@@ -139,20 +139,27 @@ async def check_tcp_16_20(
     hint_rtt: Optional[float] = None,
 ) -> Tuple[str, str, str, Optional[float]]:
     async with semaphore:
-        # max_keepalive_connections=1 гарантирует, что httpx будет пытаться
-        # переиспользовать один и тот же сокет для всех запросов к одному IP
-        limits = httpx.Limits(max_keepalive_connections=1, max_connections=1)
+        return await probe_tcp_16_20(ip, port, sni, hint_rtt)
 
-        proxy_url = getattr(config, "PROXY_URL", None)
 
-        async with httpx.AsyncClient(
-            verify=_SHARED_VERIFY_CTX,
-            http2=False,
-            limits=limits,
-            proxy=proxy_url,
-            trust_env=False
-        ) as client:
-            return await _fat_probe_keepalive(client, ip, port, sni, hint_rtt=hint_rtt)
+async def probe_tcp_16_20(
+    ip: str, port: int, sni: Optional[str],
+    hint_rtt: Optional[float] = None,
+) -> Tuple[str, str, str, Optional[float]]:
+    # max_keepalive_connections=1 гарантирует, что httpx будет пытаться
+    # переиспользовать один и тот же сокет для всех запросов к одному IP
+    limits = httpx.Limits(max_keepalive_connections=1, max_connections=1)
+
+    proxy_url = getattr(config, "PROXY_URL", None)
+
+    async with httpx.AsyncClient(
+        verify=_SHARED_VERIFY_CTX,
+        http2=False,
+        limits=limits,
+        proxy=proxy_url,
+        trust_env=False
+    ) as client:
+        return await _fat_probe_keepalive(client, ip, port, sni, hint_rtt=hint_rtt)
 
 
 async def check_tcp_16_20_with_rtt(

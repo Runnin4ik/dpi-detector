@@ -2,6 +2,7 @@ from typing import Tuple
 import re
 import sys
 import socket
+import time
 import asyncio
 
 import httpx
@@ -12,7 +13,7 @@ from utils import config
 from cli.console import console
 from cli.ui import clean_hostname, build_domain_row
 from core.tls_scanner import check_domain_tls, check_http_injection, create_dpi_client
-from core.tcp16_scanner import check_tcp_16_20, check_tcp_16_20_with_rtt
+from core.tcp16_scanner import check_tcp_16_20, check_tcp_16_20_with_rtt, probe_tcp_16_20
 from core.telegram_scanner import run_telegram_test as _run_telegram_test
 from utils.network import get_resolved_ip, get_fake_ip_type
 
@@ -115,8 +116,11 @@ async def _tcp16_worker(item: dict, semaphore: asyncio.Semaphore) -> list:
     ip   = item["ip"]
     port = int(item.get("port", 443))
     sni  = None if port == 80 else (item.get("sni") or config.FAT_DEFAULT_SNI)
-
-    alive_str, status, detail, rtt = await check_tcp_16_20(ip, port, sni, semaphore)
+    # ВРЕМЕННО: чистое время пробы (без ожидания слота семафора)
+    async with semaphore:
+        t0 = time.perf_counter()
+        alive_str, status, detail, rtt = await probe_tcp_16_20(ip, port, sni)
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
     asn_raw = str(item.get("asn", "")).strip()
     asn_str = (
@@ -125,12 +129,10 @@ async def _tcp16_worker(item: dict, semaphore: asyncio.Semaphore) -> list:
         else asn_raw.upper()
     ) or "-"
 
-    if rtt is not None:
-        rtt_ms = f"{int(rtt * 1000)}мс"
-        detail = f"{detail}"
-        #detail = f"{detail} | {rtt_ms}" if detail else rtt_ms
+    elapsed_s = f"{elapsed_ms / 1000:.1f}s"
+    detail = f"{detail} | {elapsed_s}" if detail else elapsed_s
 
-    return [item["id"], asn_str, item["provider"], alive_str, status, detail]
+    return [item["id"], asn_str, item["provider"], status, detail]
 
 
 # ── Хелпер прогресс-бара ─────────────────────────────────────────────────────
@@ -296,7 +298,6 @@ async def run_tcp_test(semaphore: asyncio.Semaphore, tcp_items: list) -> dict:
     table.add_column("ID",        style="white")
     table.add_column("ASN",       style="yellow")
     table.add_column("Провайдер", style="cyan")
-    table.add_column("Alive",     justify="center")
     table.add_column("Статус",    justify="center")
     table.add_column("Детали",    style="dim")
 
@@ -325,12 +326,12 @@ async def run_tcp_test(semaphore: asyncio.Semaphore, tcp_items: list) -> dict:
 
     tcp_results.sort(key=_sort_key)
 
-    passed  = sum(1 for r in tcp_results if "OK"       in r[4])
-    blocked = sum(1 for r in tcp_results if "DETECTED" in r[4])
-    mixed   = sum(1 for r in tcp_results if "MIXED"    in r[4])
+    passed  = sum(1 for r in tcp_results if "OK"       in r[3])
+    blocked = sum(1 for r in tcp_results if "DETECTED" in r[3])
+    mixed   = sum(1 for r in tcp_results if "MIXED"    in r[3])
 
     for r in tcp_results:
-        table.add_row(*r[:6])
+        table.add_row(*r[:5])
     console.print(table)
 
     if mixed > 0:
