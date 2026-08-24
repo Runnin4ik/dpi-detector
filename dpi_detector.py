@@ -288,7 +288,8 @@ async def main():
         config.DNS_CHECK_DOMAINS = DOMAINS
 
     console.clear()
-    console.print(f"[bold cyan]DPI Detector v{CURRENT_VERSION}[/bold cyan]")
+    console.print(f"[bold cyan]DPI Detector v{CURRENT_VERSION}[/bold cyan] [bold magenta]made with <3 by Runni[/bold magenta]")
+    console.print(f"[dim]https://github.com/{GITHUB_REPO}[/dim]")
     console.print(f"[dim]Параллельных запросов: {config.MAX_CONCURRENT}[/dim]")
 
     if config.PROXY_URL:
