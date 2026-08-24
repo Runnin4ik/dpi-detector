@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import os
 import struct
 import socket
 import asyncio
 import base64
 import time
+import ssl
 from typing import Tuple, List, Union, Optional
 import httpx
 from utils import config
@@ -134,6 +137,22 @@ async def _resolve_udp_native(nameserver: str, domain: str, timeout: float) -> U
         transport.close()
 
 
+def _doh_exc_status(exc: Exception) -> str:
+    """
+    Классификация исключения DoH-пробы.
+    BLOCKED — активное вмешательство: подмена/ошибка сертификата (MITM)
+    или сброс соединения при подключении (SNI-блокировка).
+    ERROR  — прочие ошибки (HTTP 5xx, кривой ответ, протокол).
+    """
+    e = exc
+    while e is not None:
+        if isinstance(e, ssl.SSLError):
+            return "BLOCKED"
+        e = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
+    if isinstance(exc, httpx.ConnectError):
+        return "BLOCKED"
+    return "ERROR"
+
 # ── Single-domain probes ─────────────────────────────────────────────────────
 async def _probe_udp_single(nameserver: str, domain: str) -> Optional[List[str]]:
     """UDP DNS — один домен (до 2 попыток)."""
@@ -155,7 +174,7 @@ async def _probe_doh_json_single(doh_url: str, domain: str) -> Optional[List[str
         try:
             proxy_url = getattr(config, "PROXY_URL", None)
             async with httpx.AsyncClient(
-                timeout=config.DNS_CHECK_TIMEOUT, verify=False,
+                timeout=config.DNS_CHECK_TIMEOUT,
                 headers=headers, proxy=proxy_url, trust_env=False
             ) as client:
                 resp = await client.get(doh_url, params={"name": domain, "type": "A"})
@@ -179,7 +198,7 @@ async def _probe_doh_wire_single(doh_url: str, domain: str) -> Optional[List[str
         try:
             proxy_url = getattr(config, "PROXY_URL", None)
             async with httpx.AsyncClient(
-                timeout=config.DNS_CHECK_TIMEOUT, verify=False,
+                timeout=config.DNS_CHECK_TIMEOUT,
                 proxy=proxy_url, trust_env=False, http2=True
             ) as client:
                 resp = await client.post(
@@ -252,7 +271,7 @@ async def _probe_doh_json_all(doh_url: str, domains: list) -> dict:
         try:
             resp = await client.get(doh_url, params={"name": domain, "type": "A"})
             if resp.status_code != 200:
-                return domain, "BLOCKED", None
+                return domain, "ERROR", None
             data = resp.json()
             if data.get("Status") == 3:
                 return domain, "NXDOMAIN", None
@@ -260,17 +279,17 @@ async def _probe_doh_json_all(doh_url: str, domains: list) -> dict:
             return domain, "OK", ips if ips else "EMPTY"
         except httpx.TimeoutException:
             return domain, "TIMEOUT", None
-        except Exception:
-            return domain, "BLOCKED", None
+        except Exception as e:
+            return domain, _doh_exc_status(e), None
 
     proxy_url = getattr(config, "PROXY_URL", None)
     async with httpx.AsyncClient(
-        timeout=config.DNS_CHECK_TIMEOUT, verify=False,
+        timeout=config.DNS_CHECK_TIMEOUT,
         headers=headers, proxy=proxy_url, trust_env=False,
     ) as client:
         completed = await asyncio.gather(*[_query(client, d) for d in domains])
 
-    ok = timeout_cnt = blocked = 0
+    ok = timeout_cnt = blocked = error = 0
     results = {}
     for domain, status, res in completed:
         if status in ("OK", "NXDOMAIN"):
@@ -279,11 +298,15 @@ async def _probe_doh_json_all(doh_url: str, domains: list) -> dict:
         elif status == "TIMEOUT":
             results[domain] = "TIMEOUT"
             timeout_cnt += 1
-        else:
+        elif status == "BLOCKED":
             results[domain] = "BLOCKED"
             blocked += 1
+        else:
+            results[domain] = "ERROR"
+            error += 1
 
-    return {"ok": ok, "timeout": timeout_cnt, "blocked": blocked, "results": results}
+    return {"ok": ok, "timeout": timeout_cnt, "blocked": blocked, "error": error, "results": results}
+
 
 
 async def _probe_doh_wire_all(doh_url: str, domains: list) -> dict:
@@ -314,7 +337,7 @@ async def _probe_doh_wire_all(doh_url: str, domains: list) -> dict:
                     },
                 )
                 if resp.status_code != 200:
-                    return domain, "BLOCKED", None
+                    return domain, "ERROR", None
 
             result = _parse_dns_response(resp.content, tx_id)
             if result == "NXDOMAIN":
@@ -324,17 +347,17 @@ async def _probe_doh_wire_all(doh_url: str, domains: list) -> dict:
             return domain, "EMPTY", None
         except httpx.TimeoutException:
             return domain, "TIMEOUT", None
-        except Exception:
-            return domain, "BLOCKED", None
+        except Exception as e:
+            return domain, _doh_exc_status(e), None
 
     proxy_url = getattr(config, "PROXY_URL", None)
     async with httpx.AsyncClient(
-        timeout=config.DNS_CHECK_TIMEOUT, verify=False,
+        timeout=config.DNS_CHECK_TIMEOUT,
         proxy=proxy_url, trust_env=False, http2=True
     ) as client:
         completed = await asyncio.gather(*[_query(client, d) for d in domains])
 
-    ok = timeout_cnt = blocked = 0
+    ok = timeout_cnt = blocked = error = 0
     results = {}
     for domain, status, res in completed:
         if status in ("OK", "NXDOMAIN"):
@@ -343,11 +366,14 @@ async def _probe_doh_wire_all(doh_url: str, domains: list) -> dict:
         elif status == "TIMEOUT":
             results[domain] = "TIMEOUT"
             timeout_cnt += 1
-        else:
+        elif status == "BLOCKED":
             results[domain] = "BLOCKED"
             blocked += 1
+        else:
+            results[domain] = "ERROR"
+            error += 1
 
-    return {"ok": ok, "timeout": timeout_cnt, "blocked": blocked, "results": results}
+    return {"ok": ok, "timeout": timeout_cnt, "blocked": blocked, "error": error, "results": results}
 
 
 # ── Публичные функции ─────────────────────────────────────────────────────────
@@ -830,7 +856,7 @@ async def check_dns_availability() -> dict:
 
         try:
             async with httpx.AsyncClient(
-                timeout=cli_timeout, verify=False,
+                timeout=cli_timeout,
                 headers={"Accept": "application/dns-json", "User-Agent": config.USER_AGENT},
                 proxy=proxy_url, trust_env=False,
             ) as client:
@@ -890,7 +916,7 @@ async def check_dns_availability() -> dict:
 
             try:
                 async with httpx.AsyncClient(
-                    timeout=cli_timeout, verify=False,
+                    timeout=cli_timeout,
                     proxy=proxy_url, trust_env=False, http2=True,
                 ) as client:
                     # 1. Прогрев с Fail-Fast (Защита от двойного таймаута)
@@ -916,7 +942,7 @@ async def check_dns_availability() -> dict:
         # 3. Жесткая гильотина: ограничиваем всё время проверки провайдера
         try:
             # Даем времени чуть больше, чтобы httpx успел закрыться сам штатно
-            pairs = await asyncio.wait_for(_do_probe(), timeout=timeout + 2.0)
+            pairs = await asyncio.wait_for(_do_probe(), timeout=timeout + 3.0)
             raw[key] = dict(pairs)
         except (asyncio.TimeoutError, Exception):
             raw[key] = {d: None for d in domains}
@@ -924,12 +950,25 @@ async def check_dns_availability() -> dict:
             await _tick()
 
     # ── Запускаем: только Wire + UDP ─────────────────────────────────────────
+    # Глобальный лимит одновременных проб: десятки TLS+HTTP2-хендшейков в один
+    # момент на DPI-сети выглядят как атака и массово дропаются (thundering herd),
+    # что даёт ложные TIMEOUT. Пробуем серверы пачками.
+    probe_gate = asyncio.Semaphore(getattr(config, "DNS_PROBE_CONCURRENCY", 3))
+
+    async def _probe_udp_gated(addr, name):
+        async with probe_gate:
+            await _probe_udp(addr, name)
+
+    async def _probe_doh_wire_gated(addr, name):
+        async with probe_gate:
+            await _probe_doh_wire(addr, name)
+
     _redraw_progress()
     if udp_servers:
-        await asyncio.gather(*[_probe_udp(a, n) for a, n in udp_servers])
+        await asyncio.gather(*[_probe_udp_gated(a, n) for a, n in udp_servers])
 
     if wire_servers:
-        await asyncio.gather(*[_probe_doh_wire(a, n) for a, n in wire_servers])
+        await asyncio.gather(*[_probe_doh_wire_gated(a, n) for a, n in wire_servers])
 
     # Завершаем прогресс-строку — переходим на новую строку
     import sys
@@ -955,9 +994,12 @@ async def check_dns_availability() -> dict:
             total = len(domain_map)
             ok = len(vals)
             if ok > 0:
-                avg = round(sum(vals) / ok, 1)
-                if best is None or avg < best[0]:
-                    best = (avg, ok, total)
+                # Минимум успешных запросов, а не среднее: при многих серверах
+                # среднее по HTTP/2-мультиплексу одного соединения раздувается
+                # DPI-душением этого соединения и не отражает реальную задержку.
+                best_ms = round(min(vals), 1)
+                if best is None or best_ms < best[0]:
+                    best = (best_ms, ok, total)
 
         if best is not None:
             return best  # (avg_ms, ok, total)
@@ -981,8 +1023,8 @@ async def check_dns_availability() -> dict:
     from rich.table import Table
     t = Table(show_header=True, header_style="bold magenta", border_style="dim")
     t.add_column("Провайдер", style="cyan", no_wrap=True, min_width=16)
-    t.add_column("DoH avg",   justify="right", no_wrap=True, min_width=12)
-    t.add_column("UDP avg",   justify="right", no_wrap=True, min_width=12)
+    t.add_column("DoH мин",  justify="right", no_wrap=True, min_width=12)
+    t.add_column("UDP мин",  justify="right", no_wrap=True, min_width=12)
 
     doh_ok_names = udp_ok_names = 0
     doh_total_names = len({n for _, n in doh_servers})
