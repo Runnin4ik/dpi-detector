@@ -128,6 +128,32 @@ python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
 Переопределите нужные файлы: `domains.txt`, `tcp16.json`, `config.yml`, `whitelist_sni.txt`
 И положите их в папку рядом с `.exe` файлом.
 
+## 🍎 macOS (Экспериментально)
+
+Готовые сборки для macOS появились недавно и **экспериментальны** — протестированы не на всех конфигурациях. Буду благодарен за фидбек в [Issue](https://github.com/Runnin4ik/dpi-detector/issues).
+
+Скачайте подходящий бинарник в разделе [Releases -> Assets](https://github.com/Runnin4ik/dpi-detector/releases):
+
+*   **[Скачать для Apple Silicon (M1–M4)](https://github.com/Runnin4ik/dpi-detector/releases/download/v3.4.0/dpi_detector_v3.4.0_macos_arm64)**
+*   **[Скачать для Intel](https://github.com/Runnin4ik/dpi-detector/releases/download/v3.4.0/dpi_detector_v3.4.0_macos_intel)**
+
+#### Запуск
+
+Приложение не нотаризовано, поэтому macOS заблокирует файл, скачанный через браузер. Один раз снимите карантин и запустите:
+
+```bash
+xattr -cr dpi_detector_v3.4.0_macos_arm64
+chmod +x dpi_detector_v3.4.0_macos_arm64
+./dpi_detector_v3.4.0_macos_arm64
+```
+
+Либо: **Системные настройки → Конфиденциальность и безопасность → «Открыть в любом случае»** (macOS Sequoia и новее), на старых версиях — ПКМ по файлу → **Открыть**.
+
+#### С кастомизацией
+
+Переопределите нужные файлы: `domains.txt`, `tcp16.json`, `config.yml`, `whitelist_sni.txt`
+И положите их рядом с бинарником.
+
 ## 🤝 Вклад в проект
 Приветствуются Issue и Pull Request'ы и предложения функционала!
 
