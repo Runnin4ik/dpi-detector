@@ -29,7 +29,7 @@ from core.dns_scanner import (
 )
 from utils.files import load_domains, load_tcp_targets, load_whitelist_sni, get_base_dir
 
-CURRENT_VERSION = "3.3.0"
+CURRENT_VERSION = "3.4.0"
 GITHUB_REPO     = "Runnin4ik/dpi-detector"
 
 DOMAINS         = load_domains()

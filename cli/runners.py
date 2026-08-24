@@ -560,9 +560,6 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
 # ── Тест 5: Telegram ──────────────────────────────────────────────────────────
 
 async def run_telegram_test(semaphore: asyncio.Semaphore) -> dict:
-    console.print(
-        "\n[bold]Проверка Telegram[/bold]  "
-        "[dim]доступность DC, скорость загрузки/выгрузки (признаки замедления)[/dim]"
-    )
+    console.print("\n[bold]Проверка доступности Telegram[/bold]")
     from core.telegram_scanner import run_telegram_test as _run_scanner
     return await _run_scanner(semaphore)
