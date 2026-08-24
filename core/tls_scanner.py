@@ -18,6 +18,11 @@ from utils.error_classifier import (
 )
 
 
+def _strip_www(host: str) -> str:
+    """Убирает префикс 'www.' (аналог str.removeprefix, которого нет в Python 3.8)."""
+    return host[4:] if host.startswith("www.") else host
+
+
 def create_dpi_client(tls_version: str = None, ipv6: bool = False) -> httpx.AsyncClient:
     """
     Создаёт изолированного клиента для DPI-проверки.
@@ -147,14 +152,16 @@ async def _check_tls_single(
                         location if location.startswith('http') else f'https://{location}'
                     )
                     loc_domain = parsed_loc.netloc.lower().split(':')[0]
-                    clean_domain = domain.lower()
-                    norm_loc = loc_domain.removeprefix('www.')
-                    norm_dom = clean_domain.removeprefix('www.')
+                    norm_loc = _strip_www(loc_domain)
+                    norm_dom = _strip_www(domain.lower())
 
-                    if norm_loc == norm_dom or norm_loc.endswith('.' + norm_dom):
+                    same_host = norm_loc == norm_dom or norm_loc.endswith('.' + norm_dom)
+                    if same_host and parsed_loc.scheme == "https":
+                        # тот же сайт, просто апгрейд до https — считаем ОК
+                        return ("[green]OK[/green]", "→ https", bytes_read, elapsed)
+                    if same_host:
                         return ("[green]REDIR[/green]", f"→ {loc_domain[:30]}", bytes_read, elapsed)
-                    else:
-                        return ("[bold red]REDIR[/bold red]", f"→ {loc_domain[:30]}", bytes_read, elapsed)
+                    return ("[bold red]REDIR[/bold red]", f"→ {loc_domain[:30]}", bytes_read, elapsed)
                 except Exception:
                     return ("[bold red]REDIR[/bold red]", f"→ {location[:30]}", bytes_read, elapsed)
 
@@ -276,12 +283,15 @@ async def check_http_injection(
                     location if location.startswith('http') else f'https://{location}'
                 )
                 loc_domain = parsed_loc.netloc.lower().split(':')[0]
-                norm_loc = loc_domain.removeprefix('www.')
-                norm_dom = clean_domain.lower().removeprefix('www.')
-                if norm_loc == norm_dom or norm_loc.endswith('.' + norm_dom):
+                norm_loc = _strip_www(loc_domain)
+                norm_dom = _strip_www(clean_domain.lower())
+                same_host = norm_loc == norm_dom or norm_loc.endswith('.' + norm_dom)
+                if same_host and parsed_loc.scheme == "https":
+                    # http → https на том же сайте — норма, считаем ОК
+                    return ("[green]OK[/green]", f"{status_code} → https")
+                if same_host:
                     return ("[green]REDIR[/green]", f"{status_code}")
-                else:
-                    return ("[bold red]REDIR[/bold red]", f"→ {loc_domain[:30]}")
+                return ("[bold red]REDIR[/bold red]", f"→ {loc_domain[:30]}")
             except Exception:
                 return ("[bold red]REDIR[/bold red]", f"→ {location[:30]}")
 
