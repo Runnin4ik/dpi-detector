@@ -3,6 +3,12 @@ name: Release CI (Docker + EXE)
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Тег версии для имён артефактов, например v3.4.0'
+        required: true
+        default: 'v3.4.0'
 
 permissions:
   contents: write
@@ -36,7 +42,7 @@ jobs:
       - name: Build with PyInstaller
         shell: bash
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${{ github.event.release.tag_name || inputs.version }}"
           EXE_NAME="dpi_detector_${VERSION}_${{ matrix.suffix }}"
           
           python -m PyInstaller --onefile --console --clean \
@@ -84,7 +90,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${{ github.event.release.tag_name || inputs.version }}"
           BIN_NAME="dpi_detector_${VERSION}_${{ matrix.suffix }}"
 
           python -m PyInstaller --onefile --console --clean \
@@ -108,6 +114,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   build-docker:
+    # docker-образ публикуется только из релиза: без тега semver-теги не соберутся
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
