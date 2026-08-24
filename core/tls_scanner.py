@@ -208,7 +208,7 @@ async def _check_tls_single(
             en = e.errno
             if en in (errno.ECONNRESET, config.WSAECONNRESET):
                 if connection_state["stage"] == "tls_handshake":
-                    return ("[bold red]TLS RST[/bold red]", "Активный сброс (TCP RST)", bytes_read, elapsed)
+                    return ("[bold red]TLS RST[/bold red]", "TCP RST на ClientHello", bytes_read, elapsed)
                 return ("[bold red]TCP RST[/bold red]", "OS conn reset", bytes_read, elapsed)
             elif en in (errno.ECONNREFUSED, config.WSAECONNREFUSED):
                 return ("[bold red]REFUSED[/bold red]", "OS conn refused", bytes_read, elapsed)

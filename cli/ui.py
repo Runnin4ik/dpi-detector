@@ -35,14 +35,13 @@ def build_domain_row(entry: dict) -> list:
         if d12: details.append(f"T12:{d12}")
         if d13: details.append(f"T13:{d13}")
 
-    times = []
-    if "TIMEOUT" not in t12_status and t12_elapsed > 0:
-        times.append(t12_elapsed)
-    if "TIMEOUT" not in t13_status and t13_elapsed > 0:
-        times.append(t13_elapsed)
-
-    if times:
-        details.append(f"{min(times):.1f}s")
+    # время показываем только когда обе TLS-пробы успешны (или NO TLS1.3)
+    ok12 = "[green]" in t12_status or "NO TLS1.3" in t12_status
+    ok13 = "[green]" in t13_status or "NO TLS1.3" in t13_status
+    if ok12 and ok13:
+        times = [t for t in (t12_elapsed, t13_elapsed) if t > 0]
+        if times:
+            details.append(f"{min(times):.1f}s")
 
     detail_str = " | ".join(d for d in details if d)
     return [domain, http_status, t12_status, t13_status, detail_str, entry["resolved_ipv4"]]
@@ -93,6 +92,7 @@ def print_legend() -> None:
             ("TLS DPI",     "DPI обрывает или манипулирует TLS: EOF, bad record, handshake abort"),
             ("TLS MITM",    "Man-in-the-Middle: подменён сертификат (Unknown CA, Cert expired, Hostname mismatch)"),
             ("TLS BLOCK",   "Блокировка версии TLS или протокола целиком (protocol_version alert)"),
+            ("TLS RST",     "Активный TCP RST на ClientHello (сброс TLS-хендшейка)"),
             ("SSL ERR",     "Прочие SSL ошибки: bad key share, record layer fail, internal error"),
             ("NO TLS1.3",   "Сервер не поддерживает TLS 1.3 (норма для старых серверов)")
         ]),

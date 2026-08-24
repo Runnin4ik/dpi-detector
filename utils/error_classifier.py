@@ -70,7 +70,7 @@ def classify_ssl_error(error: ssl.SSLError, bytes_read: int, stage: str = "unkno
     full_text = collect_error_text(error)
 
     if "pop from an empty deque" in full_text or "brokenresourceerror" in full_text:
-        return ("[bold red]TLS RST[/bold red]", "Активный сброс (TCP RST)", bytes_read)
+        return ("[bold red]TLS RST[/bold red]", "TCP RST на ClientHello", bytes_read)
 
     if "wrong version number" in msg:
         return ("[bold red]TLS SPOOF[/bold red]", "Подмена ответа (Wrong Version)", bytes_read)
@@ -91,7 +91,7 @@ def classify_ssl_error(error: ssl.SSLError, bytes_read: int, stage: str = "unkno
     if any(m in msg for m in dpi_interruption):
         # Если это произошло во время хендшейка - в 99% это активный RST, замаскированный ОС под EOF
         if bytes_read == 0 or stage == "tls_handshake":
-            return ("[bold red]TLS RST[/bold red]", "Активный сброс (TCP RST)", bytes_read)
+            return ("[bold red]TLS RST[/bold red]", "TCP RST на ClientHello", bytes_read)
 
         detail = "Обрыв при передаче (EOF)" if bytes_read > 0 else "Тихий обрыв (Handshake EOF)"
         return ("[bold red]TLS EOF[/bold red]", detail, bytes_read)
@@ -174,8 +174,10 @@ def classify_connect_error(error: Exception, bytes_read: int, stage: str = "unkn
         return ("[bold red]REFUSED[/bold red]", "TCP соединение отклонено", bytes_read)
 
     if find_cause(error, ConnectionResetError) is not None or err_errno in (errno.ECONNRESET, config.WSAECONNRESET) or "connection reset" in full_text:
-        if stage in ("tls_handshake", "tls_connected"):
-            return ("[bold red]TLS RST[/bold red]", "Активный сброс (TCP RST)", bytes_read)
+        if stage == "tls_handshake":
+            return ("[bold red]TLS RST[/bold red]", "TCP RST на ClientHello", bytes_read)
+        if stage == "tls_connected":
+            return ("[bold red]TLS RST[/bold red]", "TCP RST после handshake", bytes_read)
         return ("[bold red]TCP RST[/bold red]", "TCP соединение сброшено", bytes_read)
 
     if find_cause(error, ConnectionAbortedError) is not None or err_errno in (getattr(errno, 'ECONNABORTED', 103), config.WSAECONNABORTED) or "connection aborted" in full_text:
@@ -209,8 +211,10 @@ def classify_read_error(error: Exception, bytes_read: int, stage: str = "unknown
     if find_cause(error, ConnectionResetError) is not None \
             or err_errno in (errno.ECONNRESET, config.WSAECONNRESET) \
             or "connection reset" in full_text:
-        if stage in ("tls_handshake", "tls_connected"):
-            return ("[bold red]TLS RST[/bold red]", "Активный сброс (TCP RST)", bytes_read)
+        if stage == "tls_handshake":
+            return ("[bold red]TLS RST[/bold red]", "TCP RST на ClientHello", bytes_read)
+        if stage == "tls_connected":
+            return ("[bold red]TLS RST[/bold red]", "TCP RST после handshake", bytes_read)
         return ("[bold red]TCP RST[/bold red]", "TCP соединение сброшено", bytes_read)
 
     if find_cause(error, ConnectionAbortedError) is not None \
