@@ -274,7 +274,7 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
         "t12_ok":  _col_ok(2),
         "t13_ok":  _col_ok(3),
     }
-    block_markers = ("TLS DPI", "TLS MITM", "TLS BLOCK", "ISP PAGE", "BLOCKED", "TCP RST", "TCP ABORT")
+    block_markers = ("TLS DPI", "TLS MITM", "TLS BLOCK", "TLS RST", "ISP PAGE", "BLOCKED", "TCP RST", "TCP ABORT")
     stats_extra["blocked"]  = sum(1 for r in rows if any(m in r[c] for c in (1,2,3) for m in block_markers))
     return {
         "total":    len(domains),
@@ -560,5 +560,9 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
 # ── Тест 5: Telegram ──────────────────────────────────────────────────────────
 
 async def run_telegram_test(semaphore: asyncio.Semaphore) -> dict:
+    console.print(
+        "\n[bold]Проверка Telegram[/bold]  "
+        "[dim]доступность DC, скорость загрузки/выгрузки (признаки замедления)[/dim]"
+    )
     from core.telegram_scanner import run_telegram_test as _run_scanner
     return await _run_scanner(semaphore)
