@@ -3,7 +3,7 @@ FROM python:3.14-alpine
 WORKDIR /app
 
 COPY requirements.txt .
-RUN apk add --no-cache --virtual .build-deps build-base libyaml-dev \
+RUN apk add --no-cache --virtual .build-deps build-base yaml-dev \
     && pip install --no-cache-dir -r requirements.txt \
     && apk del .build-deps
 
