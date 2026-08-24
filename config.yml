@@ -44,6 +44,10 @@ WSAEACCES: 10013
 # === Настройки DNS проверки ===
 DNS_CHECK_TIMEOUT: 5.0
 
+# Максимум одновременных DNS-проб (серверов) — защита от ложных TIMEOUT
+# на DPI-сети при большом количестве эндпоинтов (thundering herd).
+DNS_PROBE_CONCURRENCY: 3
+
 # Список доменов для теста доступности и подмены DNS
 DNS_CHECK_DOMAINS:
   - "rutor.info"
@@ -77,7 +81,6 @@ DNS_UDP_SERVERS:
   - ["185.228.168.9", "CleanBrowsing"]
   - ["76.223.122.150", "NextDNS"]
   - ["185.222.222.222", "DNS.SB"]
-  - ["193.110.81.0", "DNS0.eu"]
   - ["176.9.93.198", "dnsforge"]
 
 # Публичные DoH JSON API серверы (HTTPS)
@@ -104,36 +107,73 @@ DNS_AVAILABILITY_DOMAINS:
 # Типы: "udp", "doh_json", "doh_wire"
 DNS_AVAILABILITY_SERVERS:
   # ── UDP ──────────────────────────────────────────────────────────────────────
-  - ["8.8.8.8",          "Google",        "udp"]
-  - ["1.1.1.1",          "Cloudflare",    "udp"]
-  - ["223.5.5.5",        "Alibaba",       "udp"]
-  - ["185.222.222.222",  "DNS.SB",        "udp"]
-  - ["193.110.81.0",     "DNS0.eu",       "udp"]
-  - ["176.9.93.198",     "dnsforge",      "udp"]
-  - ["9.9.9.9",          "Quad9",         "udp"]
-  - ["94.140.14.14",     "AdGuard",       "udp"]
-  - ["77.88.8.8",        "Yandex",        "udp"]
-  - ["208.67.222.222",   "OpenDNS",       "udp"]
-  - ["76.76.2.0",        "ControlD",      "udp"]
-  - ["185.228.168.9",    "CleanBrowsing", "udp"]
-  - ["76.223.122.150",   "NextDNS",       "udp"]
-
-#   - ["194.242.2.2", "Mullvad", "udp"] - походу заблочен
-#  - [ "https://dns.mullvad.net/dns-query", "Mullvad", "doh_wire" ] - походу заблочен
+  - ["94.140.14.14", "AdGuard", "udp"]
+  - ["94.140.15.15", "AdGuard", "udp"]
+  - ["94.140.14.15", "AdGuard (family)", "udp"]
+  - ["223.5.5.5", "Alibaba", "udp"]
+  - ["223.6.6.6", "Alibaba", "udp"]
+  - ["185.228.168.9", "CleanBrowsing", "udp"]
+  - ["185.228.169.9", "CleanBrowsing", "udp"]
+  - ["1.0.0.1", "Cloudflare", "udp"]
+  - ["1.1.1.1", "Cloudflare", "udp"]
+  - ["76.76.2.0", "ControlD", "udp"]
+  - ["76.76.2.1", "ControlD", "udp"]
+  - ["185.222.222.222", "DNS.SB", "udp"]
+  - ["45.11.45.11", "DNS.SB", "udp"]
+  - ["176.9.93.198", "dnsforge", "udp"]
+  - ["119.29.29.29", "DNSPod (doh.pub)", "udp"]
+  - ["8.8.4.4", "Google", "udp"]
+  - ["8.8.8.8", "Google", "udp"]
+  - ["62.76.62.76", "MSK-IX", "udp"]
+  - ["62.76.76.62", "MSK-IX", "udp"]
+  - ["45.90.28.0", "NextDNS", "udp"]
+  - ["45.90.30.0", "NextDNS", "udp"]
+  - ["195.208.4.1", "NSDI", "udp"]
+  - ["195.208.5.1", "NSDI", "udp"]
+  - ["208.67.220.220", "OpenDNS", "udp"]
+  - ["208.67.222.222", "OpenDNS", "udp"]
+  - ["149.112.112.112", "Quad9", "udp"]
+  - ["9.9.9.9", "Quad9", "udp"]
+  - ["9.9.9.10", "Quad9 (unfiltered)", "udp"]
+  - ["9.9.9.11", "Quad9 (unsecured)", "udp"]
+  - ["111.88.96.55", "XboxDNS (RU)", "udp"]
+  - ["77.88.8.1", "Yandex", "udp"]
+  - ["77.88.8.8", "Yandex", "udp"]
 
   # ── DoH Wire (RFC 8484, POST/GET application/dns-message) ───────────────────
-  - ["https://dns.google/dns-query",                      "Google",          "doh_wire"]
-  - ["https://cloudflare-dns.com/dns-query",              "Cloudflare",      "doh_wire"]
-  - ["https://1.1.1.1/dns-query",                        "Cloudflare (IP)", "doh_wire"]
   - ["https://dns.adguard-dns.com/dns-query",             "AdGuard",         "doh_wire"]
-  - ["https://dns.quad9.net/dns-query",                   "Quad9",           "doh_wire"]
-  - ["https://doh.opendns.com/dns-query",                 "OpenDNS",         "doh_wire"]
-  - ["https://common.dot.dns.yandex.net/dns-query",       "Yandex",          "doh_wire"]
-  - ["https://dns.nextdns.io/dns-query",                  "NextDNS",         "doh_wire"]
+  - ["https://family.adguard-dns.com/dns-query",          "AdGuard (family)", "doh_wire"]
+  - ["https://dns.adguard.com/dns-query",                 "AdGuard (legacy)", "doh_wire"]
+  - ["https://unfiltered.adguard-dns.com/dns-query",      "AdGuard (unfiltered)", "doh_wire"]
+  - ["https://dns.alidns.com/dns-query",                  "Alibaba", "doh_wire"]
   - ["https://doh.cleanbrowsing.org/doh/security-filter", "CleanBrowsing",   "doh_wire"]
+  - ["https://cloudflare-dns.com/dns-query",              "Cloudflare",      "doh_wire"]
+  - ["https://dns.cloudflare.com/dns-query",             "Cloudflare (dns)", "doh_wire"]
+  - ["https://1.1.1.1/dns-query",                        "Cloudflare (IP)", "doh_wire"]
+  - ["https://mozilla.cloudflare-dns.com/dns-query",      "Cloudflare (Mozilla)",  "doh_wire"]
+  - ["https://security.cloudflare-dns.com/dns-query",     "Cloudflare (Security)", "doh_wire"]
+  - ["https://dns.comss.one/dns-query",                   "Comss.one", "doh_wire"]
+  - ["https://freedns.controld.com/p0",                   "ControlD",        "doh_wire"]
+  - ["https://x-adguard.freedns.controld.com/dns-query",  "ControlD (x-adguard)", "doh_wire"]
+  - ["https://dns.digitale-gesellschaft.ch/dns-query",    "Digitale Gesellschaft", "doh_wire"]
   - ["https://dns.sb/dns-query",                          "DNS.SB",          "doh_wire"]
   - ["https://doh.dns.sb/dns-query",                      "DNS.SB (alt)",    "doh_wire"]
-  - ["https://doh.libredns.gr/dns-query",                 "LibreDNS",        "doh_wire"]
-  - ["https://freedns.controld.com/p0",                   "ControlD",        "doh_wire"]
-  - ["https://dns0.eu/dns-query",                         "DNS0.eu",         "doh_wire"]
+  - ["https://doh.dns4all.eu/dns-query",                  "DNS4all", "doh_wire"]
   - ["https://dnsforge.de/dns-query",                     "dnsforge.de",     "doh_wire"]
+  - ["https://doh.pub/dns-query",                         "DNSPod (doh.pub)", "doh_wire"]
+  - ["https://dns.google/dns-query",                      "Google",          "doh_wire"]
+  - ["https://protective.joindns4.eu/dns-query",          "JoinDNS4 (protective)", "doh_wire"]
+  - ["https://unfiltered.joindns4.eu/dns-query",          "JoinDNS4 (unfiltered)", "doh_wire"]
+  - ["https://doh.libredns.gr/dns-query",                 "LibreDNS",        "doh_wire"]
+  - ["https://dns.mullvad.net/dns-query",                 "Mullvad",         "doh_wire"]
+  - ["https://adblock.dns.mullvad.net/dns-query",         "Mullvad (adblock)", "doh_wire"]
+  - ["https://dns.nextdns.io/dns-query",                  "NextDNS",         "doh_wire"]
+  - ["https://doh.opendns.com/dns-query",                 "OpenDNS",         "doh_wire"]
+  - ["https://dns.opendns.com/dns-query",                 "OpenDNS (dns)",    "doh_wire"]
+  - ["https://dns.quad9.net/dns-query",                   "Quad9",           "doh_wire"]
+  - ["https://dns10.quad9.net/dns-query",                 "Quad9 (unfiltered)", "doh_wire"]
+  - ["https://dns11.quad9.net/dns-query",                 "Quad9 (unsecured)", "doh_wire"]
+  - ["https://anycast.uncensoreddns.org/dns-query",       "UncensoredDNS", "doh_wire"]
+  - ["https://wikimedia-dns.org/dns-query",               "Wikimedia", "doh_wire"]
+  - ["https://xbox-dns.ru/dns-query",                   "XboxDNS (RU)", "doh_wire"]
+  - ["https://common.dot.dns.yandex.net/dns-query",       "Yandex",          "doh_wire"]
