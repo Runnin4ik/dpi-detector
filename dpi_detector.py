@@ -94,6 +94,54 @@ def _flush_stdin() -> None:
             pass
 
 
+def _read_key_sync() -> str:
+    """Блокирующее чтение одной клавиши без ожидания Enter."""
+    if os.name == "nt":
+        import msvcrt
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):  # спец-клавиши (стрелки, F1-F12): второй код отбрасываем
+            msvcrt.getwch()
+            return "\x00"
+        if ch in ("\x03", "\x04", "\x1a"):  # Ctrl+C / Ctrl+D / Ctrl+Z — выход
+            raise KeyboardInterrupt
+        return ch
+    import termios, tty
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    if ch in ("\x03", "\x04", "\x1a"):  # Ctrl+C / Ctrl+D / Ctrl+Z в raw-режиме
+        raise KeyboardInterrupt
+    return ch
+
+
+async def _read_key_cancelable() -> str:
+    """Одна клавиша; если stdin не терминал — строка ввода (fallback)."""
+    loop = asyncio.get_running_loop()
+    if sys.stdin.isatty():
+        return (await loop.run_in_executor(None, _read_key_sync)).lower()
+    return (await _readline_cancelable()).strip().lower()
+
+
+def _selection_flags(selection: str) -> tuple:
+    """Раскладывает строку выбора ('123'...) на флаги запуска тестов."""
+    run_dns       = "1" in selection   # Тест 1: подмена DNS
+    run_dns_avail = "2" in selection   # Тест 2: доступность DNS-серверов
+    run_domains   = "3" in selection   # Тест 3: доступность доменов (TLS/HTTP)
+    run_tcp       = "4" in selection   # Тест 4: TCP 16-20KB блокировка
+    run_wl_sni    = "5" in selection   # Тест 5: белые SNI для ASN
+    run_telegram  = "6" in selection   # Тест 6: Telegram
+    run_legend    = "7" in selection   # Тест 7: Легенда
+    only_legend   = run_legend and not any([
+        run_dns, run_dns_avail, run_domains, run_tcp, run_wl_sni, run_telegram
+    ])
+    return (run_dns, run_dns_avail, run_domains, run_tcp,
+            run_wl_sni, run_telegram, run_legend, only_legend)
+
+
 def _format_summary(
     run_dns: bool,
     run_dns_avail: bool,
@@ -254,16 +302,8 @@ async def main():
     else:
         selection = await ask_test_selection()
 
-    run_dns       = "1" in selection   # Тест 1: подмена DNS
-    run_dns_avail = "2" in selection   # Тест 2: доступность DNS-серверов
-    run_domains   = "3" in selection   # Тест 3: доступность доменов (TLS/HTTP)
-    run_tcp       = "4" in selection   # Тест 4: TCP 16-20KB блокировка
-    run_wl_sni    = "5" in selection   # Тест 5: белые SNI для ASN
-    run_telegram  = "6" in selection   # Тест 6: Telegram
-    run_legend    = "7" in selection   # Тест 7: Легенда
-    only_legend   = run_legend and not any([
-        run_dns, run_dns_avail, run_domains, run_tcp, run_wl_sni, run_telegram
-    ])
+    (run_dns, run_dns_avail, run_domains, run_tcp,
+     run_wl_sni, run_telegram, run_legend, only_legend) = _selection_flags(selection)
 
     if only_legend:
         print_legend()
@@ -385,14 +425,36 @@ async def main():
             break
 
         console.print(
-            "\nНажмите [bold green]Enter[/bold green] чтобы повторить проверку "
-            "или [bold red]Ctrl+C[/bold red] для выхода"
+            "\nНажмите [bold green]\\[Enter][/bold green] чтобы повторить проверку, "
+            "[bold cyan]\\[M][/bold cyan]/[bold cyan]\\[V][/bold cyan] чтобы вернуться в меню "
+            "(любая раскладка) или [bold red]Ctrl+C[/bold red] для выхода"
         )
         _flush_stdin()
-        try:
-            await _readline_cancelable()
-        except KeyboardInterrupt:
-            raise
+        while True:
+            try:
+                key = await _read_key_cancelable()
+            except KeyboardInterrupt:
+                raise
+            if key in ("m", "ь", "v", "м"):   # M и V на английской и русской раскладках
+                console.print()
+                while True:
+                    selection = await ask_test_selection()
+                    (run_dns, run_dns_avail, run_domains, run_tcp,
+                     run_wl_sni, run_telegram, run_legend, only_legend) = _selection_flags(selection)
+                    if not only_legend:
+                        break
+                    print_legend()
+                    console.print("\nНажмите [bold green]\\[Enter][/bold green] чтобы вернуться в меню...")
+                    _flush_stdin()
+                    try:
+                        await _read_key_cancelable()
+                    except KeyboardInterrupt:
+                        raise
+                    console.print()
+                break
+            if key in ("\r", "\n", ""):   # Enter — повторить
+                break
+            console.print("[yellow]Нажмите \\[Enter] для повтора или \\[M]/\\[V] для меню[/yellow]")
         console.print()
 
 
@@ -401,6 +463,8 @@ if __name__ == "__main__":
 
     try:
         asyncio.run(main())
+    except KeyboardInterrupt:
+        fast_exit_handler(None, None)  # Ctrl+C/Ctrl+D у промпта приходят символом, не SIGINT
     except Exception as e:
         console.print(f"\n[bold red]Критическая ошибка:[/bold red] {e}")
         traceback.print_exc()
