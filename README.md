@@ -59,7 +59,7 @@ docker run --rm -it --pull=always ghcr.io/runnin4ik/dpi-detector:latest
 Или запускайте с указанием определенной версии  
 Это избавляет от постоянных скачиваний, но нужно следить за актуальностью версий
 ```bash
-docker run --rm -it ghcr.io/runnin4ik/dpi-detector:3.4.0
+docker run --rm -it ghcr.io/runnin4ik/dpi-detector:3.5.0
 ```
 
 #### С кастомизацией
@@ -120,8 +120,8 @@ python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
 
 Для использования программы не обязательно устанавливать Python. Скачайте подходящий `.exe` файл в разделе [Releases -> Assets](https://github.com/Runnin4ik/dpi-detector/releases):
 
-*   **[Скачать для Windows 10 / 11](https://github.com/Runnin4ik/dpi-detector/releases/download/v3.4.0/dpi_detector_v3.4.0_win10.exe)**
-*   **[Скачать для Windows 7 / 8](https://github.com/Runnin4ik/dpi-detector/releases/download/v3.4.0/dpi_detector_v3.4.0_win7.exe)**
+*   **[Скачать для Windows 10 / 11](https://github.com/Runnin4ik/dpi-detector/releases/download/v3.5.0/dpi_detector_v3.5.0_win10.exe)**
+*   **[Скачать для Windows 7 / 8](https://github.com/Runnin4ik/dpi-detector/releases/download/v3.5.0/dpi_detector_v3.5.0_win7.exe)**
 
 #### С кастомизацией
 
@@ -134,17 +134,17 @@ python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
 
 Скачайте подходящий бинарник в разделе [Releases -> Assets](https://github.com/Runnin4ik/dpi-detector/releases):
 
-*   **[Скачать для Apple Silicon (M1–M4)](https://github.com/Runnin4ik/dpi-detector/releases/download/v3.4.0/dpi_detector_v3.4.0_macos_arm64)**
-*   **[Скачать для Intel](https://github.com/Runnin4ik/dpi-detector/releases/download/v3.4.0/dpi_detector_v3.4.0_macos_intel)**
+*   **[Скачать для Apple Silicon (M1–M4)](https://github.com/Runnin4ik/dpi-detector/releases/download/v3.5.0/dpi_detector_v3.5.0_macos_arm64)**
+*   **[Скачать для Intel](https://github.com/Runnin4ik/dpi-detector/releases/download/v3.5.0/dpi_detector_v3.5.0_macos_intel)**
 
 #### Запуск
 
 Приложение не нотаризовано, поэтому macOS заблокирует файл, скачанный через браузер. Один раз снимите карантин и запустите:
 
 ```bash
-xattr -cr dpi_detector_v3.4.0_macos_arm64
-chmod +x dpi_detector_v3.4.0_macos_arm64
-./dpi_detector_v3.4.0_macos_arm64
+xattr -cr dpi_detector_v3.5.0_macos_arm64
+chmod +x dpi_detector_v3.5.0_macos_arm64
+./dpi_detector_v3.5.0_macos_arm64
 ```
 
 Либо: **Системные настройки → Конфиденциальность и безопасность → «Открыть в любом случае»** (macOS Sequoia и новее), на старых версиях — ПКМ по файлу → **Открыть**.

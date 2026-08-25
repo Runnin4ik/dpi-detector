@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Тег версии для имён артефактов, например v3.4.0'
+        description: 'Тег версии для имён артефактов, например v3.5.0'
         required: true
-        default: 'v3.4.0'
+        default: 'v3.5.0'
 
 permissions:
   contents: write
