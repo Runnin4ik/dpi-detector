@@ -60,6 +60,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.exe
+          tag: ${{ github.event.release.tag_name || inputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -105,12 +106,13 @@ jobs:
             dpi_detector.py
 
       - name: Ad-hoc codesign
-        run: codesign --force -s - "dist/dpi_detector_${{ github.event.release.tag_name }}_${{ matrix.suffix }}"
+        run: codesign --force -s - "dist/dpi_detector_${{ inputs.version || github.event.release.tag_name }}_${{ matrix.suffix }}"
 
       - name: Upload binary to Release Assets
         uses: softprops/action-gh-release@v2
         with:
           files: dist/dpi_detector_*
+          tag: ${{ github.event.release.tag_name || inputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   build-docker:
