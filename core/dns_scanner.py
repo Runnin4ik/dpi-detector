@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import re
+import json
 import struct
+import tempfile
 import socket
 import asyncio
 import base64
@@ -472,7 +475,7 @@ async def check_dns_integrity() -> Tuple[set, int, bool]:
             if qr is not None or full_map.get((key, name), False):
                 working.append((key, name))
             else:
-                log.append(f"[dim]• {label} [yellow]{key} ({name})[/yellow] недоступен[/dim]")
+                log.append(f"[dim]• {label} [yellow]{key} ({name})[/yellow] не ответил[/dim]")
         return working, log
 
     udp_working, udp_log   = _classify(udp_quick,  full_u, "UDP")
@@ -671,6 +674,26 @@ async def check_dns_integrity() -> Tuple[set, int, bool]:
 
 # ── Тест 2: Проверка доступности DNS-серверов ────────────────────────────────
 
+class _SingleQueryProto(asyncio.DatagramProtocol):
+    """Одиночный UDP DNS-запрос: отдаёт (data, t_recv) в future."""
+
+    def __init__(self, fut):
+        self.fut = fut
+
+    def datagram_received(self, data, _addr):
+        t_recv = time.perf_counter()
+        if not self.fut.done():
+            self.fut.set_result((data, t_recv))
+
+    def error_received(self, exc):
+        pass
+
+    def connection_lost(self, exc):
+        err = exc or ConnectionError("Socket closed")
+        if not self.fut.done():
+            self.fut.set_exception(err)
+
+
 async def check_dns_availability() -> dict:
     """
     Тест 2: Проверяет доступность DNS-серверов и замеряет время резолва.
@@ -781,25 +804,6 @@ async def check_dns_availability() -> dict:
         loop = asyncio.get_running_loop()
         udp_sem = asyncio.Semaphore(15) # Ограничиваем кол-во одновременных сокетов
 
-        # Выносим класс протокола наружу, чтобы передавать ему конкретный future
-        class _SingleQueryProto(asyncio.DatagramProtocol):
-            def __init__(self, fut):
-                self.fut = fut
-
-            def datagram_received(self, data, _addr):
-                # Идеально точное время прямо в момент получения пакета ОС
-                t_recv = time.perf_counter()
-                if not self.fut.done():
-                    self.fut.set_result((data, t_recv))
-
-            def error_received(self, exc):
-                pass
-
-            def connection_lost(self, exc):
-                err = exc or ConnectionError("Socket closed")
-                if not self.fut.done():
-                    self.fut.set_exception(err)
-
         async def _wait(domain: str) -> tuple[str, Optional[float]]:
             async with udp_sem:
                 q = _build_dns_query(domain)
@@ -881,6 +885,10 @@ async def check_dns_availability() -> dict:
         key = ("doh_wire", addr, name)
         cli_timeout = httpx.Timeout(timeout, connect=timeout, pool=2.0)
         doh_sem = asyncio.Semaphore(20)
+        # Один коннект на сервер: боевые запросы обязаны переиспользовать
+        # прогревочное соединение. Иначе каждый открывает своё и платит
+        # задержку классификации ТСПУ (~+300мс на весь замер).
+        single_conn = httpx.Limits(max_connections=1, max_keepalive_connections=1)
 
         # Выносим всю логику во внутреннюю функцию, чтобы обернуть её в жесткий таймаут
         async def _do_probe() -> list:
@@ -888,36 +896,45 @@ async def check_dns_availability() -> dict:
                 async with doh_sem:
                     query = _build_dns_query(domain)
                     tx_id = query[:2]
-                    try:
-                        t0 = time.perf_counter()
-                        resp = await client.post(
-                            addr, content=query,
-                            headers={
-                                "Content-Type": "application/dns-message",
-                                "Accept":       "application/dns-message",
-                                "User-Agent":   config.USER_AGENT,
-                            },
-                        )
-                        if resp.status_code != 200:
-                            dns_b64 = base64.urlsafe_b64encode(query).rstrip(b'=').decode()
+                    # Одна повторная попытка: серверы с лимитом h2-стримов
+                    # отвечают REFUSED_STREAM на залп всех доменов разом,
+                    # а редкие ReadTimeout обычно проходятся со второго раза.
+                    last_err: Optional[Exception] = None
+                    for attempt in range(2):
+                        if attempt:
+                            await asyncio.sleep(0.3 + os.urandom(1)[0] / 255 * 0.7)
+                        try:
                             t0 = time.perf_counter()
-                            resp = await client.get(
-                                addr, params={"dns": dns_b64},
-                                headers={"Accept": "application/dns-message",
-                                         "User-Agent": config.USER_AGENT},
+                            resp = await client.post(
+                                addr, content=query,
+                                headers={
+                                    "Content-Type": "application/dns-message",
+                                    "Accept":       "application/dns-message",
+                                    "User-Agent":   config.USER_AGENT,
+                                },
                             )
-                        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
-                        if resp.status_code != 200:
-                            return domain, None
-                        result = _parse_dns_response(resp.content, tx_id)
-                        return domain, elapsed_ms if isinstance(result, list) else None
-                    except Exception:
-                        return domain, None
+                            if resp.status_code != 200:
+                                dns_b64 = base64.urlsafe_b64encode(query).rstrip(b'=').decode()
+                                t0 = time.perf_counter()
+                                resp = await client.get(
+                                    addr, params={"dns": dns_b64},
+                                    headers={"Accept": "application/dns-message",
+                                             "User-Agent": config.USER_AGENT},
+                                )
+                            elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+                            if resp.status_code != 200:
+                                return domain, None
+                            result = _parse_dns_response(resp.content, tx_id)
+                            return domain, elapsed_ms if isinstance(result, list) else None
+                        except Exception as err:
+                            last_err = err
+                    return domain, None
 
             try:
                 async with httpx.AsyncClient(
                     timeout=cli_timeout,
                     proxy=proxy_url, trust_env=False, http2=True,
+                    limits=single_conn,
                 ) as client:
                     # 1. Прогрев с Fail-Fast (Защита от двойного таймаута)
                     try:
@@ -934,8 +951,16 @@ async def check_dns_availability() -> dict:
                     except Exception:
                         pass # Сервер жив, но вернул 400/500 — продолжаем (м.б. GET сработает)
 
-                    # 2. Боевые запросы (запустятся только если сервер жив)
-                    return await asyncio.gather(*[_one(d, client) for d in domains])
+                    # 2. Боевые запросы ПОСЛЕДОВАТЕЛЬНО. При параллельном залпе
+                    # все пять попадают в окно классификации ТСПУ на свежем
+                    # соединении и получают равную надбавку ~300мс (GOAWAY
+                    # вынуждает открыть новое соединение после прогрева).
+                    # Последовательный запуск платит за установление максимум
+                    # один запрос — минимум остаётся честным RTT.
+                    results = []
+                    for d in domains:
+                        results.append(await _one(d, client))
+                    return results
             except Exception:
                 return [(d, None) for d in domains]
 
@@ -955,6 +980,31 @@ async def check_dns_availability() -> dict:
     # что даёт ложные TIMEOUT. Пробуем серверы пачками.
     probe_gate = asyncio.Semaphore(getattr(config, "DNS_PROBE_CONCURRENCY", 3))
 
+    # ── Выходной резолвер: A whoami.akamai.net ────────────────────────────────
+    # Ответ — IP резолвера, который реально сходил к авторитативным NS Akamai.
+    # Совпадение выхода у разных провайдеров = перехват ip:53.
+    egress: dict[tuple, Optional[str]] = {}
+
+    async def _probe_egress(addr: str, name: str) -> None:
+        key = ("egress", addr, name)
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        transport = None
+        try:
+            q = _build_dns_query("whoami.akamai.net")
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: _SingleQueryProto(fut), remote_addr=(addr, 53)
+            )
+            transport.sendto(q)
+            data, _t = await asyncio.wait_for(fut, timeout=timeout)
+            parsed = _parse_dns_response(data, q[:2])
+            egress[key] = parsed[0] if isinstance(parsed, list) and parsed else None
+        except Exception:
+            egress[key] = None
+        finally:
+            if transport:
+                transport.close()
+
     async def _probe_udp_gated(addr, name):
         async with probe_gate:
             await _probe_udp(addr, name)
@@ -963,9 +1013,20 @@ async def check_dns_availability() -> dict:
         async with probe_gate:
             await _probe_doh_wire(addr, name)
 
+    # Своё окно: egress — один лёгкий UDP-пакет на сервер, ему не нужен
+    # консервативный probe_gate(3), иначе фаза проб растягивается.
+    egress_sem = asyncio.Semaphore(10)
+
+    async def _probe_egress_gated(addr, name):
+        async with egress_sem:
+            await _probe_egress(addr, name)
+
     _redraw_progress()
     if udp_servers:
-        await asyncio.gather(*[_probe_udp_gated(a, n) for a, n in udp_servers])
+        await asyncio.gather(
+            *[_probe_udp_gated(a, n) for a, n in udp_servers]
+          + [_probe_egress_gated(a, n) for a, n in udp_servers]
+        )
 
     if wire_servers:
         await asyncio.gather(*[_probe_doh_wire_gated(a, n) for a, n in wire_servers])
@@ -975,73 +1036,241 @@ async def check_dns_availability() -> dict:
     sys.stderr.write(f"\r  Проверено серверов: {done_count}/{total_probes}          \n")
     sys.stderr.flush()
 
-    # ── Агрегируем по имени провайдера ────────────────────────────────────────
-    # Возвращает (avg_ms, ok, total) или ("TIMEOUT", 0, total) если сервер есть
-    # но все провалились, или None если нет серверов этого типа вообще.
-    def _aggregate(name: str, kind: str) -> Optional[tuple]:
-        entries = [
-            (k_addr, domain_map)
-            for (k_kind, k_addr, k_name), domain_map in raw.items()
-            if k_kind == kind and k_name == name
-        ]
-        if not entries:
-            return None  # нет серверов этого типа — прочерк
 
-        # Берём лучший (минимальный avg) среди рабочих
-        best = None
-        for _addr, domain_map in entries:
-            vals = [v for v in domain_map.values() if v is not None]
-            total = len(domain_map)
-            ok = len(vals)
-            if ok > 0:
-                # Минимум успешных запросов, а не среднее: при многих серверах
-                # среднее по HTTP/2-мультиплексу одного соединения раздувается
-                # DPI-душением этого соединения и не отражает реальную задержку.
-                best_ms = round(min(vals), 1)
-                if best is None or best_ms < best[0]:
-                    best = (best_ms, ok, total)
+    # ── Имена организаций выходных IP (Team Cymru через DoH) ──────────────────
+    # TXT-запросы к asn.cymru.com идут через DoH — сам lookup не перехватить.
+    _CYMRU_DOH = ("https://cloudflare-dns.com/dns-query",
+                  "https://dns.google/resolve")
 
-        if best is not None:
-            return best  # (avg_ms, ok, total)
+    def _doh_txt_fields(txt: str) -> list:
+        return [p.strip() for p in txt.strip('"').split("|")]
 
-        # Серверы есть, но все провалились → TIMEOUT
-        total = len(next(iter(entries))[1])
-        return ("TIMEOUT", 0, total)
+    async def _lookup_asn_name(client: httpx.AsyncClient, ip: str) -> Optional[str]:
+        if ip.count(".") != 3:
+            return None
+        rev = ".".join(reversed(ip.split(".")))
+        asn = None
+        for url in _CYMRU_DOH:
+            try:
+                resp = await client.get(url, params={"name": f"{rev}.origin.asn.cymru.com", "type": "TXT"})
+                answers = resp.json().get("Answer", []) if resp.status_code == 200 else []
+                if answers:
+                    m = re.match(r"\s*(\d+)", _doh_txt_fields(answers[0]["data"])[0])
+                    if m:
+                        asn = m.group(1)
+                        break
+            except Exception:
+                continue
+        if not asn:
+            return None
+        for url in _CYMRU_DOH:
+            try:
+                resp = await client.get(url, params={"name": f"AS{asn}.asn.cymru.com", "type": "TXT"})
+                answers = resp.json().get("Answer", []) if resp.status_code == 200 else []
+                if answers:
+                    fields = _doh_txt_fields(answers[0]["data"])
+                    name = fields[-1] if len(fields) >= 3 else fields[0]
+                    return re.sub(r"\s+", " ", name).strip() or None
+            except Exception:
+                continue
+        return None
 
-    # ── Формируем ячейку таблицы ──────────────────────────────────────────────
-    def _cell(agg: Optional[tuple], has_server: bool) -> str:
-        if not has_server or agg is None:
+    _ASN_CACHE_FILE = os.path.join(tempfile.gettempdir(), "dpi_detector_asn_cache.json")
+
+    def _load_asn_cache() -> dict:
+        try:
+            with open(_ASN_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    async def _resolve_asn_names() -> dict[str, str]:
+        uniq = sorted({e for e in egress.values() if e and e != "0.0.0.0"})
+        if not uniq:
+            return {}
+        cache = _load_asn_cache()
+        out = {i: cache[i] for i in uniq if isinstance(cache.get(i), str)}
+        missing = [i for i in uniq if i not in out]
+        if not missing:
+            return out
+        headers = {"Accept": "application/dns-json", "User-Agent": config.USER_AGENT}
+        sem = asyncio.Semaphore(8)
+        fresh: dict[str, str] = {}
+        async with httpx.AsyncClient(
+            timeout=4, headers=headers,
+            proxy=getattr(config, "PROXY_URL", None), trust_env=False,
+        ) as cli:
+            async def one(uip: str):
+                async with sem:
+                    nm = await _lookup_asn_name(cli, uip)
+                    return uip, nm
+            for uip, nm in await asyncio.gather(*[one(i) for i in missing]):
+                if nm:
+                    out[uip] = nm
+                    fresh[uip] = nm
+        if fresh:
+            cache.update(fresh)
+            try:
+                with open(_ASN_CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(cache, f)
+            except Exception:
+                pass
+        return out
+
+    org_names = await _resolve_asn_names()
+
+    def _org_label(eip: str) -> str:
+        # Cymru отдаёт "КРАТКОЕ ИМЯ - полное описание, CC" — берём до " - ".
+        name = org_names.get(eip)
+        if not name:
+            return eip  # fallback — сырой IP
+        return name.split(" - ", 1)[0].strip() or name
+
+    # ── Классификация выходных резолверов ─────────────────────────────────────
+    # Одинаковый выходной /24 у РАЗНЫХ брендов = трафик идёт на общий
+    # резолвер (перехват ip:53), а не к заявленному серверу.
+    def _net24(ip: str) -> str:
+        parts = ip.split(".")
+        return ".".join(parts[:3]) if len(parts) == 4 else ip
+
+    def _brand(nm: str) -> str:
+        # "AdGuard (family)" → "AdGuard": варианты одного бренда не считаем
+        # разными провайдерами.
+        return nm.split(" (", 1)[0].strip()
+
+    name_ips: dict[str, list[str]] = {}
+    net_brands: dict[str, set] = {}
+    for (_ekind, _eaddr, ename), eip in egress.items():
+        if not eip or eip == "0.0.0.0":
+            continue
+        name_ips.setdefault(ename, []).append(eip)
+        net_brands.setdefault(_net24(eip), set()).add(_brand(ename))
+
+    def _is_hijacked(eip: str) -> bool:
+        return len(net_brands.get(_net24(eip), ())) >= 2
+
+    # Отечественные резолверы: их выход через RIPN/МСИКС — норма, а не перехват.
+    # Из флагов и детальной таблицы исключены, но в сигнатуре net_brands
+    # участвуют — на их выход сверяются остальные провайдеры.
+    _DOMESTIC_BRANDS = {"msk-ix", "нсди"}
+
+    def _is_domestic(name: str) -> bool:
+        return _brand(name).lower() in _DOMESTIC_BRANDS
+
+    # ── Ячейки единой таблицы ─────────────────────────────────────────────────
+    def _kind_stats(kind: str, name: str):
+        """Минимальная латентность и (ok, total) по всем серверам провайдера."""
+        addrs = (udp_by_name if kind == "udp" else doh_by_name).get(name, [])
+        vals_all, ok_q, total_q = [], 0, 0
+        for a in addrs:
+            dm = raw.get((kind, a, name), {})
+            vals = [v for v in dm.values() if v is not None]
+            vals_all += vals
+            ok_q += len(vals)
+            total_q += len(dm)
+        return vals_all, ok_q, total_q
+
+    def _latency_cell(kind: str, name: str, warn: bool = False) -> str:
+        addrs = (udp_by_name if kind == "udp" else doh_by_name).get(name, [])
+        if not addrs:
             return "[dim]—[/dim]"
-        if agg[0] == "TIMEOUT":
-            return "[red]TIMEOUT[/red]"
-        avg, ok, total = agg
-        ms_str = f"[green]{avg}мс[/green]"
-        ratio  = f" [dim]{ok}/{total}[/dim]" if ok < total else ""
-        return ms_str + ratio
+        vals_all, ok_q, total_q = _kind_stats(kind, name)
+        if not vals_all:
+            base = "[red]TIMEOUT[/red]"
+        else:
+            ratio = f" [dim]{ok_q}/{total_q}[/dim]" if ok_q < total_q else ""
+            base = f"[green]{round(min(vals_all), 1)}мс[/green]{ratio}"
+        return f"{base} [red]![/red]" if warn else base
+
+    def _egress_cell(pname: str) -> str:
+        addrs = udp_by_name.get(pname, [])
+        if not addrs:
+            return "[dim]—[/dim]"
+        lines = []
+        for a in addrs:
+            dm = raw.get(("udp", a, pname), {})
+            ok_q = sum(1 for v in dm.values() if v is not None)
+            # Потери конкретного сервера показываем только если они были —
+            # иначе каждая строка превращается в шум "5/5".
+            loss = f" [dim]{ok_q}/{len(dm)}[/dim]" if 0 < ok_q < len(dm) else ""
+            eip = egress.get(("egress", a, pname))
+            if not eip or eip == "0.0.0.0":
+                lines.append(f"[dim]{a}: выход н/д{loss}[/dim]")
+            elif _is_domestic(pname):
+                lines.append(f"{a}→{_org_label(eip)}{loss}")
+            elif _is_hijacked(eip):
+                lines.append(f"[red]{a}→{_org_label(eip)} !{loss}[/red]")
+            else:
+                lines.append(f"[green]{a}→{_org_label(eip)}[/green]{loss}")
+        return "\n".join(lines)
 
     # ── Таблица ───────────────────────────────────────────────────────────────
     from rich.table import Table
     t = Table(show_header=True, header_style="bold magenta", border_style="dim")
     t.add_column("Провайдер", style="cyan", no_wrap=True, min_width=16)
-    t.add_column("DoH мин",  justify="right", no_wrap=True, min_width=12)
-    t.add_column("UDP мин",  justify="right", no_wrap=True, min_width=12)
+    t.add_column("DoH мин", justify="right", no_wrap=True)
+    t.add_column("UDP мин", justify="right", no_wrap=True)
+    t.add_column("Реальный резолвер", no_wrap=True)
 
     doh_ok_names = udp_ok_names = 0
-    doh_total_names = len({n for _, n in doh_servers})
-    udp_total_names = len({n for _, n in udp_servers})
+    doh_total_names = len(doh_by_name)
+    udp_total_names = len(udp_by_name)
 
     for name in all_names:
-        has_doh = name in doh_by_name
-        has_udp = name in udp_by_name
-        doh_agg = _aggregate(name, "doh_wire")
-        udp_agg = _aggregate(name, "udp")
-        if doh_agg and doh_agg[0] != "TIMEOUT":
+        doh_vals, _, _ = _kind_stats("doh_wire", name) if name in doh_by_name else ([], 0, 0)
+        udp_vals, _, _ = _kind_stats("udp", name) if name in udp_by_name else ([], 0, 0)
+        if doh_vals:
             doh_ok_names += 1
-        if udp_agg and udp_agg[0] != "TIMEOUT":
+        udp_hij = not _is_domestic(name) and any(
+            (e := egress.get(("egress", a, name))) and _is_hijacked(e)
+            for a in udp_by_name.get(name, [])
+        )
+        if udp_vals:
             udp_ok_names += 1
-        t.add_row(name, _cell(doh_agg, has_doh), _cell(udp_agg, has_udp))
+        t.add_row(
+            name,
+            _latency_cell("doh_wire", name),
+            _latency_cell("udp", name, warn=udp_hij),
+            _egress_cell(name),
+        )
 
-    console.print(t)
+    # Таблица шире терминала: печатаем через консоль достаточной ширины,
+    # чтобы строки уходили в горизонтальный скролл, а не обрезались.
+    try:
+        meas = t.__rich_measure__(console, console.options)
+        wide = max(console.width, int(meas.maximum) + 2)
+        from rich.console import Console as _WideConsole
+        _WideConsole(file=sys.stdout, width=wide).print(t)
+    except Exception:
+        console.print(t)
+
+    # ── Детальная таблица перехвата ───────────────────────────────────────────
+    hij_rows = []
+    for hname, haddrs in udp_by_name.items():
+        for ha in haddrs:
+            heip = egress.get(("egress", ha, hname))
+            if heip and heip != "0.0.0.0" and _is_hijacked(heip) \
+                    and not _is_domestic(hname):
+                hij_rows.append(
+                    (ha, hname, org_names.get(heip, heip))
+                )
+    if hij_rows:
+        console.print()
+        ht = Table(
+            title="[bold red]! Перехват UDP-запросов[/bold red]",
+            show_header=True, header_style="bold magenta", border_style="red",
+        )
+        ht.add_column("Сервер", style="cyan")
+        ht.add_column("Заявлен")
+        ht.add_column("Реальный резолвер", style="red")
+        for ha, hname, horg in sorted(hij_rows):
+            ht.add_row(ha, hname, horg)
+        console.print(ht)
+        console.print(
+            "[dim]Сигнатура: whoami.akamai.net — разные провайдеры отвечают "
+            "через один и тот же резолвер.[/dim]"
+        )
     console.print()
 
     return {
