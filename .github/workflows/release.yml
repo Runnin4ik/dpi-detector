@@ -72,8 +72,10 @@ jobs:
         include:
           - os: macos-latest
             suffix: 'macos_arm64'
-          - os: macos-13
+            pyarch: 'arm64'
+          - os: macos-latest
             suffix: 'macos_intel'
+            pyarch: 'x64'   # x86_64-Python под Rosetta 2: macos-13 (Intel-раннеры) ретирнуты
 
     steps:
       - name: Checkout code
@@ -83,6 +85,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.14'
+          architecture: ${{ matrix.pyarch }}
 
       - name: Install dependencies
         run: |
