@@ -60,7 +60,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.exe
-          tag: ${{ github.event.release.tag_name || inputs.version }}
+          tag_name: ${{ github.event.release.tag_name || inputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -112,7 +112,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/dpi_detector_*
-          tag: ${{ github.event.release.tag_name || inputs.version }}
+          tag_name: ${{ github.event.release.tag_name || inputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   build-docker:
