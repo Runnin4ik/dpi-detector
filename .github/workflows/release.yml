@@ -67,6 +67,10 @@ jobs:
 
   build-macos:
     runs-on: ${{ matrix.os }}
+    env:
+      # macos_intel: setup-python ставит universal2-Python, который на ARM-раннере
+      # выполняется нативным arm-слайсом; принудительно гоняем его под Rosetta.
+      ARCHCMD: ${{ matrix.suffix == 'macos_intel' && 'arch -x86_64' || '' }}
     strategy:
       matrix:
         include:
@@ -75,7 +79,7 @@ jobs:
             pyarch: 'arm64'
           - os: macos-latest
             suffix: 'macos_intel'
-            pyarch: 'x64'   # x86_64-Python под Rosetta 2: macos-13 (Intel-раннеры) ретирнуты
+            pyarch: 'x64'
 
     steps:
       - name: Checkout code
@@ -88,11 +92,15 @@ jobs:
           python-version: '3.14'
           architecture: ${{ matrix.pyarch }}
 
+      - name: Check Rosetta (intel only)
+        if: matrix.suffix == 'macos_intel'
+        run: arch -x86_64 /usr/bin/true
+
       - name: Install dependencies
         run: |
           PY="${{ steps.py.outputs.python-path }}"
-          "$PY" -m pip install --upgrade pip
-          "$PY" -m pip install "httpx[socks,http2]" rich pyinstaller pyyaml
+          $ARCHCMD "$PY" -m pip install --upgrade pip
+          $ARCHCMD "$PY" -m pip install "httpx[socks,http2]" rich pyinstaller pyyaml
 
       - name: Build with PyInstaller
         run: |
@@ -100,7 +108,7 @@ jobs:
           VERSION="${{ github.event.release.tag_name || inputs.version }}"
           BIN_NAME="dpi_detector_${VERSION}_${{ matrix.suffix }}"
 
-          "$PY" -m PyInstaller --onefile --console --clean \
+          $ARCHCMD "$PY" -m PyInstaller --onefile --console --clean \
             --collect-all rich \
             --collect-all httpx \
             --collect-all yaml \
