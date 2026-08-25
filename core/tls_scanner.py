@@ -4,7 +4,7 @@ import math
 import errno
 import asyncio
 import socket
-from utils.network import get_fake_ip_type
+from utils.network import get_fake_ip_type, get_resolved_ip
 from typing import Tuple
 from urllib.parse import urlparse
 
@@ -23,7 +23,7 @@ def _strip_www(host: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
-def create_dpi_client(tls_version: str = None, ipv6: bool = False) -> httpx.AsyncClient:
+def create_dpi_client(tls_version: str = None) -> httpx.AsyncClient:
     """
     Создаёт изолированного клиента для DPI-проверки.
     Тройная гарантия свежего TCP-соединения на каждый запрос:
@@ -106,6 +106,14 @@ async def _check_tls_single(
             return ("[bold red]ISP PAGE[/bold red]", f"Заглушка провайдера {resolved_ip}", 0, 0.0)
         elif fake_type == "local":
             return ("[bold yellow]LOCAL IP[/bold yellow]", f"Локальный IP {resolved_ip}", 0, 0.0)
+    # Привязка к IPv4: TCP-соединение по A-записи, SNI и Host — от домена.
+    # Иначе домен с AAAA при живом IPv6 уходит в v6-замер.
+    if resolved_ip is None and not getattr(config, "PROXY_URL", None):
+        resolved_ip = await get_resolved_ip(domain)
+    req_url, sni_ext = url, {}
+    if resolved_ip:
+        req_url = f"https://{resolved_ip}"
+        sni_ext = {"sni_hostname": domain}
 
     connection_state = {"stage": "init"}
     async def trace_hook(event_name, info):
@@ -128,13 +136,14 @@ async def _check_tls_single(
         try:
             req = client.build_request(
                 "GET",
-                url,
+                req_url,
                 headers={
                     "User-Agent": config.USER_AGENT,
                     "Accept-Encoding": "identity",
                     "Connection": "close",
+                    **({"Host": domain} if sni_ext else {}),
                 },
-                extensions={"trace": trace_hook}
+                extensions={"trace": trace_hook, **sni_ext}
             )
             response = await client.send(req, stream=True)
             status_code = response.status_code
@@ -235,7 +244,6 @@ async def check_domain_tls(
     )
     return (status, detail, elapsed)
 
-
 async def check_http_injection(
     domain: str,
     client: httpx.AsyncClient,
@@ -244,6 +252,12 @@ async def check_http_injection(
 ) -> Tuple[str, str]:
     """Проверяет HTTP-инжекцию (plain HTTP). Клиент передаётся снаружи."""
     clean_domain = domain.replace("https://", "").replace("http://", "")
+    # Привязка к IPv4: соединение по A-записи, Host остаётся доменом.
+    http_target = f"http://{clean_domain}"
+    if not getattr(config, "PROXY_URL", None):
+        _ip = await get_resolved_ip(clean_domain)
+        if _ip:
+            http_target = f"http://{_ip}"
 
     connection_state = {"stage": "init"}
     async def trace_hook(event_name, info):
@@ -259,7 +273,7 @@ async def check_http_injection(
     try:
         req = client.build_request(
             "HEAD",
-            f"http://{clean_domain}",
+            http_target,
             headers={
                 "User-Agent": config.USER_AGENT,
                 "Host": clean_domain,

@@ -56,3 +56,44 @@ def get_fake_ip_type(ip_str: str) -> str:
         return None
     except ValueError:
         return None
+
+
+from utils import config as _config
+
+_pin_cache: dict = {}
+
+
+async def pin_ipv4(url: str):
+    """
+    Привязка HTTP-тестов к IPv4: хост в URL заменяется на его A-запись,
+    чтобы соединение не ушло в IPv6 через системный getaddrinfo.
+    Возвращает (url, host): host нужно передать в запросе заголовком Host
+    и расширением sni_hostname — иначе сервер и проверка сертификата
+    увидят IP вместо имени. Если задан PROXY_URL (резолв выполняет прокси),
+    хост уже IP-литерал или A-записи нет — возвращается (url, None),
+    соединение пойдёт как раньше. Результат кэшируется на время сессии.
+    """
+    cached = _pin_cache.get(url)
+    if cached is not None:
+        return cached
+    result = (url, None)
+    try:
+        from ipaddress import ip_address
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(url)
+        host = parts.hostname
+        if host and not getattr(_config, "PROXY_URL", None):
+            try:
+                ip_address(host)  # уже литерал — резолвить нечего
+            except ValueError:
+                ip = await get_resolved_ip(host)
+                if ip:
+                    netloc = ip if parts.port is None else f"{ip}:{parts.port}"
+                    new_url = urlunsplit(
+                        (parts.scheme, netloc, parts.path, parts.query, parts.fragment)
+                    )
+                    result = (new_url, host)
+    except Exception:
+        pass
+    _pin_cache[url] = result
+    return result

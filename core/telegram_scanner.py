@@ -12,6 +12,7 @@ from rich.live import Live
 from rich.table import Table
 from cli.console import console as main_console
 from utils import config
+from utils.network import pin_ipv4
 
 live_console = Console(record=False)
 
@@ -296,8 +297,12 @@ async def _run_download(display: LiveDisplay) -> dict:
         nonlocal total_bytes, tick_bytes, t_start
         try:
             async with httpx.AsyncClient(verify=ctx, proxy=proxy_url, trust_env=False, timeout=TOTAL_TIMEOUT+5) as client:
-                req = client.build_request("GET", MEDIA_URL)
-                response = await client.send(req, stream=True)
+                murl, mhost = await pin_ipv4(MEDIA_URL)
+                req = client.build_request(
+                    "GET", murl,
+                    headers={"Host": mhost} if mhost else None,
+                    extensions={"sni_hostname": mhost} if mhost else None,
+                )
 
                 t_start = time.monotonic()
                 async for chunk in response.aiter_bytes(chunk_size=65536):

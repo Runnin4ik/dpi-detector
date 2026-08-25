@@ -14,7 +14,8 @@ from typing import Tuple, List, Union, Optional
 import httpx
 from utils import config
 from cli.console import console
-from utils.network import get_fake_ip_type
+from utils.network import get_fake_ip_type, pin_ipv4
+from utils.error_classifier import classify_connect_error
 
 
 # ── DNS wire-format helpers ───────────────────────────────────────────────────
@@ -173,6 +174,8 @@ async def _probe_udp_single(nameserver: str, domain: str) -> Optional[List[str]]
 async def _probe_doh_json_single(doh_url: str, domain: str) -> Optional[List[str]]:
     """DoH JSON API (?name=…&type=A) — один домен (до 2 попыток)."""
     headers = {"Accept": "application/dns-json", "User-Agent": config.USER_AGENT}
+    doh_url, ehost = await pin_ipv4(doh_url)
+    headers.update({"Host": ehost} if ehost else {})
     for attempt in range(2):
         try:
             proxy_url = getattr(config, "PROXY_URL", None)
@@ -180,7 +183,10 @@ async def _probe_doh_json_single(doh_url: str, domain: str) -> Optional[List[str
                 timeout=config.DNS_CHECK_TIMEOUT,
                 headers=headers, proxy=proxy_url, trust_env=False
             ) as client:
-                resp = await client.get(doh_url, params={"name": domain, "type": "A"})
+                resp = await client.get(
+                    doh_url, params={"name": domain, "type": "A"},
+                    extensions={"sni_hostname": ehost} if ehost else None,
+                )
                 if resp.status_code == 200:
                     data = resp.json()
                     if data.get("Status") != 3:  # Не NXDOMAIN
@@ -197,6 +203,7 @@ async def _probe_doh_wire_single(doh_url: str, domain: str) -> Optional[List[str
     """DoH wire-format (RFC 8484) — один домен (до 2 попыток)."""
     query = _build_dns_query(domain)
     tx_id = query[:2]
+    doh_url, ehost = await pin_ipv4(doh_url)
     for attempt in range(2):
         try:
             proxy_url = getattr(config, "PROXY_URL", None)
@@ -210,7 +217,9 @@ async def _probe_doh_wire_single(doh_url: str, domain: str) -> Optional[List[str
                         "Content-Type": "application/dns-message",
                         "Accept": "application/dns-message",
                         "User-Agent": config.USER_AGENT,
+                        **({"Host": ehost} if ehost else {}),
                     },
+                    extensions={"sni_hostname": ehost} if ehost else None,
                 )
                 if resp.status_code != 200:
                     dns_b64 = base64.urlsafe_b64encode(query).rstrip(b'=').decode()
@@ -219,7 +228,9 @@ async def _probe_doh_wire_single(doh_url: str, domain: str) -> Optional[List[str
                         headers={
                             "Accept": "application/dns-message",
                             "User-Agent": config.USER_AGENT,
+                            **({"Host": ehost} if ehost else {}),
                         },
+                        extensions={"sni_hostname": ehost} if ehost else None,
                     )
                 if resp.status_code == 200:
                     result = _parse_dns_response(resp.content, tx_id)
@@ -260,19 +271,22 @@ async def _probe_udp_all(nameserver: str, domains: list) -> dict:
             results[domain] = "TIMEOUT"
             timeout_cnt += 1
         else:
-            results[domain] = "ERROR"
             error += 1
 
     return {"ok": ok, "timeout": timeout_cnt, "error": error, "results": results}
 
-
 async def _probe_doh_json_all(doh_url: str, domains: list) -> dict:
     """Параллельно резолвит все домены через DoH JSON API."""
     headers = {"Accept": "application/dns-json", "User-Agent": config.USER_AGENT}
+    doh_url, ehost = await pin_ipv4(doh_url)
 
     async def _query(client, domain):
         try:
-            resp = await client.get(doh_url, params={"name": domain, "type": "A"})
+            resp = await client.get(
+                doh_url, params={"name": domain, "type": "A"},
+                headers={"Host": ehost} if ehost else None,
+                extensions={"sni_hostname": ehost} if ehost else None,
+            )
             if resp.status_code != 200:
                 return domain, "ERROR", None
             data = resp.json()
@@ -306,14 +320,13 @@ async def _probe_doh_json_all(doh_url: str, domains: list) -> dict:
             blocked += 1
         else:
             results[domain] = "ERROR"
-            error += 1
-
     return {"ok": ok, "timeout": timeout_cnt, "blocked": blocked, "error": error, "results": results}
 
 
 
 async def _probe_doh_wire_all(doh_url: str, domains: list) -> dict:
     """Параллельно резолвит все домены через DoH wire-format (RFC 8484)."""
+    doh_url, ehost = await pin_ipv4(doh_url)
 
     async def _query(client, domain):
         try:
@@ -327,7 +340,9 @@ async def _probe_doh_wire_all(doh_url: str, domains: list) -> dict:
                     "Content-Type": "application/dns-message",
                     "Accept": "application/dns-message",
                     "User-Agent": config.USER_AGENT,
+                    **({"Host": ehost} if ehost else {}),
                 },
+                extensions={"sni_hostname": ehost} if ehost else None,
             )
             if resp.status_code != 200:
                 # ── GET fallback ──
@@ -337,7 +352,9 @@ async def _probe_doh_wire_all(doh_url: str, domains: list) -> dict:
                     headers={
                         "Accept": "application/dns-message",
                         "User-Agent": config.USER_AGENT,
+                        **({"Host": ehost} if ehost else {}),
                     },
+                    extensions={"sni_hostname": ehost} if ehost else None,
                 )
                 if resp.status_code != 200:
                     return domain, "ERROR", None
@@ -792,6 +809,7 @@ async def check_dns_availability() -> dict:
     # None = сервер есть, но запрос не прошёл (TIMEOUT/ERR/NXDOMAIN)
     # Ключ отсутствует = этот тип у данного имени не определён
     raw: dict[tuple, dict[str, Optional[int]]] = {}
+    fail_reasons: dict[tuple, str] = {}   # (kind, addr, name) -> ярлык причины фейла
 
     # ── UDP probe ─────────────────────────────────────────────────────────────
     # Фиксы:
@@ -883,6 +901,10 @@ async def check_dns_availability() -> dict:
     # ── DoH Wire probe ────────────────────────────────────────────────────────
     async def _probe_doh_wire(addr: str, name: str) -> None:
         key = ("doh_wire", addr, name)
+        # Привязка к IPv4: коннект по A-записи, SNI и Host — от имени сервера
+        addr, ehost = await pin_ipv4(addr)
+        ehost_headers = {"Host": ehost} if ehost else {}
+        ehost_ext = {"sni_hostname": ehost} if ehost else None
         cli_timeout = httpx.Timeout(timeout, connect=timeout, pool=2.0)
         doh_sem = asyncio.Semaphore(20)
         # Один коннект на сервер: боевые запросы обязаны переиспользовать
@@ -892,6 +914,7 @@ async def check_dns_availability() -> dict:
 
         # Выносим всю логику во внутреннюю функцию, чтобы обернуть её в жесткий таймаут
         async def _do_probe() -> list:
+            conn_state = {"stage": "init"}
             async def _one(domain: str, client: httpx.AsyncClient) -> tuple[str, Optional[float]]:
                 async with doh_sem:
                     query = _build_dns_query(domain)
@@ -911,7 +934,9 @@ async def check_dns_availability() -> dict:
                                     "Content-Type": "application/dns-message",
                                     "Accept":       "application/dns-message",
                                     "User-Agent":   config.USER_AGENT,
+                                    **ehost_headers,
                                 },
+                                extensions=ehost_ext,
                             )
                             if resp.status_code != 200:
                                 dns_b64 = base64.urlsafe_b64encode(query).rstrip(b'=').decode()
@@ -919,7 +944,9 @@ async def check_dns_availability() -> dict:
                                 resp = await client.get(
                                     addr, params={"dns": dns_b64},
                                     headers={"Accept": "application/dns-message",
-                                             "User-Agent": config.USER_AGENT},
+                                             "User-Agent": config.USER_AGENT,
+                                             **ehost_headers},
+                                    extensions=ehost_ext,
                                 )
                             elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
                             if resp.status_code != 200:
@@ -928,6 +955,8 @@ async def check_dns_availability() -> dict:
                             return domain, elapsed_ms if isinstance(result, list) else None
                         except Exception as err:
                             last_err = err
+                    if last_err is not None:
+                        _record_fail(last_err)
                     return domain, None
 
             try:
@@ -936,17 +965,35 @@ async def check_dns_availability() -> dict:
                     proxy=proxy_url, trust_env=False, http2=True,
                     limits=single_conn,
                 ) as client:
-                    # 1. Прогрев с Fail-Fast (Защита от двойного таймаута)
+                    async def _trace_hook(event_name: str, info):
+                        if event_name == "connection.connect_tcp.started":
+                            conn_state["stage"] = "tcp_connect"
+                        elif event_name == "connection.connect_tcp.complete":
+                            conn_state["stage"] = "tcp_connected"
+                        elif event_name == "connection.start_tls.started":
+                            conn_state["stage"] = "tls_handshake"
+                        elif event_name == "connection.start_tls.complete":
+                            conn_state["stage"] = "tls_connected"
+
+                    def _record_fail(err: Exception) -> None:
+                        if key in fail_reasons:
+                            return
+                        label, _, _ = classify_connect_error(err, 0, stage=conn_state.get("stage", "init"))
+                        fail_reasons[key] = label
+
                     try:
                         warmup = _build_dns_query(domains[0] if domains else "google.com")
                         await client.post(
                             addr, content=warmup,
                             headers={"Content-Type": "application/dns-message",
                                      "Accept": "application/dns-message",
-                                     "User-Agent": config.USER_AGENT},
+                                     "User-Agent": config.USER_AGENT,
+                                     **ehost_headers},
+                            extensions={**ehost_ext, "trace": _trace_hook} if ehost_ext else {"trace": _trace_hook},
                         )
-                    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException):
+                    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as err:
                         # Сервер физически недоступен. Нет смысла спамить боевыми запросами.
+                        _record_fail(err)
                         return [(d, None) for d in domains]
                     except Exception:
                         pass # Сервер жив, но вернул 400/500 — продолжаем (м.б. GET сработает)
@@ -961,7 +1008,8 @@ async def check_dns_availability() -> dict:
                     for d in domains:
                         results.append(await _one(d, client))
                     return results
-            except Exception:
+            except Exception as err:
+                fail_reasons.setdefault(key, "[red]CONN ERR[/red]")
                 return [(d, None) for d in domains]
 
         # 3. Жесткая гильотина: ограничиваем всё время проверки провайдера
@@ -1050,9 +1098,13 @@ async def check_dns_availability() -> dict:
             return None
         rev = ".".join(reversed(ip.split(".")))
         asn = None
-        for url in _CYMRU_DOH:
+        for url, ehost in [await pin_ipv4(u) for u in _CYMRU_DOH]:
             try:
-                resp = await client.get(url, params={"name": f"{rev}.origin.asn.cymru.com", "type": "TXT"})
+                resp = await client.get(
+                    url, params={"name": f"{rev}.origin.asn.cymru.com", "type": "TXT"},
+                    headers={"Host": ehost} if ehost else None,
+                    extensions={"sni_hostname": ehost} if ehost else None,
+                )
                 answers = resp.json().get("Answer", []) if resp.status_code == 200 else []
                 if answers:
                     m = re.match(r"\s*(\d+)", _doh_txt_fields(answers[0]["data"])[0])
@@ -1063,9 +1115,13 @@ async def check_dns_availability() -> dict:
                 continue
         if not asn:
             return None
-        for url in _CYMRU_DOH:
+        for url, ehost in [await pin_ipv4(u) for u in _CYMRU_DOH]:
             try:
-                resp = await client.get(url, params={"name": f"AS{asn}.asn.cymru.com", "type": "TXT"})
+                resp = await client.get(
+                    url, params={"name": f"AS{asn}.asn.cymru.com", "type": "TXT"},
+                    headers={"Host": ehost} if ehost else None,
+                    extensions={"sni_hostname": ehost} if ehost else None,
+                )
                 answers = resp.json().get("Answer", []) if resp.status_code == 200 else []
                 if answers:
                     fields = _doh_txt_fields(answers[0]["data"])
@@ -1171,17 +1227,33 @@ async def check_dns_availability() -> dict:
             total_q += len(dm)
         return vals_all, ok_q, total_q
 
-    def _latency_cell(kind: str, name: str, warn: bool = False) -> str:
+    def _latency_cell(kind: str, name: str) -> str:
         addrs = (udp_by_name if kind == "udp" else doh_by_name).get(name, [])
         if not addrs:
             return "[dim]—[/dim]"
+        if kind == "udp":
+            # По строке на каждый сервер со своим пингом
+            lines = []
+            for a in addrs:
+                dm = raw.get((kind, a, name), {})
+                vals = [v for v in dm.values() if v is not None]
+                ok_q, total_q = len(vals), len(dm)
+                if not vals:
+                    lines.append("[red]TIMEOUT[/red]")
+                    continue
+                ratio = f" [dim]{ok_q}/{total_q}[/dim]" if ok_q < total_q else ""
+                lines.append(f"[green]{round(min(vals), 1)}мс[/green]{ratio}")
+            return "\n".join(lines)
         vals_all, ok_q, total_q = _kind_stats(kind, name)
         if not vals_all:
-            base = "[red]TIMEOUT[/red]"
-        else:
-            ratio = f" [dim]{ok_q}/{total_q}[/dim]" if ok_q < total_q else ""
-            base = f"[green]{round(min(vals_all), 1)}мс[/green]{ratio}"
-        return f"{base} [red]![/red]" if warn else base
+            # Причина фейла от классификатора (как в тесте 3): TLS DROP, SYN DROP и т.п.
+            for a in addrs:
+                reason = fail_reasons.get((kind, a, name))
+                if reason:
+                    return reason
+            return "[red]TIMEOUT[/red]"
+        ratio = f" [dim]{ok_q}/{total_q}[/dim]" if ok_q < total_q else ""
+        return f"[green]{round(min(vals_all), 1)}мс[/green]{ratio}"
 
     def _egress_cell(pname: str) -> str:
         addrs = udp_by_name.get(pname, [])
@@ -1190,17 +1262,20 @@ async def check_dns_availability() -> dict:
         lines = []
         for a in addrs:
             dm = raw.get(("udp", a, pname), {})
-            ok_q = sum(1 for v in dm.values() if v is not None)
+            vals = [v for v in dm.values() if v is not None]
+            ok_q = len(vals)
             # Потери конкретного сервера показываем только если они были —
             # иначе каждая строка превращается в шум "5/5".
             loss = f" [dim]{ok_q}/{len(dm)}[/dim]" if 0 < ok_q < len(dm) else ""
             eip = egress.get(("egress", a, pname))
-            if not eip or eip == "0.0.0.0":
+            if not vals:
+                lines.append(f"[dim]{a}: таймаут{loss}[/dim]")
+            elif not eip or eip == "0.0.0.0":
                 lines.append(f"[dim]{a}: выход н/д{loss}[/dim]")
             elif _is_domestic(pname):
                 lines.append(f"{a}→{_org_label(eip)}{loss}")
             elif _is_hijacked(eip):
-                lines.append(f"[red]{a}→{_org_label(eip)} !{loss}[/red]")
+                lines.append(f"[red]{a}→{_org_label(eip)}{loss}[/red]")
             else:
                 lines.append(f"[green]{a}→{_org_label(eip)}[/green]{loss}")
         return "\n".join(lines)
@@ -1222,16 +1297,12 @@ async def check_dns_availability() -> dict:
         udp_vals, _, _ = _kind_stats("udp", name) if name in udp_by_name else ([], 0, 0)
         if doh_vals:
             doh_ok_names += 1
-        udp_hij = not _is_domestic(name) and any(
-            (e := egress.get(("egress", a, name))) and _is_hijacked(e)
-            for a in udp_by_name.get(name, [])
-        )
         if udp_vals:
             udp_ok_names += 1
         t.add_row(
             name,
             _latency_cell("doh_wire", name),
-            _latency_cell("udp", name, warn=udp_hij),
+            _latency_cell("udp", name),
             _egress_cell(name),
         )
 
