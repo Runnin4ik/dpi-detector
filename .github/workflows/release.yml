@@ -82,6 +82,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
+        id: py
         uses: actions/setup-python@v5
         with:
           python-version: '3.14'
@@ -89,15 +90,17 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install "httpx[socks,http2]" rich pyinstaller pyyaml
+          PY="${{ steps.py.outputs.python-path }}"
+          "$PY" -m pip install --upgrade pip
+          "$PY" -m pip install "httpx[socks,http2]" rich pyinstaller pyyaml
 
       - name: Build with PyInstaller
         run: |
+          PY="${{ steps.py.outputs.python-path }}"
           VERSION="${{ github.event.release.tag_name || inputs.version }}"
           BIN_NAME="dpi_detector_${VERSION}_${{ matrix.suffix }}"
 
-          python -m PyInstaller --onefile --console --clean \
+          "$PY" -m PyInstaller --onefile --console --clean \
             --collect-all rich \
             --collect-all httpx \
             --collect-all yaml \
@@ -107,6 +110,16 @@ jobs:
             --add-data "config.yml:." \
             --name "$BIN_NAME" \
             dpi_detector.py
+
+      - name: Check bundle architecture
+        run: |
+          BIN="dist/dpi_detector_${{ github.event.release.tag_name || inputs.version }}_${{ matrix.suffix }}"
+          ARCH="$(lipo -archs "$BIN")"
+          echo "bundle arch: $ARCH"
+          case "${{ matrix.suffix }}" in
+            macos_intel) echo "$ARCH" | grep -qw x86_64 ;;
+            macos_arm64) echo "$ARCH" | grep -qw arm64 ;;
+          esac
 
       - name: Ad-hoc codesign
         run: codesign --force -s - "dist/dpi_detector_${{ inputs.version || github.event.release.tag_name }}_${{ matrix.suffix }}"
