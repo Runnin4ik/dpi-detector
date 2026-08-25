@@ -17,4 +17,4 @@ build/
 dist/
 
 # Logs
-*.log
+*.logRELEASE_*.md
