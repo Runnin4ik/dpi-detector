@@ -297,12 +297,17 @@ async def _run_download(display: LiveDisplay) -> dict:
         nonlocal total_bytes, tick_bytes, t_start
         try:
             async with httpx.AsyncClient(verify=ctx, proxy=proxy_url, trust_env=False, timeout=TOTAL_TIMEOUT+5) as client:
-                murl, mhost = await pin_ipv4(MEDIA_URL)
+                                # строгий IPv4 нужен только без прокси (по прокси разрешает сам прокси)
+                if proxy_url:
+                    murl, mhost = MEDIA_URL, ""
+                else:
+                    murl, mhost = await pin_ipv4(MEDIA_URL)
                 req = client.build_request(
                     "GET", murl,
                     headers={"Host": mhost} if mhost else None,
                     extensions={"sni_hostname": mhost} if mhost else None,
-                )
+                               )
+                response = await client.send(req, stream=True)
 
                 t_start = time.monotonic()
                 async for chunk in response.aiter_bytes(chunk_size=65536):

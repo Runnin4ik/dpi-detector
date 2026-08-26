@@ -55,7 +55,6 @@ DNS_CHECK_DOMAINS:
   - "clubtone.do.am"
   - "rezka.ag"
   - "shikimori.one"
-  - "www.fastmail.com"
   # Доп домены:
   # - "www.youtube.com"
   # - "youtube.com"
@@ -97,11 +96,8 @@ DNS_DOH_SERVERS:
 
 # --- Тест 2: Проверка доступности DNS-серверов ---
 DNS_AVAILABILITY_DOMAINS:
-  - "example.com"
-  - "vk.com"
-  - "ozon.ru"
-  - "habr.com"
-  - "mail.ru"
+  - "vk.ru"            # доверенные (не под цензурой): по ним пинг и «жив ли сервер»
+  - "gosuslugi.ru"
 
 # Серверы для теста доступности. Каждый сервер — [адрес, имя, тип].
 # Типы: "udp", "doh_json", "doh_wire"

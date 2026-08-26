@@ -15,7 +15,7 @@ import httpx
 from utils import config
 from cli.console import console
 from utils.network import get_fake_ip_type, pin_ipv4
-from utils.error_classifier import classify_connect_error
+from utils.error_classifier import classify_connect_error, classify_read_error
 
 
 # ── DNS wire-format helpers ───────────────────────────────────────────────────
@@ -157,92 +157,6 @@ def _doh_exc_status(exc: Exception) -> str:
         return "BLOCKED"
     return "ERROR"
 
-# ── Single-domain probes ─────────────────────────────────────────────────────
-async def _probe_udp_single(nameserver: str, domain: str) -> Optional[List[str]]:
-    """UDP DNS — один домен (до 2 попыток)."""
-    for attempt in range(2):
-        try:
-            res = await _resolve_udp_native(nameserver, domain, config.DNS_CHECK_TIMEOUT)
-            if isinstance(res, list):
-                return res
-        except Exception:
-            pass
-        if attempt == 0:
-            await asyncio.sleep(0.5)
-    return None
-
-async def _probe_doh_json_single(doh_url: str, domain: str) -> Optional[List[str]]:
-    """DoH JSON API (?name=…&type=A) — один домен (до 2 попыток)."""
-    headers = {"Accept": "application/dns-json", "User-Agent": config.USER_AGENT}
-    doh_url, ehost = await pin_ipv4(doh_url)
-    headers.update({"Host": ehost} if ehost else {})
-    for attempt in range(2):
-        try:
-            proxy_url = getattr(config, "PROXY_URL", None)
-            async with httpx.AsyncClient(
-                timeout=config.DNS_CHECK_TIMEOUT,
-                headers=headers, proxy=proxy_url, trust_env=False
-            ) as client:
-                resp = await client.get(
-                    doh_url, params={"name": domain, "type": "A"},
-                    extensions={"sni_hostname": ehost} if ehost else None,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("Status") != 3:  # Не NXDOMAIN
-                        ips = [a["data"] for a in data.get("Answer", []) if a.get("type") == 1]
-                        if ips:
-                            return ips
-        except Exception:
-            pass
-        if attempt == 0:
-            await asyncio.sleep(0.5)
-    return None
-
-async def _probe_doh_wire_single(doh_url: str, domain: str) -> Optional[List[str]]:
-    """DoH wire-format (RFC 8484) — один домен (до 2 попыток)."""
-    query = _build_dns_query(domain)
-    tx_id = query[:2]
-    doh_url, ehost = await pin_ipv4(doh_url)
-    for attempt in range(2):
-        try:
-            proxy_url = getattr(config, "PROXY_URL", None)
-            async with httpx.AsyncClient(
-                timeout=config.DNS_CHECK_TIMEOUT,
-                proxy=proxy_url, trust_env=False, http2=True
-            ) as client:
-                resp = await client.post(
-                    doh_url, content=query,
-                    headers={
-                        "Content-Type": "application/dns-message",
-                        "Accept": "application/dns-message",
-                        "User-Agent": config.USER_AGENT,
-                        **({"Host": ehost} if ehost else {}),
-                    },
-                    extensions={"sni_hostname": ehost} if ehost else None,
-                )
-                if resp.status_code != 200:
-                    dns_b64 = base64.urlsafe_b64encode(query).rstrip(b'=').decode()
-                    resp = await client.get(
-                        doh_url, params={"dns": dns_b64},
-                        headers={
-                            "Accept": "application/dns-message",
-                            "User-Agent": config.USER_AGENT,
-                            **({"Host": ehost} if ehost else {}),
-                        },
-                        extensions={"sni_hostname": ehost} if ehost else None,
-                    )
-                if resp.status_code == 200:
-                    result = _parse_dns_response(resp.content, tx_id)
-                    if isinstance(result, list):
-                        return result
-        except Exception:
-            pass
-        if attempt == 0:
-            await asyncio.sleep(0.5)
-    return None
-
-
 # ── Batch probes ──────────────────────────────────────────────────────────────
 
 async def _probe_udp_all(nameserver: str, domains: list) -> dict:
@@ -275,127 +189,6 @@ async def _probe_udp_all(nameserver: str, domains: list) -> dict:
 
     return {"ok": ok, "timeout": timeout_cnt, "error": error, "results": results}
 
-async def _probe_doh_json_all(doh_url: str, domains: list) -> dict:
-    """Параллельно резолвит все домены через DoH JSON API."""
-    headers = {"Accept": "application/dns-json", "User-Agent": config.USER_AGENT}
-    doh_url, ehost = await pin_ipv4(doh_url)
-
-    async def _query(client, domain):
-        try:
-            resp = await client.get(
-                doh_url, params={"name": domain, "type": "A"},
-                headers={"Host": ehost} if ehost else None,
-                extensions={"sni_hostname": ehost} if ehost else None,
-            )
-            if resp.status_code != 200:
-                return domain, "ERROR", None
-            data = resp.json()
-            if data.get("Status") == 3:
-                return domain, "NXDOMAIN", None
-            ips = [a["data"] for a in data.get("Answer", []) if a.get("type") == 1]
-            return domain, "OK", ips if ips else "EMPTY"
-        except httpx.TimeoutException:
-            return domain, "TIMEOUT", None
-        except Exception as e:
-            return domain, _doh_exc_status(e), None
-
-    proxy_url = getattr(config, "PROXY_URL", None)
-    async with httpx.AsyncClient(
-        timeout=config.DNS_CHECK_TIMEOUT,
-        headers=headers, proxy=proxy_url, trust_env=False,
-    ) as client:
-        completed = await asyncio.gather(*[_query(client, d) for d in domains])
-
-    ok = timeout_cnt = blocked = error = 0
-    results = {}
-    for domain, status, res in completed:
-        if status in ("OK", "NXDOMAIN"):
-            results[domain] = res if status == "OK" else "NXDOMAIN"
-            ok += 1
-        elif status == "TIMEOUT":
-            results[domain] = "TIMEOUT"
-            timeout_cnt += 1
-        elif status == "BLOCKED":
-            results[domain] = "BLOCKED"
-            blocked += 1
-        else:
-            results[domain] = "ERROR"
-    return {"ok": ok, "timeout": timeout_cnt, "blocked": blocked, "error": error, "results": results}
-
-
-
-async def _probe_doh_wire_all(doh_url: str, domains: list) -> dict:
-    """Параллельно резолвит все домены через DoH wire-format (RFC 8484)."""
-    doh_url, ehost = await pin_ipv4(doh_url)
-
-    async def _query(client, domain):
-        try:
-            query = _build_dns_query(domain)
-            tx_id = query[:2]
-
-            # ── POST ──
-            resp = await client.post(
-                doh_url, content=query,
-                headers={
-                    "Content-Type": "application/dns-message",
-                    "Accept": "application/dns-message",
-                    "User-Agent": config.USER_AGENT,
-                    **({"Host": ehost} if ehost else {}),
-                },
-                extensions={"sni_hostname": ehost} if ehost else None,
-            )
-            if resp.status_code != 200:
-                # ── GET fallback ──
-                dns_b64 = base64.urlsafe_b64encode(query).rstrip(b'=').decode()
-                resp = await client.get(
-                    doh_url, params={"dns": dns_b64},
-                    headers={
-                        "Accept": "application/dns-message",
-                        "User-Agent": config.USER_AGENT,
-                        **({"Host": ehost} if ehost else {}),
-                    },
-                    extensions={"sni_hostname": ehost} if ehost else None,
-                )
-                if resp.status_code != 200:
-                    return domain, "ERROR", None
-
-            result = _parse_dns_response(resp.content, tx_id)
-            if result == "NXDOMAIN":
-                return domain, "NXDOMAIN", None
-            if isinstance(result, list):
-                return domain, "OK", result
-            return domain, "EMPTY", None
-        except httpx.TimeoutException:
-            return domain, "TIMEOUT", None
-        except Exception as e:
-            return domain, _doh_exc_status(e), None
-
-    proxy_url = getattr(config, "PROXY_URL", None)
-    async with httpx.AsyncClient(
-        timeout=config.DNS_CHECK_TIMEOUT,
-        proxy=proxy_url, trust_env=False, http2=True
-    ) as client:
-        completed = await asyncio.gather(*[_query(client, d) for d in domains])
-
-    ok = timeout_cnt = blocked = error = 0
-    results = {}
-    for domain, status, res in completed:
-        if status in ("OK", "NXDOMAIN"):
-            results[domain] = res if status == "OK" else "NXDOMAIN"
-            ok += 1
-        elif status == "TIMEOUT":
-            results[domain] = "TIMEOUT"
-            timeout_cnt += 1
-        elif status == "BLOCKED":
-            results[domain] = "BLOCKED"
-            blocked += 1
-        else:
-            results[domain] = "ERROR"
-            error += 1
-
-    return {"ok": ok, "timeout": timeout_cnt, "blocked": blocked, "error": error, "results": results}
-
-
 # ── Публичные функции ─────────────────────────────────────────────────────────
 
 async def collect_stub_ips_silently() -> set:
@@ -417,279 +210,7 @@ async def collect_stub_ips_silently() -> set:
     return {ip for ip, count in ip_count.items() if count >= 2}
 
 
-# ── Тест 1: Проверка подмены DNS ─────────────────────────────────────────────
-
-async def check_dns_integrity() -> Tuple[set, int, bool]:
-    total = len(config.DNS_CHECK_DOMAINS)
-    probe_domain = config.DNS_CHECK_DOMAINS[0]
-
-    console.print(
-        f"\n[bold]Проверка подмены DNS[/bold]  "
-        f"[dim]Целей: {total} | timeout: {config.DNS_CHECK_TIMEOUT}s[/dim]"
-    )
-    console.print("[dim]Проверяем, перехватывает ли провайдер DNS запросы...[/dim]\n")
-
-    # ── Списки серверов ───────────────────────────────────────────────────────
-    udp_servers      = config.DNS_UDP_SERVERS               # [(ip, name)]
-    doh_json_servers = config.DNS_DOH_SERVERS               # [(url, name)] — JSON API
-    doh_wire_servers = getattr(config, 'DNS_DOH_WIRE_SERVERS', [])  # [(url, name)] — RFC 8484
-
-    # ── Фаза 1: быстрый параллельный пинг одним доменом ──────────────────────
-    async def _qp_udp(ip, n):
-        return ip, n, await _probe_udp_single(ip, probe_domain)
-
-    async def _qp_json(u, n):
-        return u, n, await _probe_doh_json_single(u, probe_domain)
-
-    async def _qp_wire(u, n):
-        return u, n, await _probe_doh_wire_single(u, probe_domain)
-
-    quick = await asyncio.gather(
-        *[_qp_udp(ip, n)  for ip, n in udp_servers],
-        *[_qp_json(u, n)  for u, n  in doh_json_servers],
-        *[_qp_wire(u, n)  for u, n  in doh_wire_servers],
-    )
-
-    n_u, n_j = len(udp_servers), len(doh_json_servers)
-    udp_quick  = quick[:n_u]
-    json_quick = quick[n_u:n_u + n_j]
-    wire_quick = quick[n_u + n_j:]
-
-    # ── Фаза 2: полный тест для «молчащих» серверов ──────────────────────────
-    async def _full_udp(ip, n):
-        p = await _probe_udp_all(ip, config.DNS_CHECK_DOMAINS)
-        return ip, n, p["ok"] > 0
-
-    async def _full_json(u, n):
-        p = await _probe_doh_json_all(u, config.DNS_CHECK_DOMAINS)
-        return u, n, p["ok"] > 0
-
-    async def _full_wire(u, n):
-        p = await _probe_doh_wire_all(u, config.DNS_CHECK_DOMAINS)
-        return u, n, p["ok"] > 0
-
-    need_u = [(k, n) for k, n, r in udp_quick  if r is None]
-    need_j = [(k, n) for k, n, r in json_quick if r is None]
-    need_w = [(k, n) for k, n, r in wire_quick if r is None]
-
-    full_u = full_j = full_w = {}
-
-    if need_u or need_j or need_w:
-        done = await asyncio.gather(
-            *[_full_udp(k, n)  for k, n in need_u],
-            *[_full_json(k, n) for k, n in need_j],
-            *[_full_wire(k, n) for k, n in need_w],
-        )
-        nu, nj = len(need_u), len(need_j)
-        full_u = {(k, n): ok for k, n, ok in done[:nu]}
-        full_j = {(k, n): ok for k, n, ok in done[nu:nu + nj]}
-        full_w = {(k, n): ok for k, n, ok in done[nu + nj:]}
-
-    # ── Классификация серверов ────────────────────────────────────────────────
-    def _classify(quick_list, full_map, label):
-        working, log = [], []
-        for key, name, qr in quick_list:
-            if qr is not None or full_map.get((key, name), False):
-                working.append((key, name))
-            else:
-                log.append(f"[dim]• {label} [yellow]{key} ({name})[/yellow] не ответил[/dim]")
-        return working, log
-
-    udp_working, udp_log   = _classify(udp_quick,  full_u, "UDP")
-    json_working, json_log = _classify(json_quick, full_j, "DoH JSON")
-    wire_working, wire_log = _classify(wire_quick, full_w, "DoH Wire")
-
-    all_log = udp_log + json_log + wire_log
-    if all_log:
-        for line in all_log:
-            console.print(line)
-        console.print()
-
-    # ── Выбор по одному серверу каждого типа ─────────────────────────────────
-    def _pick(working, all_list):
-        if not working:
-            return None, None
-        first = all_list[0][0]
-        for k, n in working:
-            if k == first:
-                return k, n
-        return working[0]
-
-    udp_key,  udp_name  = _pick(udp_working,  udp_servers)
-    json_key, json_name = _pick(json_working, doh_json_servers)
-    wire_key, wire_name = (
-        _pick(wire_working, doh_wire_servers) if doh_wire_servers else (None, None)
-    )
-
-    # ── Полный тест выбранными серверами ──────────────────────────────────────
-    _unavail = lambda: {"results": {d: "UNAVAIL" for d in config.DNS_CHECK_DOMAINS}}
-
-    # UDP
-    if udp_key:
-        console.print(f"[dim]UDP: [cyan]{udp_key} ({udp_name})[/cyan][/dim]")
-        udp_probe = await _probe_udp_all(udp_key, config.DNS_CHECK_DOMAINS)
-        udp_label = f"UDP {udp_key}"
-    else:
-        console.print("[red]× Все UDP DNS-серверы недоступны[/red]")
-        udp_probe = _unavail()
-        udp_label = "UDP (—)"
-
-    # DoH JSON
-    if json_key:
-        console.print(f"[dim]DoH JSON: [cyan]{json_key} ({json_name})[/cyan][/dim]")
-        json_probe = await _probe_doh_json_all(json_key, config.DNS_CHECK_DOMAINS)
-        json_label = f"DoH JSON ({json_name})"
-    else:
-        console.print("[red]× Все DoH JSON-серверы недоступны[/red]")
-        json_probe = _unavail()
-        json_label = "DoH JSON (—)"
-
-    # DoH Wire (RFC 8484)
-    has_wire = bool(doh_wire_servers)
-    if has_wire:
-        if wire_key:
-            console.print(
-                f"[dim]DoH Wire [italic](RFC 8484)[/italic]: "
-                f"[cyan]{wire_key} ({wire_name})[/cyan][/dim]"
-            )
-            wire_probe = await _probe_doh_wire_all(wire_key, config.DNS_CHECK_DOMAINS)
-            wire_label = f"DoH Wire ({wire_name})"
-        else:
-            console.print("[red]× Все DoH Wire-серверы (RFC 8484) недоступны[/red]")
-            wire_probe = _unavail()
-            wire_label = "DoH Wire (—)"
-    else:
-        wire_probe = None
-        wire_label = ""
-
-    console.print()
-
-    # ── Анализ результатов ────────────────────────────────────────────────────
-    dns_intercept_count = doh_blocked_count = 0
-    udp_ips_collection: dict = {}
-    rows = []
-
-    for domain in config.DNS_CHECK_DOMAINS:
-        udp_res  = udp_probe["results"].get(domain)
-        json_res = json_probe["results"].get(domain)
-        wire_res = wire_probe["results"].get(domain) if wire_probe else None
-
-        udp_ips  = udp_res  if isinstance(udp_res, list)  else None
-        json_ips = json_res if isinstance(json_res, list) else None
-        wire_ips = wire_res if isinstance(wire_res, list) else None
-
-        if udp_ips:
-            udp_ips_collection[domain] = udp_ips
-
-        udp_str  = ", ".join(udp_ips[:2])  if udp_ips  else str(udp_res  or "—")
-        json_str = ", ".join(json_ips[:2]) if json_ips else str(json_res or "—")
-        wire_str = (
-            ", ".join(wire_ips[:2]) if wire_ips else str(wire_res or "—")
-        ) if has_wire else None
-
-        if json_res == "BLOCKED":
-            doh_blocked_count += 1
-        if has_wire and wire_res == "BLOCKED":
-            doh_blocked_count += 1
-
-        # Доверенные IP = объединение ответов обоих DoH-методов
-        trusted = set()
-        if json_ips:
-            trusted.update(json_ips)
-        if wire_ips:
-            trusted.update(wire_ips)
-
-        # Проверяем, вернул ли UDP адрес Fake-IP
-        udp_is_fakeip = False
-        if udp_ips:
-            for ip in udp_ips:
-                if get_fake_ip_type(ip) == "fakeip":
-                    udp_is_fakeip = True
-                    break
-
-        # ── Определяем статус ─────────────────────────────────────────────
-        if trusted and udp_ips:
-            if set(udp_ips) & trusted:                    # есть пересечение → ОК
-                row_status = "[green]√ DNS OK[/green]"
-            elif udp_is_fakeip:                           # это FakeIP от VPN
-                row_status = "[green]√ FAKE-IP[/green]"
-            else:
-                row_status = "[red]× DNS ПОДМЕНА[/red]"
-                dns_intercept_count += 1
-        elif trusted and not udp_ips:
-            labels = {
-                "TIMEOUT":  "[red]× DNS ПЕРЕХВАТ[/red]",
-                "NXDOMAIN": "[red]× FAKE NXDOMAIN[/red]",
-                "EMPTY":    "[red]× FAKE EMPTY[/red]",
-                "UNAVAIL":  "[yellow]× UDP недоступен[/yellow]",
-            }
-            row_status = labels.get(str(udp_res), "[red]× UDP БЛОК[/red]")
-            if udp_res != "UNAVAIL":
-                dns_intercept_count += 1
-        elif udp_ips and not trusted:
-            is_blocked = (
-                json_res == "BLOCKED"
-                or (has_wire and wire_res == "BLOCKED")
-            )
-            reason = "заблокирован" if is_blocked else "недоступен"
-            row_status = f"[red]× DoH {reason}[/red]"
-            if not udp_is_fakeip:
-                dns_intercept_count += 1
-        else:
-            row_status = "[red]× Оба недоступны[/red]"
-            dns_intercept_count += 1
-
-        # Строка таблицы
-        if has_wire:
-            rows.append([domain, json_str, wire_str, udp_str, row_status])
-        else:
-            rows.append([domain, json_str, udp_str, row_status])
-
-    # ── Заглушки ──────────────────────────────────────────────────────────────
-    ip_count: dict = {}
-    for ips in udp_ips_collection.values():
-        for ip in ips:
-            ip_count[ip] = ip_count.get(ip, 0) + 1
-    stub_ips = {ip for ip, cnt in ip_count.items() if cnt >= 2}
-
-    # ── Таблица ───────────────────────────────────────────────────────────────
-    from rich.table import Table
-    t = Table(show_header=True, header_style="bold magenta", border_style="dim")
-    t.add_column("Домен", style="cyan")
-    t.add_column(json_label, style="dim")
-    if has_wire:
-        t.add_column(wire_label, style="dim")
-    t.add_column(udp_label, style="dim")
-    t.add_column("Статус")
-    for row in rows:
-        t.add_row(*row)
-    console.print(t)
-    console.print()
-
-    # ── Диагностика ───────────────────────────────────────────────────────────
-    if dns_intercept_count > 0:
-        console.print("[bold red][!] Ваш интернет-провайдер перехватывает DNS-запросы[/bold red]")
-        console.print(
-            "Провайдер подменяет ответы UDP DNS на заглушки "
-            "или ложные NXDOMAIN/EMPTY\n"
-        )
-        console.print(
-            "[bold yellow]ВНИМАНИЕ: Это независимая проверка и она не использует "
-            "ваши настроенные DNS![/bold yellow]\n"
-            "[bold yellow]Рекомендация:[/bold yellow] Настройте DoH на устройстве и роутере\n"
-            "[bold green]Если DoH уже настроен — игнорируйте эту проверку.[/bold green]\n"
-        )
-    if doh_blocked_count > 0:
-        console.print(
-            "[bold red][!] DoH заблокирован[/bold red] — "
-            "провайдер блокирует зашифрованный DNS\n"
-        )
-
-    all_doh_unavailable = not bool(json_working) and not bool(wire_working)
-    return stub_ips, dns_intercept_count, all_doh_unavailable
-
-
-# ── Тест 2: Проверка доступности DNS-серверов ────────────────────────────────
+# ── Тест 1: Проверка доступности DNS-серверов ────────────────────────────────
 
 class _SingleQueryProto(asyncio.DatagramProtocol):
     """Одиночный UDP DNS-запрос: отдаёт (data, t_recv) в future."""
@@ -713,36 +234,38 @@ class _SingleQueryProto(asyncio.DatagramProtocol):
 
 async def check_dns_availability() -> dict:
     """
-    Тест 2: Проверяет доступность DNS-серверов и замеряет время резолва.
+    Тест 1: доступность DNS-серверов + пинг + детект подмены.
 
-    Использует только DoH Wire (RFC 8484) — метод _probe_doh_json оставлен
-    для возможного использования, но не вызывается.
+    Двух-фазная схема (чтобы пинги и детект подмены не конфликтовали):
+      Фаза A (UDP): доверенные домены (вне цензуры) — по ним меряем пинг
+                    и считаем, что сервер вообще жив.
+      Фаза B (UDP): если сервер жив — те же серверы опрашиваются по
+                    запрещённым доменам; сравнение UDP-ответа с DoH-правдой
+                    выявляет подмену. «Молчание» на запрещённом домене тоже
+                    считается подменой (блок без ответа), а не недоступностью.
 
-    Вывод:
-      1. Список эндпоинтов по именам
-      2. Прогресс-строка (обновляется в процессе проверки)
-      3. Сводная таблица: Провайдер | DoH avg | UDP avg
-         — прочерк = нет сервера этого типа
-         — TIMEOUT  = сервер есть, но все запросы провалились
-         — Nмс [k/n] = среднее по успешным; k/n если не все ответили
-      4. Возвращает dict с итогами для _format_summary
+    DoH (Wire) сразу проверяет запрещённые домены — это эталон «правды»,
+    с которым сравниваются UDP-ответы. Один TLS-коннект на сервер, запросы
+    последовательно (фикс плоских 300мс ТСПУ).
 
-    Правило таймингов: каждый DoH-сервер получает свой изолированный
-    httpx.AsyncClient — честный замер без конкуренции за пул соединений.
+    Таблица: Провайдер | DoH мин | UDP мин | Реальный резолвер | Подменяется?
     """
     servers = getattr(config, "DNS_AVAILABILITY_SERVERS", [])
-    domains = getattr(config, "DNS_AVAILABILITY_DOMAINS", config.DNS_CHECK_DOMAINS)
+    # Доверенные домены (не под цензурой) — по ним пинг и доступность
+    allowed = getattr(config, "DNS_AVAILABILITY_DOMAINS", ["vk.ru", "gosuslugi.ru"])
+    # Запрещённые домены (из теста 1) — по ним выявляем подмену
+    forbidden = getattr(config, "DNS_CHECK_DOMAINS", [])
     timeout = getattr(config, "DNS_AVAILABILITY_TIMEOUT", config.DNS_CHECK_TIMEOUT)
 
     if not servers:
         console.print("[yellow]DNS_AVAILABILITY_SERVERS не задан в config.yml — тест пропущен.[/yellow]")
-        return {"doh_ok": 0, "doh_total": 0, "udp_ok": 0, "udp_total": 0}
+        return {"doh_ok": 0, "doh_total": 0, "udp_ok": 0, "udp_total": 0,
+                "hijacked_brands": []}
 
     proxy_url = getattr(config, "PROXY_URL", None)
 
     # ── Группируем серверы ────────────────────────────────────────────────────
     udp_servers  = [(a, n) for a, n, k in servers if k == "udp"]
-    # doh_json_servers — оставлены для возможного использования, но не запускаются
     wire_servers = [(a, n) for a, n, k in servers if k == "doh_wire"]
     doh_servers  = wire_servers  # только Wire
 
@@ -765,7 +288,8 @@ async def check_dns_availability() -> dict:
     console.print(
         f"\n[bold]Проверка доступности DNS-серверов[/bold]  "
         f"[dim]DoH: {len(doh_servers)} | UDP: {len(udp_servers)}"
-        f" | Доменов: {len(domains)} | timeout: {timeout}s[/dim]"
+        f" | Запрещённых: {len(forbidden)} | Доверенных: {len(allowed)}"
+        f" | timeout: {timeout}s[/dim]"
     )
     console.print()
 
@@ -774,7 +298,7 @@ async def check_dns_availability() -> dict:
     ep_table = _Table(show_header=True, header_style="bold magenta",
                       border_style="dim", box=None, pad_edge=False)
     ep_table.add_column("Провайдер", style="bold cyan", no_wrap=True, min_width=16)
-    ep_table.add_column("DoH эндпоинты",  style="dim",   no_wrap=False)
+    ep_table.add_column("DoH эндпоинты", style="dim", no_wrap=False)
     ep_table.add_column("UDP",            style="dim",   no_wrap=True)
 
     for name in all_names:
@@ -787,13 +311,19 @@ async def check_dns_availability() -> dict:
     console.print(ep_table)
     console.print()
 
+    # ── Домены проверки и дисклеймер ──────────────────────────────────────────
+    console.print(
+        f"[bold]Заблокированные домены для проверки:[/bold] {', '.join(forbidden)}\n"
+        f"[bold]Незаблокированные домены для проверки:[/bold] {', '.join(allowed)}\n"
+        "[bold yellow]ВНИМАНИЕ:[/bold yellow] Это независимая проверка и она не использует ваши настроенные DNS!"
+    )
+
     # ── Счётчик прогресса ─────────────────────────────────────────────────────
     total_probes  = len(doh_servers) + len(udp_servers)
     done_count    = 0
     progress_lock = asyncio.Lock()
 
     def _redraw_progress():
-        # \r без \n — перезаписывает текущую строку
         import sys
         bar = f"  Проверка серверов... {done_count}/{total_probes}"
         sys.stderr.write(f"\r{bar}   ")
@@ -805,76 +335,80 @@ async def check_dns_availability() -> dict:
             done_count += 1
             _redraw_progress()
 
-    # ── raw[(kind, addr, name)][domain] = elapsed_ms or None ─────────────────
-    # None = сервер есть, но запрос не прошёл (TIMEOUT/ERR/NXDOMAIN)
-    # Ключ отсутствует = этот тип у данного имени не определён
+    # ── данные замеров ────────────────────────────────────────────────────────
+    # raw[(kind, addr, name)][domain] = elapsed_ms or None (тайминг/успешность)
     raw: dict[tuple, dict[str, Optional[int]]] = {}
     fail_reasons: dict[tuple, str] = {}   # (kind, addr, name) -> ярлык причины фейла
+    # Ответы по доменам: (kind, addr, name, domain) -> list[ip] | "NXDOMAIN" |
+    # "PARSE_ERR" | None (таймаут/нет ответа). Нужны для сравнения подмены.
+    udp_answers: dict[tuple, object] = {}
+    doh_answers: dict[tuple, object] = {}
 
-    # ── UDP probe ─────────────────────────────────────────────────────────────
-    # Фиксы:
-    # 1. t_recv снимается прямо в datagram_received (до event-loop планировщика)
-    # 2. pending[tid] записывается ДО sendto — нет race condition
-    # 3. tid из инкрементного счётчика — нет коллизий os.urandom(2)
-    # 4. Семафор ограничивает параллельный залп (защита от packet drop)
+    # ── UDP probe: фаза A (доверенные) → фаза B (запрещённые, если жив) ──────
     async def _probe_udp(addr: str, name: str) -> None:
         key = ("udp", addr, name)
         loop = asyncio.get_running_loop()
-        udp_sem = asyncio.Semaphore(15) # Ограничиваем кол-во одновременных сокетов
+        udp_sem = asyncio.Semaphore(15)  # Ограничиваем кол-во одновременных сокетов
 
-        async def _wait(domain: str) -> tuple[str, Optional[float]]:
+        async def _wait(domain: str):
             async with udp_sem:
                 q = _build_dns_query(domain)
                 tx_id = q[:2]
                 fut = loop.create_future()
                 transport = None
                 t0 = time.perf_counter()
-
                 try:
-                    # Создаем уникальный сокет для каждого домена
                     transport, _ = await loop.create_datagram_endpoint(
                         lambda: _SingleQueryProto(fut), remote_addr=(addr, 53)
                     )
                     transport.sendto(q)
-
                     data, t_recv = await asyncio.wait_for(fut, timeout=timeout)
                     elapsed_ms = round((t_recv - t0) * 1000, 1)
                     parsed = _parse_dns_response(data, tx_id)
-
-                    return domain, elapsed_ms if isinstance(parsed, list) else None
+                    ok = isinstance(parsed, list)   # «успех» — только с реальными IP
+                    return domain, (elapsed_ms if ok else None), parsed
                 except Exception:
-                    return domain, None
+                    return domain, None, None
                 finally:
                     if transport:
                         transport.close()
 
-        pairs = await asyncio.gather(*[_wait(d) for d in domains])
-        raw[key] = dict(pairs)
+        # Фаза A: доступность по доверенным доменам
+        pairs_a = await asyncio.gather(*[_wait(d) for d in allowed])
+        available = any(e is not None for _, e, _ in pairs_a)
+        res = dict((d, e) for d, e, _ in pairs_a)
+        for d, _e, parsed in pairs_a:
+            udp_answers[("udp", addr, name, d)] = parsed
+        # Фаза B: только живому серверу — запрещённые домены на проверку подмены
+        if available and forbidden:
+            pairs_b = await asyncio.gather(*[_wait(d) for d in forbidden])
+            res.update((d, e) for d, e, _ in pairs_b)
+            for d, _e, parsed in pairs_b:
+                udp_answers[("udp", addr, name, d)] = parsed
+        raw[key] = res
         await _tick()
 
-    # ── DoH JSON probe ────────────────────────────────────────────────────────
-    # Один клиент на сервер — один TLS handshake.
-    # Прогревочный запрос исключает handshake из замера боевых запросов.
+    # ── DoH JSON probe (не вызывается, оставлен для совместимости) ───────────
     async def _probe_doh_json(addr: str, name: str) -> None:
         key = ("doh_json", addr, name)
         cli_timeout = httpx.Timeout(timeout, connect=timeout, pool=2.0)
         doh_sem = asyncio.Semaphore(20)
 
-        async def _one(domain: str, client: httpx.AsyncClient) -> tuple[str, Optional[float]]:
+        async def _one(domain: str, client: httpx.AsyncClient):
             async with doh_sem:
                 t0 = time.perf_counter()
                 try:
                     resp = await client.get(addr, params={"name": domain, "type": "A"})
                     elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
                     if resp.status_code != 200:
-                        return domain, None
+                        return domain, None, None
                     data = resp.json()
                     if data.get("Status") == 3:
-                        return domain, None
+                        return domain, None, "NXDOMAIN"
                     ips = [a["data"] for a in data.get("Answer", []) if a.get("type") == 1]
-                    return domain, elapsed_ms if ips else None
+                    return domain, (elapsed_ms if ips else None), (ips if ips else None)
                 except Exception:
-                    return domain, None
+                    return domain, None, None
 
         try:
             async with httpx.AsyncClient(
@@ -882,46 +416,40 @@ async def check_dns_availability() -> dict:
                 headers={"Accept": "application/dns-json", "User-Agent": config.USER_AGENT},
                 proxy=proxy_url, trust_env=False,
             ) as client:
-                # Прогрев — устанавливаем TLS-соединение до боевых замеров
                 try:
-                    warmup_q = domains[0] if domains else "google.com"
+                    warmup_q = forbidden[0] if forbidden else "google.com"
                     await client.get(addr, params={"name": warmup_q, "type": "A"})
                 except Exception:
                     pass
-                pairs = await asyncio.gather(*[_one(d, client) for d in domains])
+                pairs = await asyncio.gather(*[_one(d, client) for d in forbidden])
         except Exception:
-            pairs = [(d, None) for d in domains]
-        raw[key] = dict(pairs)
+            pairs = [(d, None, None) for d in forbidden]
+        raw[key] = dict((d, e) for d, e, _ in pairs)
+        for d, _e, parsed in pairs:
+            doh_answers[("doh_json", addr, name, d)] = parsed
         await _tick()
 
-    # ── DoH Wire probe ────────────────────────────────────────────────────────
-    # Один клиент на сервер. http2=True → ALPN.
-    # Прогрев исключает TLS handshake из замера.
-    # Fallback POST→GET сбрасывает таймер — замеряется только успешный метод.
-    # ── DoH Wire probe ────────────────────────────────────────────────────────
+    # ── DoH Wire probe: эталон «правды» по запрещённым доменам ───────────────
+    # Один клиент на сервер, один TLS-коннект, боевые запросы последовательно
+    # (иначе каждый открывает своё соединение и платит +300мс ТСПУ).
     async def _probe_doh_wire(addr: str, name: str) -> None:
         key = ("doh_wire", addr, name)
+        orig_addr = addr   # адрес до пининга — по нему храню ответы (совпадает с doh_by_name)
         # Привязка к IPv4: коннект по A-записи, SNI и Host — от имени сервера
         addr, ehost = await pin_ipv4(addr)
         ehost_headers = {"Host": ehost} if ehost else {}
         ehost_ext = {"sni_hostname": ehost} if ehost else None
         cli_timeout = httpx.Timeout(timeout, connect=timeout, pool=2.0)
         doh_sem = asyncio.Semaphore(20)
-        # Один коннект на сервер: боевые запросы обязаны переиспользовать
-        # прогревочное соединение. Иначе каждый открывает своё и платит
-        # задержку классификации ТСПУ (~+300мс на весь замер).
         single_conn = httpx.Limits(max_connections=1, max_keepalive_connections=1)
 
-        # Выносим всю логику во внутреннюю функцию, чтобы обернуть её в жесткий таймаут
         async def _do_probe() -> list:
             conn_state = {"stage": "init"}
-            async def _one(domain: str, client: httpx.AsyncClient) -> tuple[str, Optional[float]]:
+
+            async def _one(domain: str, client: httpx.AsyncClient):
                 async with doh_sem:
                     query = _build_dns_query(domain)
                     tx_id = query[:2]
-                    # Одна повторная попытка: серверы с лимитом h2-стримов
-                    # отвечают REFUSED_STREAM на залп всех доменов разом,
-                    # а редкие ReadTimeout обычно проходятся со второго раза.
                     last_err: Optional[Exception] = None
                     for attempt in range(2):
                         if attempt:
@@ -950,14 +478,15 @@ async def check_dns_availability() -> dict:
                                 )
                             elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
                             if resp.status_code != 200:
-                                return domain, None
+                                return domain, None, None
                             result = _parse_dns_response(resp.content, tx_id)
-                            return domain, elapsed_ms if isinstance(result, list) else None
+                            ok = isinstance(result, list)
+                            return domain, (elapsed_ms if ok else None), result
                         except Exception as err:
                             last_err = err
                     if last_err is not None:
                         _record_fail(last_err)
-                    return domain, None
+                    return domain, None, None
 
             try:
                 async with httpx.AsyncClient(
@@ -978,11 +507,17 @@ async def check_dns_availability() -> dict:
                     def _record_fail(err: Exception) -> None:
                         if key in fail_reasons:
                             return
-                        label, _, _ = classify_connect_error(err, 0, stage=conn_state.get("stage", "init"))
+                        stage = conn_state.get("stage", "init")
+                        if isinstance(err, (httpx.ReadTimeout, httpx.ReadError,
+                                            httpx.RemoteProtocolError, httpx.WriteTimeout,
+                                            httpx.PoolTimeout)):
+                            label, _, _ = classify_read_error(err, 0, stage=stage)
+                        else:
+                            label, _, _ = classify_connect_error(err, 0, stage=stage)
                         fail_reasons[key] = label
 
                     try:
-                        warmup = _build_dns_query(domains[0] if domains else "google.com")
+                        warmup = _build_dns_query(forbidden[0] if forbidden else "google.com")
                         await client.post(
                             addr, content=warmup,
                             headers={"Content-Type": "application/dns-message",
@@ -992,45 +527,39 @@ async def check_dns_availability() -> dict:
                             extensions={**ehost_ext, "trace": _trace_hook} if ehost_ext else {"trace": _trace_hook},
                         )
                     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as err:
-                        # Сервер физически недоступен. Нет смысла спамить боевыми запросами.
                         _record_fail(err)
-                        return [(d, None) for d in domains]
+                        return [(d, None, None) for d in forbidden]
                     except Exception:
-                        pass # Сервер жив, но вернул 400/500 — продолжаем (м.б. GET сработает)
+                        pass  # Сервер жив, но вернул 400/500 — продолжаем
 
-                    # 2. Боевые запросы ПОСЛЕДОВАТЕЛЬНО. При параллельном залпе
-                    # все пять попадают в окно классификации ТСПУ на свежем
-                    # соединении и получают равную надбавку ~300мс (GOAWAY
-                    # вынуждает открыть новое соединение после прогрева).
-                    # Последовательный запуск платит за установление максимум
-                    # один запрос — минимум остаётся честным RTT.
+                    # Боевые запросы ПОСЛЕДОВАТЕЛЬНО (фикс плоских 300мс ТСПУ)
                     results = []
-                    for d in domains:
+                    for d in forbidden:
                         results.append(await _one(d, client))
                     return results
             except Exception as err:
-                fail_reasons.setdefault(key, "[red]CONN ERR[/red]")
-                return [(d, None) for d in domains]
+                fail_reasons.setdefault(
+                    key, f"[red]UNKNOWN[/red] [dim]{type(err).__name__}[/dim]"
+                )
+                return [(d, None, None) for d in forbidden]
 
-        # 3. Жесткая гильотина: ограничиваем всё время проверки провайдера
         try:
-            # Даем времени чуть больше, чтобы httpx успел закрыться сам штатно
-            pairs = await asyncio.wait_for(_do_probe(), timeout=timeout + 3.0)
-            raw[key] = dict(pairs)
+            pairs = await asyncio.wait_for(_do_probe(), timeout=timeout * 2 + 3.0)
+            raw[key] = dict((d, e) for d, e, _ in pairs)
+            for d, _e, parsed in pairs:
+                doh_answers[("doh_wire", orig_addr, name, d)] = parsed
         except (asyncio.TimeoutError, Exception):
-            raw[key] = {d: None for d in domains}
+            fail_reasons.setdefault(key, "[red]TIMEOUT[/red]")
+            raw[key] = {d: None for d in forbidden}
+            for d in forbidden:
+                doh_answers[("doh_wire", orig_addr, name, d)] = None
         finally:
             await _tick()
 
     # ── Запускаем: только Wire + UDP ─────────────────────────────────────────
-    # Глобальный лимит одновременных проб: десятки TLS+HTTP2-хендшейков в один
-    # момент на DPI-сети выглядят как атака и массово дропаются (thundering herd),
-    # что даёт ложные TIMEOUT. Пробуем серверы пачками.
     probe_gate = asyncio.Semaphore(getattr(config, "DNS_PROBE_CONCURRENCY", 3))
 
     # ── Выходной резолвер: A whoami.akamai.net ────────────────────────────────
-    # Ответ — IP резолвера, который реально сходил к авторитативным NS Akamai.
-    # Совпадение выхода у разных провайдеров = перехват ip:53.
     egress: dict[tuple, Optional[str]] = {}
 
     async def _probe_egress(addr: str, name: str) -> None:
@@ -1061,8 +590,6 @@ async def check_dns_availability() -> dict:
         async with probe_gate:
             await _probe_doh_wire(addr, name)
 
-    # Своё окно: egress — один лёгкий UDP-пакет на сервер, ему не нужен
-    # консервативный probe_gate(3), иначе фаза проб растягивается.
     egress_sem = asyncio.Semaphore(10)
 
     async def _probe_egress_gated(addr, name):
@@ -1079,14 +606,11 @@ async def check_dns_availability() -> dict:
     if wire_servers:
         await asyncio.gather(*[_probe_doh_wire_gated(a, n) for a, n in wire_servers])
 
-    # Завершаем прогресс-строку — переходим на новую строку
     import sys
     sys.stderr.write(f"\r  Проверено серверов: {done_count}/{total_probes}          \n")
     sys.stderr.flush()
 
-
     # ── Имена организаций выходных IP (Team Cymru через DoH) ──────────────────
-    # TXT-запросы к asn.cymru.com идут через DoH — сам lookup не перехватить.
     _CYMRU_DOH = ("https://cloudflare-dns.com/dns-query",
                   "https://dns.google/resolve")
 
@@ -1142,7 +666,8 @@ async def check_dns_availability() -> dict:
             return {}
 
     async def _resolve_asn_names() -> dict[str, str]:
-        uniq = sorted({e for e in egress.values() if e and e != "0.0.0.0"})
+        uniq = sorted({e for e in egress.values()
+                      if e and e != "0.0.0.0" and get_fake_ip_type(e) != "fakeip"})
         if not uniq:
             return {}
         cache = _load_asn_cache()
@@ -1177,22 +702,17 @@ async def check_dns_availability() -> dict:
     org_names = await _resolve_asn_names()
 
     def _org_label(eip: str) -> str:
-        # Cymru отдаёт "КРАТКОЕ ИМЯ - полное описание, CC" — берём до " - ".
         name = org_names.get(eip)
         if not name:
-            return eip  # fallback — сырой IP
+            return eip
         return name.split(" - ", 1)[0].strip() or name
 
     # ── Классификация выходных резолверов ─────────────────────────────────────
-    # Одинаковый выходной /24 у РАЗНЫХ брендов = трафик идёт на общий
-    # резолвер (перехват ip:53), а не к заявленному серверу.
     def _net24(ip: str) -> str:
         parts = ip.split(".")
         return ".".join(parts[:3]) if len(parts) == 4 else ip
 
     def _brand(nm: str) -> str:
-        # "AdGuard (family)" → "AdGuard": варианты одного бренда не считаем
-        # разными провайдерами.
         return nm.split(" (", 1)[0].strip()
 
     name_ips: dict[str, list[str]] = {}
@@ -1200,15 +720,14 @@ async def check_dns_availability() -> dict:
     for (_ekind, _eaddr, ename), eip in egress.items():
         if not eip or eip == "0.0.0.0":
             continue
+        if get_fake_ip_type(eip) == "fakeip":
+            continue           # FakeIP — не реальный резолвер, не учитывать в hijack
         name_ips.setdefault(ename, []).append(eip)
         net_brands.setdefault(_net24(eip), set()).add(_brand(ename))
 
     def _is_hijacked(eip: str) -> bool:
         return len(net_brands.get(_net24(eip), ())) >= 2
 
-    # Отечественные резолверы: их выход через RIPN/МСИКС — норма, а не перехват.
-    # Из флагов и детальной таблицы исключены, но в сигнатуре net_brands
-    # участвуют — на их выход сверяются остальные провайдеры.
     _DOMESTIC_BRANDS = {"msk-ix", "нсди"}
 
     def _is_domestic(name: str) -> bool:
@@ -1216,7 +735,6 @@ async def check_dns_availability() -> dict:
 
     # ── Ячейки единой таблицы ─────────────────────────────────────────────────
     def _kind_stats(kind: str, name: str):
-        """Минимальная латентность и (ok, total) по всем серверам провайдера."""
         addrs = (udp_by_name if kind == "udp" else doh_by_name).get(name, [])
         vals_all, ok_q, total_q = [], 0, 0
         for a in addrs:
@@ -1227,17 +745,22 @@ async def check_dns_availability() -> dict:
             total_q += len(dm)
         return vals_all, ok_q, total_q
 
+    def _allowed_vals(a: str, name: str) -> tuple[list, int]:
+        """Тайминги по ДОВЕРЕННЫМ доменам для UDP (реальная задержка резолвера),
+        заблокированные домены не участвуют — их 3–5мс заглушки занижают мин."""
+        dm = raw.get(("udp", a, name), {})
+        vals = [dm[d] for d in allowed if dm.get(d) is not None]
+        return vals, len(allowed)
+
     def _latency_cell(kind: str, name: str) -> str:
         addrs = (udp_by_name if kind == "udp" else doh_by_name).get(name, [])
         if not addrs:
             return "[dim]—[/dim]"
         if kind == "udp":
-            # По строке на каждый сервер со своим пингом
             lines = []
             for a in addrs:
-                dm = raw.get((kind, a, name), {})
-                vals = [v for v in dm.values() if v is not None]
-                ok_q, total_q = len(vals), len(dm)
+                vals, total_q = _allowed_vals(a, name)
+                ok_q = len(vals)
                 if not vals:
                     lines.append("[red]TIMEOUT[/red]")
                     continue
@@ -1246,7 +769,6 @@ async def check_dns_availability() -> dict:
             return "\n".join(lines)
         vals_all, ok_q, total_q = _kind_stats(kind, name)
         if not vals_all:
-            # Причина фейла от классификатора (как в тесте 3): TLS DROP, SYN DROP и т.п.
             for a in addrs:
                 reason = fail_reasons.get((kind, a, name))
                 if reason:
@@ -1261,24 +783,128 @@ async def check_dns_availability() -> dict:
             return "[dim]—[/dim]"
         lines = []
         for a in addrs:
-            dm = raw.get(("udp", a, pname), {})
-            vals = [v for v in dm.values() if v is not None]
-            ok_q = len(vals)
-            # Потери конкретного сервера показываем только если они были —
-            # иначе каждая строка превращается в шум "5/5".
-            loss = f" [dim]{ok_q}/{len(dm)}[/dim]" if 0 < ok_q < len(dm) else ""
+            vals, _ = _allowed_vals(a, pname)
             eip = egress.get(("egress", a, pname))
             if not vals:
-                lines.append(f"[dim]{a}: таймаут{loss}[/dim]")
+                lines.append(f"[dim]{a}: таймаут[/dim]")
             elif not eip or eip == "0.0.0.0":
-                lines.append(f"[dim]{a}: выход н/д{loss}[/dim]")
+                lines.append(f"[dim]{a}: выход н/д[/dim]")
+            elif get_fake_ip_type(eip) == "fakeip":
+                lines.append(f"[magenta]{a}→FakeIP[/magenta]")
             elif _is_domestic(pname):
-                lines.append(f"{a}→{_org_label(eip)}{loss}")
+                lines.append(f"{a}→{_org_label(eip)}")
             elif _is_hijacked(eip):
-                lines.append(f"[red]{a}→{_org_label(eip)}{loss}[/red]")
+                lines.append(f"[red]{a}→{_org_label(eip)}[/red]")
             else:
-                lines.append(f"[green]{a}→{_org_label(eip)}[/green]{loss}")
+                lines.append(f"[green]{a}→{_org_label(eip)}[/green]")
         return "\n".join(lines)
+
+    # ── Глобальная правда по запрещённым доменам (из любого чистого DoH) ───────
+    # Все UDP-ответы сравниваются с ЭТИМ единым набором IP, а не с DoH конкретного
+    # провайдера. Так проверяются и серверы без своего DoH (MSK-IX, НСДИ, dnsforge...).
+    TRUTH_DOH = [
+        "https://cloudflare-dns.com/dns-query",
+        "https://dns.google/resolve",
+        "https://dns.quad9.net/dns-query",
+    ]
+
+    async def _fetch_truth() -> dict[str, set]:
+        truth: dict[str, set] = {}
+        if not forbidden:
+            return truth
+        cli_timeout = httpx.Timeout(timeout, connect=timeout, pool=2.0)
+
+        async def _resolve(endpoint: str) -> dict[str, set]:
+            out: dict[str, set] = {}
+            try:
+                url, ehost = await pin_ipv4(endpoint)
+            except Exception:
+                url, ehost = endpoint, ""
+            headers = {"Content-Type": "application/dns-message",
+                       "Accept": "application/dns-message",
+                       "User-Agent": config.USER_AGENT}
+            if ehost:
+                headers["Host"] = ehost
+            ext = {"sni_hostname": ehost} if ehost else None
+            for d in forbidden:
+                try:
+                    q = _build_dns_query(d)
+                    r = await cli.post(url, content=q, headers=headers, extensions=ext)
+                    if r.status_code != 200:
+                        continue
+                    ips = _parse_dns_response(r.content, q[:2])
+                    if isinstance(ips, list):
+                        out[d] = set(ips)
+                except Exception:
+                    continue
+            return out
+
+        try:
+            async with httpx.AsyncClient(timeout=cli_timeout, proxy=proxy_url,
+                                         trust_env=False, http2=True) as cli:
+                results = await asyncio.gather(*[_resolve(e) for e in TRUTH_DOH])
+        except Exception:
+            return truth
+        for r in results:
+            for d, ips in r.items():
+                truth.setdefault(d, set()).update(ips)
+        return truth
+
+    truth_ips = await _fetch_truth()
+
+    def _udp_server_available(a: str, name: str) -> bool:
+        dm = raw.get(("udp", a, name), {})
+        return any(dm.get(d) is not None for d in allowed)
+
+    def _udp_ips(a: str, name: str, domain: str) -> set:
+        p = udp_answers.get(("udp", a, name, domain))
+        return set(p) if isinstance(p, list) else set()
+
+    def _fakeip_sub(a: str, name: str) -> int:
+        """Сколько запрещённых доменов вернули FakeIP (198.18.0.0/15) — прозрачный прокси."""
+        n = 0
+        for d in forbidden:
+            ips = _udp_ips(a, name, d)
+            if ips and any(get_fake_ip_type(ip) == "fakeip" for ip in ips):
+                n += 1
+        return n
+
+    def _subst_line(a: str, name: str) -> str:
+        """Оценка подмены для ОДНОГО UDP-адреса (8.8.4.4 / 8.8.8.8 отдельно).
+        Сравнивает его ответы с ГЛОБАЛЬНОЙ DoH-правдой по запрещённым доменам."""
+        judged, sub = _subst_counts(a, name)
+        if judged == 0:
+            return "[dim]—[/dim]"
+        frac = f"{sub}/{len(forbidden)}"
+        if _fakeip_sub(a, name) > 0:
+            # FakeIP — прозрачный прокси (sing-box/mihomo/clash), а не подмена провайдером
+            return f"[magenta]{frac}[/magenta]"
+        # красный — всё подменяется (5/5); жёлтый — частично (1..4/5); зелёный — 0/5
+        if sub == len(forbidden):
+            return f"[red]{frac}[/red]"
+        if sub == 0:
+            return f"[green]{frac}[/green]"
+        return f"[yellow]{frac}[/yellow]"
+
+    def _subst_counts(a: str, name: str) -> tuple[int, int]:
+        """(judged, sub) для одного UDP-адреса; judged==0 → судить нельзя (—)."""
+        if not _udp_server_available(a, name):
+            return (0, 0)
+        judged = sub = 0
+        for d in forbidden:
+            truth = truth_ips.get(d)
+            if not truth:
+                continue           # глобальная правда по этому домену не получена
+            judged += 1
+            if not (_udp_ips(a, name, d) & truth):
+                sub += 1           # расхождение или молчание (блок)
+        return judged, sub
+    def _subst_cell(name: str) -> str:
+        """Колонка «Подменяется?» — строка на каждый UDP-адрес (как UDP мин)."""
+        addrs = udp_by_name.get(name, [])
+        if not addrs or not forbidden:
+            return "[dim]—[/dim]"
+        return "\n".join(_subst_line(a, name) for a in addrs)
 
     # ── Таблица ───────────────────────────────────────────────────────────────
     from rich.table import Table
@@ -1287,27 +913,27 @@ async def check_dns_availability() -> dict:
     t.add_column("DoH мин", justify="right", no_wrap=True)
     t.add_column("UDP мин", justify="right", no_wrap=True)
     t.add_column("Реальный резолвер", no_wrap=True)
+    t.add_column("Подменяется?", justify="right", no_wrap=True)
 
-    doh_ok_names = udp_ok_names = 0
-    doh_total_names = len(doh_by_name)
-    udp_total_names = len(udp_by_name)
+    # Доступность считаем ПО СЕРВЕРАМ (а не по именам): N/M DoH и K/L UDP
+    doh_ok_cnt = sum(
+        1 for a, n in doh_servers
+        if any(v is not None for v in raw.get(("doh_wire", a, n), {}).values())
+    )
+    udp_ok_cnt = sum(
+        1 for a, n in udp_servers
+        if any(raw.get(("udp", a, n), {}).get(d) is not None for d in allowed)
+    )
 
     for name in all_names:
-        doh_vals, _, _ = _kind_stats("doh_wire", name) if name in doh_by_name else ([], 0, 0)
-        udp_vals, _, _ = _kind_stats("udp", name) if name in udp_by_name else ([], 0, 0)
-        if doh_vals:
-            doh_ok_names += 1
-        if udp_vals:
-            udp_ok_names += 1
         t.add_row(
             name,
             _latency_cell("doh_wire", name),
             _latency_cell("udp", name),
             _egress_cell(name),
+            _subst_cell(name),
         )
 
-    # Таблица шире терминала: печатаем через консоль достаточной ширины,
-    # чтобы строки уходили в горизонтальный скролл, а не обрезались.
     try:
         meas = t.__rich_measure__(console, console.options)
         wide = max(console.width, int(meas.maximum) + 2)
@@ -1316,37 +942,77 @@ async def check_dns_availability() -> dict:
     except Exception:
         console.print(t)
 
-    # ── Детальная таблица перехвата ───────────────────────────────────────────
-    hij_rows = []
+    # Бренды провайдеров, чей реальный резолвер перехвачен (для сводки)
+    hijacked_brands: list[str] = []
+    hi_brand_set: set[str] = set()
     for hname, haddrs in udp_by_name.items():
         for ha in haddrs:
             heip = egress.get(("egress", ha, hname))
             if heip and heip != "0.0.0.0" and _is_hijacked(heip) \
                     and not _is_domestic(hname):
-                hij_rows.append(
-                    (ha, hname, org_names.get(heip, heip))
-                )
-    if hij_rows:
-        console.print()
-        ht = Table(
-            title="[bold red]! Перехват UDP-запросов[/bold red]",
-            show_header=True, header_style="bold magenta", border_style="red",
-        )
-        ht.add_column("Сервер", style="cyan")
-        ht.add_column("Заявлен")
-        ht.add_column("Реальный резолвер", style="red")
-        for ha, hname, horg in sorted(hij_rows):
-            ht.add_row(ha, hname, horg)
-        console.print(ht)
-        console.print(
-            "[dim]Сигнатура: whoami.akamai.net — разные провайдеры отвечают "
-            "через один и тот же резолвер.[/dim]"
-        )
+                hi_brand_set.add(_brand(hname))
+    hijacked_brands = sorted(hi_brand_set)
     console.print()
 
+    # Сводка по подмене: судимы только резолверы, где есть DoH-правда
+    # («пустые» — не судимые — не считаем)
+    subst_sub = subst_total = 0
+    for snm, saddrs in udp_by_name.items():
+        for sa in saddrs:
+            j, s = _subst_counts(sa, snm)
+            if j:
+                subst_total += 1
+                if s:
+                    subst_sub += 1
+
+    # IP заглушек: UDP-ответы, расходящиеся с глобальной правдой
+    stub_ip_counts: dict[str, int] = {}
+    for snm, saddrs in udp_by_name.items():
+        for sa in saddrs:
+            if not _udp_server_available(sa, snm):
+                continue
+            for d in forbidden:
+                truth = truth_ips.get(d)
+                if not truth:
+                    continue
+                uips = _udp_ips(sa, snm, d)
+                if uips and not (uips & truth):
+                    for ip in uips:
+                        stub_ip_counts[ip] = stub_ip_counts.get(ip, 0) + 1
+    top_stub = max(stub_ip_counts, key=stub_ip_counts.get) if stub_ip_counts else None
+
+    # Сколько судимых резолверов вернули FakeIP (прозрачный прокси)
+    fakeip_sub = 0
+    for snm, saddrs in udp_by_name.items():
+        for sa in saddrs:
+            j, _ = _subst_counts(sa, snm)
+            if j and _fakeip_sub(sa, snm) > 0:
+                fakeip_sub += 1
+    fakeip_total = subst_total
+
+    if subst_sub > 0:
+        console.print()
+        if top_stub and get_fake_ip_type(top_stub) == "fakeip":
+            console.print(
+                "[bold magenta][!] DNS-ответы содержат FakeIP[/bold magenta]\n"
+                "Для честной оценки DNS отключите прокси/FakeIP на время проверки."
+            )
+        else:
+            console.print(
+                "[bold yellow][!] Ваш интернет-провайдер перехватывает DNS-запросы[/bold yellow]\n"
+                "Провайдер подменяет ответы UDP DNS на заглушки или ложные NXDOMAIN/EMPTY/TIMEOUT\n"
+                + (f"IP адрес заглушки провайдера - {top_stub}.\n" if top_stub else "")
+                + "Рекомендация: настройте DoH на устройстве/роутере, если еще не сделали этого."
+            )
+
     return {
-        "doh_ok":    doh_ok_names,
-        "doh_total": doh_total_names,
-        "udp_ok":    udp_ok_names,
-        "udp_total": udp_total_names,
+        "doh_ok":          doh_ok_cnt,
+        "doh_total":       len(doh_servers),
+        "udp_ok":          udp_ok_cnt,
+        "udp_total":       len(udp_servers),
+        "hijacked_brands": hijacked_brands,
+        "subst_sub":       subst_sub,
+        "subst_total":     subst_total,
+        "fakeip_sub":      fakeip_sub,
+        "fakeip_total":    fakeip_total,
     }

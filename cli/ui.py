@@ -43,14 +43,14 @@ def build_domain_row(entry: dict) -> list:
         if times:
             details.append(f"{min(times):.1f}s")
 
-    detail_str = " | ".join(d for d in details if d)
+    detail_str = "\n".join(d for d in details if d)
     return [domain, http_status, t12_status, t13_status, detail_str, entry["resolved_ipv4"]]
 
 
 async def ask_test_selection() -> str:
-    # Алгоритмически строим все непустые подмножества цифр 1–7
+    # Алгоритмически строим все непустые подмножества цифр 1–6
     from itertools import combinations
-    digits = "1234567"
+    digits = "123456"
     valid = {
         "".join(sorted(combo))
         for r in range(1, len(digits) + 1)
@@ -58,13 +58,12 @@ async def ask_test_selection() -> str:
     }
     console.print(
         "\n[bold]Какие тесты запустить?[/bold]\n"
-        "  [cyan]1[/cyan]    — Проверка подмены DNS\n"
-        "  [cyan]2[/cyan]    — Проверка доступности DNS-серверов\n"
-        "  [cyan]3[/cyan]    — Проверка доступности доменов\n"
-        "  [cyan]4[/cyan]    — Проверка TCP 16-20KB блокировки\n"
-        "  [cyan]5[/cyan]    — Поиск белых SNI для ASN\n"
-        "  [cyan]6[/cyan]    — Проверка Telegram (замедление/блокировка)\n"
-        "  [cyan]7[/cyan]    — Легенда статусов\n"
+        "  [cyan]1[/cyan]    — Проверка доступности DNS-серверов\n"
+        "  [cyan]2[/cyan]    — Проверка доступности доменов\n"
+        "  [cyan]3[/cyan]    — Проверка TCP 16-20KB блокировки\n"
+        "  [cyan]4[/cyan]    — Поиск белых SNI для ASN\n"
+        "  [cyan]5[/cyan]    — Проверка Telegram (замедление/блокировка)\n"
+        "  [cyan]6[/cyan]    — Легенда статусов\n"
         "  [cyan]123[/cyan] — [dim](по умолчанию)[/dim]"
     )
     loop = asyncio.get_running_loop()
@@ -93,7 +92,7 @@ def print_legend() -> None:
             ("TLS MITM",    "Man-in-the-Middle: подменён сертификат (Unknown CA, Cert expired, Hostname mismatch)"),
             ("TLS BLOCK",   "Блокировка версии TLS или протокола целиком (protocol_version alert)"),
             ("TLS RST",     "Активный TCP RST на ClientHello (сброс TLS-хендшейка)"),
-            ("SSL ERR",     "Прочие SSL ошибки: bad key share, record layer fail, internal error"),
+            ("UNKNOWN",     "Неизвестная ошибка (в скобках — тип исключения)"),
             ("NO TLS1.3",   "Сервер не поддерживает TLS 1.3 (норма для старых серверов)")
         ]),
         ("[bold cyan]— TCP / Соединение —[/bold cyan]", [
@@ -124,9 +123,8 @@ def print_legend() -> None:
         ]),
         ("[bold cyan]— Прочее —[/bold cyan]", [
             ("OK",          "Сайт доступен (200–4xx без признаков блокировки)"),
-            ("PROTO ERR",   "Нарушение HTTP-протокола со стороны сервера/DPI"),
-            ("READ ERR",    "Ошибка чтения данных"),
-            ("CONN ERR",    "Неклассифицированная ошибка подключения"),
+            ("UNKNOWN",     "Неизвестная ошибка (в скобках — тип исключения)"),
+            ("READ TIMEOUT","Сервер принял TLS, но не ответил — проблема сервера"),
             ("POOL TIMEOUT","Исчерпан пул сокетов — снизьте MAX_CONCURRENT"),
         ]),
     ]

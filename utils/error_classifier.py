@@ -110,9 +110,11 @@ def classify_ssl_error(error: ssl.SSLError, bytes_read: int, stage: str = "unkno
         return ("[bold red]NO TLS1.3[/bold red]", "Server has no TLS 1.3", bytes_read)
 
     if "internal error" in msg:
-        return ("[red]SSL ERR[/red]", "Internal error", bytes_read)
+        return ("[red]UNKNOWN[/red] [dim]SSL[/dim]", "Internal error", bytes_read)
 
-    return ("[red]SSL ERR[/red]", clean_detail(str(error)[:40]), bytes_read)
+    # Неизвестная SSL-ошибка: тип исключения в ярлыке, текст — в детали
+    return (f"[red]UNKNOWN[/red] [dim]{type(error).__name__}[/dim]",
+            clean_detail(str(error)[:40]), bytes_read)
 
 
 def classify_connect_error(error: Exception, bytes_read: int, stage: str = "unknown") -> Tuple[str, str, int]:
@@ -201,7 +203,8 @@ def classify_connect_error(error: Exception, bytes_read: int, stage: str = "unkn
     if "all connection attempts failed" in full_text:
         return ("[bold red]REFUSED[/bold red]", "TCP соединение отклонено", bytes_read)
 
-    return ("[red]CONN ERR[/red]", clean_detail(str(error)[:40]), bytes_read)
+    return (f"[red]UNKNOWN[/red] [dim]{type(error).__name__}[/dim]",
+            clean_detail(str(error)[:40]), bytes_read)
 
 
 def classify_read_error(error: Exception, bytes_read: int, stage: str = "unknown") -> Tuple[str, str, int]:
@@ -235,15 +238,26 @@ def classify_read_error(error: Exception, bytes_read: int, stage: str = "unknown
         elif "incomplete" in full_text:
             return ("[bold red]ABORT[/bold red]", "Incomplete response", bytes_read)
         else:
-            return ("[red]PROTO ERR[/red]", "Protocol error", bytes_read)
-
+            return (f"[red]UNKNOWN[/red] [dim]{type(error).__name__}[/dim]", "Protocol error", bytes_read)
     if isinstance(error, httpx.ReadError):
         ssl_err = find_cause(error, ssl.SSLError)
         if ssl_err is not None:
             return classify_ssl_error(ssl_err, bytes_read)
-        return ("[red]READ ERR[/red]", "Read error", bytes_read)
+        return (f"[red]UNKNOWN[/red] [dim]{type(error).__name__}[/dim]", "Read error", bytes_read)
 
-    return ("[red]READ ERR[/red]", f"{type(error).__name__}", bytes_read)
+    # Таймауты чтения/записи: соединение и TLS установлены, но ответа нет —
+    # это свойство сервера, а не блокировка
+    if isinstance(error, (httpx.ReadTimeout, httpx.WriteTimeout)) \
+            or find_cause(error, TimeoutError) is not None \
+            or err_errno in (errno.ETIMEDOUT, config.WSAETIMEDOUT) \
+            or "timed out" in full_text:
+        if stage in ("tls_connected", "reading_data"):
+            return ("[red]READ TIMEOUT[/red]", "Нет ответа после handshake", bytes_read)
+        if stage == "sending_data":
+            return ("[red]SEND TIMEOUT[/red]", "Сервер не принимает данные", bytes_read)
+        return ("[red]TIMEOUT[/red]", f"Timeout ({stage})", bytes_read)
+
+    return (f"[red]UNKNOWN[/red] [dim]{type(error).__name__}[/dim]", "", bytes_read)
 
 def get_exception_chain_full(exc: Exception) -> str:
     """Возвращает полную детализированную цепочку исключений для отладки."""
