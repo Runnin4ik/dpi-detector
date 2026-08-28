@@ -355,8 +355,8 @@ async def run_tcp_test(semaphore: asyncio.Semaphore, tcp_items: list) -> dict:
 
 # ── Тест 4: Поиск белых SNI для ASN ──────────────────────────────────────────
 
-_SNI_BATCH_SIZE = 5
-_SNI_TOP_N = 3
+_SNI_BATCH_SIZE = getattr(config, "SNI_BATCH_SIZE", 5)
+_SNI_TOP_N = getattr(config, "SNI_TOP_N", 3)
 
 
 async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, whitelist_sni: list) -> None:

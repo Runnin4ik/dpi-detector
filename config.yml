@@ -207,3 +207,92 @@ DNS_AVAILABILITY_SERVERS:
   - ["xbox-dns.ru",                           "XboxDNS (RU)",         "dot"]
   - ["common.dot.dns.yandex.net",             "Yandex",               "dot"]
   - ["dns.geohide.ru",                        "Geohide",              "dot"]
+
+# === Дополнительные настройки (меняются без правки кода) ===
+
+# Сервисы определения внешнего IP (тест 0)
+IP_LOOKUP_URLS:
+  - "https://api.ipify.org"
+  - "https://icanhazip.com"
+  - "https://ifconfig.me/ip"
+
+# DoH-эндпоинты Team Cymru (определение ASN/провайдера по IP)
+CYMRU_DOH_SERVERS:
+  - "https://dns.google/resolve"
+  - "https://cloudflare-dns.com/dns-query"
+
+# Эталонные DoH теста 1 — "правда" по запрещённым доменам (сравнение подмены)
+DNS_TRUTH_DOH_SERVERS:
+  - "https://cloudflare-dns.com/dns-query"
+  - "https://dns.google/resolve"
+  - "https://dns.quad9.net/dns-query"
+
+# Конкурентность внутри фаз теста 1
+DNS_UDP_CONCURRENCY: 15    # одновременные UDP-сокеты
+DNS_DOH_CONCURRENCY: 20    # одновременные DoH-запросы
+DNS_EGRESS_CONCURRENCY: 10 # одновременные egress-пробы (whoami)
+DNS_ASN_CONCURRENCY: 8     # одновременные запросы к Team Cymru
+
+# Файл кэша ASN-имён; null = %TEMP%\dpi_detector_asn_cache.json
+ASN_CACHE_FILE: null
+
+# === Тест 3: TCP 16-20KB ===
+FAT_CHUNKS_COUNT: 10       # запросов в keepalive-соединении (10 × 4КБ = 40КБ)
+FAT_CHUNK_SIZE: 4000       # размер X-Pad на шаг, байт
+FAT_CHUNK_DELAY: 0.05      # пауза между шагами, сек
+FAT_RANDOM_POOL_SIZE: 100000  # пул случайных байт для X-Pad
+
+# === Тест 4: подбор белых SNI ===
+SNI_BATCH_SIZE: 5          # пачка одновременных проверок SNI
+SNI_TOP_N: 3               # сколько рабочих SNI искать на одну AS
+
+# === Тест 5: Telegram ===
+TELEGRAM_MEDIA_URL: "https://telegram.org/img/Telegram200million.png"
+TELEGRAM_MEDIA_SIZE_MB: 30.97
+TELEGRAM_UPLOAD_IP: "149.154.167.220"
+TELEGRAM_UPLOAD_PORT: 443
+TELEGRAM_UPLOAD_SIZE_MB: 10
+TELEGRAM_STALL_TIMEOUT: 10.0   # сек без данных → прерываем
+TELEGRAM_TOTAL_TIMEOUT: 60.0   # общий таймаут теста
+TELEGRAM_DC_PING_TIMEOUT: 5.0  # таймаут TCP-пинга датацентров
+TELEGRAM_DC_PORT: 443
+TELEGRAM_DCS:
+  - ["149.154.175.53", "DC1"]
+  - ["149.154.167.51", "DC2"]
+  - ["149.154.175.100", "DC3"]
+  - ["149.154.167.91", "DC4"]
+  - ["91.108.56.130", "DC5"]
+
+# === Кэш DNS-пининга (utils/network.py) ===
+PIN_CACHE_MAX: 256         # максимум записей
+PIN_CACHE_TTL: 3600.0      # время жизни записи, сек
+
+# Пресеты конкурентности в меню (стрелки ← →)
+CONCURRENCY_PRESETS: [1, 5, 20, 50, 100]
+
+# Обнаружение софта обхода DPI (тест 0): имя → подстроки имён процессов
+BYPASS_TOOLS:
+  - ["zapret", ["nfqws", "tpws", "zapret", "dvtws", "dbproxy", "winws"]]
+  - ["GoodbyeDPI", ["goodbyedpi", "goodbye-dpi", "windivert"]]
+  - ["ByeDPI", ["byedpi"]]
+  - ["SpoofDPI", ["spoofdpi"]]
+  - ["DPI-Blocker", ["dpi-blocker", "dpiblocker"]]
+  - ["Green Tunnel", ["greentunnel", "green-tunnel"]]
+  - ["PowerTunnel", ["powertunnel"]]
+  - ["Hysteria2", ["hysteria"]]
+  - ["TROJAN", ["trojan"]]
+  - ["NaiveProxy", ["naive"]]
+  - ["Wstunnel", ["wstunnel"]]
+  - ["UDP2RAW", ["udp2raw"]]
+  - ["dnscrypt-proxy", ["dnscrypt-proxy"]]
+  - ["xray", ["xray"]]
+  - ["FlClashX", ["flclashx", "flclashcore"]]
+  - ["AmneziaWG", ["amneziawg"]]
+  - ["Clash", ["mihomo", "clash-meta", "clash-verge", "clash_verge", "verge-mihomo"]]
+  - ["sing-box", ["sing-box"]]
+  - ["Hiddify", ["hiddify"]]
+  - ["Tailscale", ["tailscale"]]
+  - ["ZeroTier", ["zerotier"]]
+  - ["Mullvad", ["mullvad"]]
+  - ["WARP", ["warp-svc", "cloudflarewarp"]]
+  - ["NordVPN", ["nordvpn"]]

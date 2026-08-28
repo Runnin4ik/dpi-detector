@@ -39,8 +39,9 @@ CURRENT_VERSION = "3.7.0"
 GITHUB_REPO     = "Runnin4ik/dpi-detector"
 
 # DoH-эндпоинты для запросов Team Cymru (dns.google первым — работает и без SNI)
-_CYMRU_DOH_URLS = ("https://dns.google/resolve",
-                   "https://cloudflare-dns.com/dns-query")
+_CYMRU_DOH_URLS = tuple(getattr(config, "CYMRU_DOH_SERVERS",
+                                ("https://dns.google/resolve",
+                                 "https://cloudflare-dns.com/dns-query")))
 
 
 def _flag_emoji(cc: str) -> str:
@@ -57,7 +58,9 @@ async def _fetch_public_ip(timeout: float = 5.0) -> tuple:
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
                                  trust_env=False, proxy=proxy_url) as client:
         ip = None
-        for url in ("https://api.ipify.org", "https://icanhazip.com", "https://ifconfig.me/ip"):
+        for url in getattr(config, "IP_LOOKUP_URLS",
+                           ("https://api.ipify.org", "https://icanhazip.com",
+                            "https://ifconfig.me/ip")):
             try:
                 resp = await client.get(url)
                 if resp.status_code == 200:

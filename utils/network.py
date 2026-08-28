@@ -111,11 +111,11 @@ def get_fake_ip_type(ip_str: str) -> str:
 
 from time import monotonic as _monotonic
 
-from utils import config as _config
+from utils import config
 
 _pin_cache: dict = {}
-_PIN_CACHE_MAX = 256          # максимум записей
-_PIN_CACHE_TTL = 3600.0       # TTL в секундах (устаревшие резолвы не держим)
+_PIN_CACHE_MAX = getattr(config, "PIN_CACHE_MAX", 256)     # максимум записей
+_PIN_CACHE_TTL = getattr(config, "PIN_CACHE_TTL", 3600.0)  # TTL в секундах
 
 
 async def pin_host(url: str):
@@ -139,7 +139,7 @@ async def pin_host(url: str):
         from urllib.parse import urlsplit, urlunsplit
         parts = urlsplit(url)
         host = parts.hostname
-        if host and not getattr(_config, "PROXY_URL", None):
+        if host and not getattr(config, "PROXY_URL", None):
             try:
                 ip_address(host)  # уже литерал — резолвить нечего
             except ValueError:

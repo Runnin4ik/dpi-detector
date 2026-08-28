@@ -7,6 +7,8 @@ import sys
 from typing import Dict, List
 import glob
 
+from utils import config
+
 _TCPIP_BASE = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces"
 _NET_CLASS  = r"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}"
 
@@ -409,8 +411,9 @@ def get_system_dns() -> dict:
     return res
 
 
-# Известные обходы DPI: имя для отображения -> подстроки имён процессов
-_BYPASS_TOOLS = (
+# Известные обходы DPI: имя для отображения -> подстроки имён процессов.
+# Список можно переопределить в config.yml (BYPASS_TOOLS: [[имя, [процессы]], ...]).
+_DEFAULT_BYPASS_TOOLS = (
     ("zapret",       ("nfqws", "tpws", "zapret", "dvtws", "dbproxy", "winws")),
     ("GoodbyeDPI",   ("goodbyedpi", "goodbye-dpi", "windivert")),
     ("ByeDPI",       ("byedpi",)),
@@ -437,6 +440,11 @@ _BYPASS_TOOLS = (
     ("Mullvad",      ("mullvad",)),
     ("WARP",         ("warp-svc", "cloudflarewarp")),
     ("NordVPN",      ("nordvpn",)),
+)
+
+_BYPASS_TOOLS = tuple(
+    (str(name), tuple(str(p) for p in procs))
+    for name, procs in getattr(config, "BYPASS_TOOLS", _DEFAULT_BYPASS_TOOLS)
 )
 
 

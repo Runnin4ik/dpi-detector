@@ -16,30 +16,34 @@ from utils.network import pin_host
 
 live_console = Console(record=False)
 
-# ─── Константы ───────────────────────────────────────────────────────────────
-MEDIA_URL     = "https://telegram.org/img/Telegram200million.png"
+# ─── Константы (значения — из config.yml, с дефолтами в коде) ────────────────
+MEDIA_URL     = getattr(config, "TELEGRAM_MEDIA_URL",
+                        "https://telegram.org/img/Telegram200million.png")
 MEDIA_HOST    = "telegram.org"
 MEDIA_PORT    = 443
-MEDIA_SIZE_MB = 30.97
+MEDIA_SIZE_MB = getattr(config, "TELEGRAM_MEDIA_SIZE_MB", 30.97)
 MEDIA_SIZE_B  = int(MEDIA_SIZE_MB * 1024 * 1024)
 
 TELEGRAM_DC_IPS: List[Tuple[str, str]] = [
-    ("149.154.175.53",  "DC1"),
-    ("149.154.167.51",  "DC2"),
-    ("149.154.175.100", "DC3"),
-    ("149.154.167.91",  "DC4"),
-    ("91.108.56.130",   "DC5"),
+    (str(ip), str(lbl))
+    for ip, lbl in getattr(config, "TELEGRAM_DCS", [
+        ["149.154.175.53",  "DC1"],
+        ["149.154.167.51",  "DC2"],
+        ["149.154.175.100", "DC3"],
+        ["149.154.167.91",  "DC4"],
+        ["91.108.56.130",   "DC5"],
+    ])
 ]
-TELEGRAM_DC_PORT = 443
+TELEGRAM_DC_PORT = getattr(config, "TELEGRAM_DC_PORT", 443)
 
-UPLOAD_TEST_IP   = "149.154.167.220"
-UPLOAD_TEST_PORT = 443
-UPLOAD_SIZE_MB   = 10
+UPLOAD_TEST_IP   = getattr(config, "TELEGRAM_UPLOAD_IP", "149.154.167.220")
+UPLOAD_TEST_PORT = getattr(config, "TELEGRAM_UPLOAD_PORT", 443)
+UPLOAD_SIZE_MB   = getattr(config, "TELEGRAM_UPLOAD_SIZE_MB", 10)
 UPLOAD_SIZE_B    = UPLOAD_SIZE_MB * 1024 * 1024
 
-STALL_TIMEOUT   = 10.0   # сек без данных → прерываем
-TOTAL_TIMEOUT   = 60.0   # общий таймаут
-DC_PING_TIMEOUT = 5.0
+STALL_TIMEOUT   = getattr(config, "TELEGRAM_STALL_TIMEOUT", 10.0)   # сек без данных
+TOTAL_TIMEOUT   = getattr(config, "TELEGRAM_TOTAL_TIMEOUT", 60.0)   # общий таймаут
+DC_PING_TIMEOUT = getattr(config, "TELEGRAM_DC_PING_TIMEOUT", 5.0)
 
 _SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 

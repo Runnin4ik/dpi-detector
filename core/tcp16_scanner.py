@@ -9,8 +9,10 @@ import httpx
 from utils import config
 from utils.error_classifier import classify_connect_error, classify_read_error
 
-# Предварительно генерируем пул случайных символов (100 КБ).
-RANDOM_POOL = "".join(random.choices(string.ascii_letters + string.digits, k=100_000))
+# Предварительно генерируем пул случайных символов для X-Pad.
+_RANDOM_POOL_SIZE = getattr(config, "FAT_RANDOM_POOL_SIZE", 100_000)
+RANDOM_POOL = "".join(random.choices(string.ascii_letters + string.digits,
+                                     k=_RANDOM_POOL_SIZE))
 
 
 async def _fat_probe_keepalive(
@@ -51,8 +53,12 @@ async def _fat_probe_keepalive(
             connection_state["stage"] = "reading_data"
 
     alive_str = "[dim]—[/dim]"
-    chunks_count = 10   # 10 × 4KB = 40KB суммарно
-    chunk_size = 4000
+    chunks_count = getattr(config, "FAT_CHUNKS_COUNT", 10)  # 10 × 4KB = 40KB
+    chunk_size = getattr(config, "FAT_CHUNK_SIZE", 4000)
+    # Детект-порог по TCP_BLOCK_MIN_KB: первый чанк, после которого суммарно
+    # отправлено ≥ минимального порога блокировки (конфиг, а не магия "3")
+    min_detect_chunk = max(1, int(getattr(config, "TCP_BLOCK_MIN_KB", 12) * 1024
+                                  / max(chunk_size, 1)))
 
     rtt_measurements = []
     # Если RTT известен заранее — сразу выставляем dynamic_timeout
@@ -107,32 +113,32 @@ async def _fat_probe_keepalive(
                     dyn_t = max(base_rtt * 3.0, 1.5)
                     dynamic_timeout = min(dyn_t, config.FAT_READ_TIMEOUT)
 
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(getattr(config, "FAT_CHUNK_DELAY", 0.05))
 
         except (httpx.ConnectTimeout, httpx.ConnectError) as e:
             label, detail, _ = classify_connect_error(e, 0, stage=connection_state["stage"])
             if i == 0:
                 return "[red]Нет[/red]", label, detail, measured_rtt
-            if i < 3:  # <12КБ — вне детект-диапазона DPI, обычный обрыв
+            if i < min_detect_chunk:  # вне детект-диапазона DPI — обычный обрыв
                 return alive_str, "[red]TIMEOUT[/red]", detail, measured_rtt
-            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*4}KB", measured_rtt
+            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*chunk_size//1000}KB", measured_rtt
 
         except (httpx.ReadTimeout, httpx.WriteTimeout) as e:
             err_type = "Read Timeout" if isinstance(e, httpx.ReadTimeout) else "Write Timeout"
             if i == 0:
                 return "[green]Да[/green]", f"[red]{err_type.upper()}[/red]", err_type, measured_rtt
-            if i < 3:  # <12КБ — вне детект-диапазона DPI
+            if i < min_detect_chunk:  # вне детект-диапазона DPI
                 return alive_str, "[red]TIMEOUT[/red]", err_type, measured_rtt
-            return alive_str, "[bold red]DETECTED[/bold red]", f"{err_type} at {i*4}KB", measured_rtt
+            return alive_str, "[bold red]DETECTED[/bold red]", f"{err_type} at {i*chunk_size//1000}KB", measured_rtt
 
         except Exception as e:
             # Для ReadError, WriteError, RemoteProtocolError и любых других
             label, detail, _ = classify_read_error(e, 0, stage=connection_state["stage"])
             if i == 0:
                 return "[green]Да[/green]", label, detail, measured_rtt
-            if i < 3:  # <12КБ — вне детект-диапазона DPI
+            if i < min_detect_chunk:  # вне детект-диапазона DPI
                 return alive_str, "[red]TIMEOUT[/red]", detail, measured_rtt
-            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*4}KB", measured_rtt
+            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*chunk_size//1000}KB", measured_rtt
 
     return alive_str, "[green]OK[/green]", "", measured_rtt
 

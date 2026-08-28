@@ -624,7 +624,7 @@ async def check_dns_availability() -> dict:
     async def _probe_udp(addr: str, name: str, port: int = 53) -> None:
         key = ("udp", addr, name)
         loop = asyncio.get_running_loop()
-        udp_sem = asyncio.Semaphore(15)  # Ограничиваем кол-во одновременных сокетов
+        udp_sem = asyncio.Semaphore(getattr(config, "DNS_UDP_CONCURRENCY", 15))
 
         async def _wait(domain: str):
             async with udp_sem:
@@ -674,7 +674,7 @@ async def check_dns_availability() -> dict:
     async def _probe_doh_json(addr: str, name: str) -> None:
         key = ("doh_json", addr, name)
         cli_timeout = httpx.Timeout(timeout, connect=timeout, pool=2.0)
-        doh_sem = asyncio.Semaphore(20)
+        doh_sem = asyncio.Semaphore(getattr(config, "DNS_DOH_CONCURRENCY", 20))
 
         async def _one(domain: str, client: httpx.AsyncClient):
             async with doh_sem:
@@ -726,7 +726,7 @@ async def check_dns_availability() -> dict:
         ehost_headers = {"Host": ehost} if ehost else {}
         ehost_ext = {"sni_hostname": ehost} if ehost else None
         cli_timeout = httpx.Timeout(timeout, connect=timeout, pool=2.0)
-        doh_sem = asyncio.Semaphore(20)
+        doh_sem = asyncio.Semaphore(getattr(config, "DNS_DOH_CONCURRENCY", 20))
         single_conn = httpx.Limits(max_connections=1, max_keepalive_connections=1)
 
         async def _do_probe() -> list:
@@ -997,15 +997,16 @@ async def check_dns_availability() -> dict:
         async with probe_gate:
             await _probe_dot(addr, name, port)
 
-    egress_sem = asyncio.Semaphore(10)
+    egress_sem = asyncio.Semaphore(getattr(config, "DNS_EGRESS_CONCURRENCY", 10))
 
     async def _probe_egress_gated(addr, name, port):
         async with egress_sem:
             await _probe_egress(addr, name, port)
 
     # ── Имена организаций выходных IP (Team Cymru через DoH) ──────────────────
-    _CYMRU_DOH = ("https://cloudflare-dns.com/dns-query",
-                  "https://dns.google/resolve")
+    _CYMRU_DOH = tuple(getattr(config, "CYMRU_DOH_SERVERS",
+                               ("https://dns.google/resolve",
+                                "https://cloudflare-dns.com/dns-query")))
 
     def _doh_txt_fields(txt: str) -> list:
         return [p.strip() for p in txt.strip('"').split("|")]
@@ -1048,7 +1049,10 @@ async def check_dns_availability() -> dict:
                 continue
         return None
 
-    _ASN_CACHE_FILE = os.path.join(tempfile.gettempdir(), "dpi_detector_asn_cache.json")
+    _ASN_CACHE_FILE = getattr(
+        config, "ASN_CACHE_FILE",
+        os.path.join(tempfile.gettempdir(), "dpi_detector_asn_cache.json"),
+    ) or os.path.join(tempfile.gettempdir(), "dpi_detector_asn_cache.json")
 
     def _load_asn_cache() -> dict:
         try:
@@ -1069,7 +1073,7 @@ async def check_dns_availability() -> dict:
         if not missing:
             return out
         headers = {"Accept": "application/dns-json", "User-Agent": config.USER_AGENT}
-        sem = asyncio.Semaphore(8)
+        sem = asyncio.Semaphore(getattr(config, "DNS_ASN_CONCURRENCY", 8))
         fresh: dict[str, str] = {}
         async with httpx.AsyncClient(
             timeout=4, headers=headers,
@@ -1243,11 +1247,12 @@ async def check_dns_availability() -> dict:
     # ── Глобальная правда по запрещённым доменам (из любого чистого DoH) ───────
     # Все UDP-ответы сравниваются с ЭТИМ единым набором IP, а не с DoH конкретного
     # провайдера. Так проверяются и серверы без своего DoH (MSK-IX, НСДИ, dnsforge...).
-    TRUTH_DOH = [
-        "https://cloudflare-dns.com/dns-query",
-        "https://dns.google/resolve",
-        "https://dns.quad9.net/dns-query",
-    ]
+    TRUTH_DOH = list(getattr(
+        config, "DNS_TRUTH_DOH_SERVERS",
+        ["https://cloudflare-dns.com/dns-query",
+         "https://dns.google/resolve",
+         "https://dns.quad9.net/dns-query"],
+    ))
 
     async def _fetch_truth() -> dict[str, set]:
         truth: dict[str, set] = {}

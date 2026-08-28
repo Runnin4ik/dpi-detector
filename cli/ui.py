@@ -5,6 +5,7 @@ import sys
 from urllib.parse import urlparse
 
 from cli.console import console
+from utils import config
 from utils.error_classifier import clean_detail
 
 
@@ -85,8 +86,8 @@ def build_domain_row(entry: dict) -> list:
     return [domain, http_status, t12_status, t13_status, "\n".join(details), entry["resolved_ipv4"]]
 
 
-# Пресеты конкурентности в меню (↑↓ циклически)
-CONCURRENCY_PRESETS = [1, 5, 20, 50, 100]
+# Пресеты конкурентности в меню (↑↓ циклически) — из config.yml
+CONCURRENCY_PRESETS = list(getattr(config, "CONCURRENCY_PRESETS", [1, 5, 20, 50, 100]))
 
 _MENU_OPTIONS = [
     ("0", "Информация о сети и системе"),
