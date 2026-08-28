@@ -35,7 +35,7 @@ from utils.network import ipv6_supported
 from utils.files import load_domains, load_tcp_targets, load_whitelist_sni, get_base_dir
 from utils.system_check import get_system_dns, detect_bypass_tools
 
-CURRENT_VERSION = "3.7.0"
+CURRENT_VERSION = "4.0.0"
 GITHUB_REPO     = "Runnin4ik/dpi-detector"
 
 # DoH-эндпоинты для запросов Team Cymru (dns.google первым — работает и без SNI)
