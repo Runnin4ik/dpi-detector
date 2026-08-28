@@ -42,3 +42,9 @@ else:
     _stdout = _CRLFWriter(sys.stdout)
     sys.stdout = _stdout
     console = Console(record=True, file=_stdout)
+
+
+def reset_record() -> None:
+    """Очищает буфер записи консоли: экспорт ([S] / -o) содержит только
+    результаты текущего прогона, без меню и служебных строк."""
+    console._record_buffer.clear()

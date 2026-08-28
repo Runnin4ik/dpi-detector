@@ -23,7 +23,7 @@ except ImportError as e:
     sys.exit(1)
 
 from utils import config
-from cli.console import console
+from cli.console import console, reset_record
 from cli.ui import ask_test_selection, print_legend, BOX_W
 from cli.runners import run_domains_test, run_tcp_test, run_whitelist_sni_test, run_telegram_test
 from core.dns_scanner import (
@@ -802,6 +802,9 @@ async def main():
     result_path = args.output
 
     while True:
+        # Экспорт ([S]/-o) — только результаты текущего прогона,
+        # без меню/шапки/служебных строк
+        reset_record()
         # Семафор пересоздаётся каждую итерацию: конкурентность можно сменить в меню
         semaphore = asyncio.Semaphore(config.MAX_CONCURRENT)
 
