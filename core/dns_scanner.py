@@ -824,9 +824,12 @@ async def check_dns_availability() -> dict:
                         results.append(await _one(d, client))
                     return results
             except Exception as err:
-                fail_reasons.setdefault(
-                    key, f"[red]UNKNOWN[/red] [dim]{type(err).__name__}[/dim]"
-                )
+                if isinstance(err, (TimeoutError, asyncio.TimeoutError)):
+                    fail_reasons.setdefault(key, "[red]TIMEOUT[/red]")
+                else:
+                    fail_reasons.setdefault(
+                        key, f"[red]UNKNOWN[/red] [dim]{type(err).__name__}[/dim]"
+                    )
                 return [(d, None, None) for d in forbidden]
 
         try:

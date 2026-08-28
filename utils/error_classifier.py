@@ -2,6 +2,7 @@ import ssl
 import math
 import errno
 import socket
+import asyncio
 from typing import Tuple, Optional
 
 import httpx
@@ -22,6 +23,16 @@ def find_cause(exc: Exception, target_type: type, max_depth: int = 10) -> Option
             break
         current = nxt
     return None
+
+
+def is_timeout_error(exc: Exception) -> bool:
+    """True для TimeoutError и asyncio.TimeoutError — до Python 3.11 это
+    разные классы, поэтому классификатор иначе не видит таймауты
+    asyncio (например, asyncio.wait_for у TCP-коннекта DoT)."""
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return True
+    return (find_cause(exc, TimeoutError) is not None
+            or find_cause(exc, asyncio.TimeoutError) is not None)
 
 
 def get_errno_from_chain(exc: Exception, max_depth: int = 10) -> Optional[int]:
@@ -187,7 +198,7 @@ def classify_connect_error(error: Exception, bytes_read: int, stage: str = "unkn
             return ("[bold red]TLS ABORT[/bold red]", "Соединение прервано (Abort)", bytes_read)
         return ("[bold red]TCP ABORT[/bold red]", "TCP соединение прервано", bytes_read)
 
-    if find_cause(error, TimeoutError) is not None or err_errno in (errno.ETIMEDOUT, config.WSAETIMEDOUT) or "timed out" in full_text:
+    if is_timeout_error(error) or err_errno in (errno.ETIMEDOUT, config.WSAETIMEDOUT) or "timed out" in full_text:
         if stage == "tls_handshake":
             return ("[bold red]TLS DROP[/bold red]", "TLS Handshake timeout", bytes_read)
         elif stage == "tcp_connect":
@@ -248,7 +259,7 @@ def classify_read_error(error: Exception, bytes_read: int, stage: str = "unknown
     # Таймауты чтения/записи: соединение и TLS установлены, но ответа нет —
     # это свойство сервера, а не блокировка
     if isinstance(error, (httpx.ReadTimeout, httpx.WriteTimeout)) \
-            or find_cause(error, TimeoutError) is not None \
+            or is_timeout_error(error) \
             or err_errno in (errno.ETIMEDOUT, config.WSAETIMEDOUT) \
             or "timed out" in full_text:
         if stage in ("tls_connected", "reading_data"):
