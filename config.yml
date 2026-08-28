@@ -4,7 +4,11 @@
 
 # Максимальное количество одновременных запросов.
 # Чем выше значение, тем быстрее тесты, но нагрузка на систему и сеть растет.
-MAX_CONCURRENT: 60
+# В меню переключается пресетами: 1, 5, 20, 50, 100 (по умолчанию 50).
+MAX_CONCURRENT: 50
+
+# Семейство IP для DNS-резолва и проб: "ipv4" или "ipv6".
+IP_VERSION: ipv4
 
 # Адрес локального или удаленного прокси (http/socks5).
 # В формате "протокол://ip:порт" или "протокол://user:pass@ip:port"
@@ -38,15 +42,13 @@ WSAETIMEDOUT: 10060
 WSAENETUNREACH: 10051
 WSAEHOSTUNREACH: 10065
 WSAECONNABORTED: 10053
-WSAENETDOWN: 10050
-WSAEACCES: 10013
 
 # === Настройки DNS проверки ===
 DNS_CHECK_TIMEOUT: 5.0
 
 # Максимум одновременных DNS-проб (серверов) — защита от ложных TIMEOUT
 # на DPI-сети при большом количестве эндпоинтов (thundering herd).
-DNS_PROBE_CONCURRENCY: 3
+DNS_PROBE_CONCURRENCY: 20
 
 # Список доменов для теста доступности и подмены DNS
 DNS_CHECK_DOMAINS:
@@ -62,9 +64,6 @@ DNS_CHECK_DOMAINS:
   # - "limetorrents.pro"
   # - "www.whatsapp.com"
   # - "newtime.ua",
-  # - "fast-die.kiev.ua",
-  # - "church.ua",
-  # - "www.lgbt.org.ua",
 
 # Публичные DNS серверы (UDP)
 DNS_UDP_SERVERS:
@@ -82,25 +81,18 @@ DNS_UDP_SERVERS:
   - ["185.222.222.222", "DNS.SB"]
   - ["176.9.93.198", "dnsforge"]
 
-# Публичные DoH JSON API серверы (HTTPS)
-DNS_DOH_SERVERS:
-  - ["https://8.8.8.8/resolve", "Google"]
-  - ["https://dns.google/resolve", "Google"]
-  - ["https://freedns.controld.com/p0", "ControlD"]
-  - ["https://doh.sb/dns-query", "DNS.SB"]
-  - ["https://1.1.1.1/dns-query", "Cloudflare"]
-  - ["https://cloudflare-dns.com/dns-query", "Cloudflare"]
-  - ["https://one.one.one.one/dns-query", "Cloudflare"]
-  - ["https://dns.adguard-dns.com/resolve", "AdGuard"]
-  - ["https://dns.alidns.com/resolve", "Alibaba"]
-
 # --- Тест 2: Проверка доступности DNS-серверов ---
 DNS_AVAILABILITY_DOMAINS:
-  - "vk.ru"            # доверенные (не под цензурой): по ним пинг и «жив ли сервер»
+  - "vk.ru"            # доверенные (не под цензурой): по ним пинг и "жив ли сервер"
   - "gosuslugi.ru"
 
-# Серверы для теста доступности. Каждый сервер — [адрес, имя, тип].
-# Типы: "udp", "doh_json", "doh_wire"
+# Серверы для теста доступности. Каждый сервер — [адрес, имя, тип, порт?].
+# Типы: "udp", "doh_json", "doh_wire", "dot"
+# Порт необязателен (по умолчанию: UDP 53, DoH 443, DoT 853).
+# Для нестандартного порта укажите его 4-м элементом, например:
+#   - ["dns.my-server.ru", "MyServer", "dot", 8853]
+#   - ["192.168.1.10", "LocalPiHole", "udp", 5353]
+#   - ["https://dns.my-server.ru/dns-query", "MyServer", "doh_wire", 8443]
 DNS_AVAILABILITY_SERVERS:
   # ── UDP ──────────────────────────────────────────────────────────────────────
   - ["94.140.14.14", "AdGuard", "udp"]
@@ -110,8 +102,8 @@ DNS_AVAILABILITY_SERVERS:
   - ["223.6.6.6", "Alibaba", "udp"]
   - ["185.228.168.9", "CleanBrowsing", "udp"]
   - ["185.228.169.9", "CleanBrowsing", "udp"]
-  - ["1.0.0.1", "Cloudflare", "udp"]
-  - ["1.1.1.1", "Cloudflare", "udp"]
+  - ["1.1.1.1", "Cloudflare IP", "udp"]
+  - ["1.0.0.1", "Cloudflare IP 2", "udp"]
   - ["76.76.2.0", "ControlD", "udp"]
   - ["76.76.2.1", "ControlD", "udp"]
   - ["185.222.222.222", "DNS.SB", "udp"]
@@ -135,6 +127,8 @@ DNS_AVAILABILITY_SERVERS:
   - ["111.88.96.55", "XboxDNS (RU)", "udp"]
   - ["77.88.8.1", "Yandex", "udp"]
   - ["77.88.8.8", "Yandex", "udp"]
+  - ["45.155.204.190", "Geohide", "udp"]
+  - ["83.220.169.155", "Comss.one", "udp"]
 
   # ── DoH Wire (RFC 8484, POST/GET application/dns-message) ───────────────────
   - ["https://dns.adguard-dns.com/dns-query",             "AdGuard",         "doh_wire"]
@@ -144,8 +138,11 @@ DNS_AVAILABILITY_SERVERS:
   - ["https://dns.alidns.com/dns-query",                  "Alibaba", "doh_wire"]
   - ["https://doh.cleanbrowsing.org/doh/security-filter", "CleanBrowsing",   "doh_wire"]
   - ["https://cloudflare-dns.com/dns-query",              "Cloudflare",      "doh_wire"]
-  - ["https://dns.cloudflare.com/dns-query",             "Cloudflare (dns)", "doh_wire"]
-  - ["https://1.1.1.1/dns-query",                        "Cloudflare (IP)", "doh_wire"]
+  - ["https://dns.cloudflare.com/dns-query",             "Cloudflare dns", "doh_wire"]
+  - ["https://1.1.1.1/dns-query",                        "Cloudflare IP",   "doh_wire"]
+  - ["https://1.0.0.1/dns-query",                        "Cloudflare IP 2",   "doh_wire"]
+  - ["https://one.one.one.one/dns-query",                 "Cloudflare one",   "doh_wire"]
+  - ["https://1dot1dot1dot1.cloudflare-dns.com/dns-query","Cloudflare dot",   "doh_wire"]
   - ["https://mozilla.cloudflare-dns.com/dns-query",      "Cloudflare (Mozilla)",  "doh_wire"]
   - ["https://security.cloudflare-dns.com/dns-query",     "Cloudflare (Security)", "doh_wire"]
   - ["https://dns.comss.one/dns-query",                   "Comss.one", "doh_wire"]
@@ -155,7 +152,7 @@ DNS_AVAILABILITY_SERVERS:
   - ["https://dns.sb/dns-query",                          "DNS.SB",          "doh_wire"]
   - ["https://doh.dns.sb/dns-query",                      "DNS.SB (alt)",    "doh_wire"]
   - ["https://doh.dns4all.eu/dns-query",                  "DNS4all", "doh_wire"]
-  - ["https://dnsforge.de/dns-query",                     "dnsforge.de",     "doh_wire"]
+  - ["https://dnsforge.de/dns-query",                     "dnsforge",        "doh_wire"]
   - ["https://dns.google/dns-query",                      "Google",          "doh_wire"]
   - ["https://doh.libredns.gr/dns-query",                 "LibreDNS",        "doh_wire"]
   - ["https://dns.mullvad.net/dns-query",                 "Mullvad",         "doh_wire"]
@@ -170,3 +167,43 @@ DNS_AVAILABILITY_SERVERS:
   - ["https://wikimedia-dns.org/dns-query",               "Wikimedia", "doh_wire"]
   - ["https://xbox-dns.ru/dns-query",                   "XboxDNS (RU)", "doh_wire"]
   - ["https://common.dot.dns.yandex.net/dns-query",       "Yandex",          "doh_wire"]
+  - ["https://dns.geohide.ru:444/dns-query",              "Geohide",         "doh_wire"]
+
+  # ── DoT (RFC 7858, TLS:853, wire-запросы с length-prefix) ──────────────────
+  - ["dns.adguard-dns.com",                   "AdGuard",              "dot"]
+  - ["family.adguard-dns.com",                "AdGuard (family)",     "dot"]
+  - ["unfiltered.adguard-dns.com",            "AdGuard (unfiltered)", "dot"]
+  - ["dns.adguard.com",                       "AdGuard (legacy)",     "dot"]
+  - ["dns.alidns.com",                        "Alibaba",              "dot"]
+  - ["security-filter-dns.cleanbrowsing.org", "CleanBrowsing",        "dot"]
+  - ["1.1.1.1",                               "Cloudflare IP",        "dot"]
+  - ["1.0.0.1",                               "Cloudflare IP 2",        "dot"]
+  - ["one.one.one.one",                       "Cloudflare one",       "dot"]
+  - ["1dot1dot1dot1.cloudflare-dns.com",      "Cloudflare dot",       "dot"]
+  - ["cloudflare-dns.com",                    "Cloudflare",           "dot"]
+  - ["dns.cloudflare.com",                    "Cloudflare dns",     "dot"]
+  - ["security.cloudflare-dns.com",           "Cloudflare (Security)","dot"]
+  - ["dns.comss.one",                         "Comss.one",            "dot"]
+  - ["p0.freedns.controld.com",               "ControlD",             "dot"]
+  - ["x-adguard.freedns.controld.com",        "ControlD (x-adguard)", "dot"]
+  - ["dns.digitale-gesellschaft.ch",          "Digitale Gesellschaft","dot"]
+  - ["dot.sb",                                "DNS.SB",               "dot"]
+  - ["dns.sb",                                "DNS.SB (alt)",         "dot"]
+  - ["dot.dns4all.eu",                        "DNS4all",              "dot"]
+  - ["dnsforge.de",                           "dnsforge",             "dot"]
+  - ["dns.google",                            "Google",               "dot"]
+  - ["8.8.8.8",                               "Google",               "dot"]
+  - ["8.8.4.4",                               "Google",               "dot"]
+  - ["dns.mullvad.net",                       "Mullvad",              "dot"]
+  - ["adblock.dns.mullvad.net",               "Mullvad (adblock)",    "dot"]
+  - ["dns.nextdns.io",                        "NextDNS",              "dot"]
+  - ["dns.opendns.com",                       "OpenDNS",              "dot"]
+  - ["dns.quad9.net",                         "Quad9",                "dot"]
+  - ["9.9.9.9",                               "Quad9",                "dot"]
+  - ["149.112.112.112",                       "Quad9",                "dot"]
+  - ["dns11.quad9.net",                       "Quad9 (unsecured)",    "dot"]
+  - ["unicast.censurfridns.dk",               "UncensoredDNS",        "dot"]
+  - ["wikimedia-dns.org",                     "Wikimedia",            "dot"]
+  - ["xbox-dns.ru",                           "XboxDNS (RU)",         "dot"]
+  - ["common.dot.dns.yandex.net",             "Yandex",               "dot"]
+  - ["dns.geohide.ru",                        "Geohide",              "dot"]
