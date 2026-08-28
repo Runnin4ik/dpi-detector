@@ -9,25 +9,50 @@ def _ip_family() -> int:
     from utils import config
     return socket.AF_INET6 if getattr(config, "IP_VERSION", "ipv4") == "ipv6" else socket.AF_INET
 
-def ipv6_supported() -> bool:
-    """True, если в системе настроен глобально адресуемый IPv6.
 
-    Windows без IPv6 бросает WSAHOST_NOT_FOUND из getaddrinfo(AF_INET6);
-    на других ОС возвращается wildcard ::/link-local — ни то, ни другое
-    не является глобальным адресом (2000::/3).
+def ipv6_supported() -> bool:
+    """True, если в системе настроен глобально адресуемый IPv6 (2000::/3).
+
+    Раньше проверялся только getaddrinfo(None, None, AF_INET6, AI_PASSIVE) —
+    он возвращает bind-wildcard ``::`` (is_unspecified), а не адреса интерфейсов,
+    поэтому глобальный адрес не находился даже при настроенном IPv6.
+    Теперь адреса собираются из имени хоста (все IPv6 интерфейса) и из
+    source-адреса, который ОС выбрала бы для маршрута в глобальный IPv6.
     """
     if not socket.has_ipv6:
         return False
-    try:
-        infos = socket.getaddrinfo(
-            None, None, family=socket.AF_INET6, type=socket.SOCK_STREAM,
-            flags=socket.AI_PASSIVE,
-        )
-    except OSError:
-        return False
-    for info in infos:
+
+    candidates = []
+    # 1) Адреса, назначенные хосту: hostname-резолв перечисляет все IPv6 адреса,
+    #    включая глобальные 2000::/3 (AI_PASSIVE этого не делает).
+    for host, flags in ((socket.gethostname(), 0),
+                        (None, socket.AI_PASSIVE | socket.AI_ADDRCONFIG)):
         try:
-            ip = ipaddress.ip_address(info[4][0].split("%")[0])
+            infos = socket.getaddrinfo(
+                host, None, family=socket.AF_INET6, type=socket.SOCK_STREAM,
+                flags=flags,
+            )
+        except OSError:
+            continue
+        for info in infos:
+            candidates.append(info[4][0])
+
+    # 2) Source-адрес, выбранный ОС для маршрута в глобальный IPv6. UDP connect()
+    #    пакет не отправляет, только просит ОС подобрать локальный адрес.
+    for addr in ("2001:4860:4860::8888", "2606:4700:4700::1111", "2620:fe::fe"):
+        try:
+            s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            try:
+                s.connect((addr, 53))
+                candidates.append(s.getsockname()[0])
+            finally:
+                s.close()
+        except OSError:
+            continue
+
+    for raw in candidates:
+        try:
+            ip = ipaddress.ip_address(raw.split("%")[0])
         except ValueError:
             continue
         if isinstance(ip, ipaddress.IPv6Address) and ip.is_global:
