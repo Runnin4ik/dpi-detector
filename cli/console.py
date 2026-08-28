@@ -6,10 +6,34 @@
 (isatty() = False) вывод остаётся LF.
 """
 
+
 import os
 import sys
 
 from rich.console import Console
+
+
+def _enable_windows_vt() -> None:
+    """Включает обработку ANSI/VT в консоли Windows (ENABLE_VIRTUAL_TERMINAL_PROCESSING).
+
+    Rich включает этот флаг сам для своего вывода, но прямые sys.stdout.write()
+    (banner, курсорные команды меню, тест 0) идут в обход Rich. Без флага старый
+    conhost (cmd, Windows 10/Server 2022) печатает ESC-последовательности как
+    текст (←[0J, ←[36m...), и интерфейс двоится.
+    """
+    if os.name != "nt":
+        return
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    for handle_id in (-11, -12):  # STD_OUTPUT_HANDLE, STD_ERROR_HANDLE
+        handle = kernel32.GetStdHandle(handle_id)
+        mode = ctypes.c_ulong()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+
+
+_enable_windows_vt()
 
 
 class _CRLFWriter:
