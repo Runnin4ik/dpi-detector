@@ -1,9 +1,9 @@
 from typing import Tuple
 import re
 import sys
-import socket
 import time
 import asyncio
+import socket
 
 import httpx
 from rich.table import Table
@@ -22,7 +22,7 @@ from utils.network import get_resolved_ip, get_fake_ip_type
 
 async def _resolve_worker(domain_raw: str, semaphore: asyncio.Semaphore, stub_ips: set) -> dict:
     """
-    Фаза 0: DNS-резолв (IPv4).
+    Фаза 0: DNS-резолв (семейство из config.IP_VERSION).
     dns_fake: False = чисто, True = заглушка, None = DNS FAIL.
 
     Замечание по stub_ips: stub_ips собирается через прямой UDP к публичным серверам.
@@ -33,7 +33,14 @@ async def _resolve_worker(domain_raw: str, semaphore: asyncio.Semaphore, stub_ip
     domain = clean_hostname(domain_raw)
 
     async with semaphore:
-        resolved_ipv4 = await get_resolved_ip(domain, family=socket.AF_INET)
+        resolved_ipv4 = await get_resolved_ip(domain)
+        # IPv6-режим: при неудаче пробуем IPv4 — отличить NXDOMAIN
+        # от "домен есть, но IPv6 не поддерживается/отключён"
+        v4_fallback = (
+            await get_resolved_ip(domain, family=socket.AF_INET)
+            if resolved_ipv4 is None and config.IP_VERSION == "ipv6"
+            else None
+        )
 
     entry = {
         "domain":       domain,
@@ -45,33 +52,34 @@ async def _resolve_worker(domain_raw: str, semaphore: asyncio.Semaphore, stub_ip
     }
 
     if resolved_ipv4 is None:
+        fail_detail = "Домен не найден"
+        if v4_fallback:
+            fail_detail = "IPv6 не поддерживается/отключён"
         fail = "[yellow]DNS FAIL[/yellow]"
-        entry["t13v4_res"] = (fail, "Домен не найден", 0.0)
-        entry["t12_res"]   = (fail, "Домен не найден", 0.0)
-        entry["http_res"]  = (fail, "Домен не найден")
+        entry["t13v4_res"] = (fail, fail_detail, 0.0)
+        entry["t12_res"]   = (fail, fail_detail, 0.0)
+        entry["http_res"]  = (fail, fail_detail)
         entry["dns_fake"]  = None
         return entry
 
-        fake_type = get_fake_ip_type(resolved_ipv4)
-        if fake_type != "fakeip" and stub_ips and resolved_ipv4 in stub_ips:
-            fake_type = "isp"
+    fake_type = get_fake_ip_type(resolved_ipv4)
+    if fake_type != "fakeip" and stub_ips and resolved_ipv4 in stub_ips:
+        fake_type = "isp"
 
-        if fake_type == "isp":
-            fake = "[bold red]DNS FAKE[/bold red]"
-            detail = f"Заглушка провайдера -> {resolved_ipv4}"
-            entry["t13v4_res"] = (fake, detail, 0.0)
-            entry["t12_res"]   = (fake, detail, 0.0)
-            entry["http_res"]  = (fake, detail)
-            entry["dns_fake"]  = True
-        elif fake_type == "local":
-            fake = "[bold yellow]LOCAL IP[/bold yellow]"
-            detail = f"Локальный IP -> {resolved_ipv4}"
-            entry["t13v4_res"] = (fake, detail, 0.0)
-            entry["t12_res"]   = (fake, detail, 0.0)
-            entry["http_res"]  = (fake, detail)
-            entry["dns_fake"]  = True
-
-        return entry
+    if fake_type == "isp":
+        fake = "[bold red]DNS FAKE[/bold red]"
+        detail = f"Заглушка провайдера -> {resolved_ipv4}"
+        entry["t13v4_res"] = (fake, detail, 0.0)
+        entry["t12_res"]   = (fake, detail, 0.0)
+        entry["http_res"]  = (fake, detail)
+        entry["dns_fake"]  = True
+    elif fake_type == "local":
+        fake = "[bold yellow]LOCAL IP[/bold yellow]"
+        detail = f"Локальный IP -> {resolved_ipv4}"
+        entry["t13v4_res"] = (fake, detail, 0.0)
+        entry["t12_res"]   = (fake, detail, 0.0)
+        entry["http_res"]  = (fake, detail)
+        entry["dns_fake"]  = True
 
     return entry
 
@@ -167,7 +175,7 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
     """Тест 2: TLS1.3 IPv4 → TLS1.2 → HTTP injection."""
     console.print(
         f"\n[bold]Проверка доступности доменов[/bold]  "
-        f"[dim]Целей: {len(domains)} | timeout: {config.CONNECT_TIMEOUT}s[/dim]\n"
+        f"[dim]Целей: {len(domains)} | IP: {'IPv6' if config.IP_VERSION == 'ipv6' else 'IPv4'} | timeout: {config.CONNECT_TIMEOUT}s[/dim]\n"
     )
 
     table = Table(show_header=True, header_style="bold magenta", border_style="dim")
@@ -207,6 +215,7 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
 
     rows = sorted([build_domain_row(e) for e in entries], key=lambda x: x[0])
     dns_fail_count = 0
+    no_ipv6_count = 0     # DNS FAIL из-за "IPv6 не поддерживается" — не сбой резолвера
     isp_stubs = {}
     local_stubs = {}
     fakeip_stubs = {}
@@ -227,12 +236,17 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
 
         if any("DNS FAIL" in r[col] for col in (1, 2, 3)):
             dns_fail_count += 1
+            if "IPv6 не поддерживается" in (r[4] if len(r) > 4 else ""):
+                no_ipv6_count += 1
 
     for r in rows:
         table.add_row(*r[:5])
     console.print(table)
 
-    if isp_stubs or local_stubs or fakeip_stubs or dns_fail_count > 0:
+    # DNS FAIL из-за отсутствия IPv6 (нет AAAA/отключён v6) — не проблема резолвера,
+    # рекомендации по DoH к нему неприменимы → блок не показываем
+    real_dns_fail = dns_fail_count - no_ipv6_count
+    if isp_stubs or local_stubs or fakeip_stubs or real_dns_fail > 0:
         console.print(f"\n[bold yellow][i][!] ИНФОРМАЦИЯ О DNS РЕЗОЛВЕ:[/bold yellow]")
 
         if fakeip_stubs:
@@ -255,10 +269,10 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
             else:
                 console.print(f"DNS вернул локальные IP (AdGuard/hosts/Pi-hole?): у [yellow]{total_local}[/yellow] доменов")
 
-        if dns_fail_count > 0:
-            console.print(f"У {dns_fail_count} сайтов обнаружен DNS FAIL (Домен не найден)")
+        if real_dns_fail > 0:
+            console.print(f"У {real_dns_fail} сайтов обнаружен DNS FAIL")
 
-        if isp_stubs or dns_fail_count > 0:
+        if isp_stubs or real_dns_fail > 0:
             console.print("[yellow]Рекомендация: Настройте DoH на вашем устройстве и роутере[/yellow]\n")
             console.print("После настройки сбросьте кеш DNS:")
             console.print("Windows: [dim]ipconfig /flushdns[/dim]")

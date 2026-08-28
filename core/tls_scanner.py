@@ -4,7 +4,7 @@ import math
 import errno
 import asyncio
 import socket
-from utils.network import get_fake_ip_type, get_resolved_ip
+from utils.network import get_fake_ip_type, get_resolved_ip, format_ip_for_url
 from typing import Tuple
 from urllib.parse import urlparse
 
@@ -106,13 +106,13 @@ async def _check_tls_single(
             return ("[bold red]ISP PAGE[/bold red]", f"Заглушка провайдера {resolved_ip}", 0, 0.0)
         elif fake_type == "local":
             return ("[bold yellow]LOCAL IP[/bold yellow]", f"Локальный IP {resolved_ip}", 0, 0.0)
-    # Привязка к IPv4: TCP-соединение по A-записи, SNI и Host — от домена.
-    # Иначе домен с AAAA при живом IPv6 уходит в v6-замер.
+    # Привязка к IP выбранного семейства: соединение по A-/AAAA-записи,
+    # SNI и Host — от домена.
     if resolved_ip is None and not getattr(config, "PROXY_URL", None):
         resolved_ip = await get_resolved_ip(domain)
     req_url, sni_ext = url, {}
     if resolved_ip:
-        req_url = f"https://{resolved_ip}"
+        req_url = f"https://{format_ip_for_url(resolved_ip)}"
         sni_ext = {"sni_hostname": domain}
 
     connection_state = {"stage": "init"}
@@ -252,12 +252,13 @@ async def check_http_injection(
 ) -> Tuple[str, str]:
     """Проверяет HTTP-инжекцию (plain HTTP). Клиент передаётся снаружи."""
     clean_domain = domain.replace("https://", "").replace("http://", "")
-    # Привязка к IPv4: соединение по A-записи, Host остаётся доменом.
+    # Привязка к IP выбранного семейства: соединение по A-/AAAA-записи,
+    # Host остаётся доменом.
     http_target = f"http://{clean_domain}"
     if not getattr(config, "PROXY_URL", None):
         _ip = await get_resolved_ip(clean_domain)
         if _ip:
-            http_target = f"http://{_ip}"
+            http_target = f"http://{format_ip_for_url(_ip)}"
 
     connection_state = {"stage": "init"}
     async def trace_hook(event_name, info):

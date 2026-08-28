@@ -12,7 +12,7 @@ from rich.live import Live
 from rich.table import Table
 from cli.console import console as main_console
 from utils import config
-from utils.network import pin_ipv4
+from utils.network import pin_host
 
 live_console = Console(record=False)
 
@@ -219,7 +219,8 @@ async def _run_upload(display: LiveDisplay) -> dict:
     )
 
     stop_ev.set()
-    for t in pending: t.cancel()
+    for t in pending:
+        t.cancel()
 
     duration = time.monotonic() - t0
     sent = sent_ref[0]
@@ -297,16 +298,16 @@ async def _run_download(display: LiveDisplay) -> dict:
         nonlocal total_bytes, tick_bytes, t_start
         try:
             async with httpx.AsyncClient(verify=ctx, proxy=proxy_url, trust_env=False, timeout=TOTAL_TIMEOUT+5) as client:
-                                # строгий IPv4 нужен только без прокси (по прокси разрешает сам прокси)
+                # строгий IPv4 нужен только без прокси (по прокси разрешает сам прокси)
                 if proxy_url:
                     murl, mhost = MEDIA_URL, ""
                 else:
-                    murl, mhost = await pin_ipv4(MEDIA_URL)
+                    murl, mhost = await pin_host(MEDIA_URL)
                 req = client.build_request(
                     "GET", murl,
                     headers={"Host": mhost} if mhost else None,
                     extensions={"sni_hostname": mhost} if mhost else None,
-                               )
+                )
                 response = await client.send(req, stream=True)
 
                 t_start = time.monotonic()
