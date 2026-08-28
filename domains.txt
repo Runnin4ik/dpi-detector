@@ -35,6 +35,3 @@ kinopub.online
 vk.ru
 www.google.com
 aws.amazon.com
-check-host.net
-2ip.io
-raw.githubusercontent.com
