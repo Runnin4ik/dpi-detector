@@ -833,7 +833,6 @@ async def main():
         banner, banner_lines = _render_banner(_version_badge(latest))
         header["banner"], header["banner_lines"] = banner, banner_lines
 
-    net_task = None   # создаётся только при выборе теста 0 (инфо о сети)
     ver_task = asyncio.create_task(_version_updater())
 
     if args.tests:
@@ -938,8 +937,9 @@ async def main():
 
         # ── Тест 0: информация о сети и системе ─────────────────────────────
         if run_net_info:
-            if net_task is None:   # лениво: сбор только по выбору теста 0
-                net_task = asyncio.create_task(_net_updater())
+            header["net_text"] = None
+            header["net_lines"] = 0
+            net_task = asyncio.create_task(_net_updater())
             try:
                 await asyncio.wait_for(asyncio.shield(net_task), timeout=10.0)
             except Exception:
