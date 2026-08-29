@@ -298,38 +298,15 @@ BYPASS_TOOLS:
   - ["NordVPN", ["nordvpn"]]
 
 # === Белый список известных публичных резолверов (тест 1) ===
-# Выход DNS-запроса на сервер не считается перехватом, если его имя
-# содержит одну из подстрок ниже (регистр не важен). Например, сервер
-# "Google" / "Google #2" / "Cloudflare (Mozilla)" матчатся по "google"/"cloudflare".
+# Выход DNS-запроса на реальный резолвер не считается перехватом, если его
+# org-имя (после "→" в таблице) содержит одну из подстрок ниже (регистр не важен).
 DNS_KNOWN_RESOLVER_NAMES:
   - "google"
-  - "cloudflare"
-  - "quad9"
-  - "adguard"
-  - "alibaba"
-  - "cleanbrowsing"
-  - "controld"
-  - "digitale gesellschaft"
-  - "dns.sb"
-  - "dns4all"
-  - "dnsforge"
-  - "dnspod"
-  - "libredns"
-  - "mullvad"
-  - "nextdns"
-  - "opendns"
-  - "uncensoreddns"
-  - "wikimedia"
-  - "xboxdns"
-  - "comss"
-  - "yandex"
-  - "geohide"
-  - "msk-ix"
-  - "нсди"
-  # Реальные org-сети резолверов (после "→" в таблице теста 1): не перехват,
-  # а обычный транзит хостинга/провайдера (RIPN-NS5-RU-MSK, RU-JSCIOT, CDN77...)
-  - "ripn"
+  - "ripn-ns5-ru-msk"
+  - "cloudflarenet"
+  - "i3dnet"
   - "cdn77"
+  - "alibaba-cn-net"
   - "as-vultr"
   - "cdnext"
   - "xtom"
@@ -337,4 +314,5 @@ DNS_KNOWN_RESOLVER_NAMES:
   - "misaka-cis-as"
   - "as-anexia"
   - "ru-jsciot"
-  - "i3dnet"
+  - "yandex"
+  - "ripn-ru-rnd"
