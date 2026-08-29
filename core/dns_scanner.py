@@ -1213,12 +1213,10 @@ async def check_dns_availability() -> dict:
                 lines.append(f"[magenta]{a}→FakeIP[/magenta]")
             elif _is_domestic(pname):
                 lines.append(f"{a}→{_org_label(eip)}")
-            elif _known_resolver(pname) or _known_resolver(_org_label(eip)):
+            elif _known_resolver(_org_label(eip)):
                 lines.append(f"[green]{a}→{_org_label(eip)}[/green]")
-            elif _is_hijacked(eip):
-                lines.append(f"[red]{a}→{_org_label(eip)}[/red]")
             else:
-                lines.append(f"[green]{a}→{_org_label(eip)}[/green]")
+                lines.append(f"[red]{a}→{_org_label(eip)}[/red]")
         return "\n".join(lines)
 
     # ── Глобальная правда по запрещённым доменам (из любого чистого DoH) ───────
@@ -1381,7 +1379,6 @@ async def check_dns_availability() -> dict:
         for ha in haddrs:
             heip = egress.get(("egress", ha, hname))
             if heip and heip != "0.0.0.0" and _is_hijacked(heip) \
-                    and not _known_resolver(hname) \
                     and not _known_resolver(_org_label(heip)) \
                     and not _is_domestic(hname):
                 hi_brand_set.add(_brand(hname))
