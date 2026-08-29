@@ -24,71 +24,21 @@ from utils.error_classifier import classify_connect_error, classify_read_error
 # MSK-IX/НСДИ не включаем — отечественные, судятся отдельно как _is_domestic.
 
 
-def _ip_net24(ip: str) -> str:
-    parts = ip.split(".")
-    return ".".join(parts[:3]) if len(parts) == 4 else ip
-
-
-# Белый список известных публичных резолверов: выход на них не считается
-# перехватом. Переопределяется в config.yml (DNS_KNOWN_RESOLVER_NETS/_SPANS).
-_KNOWN_RESOLVER_NETS: set = set(getattr(
-    config, "DNS_KNOWN_RESOLVER_NETS",
-    [   # точные /24 (3 октета)
-        "91.239.100",                                                # UncensoredDNS
-        "64.6.64", "64.6.65",                                        # Verisign
-        "156.154.70", "156.154.71",                                  # Neustar
-        "114.114.114",                                               # 114DNS
-        *(f"109.200.{o}" for o in range(192, 224)),                  # i3D.net (AS49544) — anycast Quad9
-    ],
-))
-# Широкие префиксы (2 октета) anycast-пулов крупных резолверов:
-# whoami.akamai.net отвечает адресом из всего anycast, а не только .0/24
-_KNOWN_RESOLVER_SPANS: set = set(getattr(
-    config, "DNS_KNOWN_RESOLVER_SPANS",
-    [
-        "74.125", "172.217", "172.253", "142.250", "216.58",   # Google
-        "104.16", "172.64", "162.158",                         # Cloudflare
-        "37.140",                                              # Yandex
-    ],
-))
-for _srv in config.DNS_AVAILABILITY_SERVERS:
-    _a = _srv[0]
-    _nm = _srv[1].lower()
-    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", _a):
-        if "msk-ix" in _nm or "нсди" in _nm:
-            continue
-        _KNOWN_RESOLVER_NETS.add(_ip_net24(_a))
-
-
-# Белый список по имени сервера (подстроки, регистр не важен): если заявленный
-# DNS-сервер называется, например, "Google", его выход не считается перехватом,
-# даже если IP не попал в _KNOWN_RESOLVER_NETS/_SPANS. Из config.yml.
+# Белый список серверов по имени (подстроки, регистр не важен): если заявленный
+# DNS-сервер называется, например, "Google", его выход не считается перехватом.
+# Список вынесен в config.yml (DNS_KNOWN_RESOLVER_NAMES).
 _KNOWN_RESOLVER_NAME_TOKENS: set = set(getattr(
     config, "DNS_KNOWN_RESOLVER_NAMES",
-    ["google", "cloudflare", "quad9", "adguard", "uncensoreddns",
-     "verisign", "neustar", "114dns", "i3d", "yandex"],
+    ["google", "cloudflare", "quad9", "adguard", "alibaba", "cleanbrowsing",
+     "controld", "digitale gesellschaft", "dns.sb", "dns4all", "dnsforge",
+     "dnspod", "libredns", "mullvad", "nextdns", "opendns", "uncensoreddns",
+     "wikimedia", "xboxdns", "comss", "yandex", "geohide", "msk-ix", "нсди"],
 ))
-# Имена серверов, чей /24 уже целиком в белом списке, тоже доверим
-for _srv in config.DNS_AVAILABILITY_SERVERS:
-    _nm = _srv[1].lower().split(" #")[0]
-    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", _srv[0]) \
-            and _ip_net24(_srv[0]) in _KNOWN_RESOLVER_NETS:
-        _KNOWN_RESOLVER_NAME_TOKENS.add(_nm)
 
 
-def _known_resolver(eip: str, name: str = "") -> bool:
-    """Выходной резолвер — известный публичный DNS.
-
-    По IP (точный /24 или широкий anycast-префикс) либо по имени сервера
-    из конфига (подстрока, например "Google").
-    """
-    if name and any(tok in name.lower() for tok in _KNOWN_RESOLVER_NAME_TOKENS):
-        return True
-    parts = eip.split(".")
-    if len(parts) != 4:
-        return False
-    return (".".join(parts[:3]) in _KNOWN_RESOLVER_NETS
-            or ".".join(parts[:2]) in _KNOWN_RESOLVER_SPANS)
+def _known_resolver(name: str) -> bool:
+    """Выходной резолвер — известный публичный DNS по имени сервера из конфига."""
+    return bool(name) and any(tok in name.lower() for tok in _KNOWN_RESOLVER_NAME_TOKENS)
 
 
 # ── Ручной порядок провайдеров в DNS-тесте ──────────────────────────────────
@@ -1266,7 +1216,7 @@ async def check_dns_availability() -> dict:
                 lines.append(f"[magenta]{a}→FakeIP[/magenta]")
             elif _is_domestic(pname):
                 lines.append(f"{a}→{_org_label(eip)}")
-            elif _known_resolver(eip, pname):
+            elif _known_resolver(pname):
                 lines.append(f"[green]{a}→{_org_label(eip)}[/green]")
             elif _is_hijacked(eip):
                 lines.append(f"[red]{a}→{_org_label(eip)}[/red]")
@@ -1434,7 +1384,7 @@ async def check_dns_availability() -> dict:
         for ha in haddrs:
             heip = egress.get(("egress", ha, hname))
             if heip and heip != "0.0.0.0" and _is_hijacked(heip) \
-                    and not _known_resolver(heip, hname) and not _is_domestic(hname):
+                    and not _known_resolver(hname) and not _is_domestic(hname):
                 hi_brand_set.add(_brand(hname))
     hijacked_brands = sorted(hi_brand_set)
     console.print()
