@@ -8,6 +8,7 @@ import time
 import traceback
 import warnings
 import httpx
+import ipaddress
 import signal
 import argparse
 
@@ -30,6 +31,8 @@ from core.dns_scanner import (
     check_dns_availability,
     collect_stub_ips_silently,
     probe_resolver_ip,
+    _build_dns_query,
+    _parse_txt_response,
 )
 from utils.network import ipv6_supported
 from utils.files import load_domains, load_tcp_targets, load_whitelist_sni, get_base_dir
@@ -51,80 +54,122 @@ def _flag_emoji(cc: str) -> str:
     return ""
 
 
-async def _fetch_public_ip(timeout: float = 5.0) -> tuple:
-    """Внешний IPv4 + TTLB (мс). Ошибка → поднимает исключение."""
-    t0 = time.perf_counter()
+async def _fetch_public_ips(timeout: float = 3.5) -> dict:
+    """Внешние IPv4 и IPv6 адреса + TTLB (мс).
+    Возвращает {'v4': (ip4, ttlb4), 'v6': (ip6, ttlb6)}.
+    """
+    v4_urls = getattr(config, "IP4_LOOKUP_URLS",
+                      getattr(config, "IP_LOOKUP_URLS",
+                              ("https://api4.ipify.org", "https://api.ipify.org",
+                               "https://v4.ident.me", "https://ipv4.icanhazip.com")))
+    v6_urls = getattr(config, "IP6_LOOKUP_URLS",
+                      ("https://api64.ipify.org", "https://icanhazip.com",
+                       "https://ifconfig.me/ip", "https://v6.ident.me"))
     proxy_url = getattr(config, "PROXY_URL", None)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
-                                 trust_env=False, proxy=proxy_url) as client:
-        ip = None
-        for url in getattr(config, "IP_LOOKUP_URLS",
-                           ("https://api.ipify.org", "https://icanhazip.com",
-                            "https://ifconfig.me/ip")):
-            try:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    cand = resp.text.strip()
-                    if cand.count(".") == 3 and all(p.isdigit() for p in cand.split(".")):
-                        ip = cand
-                        break
-            except Exception:
-                continue
-    if not ip:
-        raise RuntimeError("внешний IP не определён")
-    return ip, int((time.perf_counter() - t0) * 1000)
+
+    async def _lookup_first(urls, expected_ver: int) -> tuple:
+        t0 = time.perf_counter()
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
+                                     trust_env=False, proxy=proxy_url) as client:
+            async def _check_one(u: str) -> tuple:
+                try:
+                    resp = await client.get(u)
+                    if resp.status_code == 200:
+                        cand = resp.text.strip()
+                        ip_obj = ipaddress.ip_address(cand)
+                        if ip_obj.version == expected_ver and not ip_obj.is_private:
+                            return str(ip_obj), int((time.perf_counter() - t0) * 1000)
+                except Exception:
+                    pass
+                return None, None
+
+            tasks = [asyncio.create_task(_check_one(u)) for u in urls]
+            for fut in asyncio.as_completed(tasks):
+                ip, ttlb = await fut
+                if ip:
+                    for t in tasks:
+                        if not t.done():
+                            t.cancel()
+                    return ip, ttlb
+        return None, None
+
+    (v4_res, v6_res) = await asyncio.gather(_lookup_first(v4_urls, 4), _lookup_first(v6_urls, 6))
+    return {"v4": v4_res, "v6": v6_res}
 
 
 async def _fetch_ip_info(ip: str, timeout: float = 5.0) -> dict:
-    """Team Cymru через DoH: {asn, subnet, cc, org}. Ошибка → {}."""
+    """Team Cymru через DoH (RFC 8484 POST, IPv4 и IPv6): {asn, subnet, cc, org}. Ошибка → {}."""
     from utils.network import pin_host
     info = {}
-    proxy_url = getattr(config, "PROXY_URL", None)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
-                                 trust_env=False, proxy=proxy_url) as client:
+    if not ip or ip in ("timeout", "…"):
+        return info
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+    except ValueError:
+        return info
+
+    if ip_obj.version == 6:
+        rev = ".".join(reversed(ip_obj.exploded.replace(":", "")))
+        q_name = f"{rev}.origin6.asn.cymru.com"
+    else:
         rev = ".".join(reversed(ip.split(".")))
-        for url, ehost in [await pin_host(u) for u in _CYMRU_DOH_URLS]:
+        q_name = f"{rev}.origin.asn.cymru.com"
+
+    proxy_url = getattr(config, "PROXY_URL", None)
+    tq = _build_dns_query(q_name, qtype=16)
+    headers = {"Content-Type": "application/dns-message", "Accept": "application/dns-message"}
+
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
+                                 trust_env=False, proxy=proxy_url, http2=True) as client:
+        doh_urls = getattr(config, "CYMRU_DOH_SERVERS", _CYMRU_DOH_URLS)
+        for url in doh_urls:
+            url_pin, ehost = await pin_host(url)
+            h = dict(headers)
+            if ehost:
+                h["Host"] = ehost
+            ext = {"sni_hostname": ehost} if ehost else None
             try:
-                resp = await client.get(
-                    url, params={"name": f"{rev}.origin.asn.cymru.com", "type": "TXT"},
-                    headers={"Host": ehost} if ehost else None,
-                    extensions={"sni_hostname": ehost} if ehost else None,
-                )
-                answers = resp.json().get("Answer", []) if resp.status_code == 200 else []
-                if answers:
-                    fields = [p.strip() for p in answers[0]["data"].strip('"').split("|")]
-                    # ASN | IP | BGP Prefix | CC | Registry | Allocated | AS Name
-                    # Префикс может отсутствовать — ищем поля по типу, а не позиции;
-                    # несколько ASN приходят через пробел — берём первый (основной)
-                    info["asn"] = fields[0].split()[0]
-                    for f in fields[1:]:
-                        if "/" in f and f[0].isdigit():
-                            info["subnet"] = f
-                        elif re.fullmatch(r"[A-Z]{2}", f):
-                            info["cc"] = f
-                    info["org"] = re.sub(r"\s+", " ", fields[-1]).strip() if fields[-1] else ""
-                    break
+                resp = await client.post(url_pin, content=tq, headers=h, extensions=ext)
+                if resp.status_code != 200:
+                    continue
+                txt = _parse_txt_response(resp.content)
+                if not txt:
+                    continue
+                fields = [p.strip() for p in txt.strip('"').split("|")]
+                info["asn"] = fields[0].split()[0]
+                for f in fields[1:]:
+                    if "/" in f:
+                        info["subnet"] = f
+                    elif re.fullmatch(r"[A-Z]{2}", f):
+                        info["cc"] = f
+                info["org"] = re.sub(r"\s+", " ", fields[-1]).strip() if fields[-1] else ""
+                break
             except Exception:
                 continue
 
-        # Если в origin-ответе нет имени AS (последнее поле — дата выделения), берём из AS{asn}.asn.cymru.com
-        if info.get("asn") and re.fullmatch(r"\d{4}-\d{2}-\d{2}", info.get("org", "") or ""):
-            for url, ehost in [await pin_host(u) for u in _CYMRU_DOH_URLS]:
+        if info.get("asn"):
+            as_q = _build_dns_query(f"AS{info['asn']}.asn.cymru.com", qtype=16)
+            for url in doh_urls:
+                url_pin, ehost = await pin_host(url)
+                h = dict(headers)
+                if ehost:
+                    h["Host"] = ehost
+                ext = {"sni_hostname": ehost} if ehost else None
                 try:
-                    resp = await client.get(
-                        url, params={"name": f"AS{info['asn']}.asn.cymru.com", "type": "TXT"},
-                        headers={"Host": ehost} if ehost else None,
-                        extensions={"sni_hostname": ehost} if ehost else None,
-                    )
-                    answers = resp.json().get("Answer", []) if resp.status_code == 200 else []
-                    if answers:
-                        fields = [p.strip() for p in answers[0]["data"].strip('"').split("|")]
-                        if len(fields) >= 2:
-                            info["org"] = re.sub(r"\s+", " ", fields[-1]).strip() or info.get("org", "")
-                        break
+                    resp = await client.post(url_pin, content=as_q, headers=h, extensions=ext)
+                    if resp.status_code != 200:
+                        continue
+                    txt = _parse_txt_response(resp.content)
+                    if not txt:
+                        continue
+                    fields = [p.strip() for p in txt.strip('"').split("|")]
+                    name = fields[-1] if len(fields) >= 3 else fields[0]
+                    org_name = re.sub(r"\s+", " ", name).strip()
+                    if org_name and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", org_name):
+                        info["org"] = org_name
+                    break
                 except Exception:
                     continue
-    # Дата выделения вместо имени AS (имя так и не пришло) — не показываем
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", info.get("org", "") or ""):
         info["org"] = ""
     return info
@@ -186,33 +231,82 @@ def _is_tun_name(name: str) -> bool:
 def _net_info_lines(net_info: dict, sys_dns: dict, bypass: list) -> list:
     """Строки блока "Информация о сети и системе" (с rich-разметкой)."""
     lines = []
-    ip   = net_info.get("ip") or "…"
-    sub  = net_info.get("subnet") or "…"
-    ttlb = net_info.get("ttlb_ms")
-    if ttlb is None:
-        ttlb_s = "…"
-    elif ttlb == "timeout":
-        ttlb_s = "[red]timeout[/red]"
-    elif isinstance(ttlb, int):
-        ttlb_s = f"[dim]{ttlb} ms[/dim]"
-    else:
-        ttlb_s = str(ttlb)
 
     def _v(v: str) -> str:
         return f"[red]{v}[/red]" if v == "timeout" else f"[cyan]{v}[/cyan]"
 
-    lines.append(f"IP: {_v(ip)}  Subnet: {_v(sub)}  TTLB: {ttlb_s}")
-    org = net_info.get("org") or "…"
-    asn = net_info.get("asn") or ""
-    org_s = f"{org} (AS{asn})" if asn else org
-    lines.append(f"Org: {_v(org_s)}")
-    cc = net_info.get("cc") or "…"
-    loc = f"{_flag_emoji(cc)} {cc}".strip()
-    lines.append(f"Location: {_v(loc)}")
+    def _ttlb_str(ttlb) -> str:
+        if ttlb is None:
+            return "…"
+        if ttlb == "timeout":
+            return "[red]timeout[/red]"
+        if isinstance(ttlb, int):
+            return f"[dim]{ttlb} ms[/dim]"
+        return str(ttlb)
+
+    v4_info = net_info.get("v4")
+    v6_info = net_info.get("v6")
+
+    # Совместимость со старым плоским словарём {"ip": ..., "subnet": ...}
+    if v4_info is None and v6_info is None and "ip" in net_info:
+        old_ip = net_info.get("ip")
+        if old_ip and ":" in old_ip:
+            v6_info = net_info
+        else:
+            v4_info = net_info
+
+    if not net_info:
+        lines.append("IPv4: [cyan]…[/cyan]  Subnet: [cyan]…[/cyan]  TTLB: …")
+        lines.append("IPv6: [cyan]…[/cyan]")
+        lines.append("Org: [cyan]…[/cyan]")
+        lines.append("Location: [cyan]…[/cyan]")
+    else:
+        if v4_info and v4_info.get("ip"):
+            ip4 = v4_info.get("ip") or "…"
+            sub4 = v4_info.get("subnet") or "…"
+            ttlb4_s = _ttlb_str(v4_info.get("ttlb_ms"))
+            lines.append(f"IPv4: {_v(ip4)}  Subnet: {_v(sub4)}  TTLB: {ttlb4_s}")
+        else:
+            lines.append("IPv4: [dim]недоступен[/dim]")
+
+        if v6_info and v6_info.get("ip"):
+            ip6 = v6_info.get("ip") or "…"
+            sub6 = v6_info.get("subnet") or "…"
+            ttlb6_s = _ttlb_str(v6_info.get("ttlb_ms"))
+            lines.append(f"IPv6: {_v(ip6)}")
+            lines.append(f"      Subnet: {_v(sub6)}  TTLB: {ttlb6_s}")
+        else:
+            lines.append("IPv6: [dim]недоступен[/dim]")
+
+        v4_org = (v4_info or {}).get("org") or ""
+        v4_asn = (v4_info or {}).get("asn") or ""
+        v4_cc  = (v4_info or {}).get("cc") or ""
+
+        v6_org = (v6_info or {}).get("org") or ""
+        v6_asn = (v6_info or {}).get("asn") or ""
+        v6_cc  = (v6_info or {}).get("cc") or ""
+
+        if v4_org and v6_org and v4_org != v6_org:
+            s4 = f"{v4_org} (AS{v4_asn})" if v4_asn else v4_org
+            s6 = f"{v6_org} (AS{v6_asn})" if v6_asn else v6_org
+            org_s = f"{s4} [dim](v4)[/dim], {s6} [dim](v6)[/dim]"
+        else:
+            main_org = v4_org or v6_org or "…"
+            main_asn = v4_asn or v6_asn or ""
+            org_s = f"{main_org} (AS{main_asn})" if main_asn else main_org
+
+        lines.append(f"Org: {_v(org_s)}")
+
+        if v4_cc and v6_cc and v4_cc != v6_cc:
+            loc = f"{_flag_emoji(v4_cc)} {v4_cc} [dim](v4)[/dim], {_flag_emoji(v6_cc)} {v6_cc} [dim](v6)[/dim]"
+        else:
+            main_cc = v4_cc or v6_cc or "…"
+            loc = f"{_flag_emoji(main_cc)} {main_cc}".strip()
+        lines.append(f"Location: {_v(loc)}")
+
     os_line = (sys_dns or {}).get("os")
     if os_line:
         lines.append(f"ОС: {_v(os_line)}")
-
     active = (sys_dns or {}).get("active")
     if active:
         a_name = (sys_dns or {}).get("active_name")
@@ -673,23 +767,43 @@ async def main():
 
             _publish({})          # 1) скелет: все поля "…"
             try:
-                ip, ttlb = await _fetch_public_ip()
+                ips_data = await _fetch_public_ips()
             except Exception:
-                ip, ttlb = None, None
-            if not ip:
-                _publish({"ip": "timeout", "ttlb_ms": "timeout",
-                          "subnet": "timeout", "org": "timeout", "cc": "timeout"})
+                ips_data = {"v4": (None, None), "v6": (None, None)}
+
+            v4_ip, v4_ttlb = ips_data.get("v4", (None, None))
+            v6_ip, v6_ttlb = ips_data.get("v6", (None, None))
+
+            if not v4_ip and not v6_ip:
+                _publish({"v4": {"ip": "timeout", "ttlb_ms": "timeout"},
+                          "v6": {"ip": "timeout", "ttlb_ms": "timeout"}})
                 return
-            _publish({"ip": ip, "ttlb_ms": ttlb})   # 2) внешний IP пришёл
-            try:
-                extra = await _fetch_ip_info(ip)
-            except Exception:
-                extra = {}
-            info = {"ip": ip, "ttlb_ms": ttlb}
-            info.update({k: (v if v is not None else "timeout") for k, v in extra.items()})
-            for k in ("subnet", "org", "cc"):
-                info.setdefault(k, "timeout")
-            _publish(info)         # 3) Cymru: org/asn/subnet/cc
+
+            info = {
+                "v4": {"ip": v4_ip, "ttlb_ms": v4_ttlb} if v4_ip else None,
+                "v6": {"ip": v6_ip, "ttlb_ms": v6_ttlb} if v6_ip else None,
+            }
+            _publish(info)        # 2) внешние IP пришли
+
+            # 3) Cymru для найденных IP (параллельно)
+            v4_task = _fetch_ip_info(v4_ip) if v4_ip else None
+            v6_task = _fetch_ip_info(v6_ip) if v6_ip else None
+
+            v4_extra, v6_extra = await asyncio.gather(
+                v4_task if v4_task else asyncio.sleep(0),
+                v6_task if v6_task else asyncio.sleep(0)
+            )
+
+            if info.get("v4") and isinstance(v4_extra, dict):
+                info["v4"].update({k: (v if v is not None else "timeout") for k, v in v4_extra.items()})
+                for k in ("subnet", "org", "cc"):
+                    info["v4"].setdefault(k, "timeout")
+            if info.get("v6") and isinstance(v6_extra, dict):
+                info["v6"].update({k: (v if v is not None else "timeout") for k, v in v6_extra.items()})
+                for k in ("subnet", "org", "cc"):
+                    info["v6"].setdefault(k, "timeout")
+
+            _publish(info)        # 3) Cymru: org/asn/subnet/cc готовы
 
             # 4) upstream роутера: активный DNS == шлюз → роутер-релей (dnsmasq и т.п.)
             gw = dns_info.get("gateway")
@@ -827,7 +941,7 @@ async def main():
             if net_task is None:   # лениво: сбор только по выбору теста 0
                 net_task = asyncio.create_task(_net_updater())
             try:
-                await asyncio.wait_for(asyncio.shield(net_task), timeout=6.0)
+                await asyncio.wait_for(asyncio.shield(net_task), timeout=10.0)
             except Exception:
                 pass
             net_text = header.get("net_text")

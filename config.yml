@@ -97,8 +97,8 @@ DNS_AVAILABILITY_SERVERS:
   # ── UDP ──────────────────────────────────────────────────────────────────────
   - ["94.140.14.14", "AdGuard", "udp"]
   - ["94.140.15.15", "AdGuard", "udp"]
-  - ["94.140.14.15", "AdGuard (family)", "udp"]
-  - ["94.140.14.140", "AdGuard (unfiltr)", "udp"]
+  - ["94.140.14.15", "AdGuard (F)", "udp"]
+  - ["94.140.14.140", "AdGuard (UN)", "udp"]
   - ["223.5.5.5", "Alibaba", "udp"]
   - ["223.6.6.6", "Alibaba", "udp"]
   - ["185.228.168.9", "CleanBrowsing", "udp"]
@@ -123,9 +123,9 @@ DNS_AVAILABILITY_SERVERS:
   - ["208.67.222.222", "OpenDNS", "udp"]
   - ["9.9.9.9", "Quad9", "udp"]
   - ["149.112.112.112", "Quad9", "udp"]
-  - ["9.9.9.10", "Quad9 (unsecured)", "udp"]
-  - ["9.9.9.11", "Quad9 (secured)", "udp"]
-  - ["9.9.9.12", "Quad9 (unsecured2)", "udp"]
+  - ["9.9.9.10", "Quad9 (UN)", "udp"]
+  - ["9.9.9.11", "Quad9 (S)", "udp"]
+  - ["9.9.9.12", "Quad9 (UN2)", "udp"]
   - ["111.88.96.55", "XboxDNS (RU)", "udp"]
   - ["77.88.8.1", "Yandex", "udp"]
   - ["77.88.8.8", "Yandex", "udp"]
@@ -138,9 +138,9 @@ DNS_AVAILABILITY_SERVERS:
   #
   # ── DoH Wire (RFC 8484, POST/GET application/dns-message) ───────────────────
   - ["https://dns.adguard-dns.com/dns-query",             "AdGuard",         "doh_wire"]
-  - ["https://family.adguard-dns.com/dns-query",          "AdGuard (family)", "doh_wire"]
-  - ["https://dns.adguard.com/dns-query",                 "AdGuard (legacy)", "doh_wire"]
-  - ["https://unfiltered.adguard-dns.com/dns-query",      "AdGuard (unfiltr)", "doh_wire"]
+  - ["https://family.adguard-dns.com/dns-query",          "AdGuard (F)", "doh_wire"]
+  - ["https://dns.adguard.com/dns-query",                 "AdGuard (L)", "doh_wire"]
+  - ["https://unfiltered.adguard-dns.com/dns-query",      "AdGuard (UN)", "doh_wire"]
   - ["https://dns.alidns.com/dns-query",                  "Alibaba", "doh_wire"]
   - ["https://doh.cleanbrowsing.org/doh/security-filter", "CleanBrowsing",   "doh_wire"]
   - ["https://cloudflare-dns.com/dns-query",              "Cloudflare",      "doh_wire"]
@@ -165,9 +165,9 @@ DNS_AVAILABILITY_SERVERS:
   - ["https://doh.opendns.com/dns-query",                 "OpenDNS",         "doh_wire"]
   - ["https://dns.opendns.com/dns-query",                 "OpenDNS",    "doh_wire"]
   - ["https://dns.quad9.net/dns-query",                   "Quad9",           "doh_wire"]
-  - ["https://dns10.quad9.net/dns-query",                 "Quad9 (unsecured)", "doh_wire"]
-  - ["https://dns11.quad9.net/dns-query",                 "Quad9 (secured)", "doh_wire"]
-  - ["https://dns12.quad9.net/dns-query",                 "Quad9 (unsecured2)", "doh_wire"]
+  - ["https://dns10.quad9.net/dns-query",                 "Quad9 (UN)", "doh_wire"]
+  - ["https://dns11.quad9.net/dns-query",                 "Quad9 (S)", "doh_wire"]
+  - ["https://dns12.quad9.net/dns-query",                 "Quad9 (UN2)", "doh_wire"]
   - ["https://anycast.uncensoreddns.org/dns-query",       "UncensoredDNS", "doh_wire"]
   - ["https://wikimedia-dns.org/dns-query",               "Wikimedia", "doh_wire"]
   - ["https://xbox-dns.ru/dns-query",                   "XboxDNS (RU)", "doh_wire"]
@@ -180,9 +180,9 @@ DNS_AVAILABILITY_SERVERS:
   #
   # ── DoT (RFC 7858, TLS:853, wire-запросы с length-prefix) ──────────────────
   - ["dns.adguard-dns.com",                   "AdGuard",              "dot"]
-  - ["family.adguard-dns.com",                "AdGuard (family)",     "dot"]
-  - ["unfiltered.adguard-dns.com",            "AdGuard (unfiltr)", "dot"]
-  - ["dns.adguard.com",                       "AdGuard (legacy)",     "dot"]
+  - ["family.adguard-dns.com",                "AdGuard (F)",     "dot"]
+  - ["unfiltered.adguard-dns.com",            "AdGuard (UN)", "dot"]
+  - ["dns.adguard.com",                       "AdGuard (L)",     "dot"]
   - ["dns.alidns.com",                        "Alibaba",              "dot"]
   - ["security-filter-dns.cleanbrowsing.org", "CleanBrowsing",        "dot"]
   - ["1.1.1.1",                               "Cloudflare IP",        "dot"]
@@ -203,9 +203,9 @@ DNS_AVAILABILITY_SERVERS:
   - ["dns.nextdns.io",                        "NextDNS",              "dot"]
   - ["dns.opendns.com",                       "OpenDNS",              "dot"]
   - ["dns.quad9.net",                         "Quad9",                "dot"]
-  - ["dns10.quad9.net",                       "Quad9 (unsecured)",    "dot"]
-  - ["dns11.quad9.net",                       "Quad9 (secured)",      "dot"]
-  - ["dns12.quad9.net",                       "Quad9 (unsecured2)",    "dot"]
+  - ["dns10.quad9.net",                       "Quad9 (UN)",    "dot"]
+  - ["dns11.quad9.net",                       "Quad9 (S)",      "dot"]
+  - ["dns12.quad9.net",                       "Quad9 (UN2)",    "dot"]
   - ["unicast.censurfridns.dk",               "UncensoredDNS",        "dot"]
   - ["wikimedia-dns.org",                     "Wikimedia",            "dot"]
   - ["xbox-dns.ru",                           "XboxDNS (RU)",         "dot"]
@@ -215,12 +215,26 @@ DNS_AVAILABILITY_SERVERS:
 
 # === Дополнительные настройки (меняются без правки кода) ===
 
-# Сервисы определения внешнего IP (тест 0)
+# Сервисы определения внешнего IPv4 (тест 0)
+IP4_LOOKUP_URLS:
+  - "https://api4.ipify.org"
+  - "https://api.ipify.org"
+  - "https://v4.ident.me"
+  - "https://ipv4.icanhazip.com"
+
+# Сервисы определения внешнего IPv6 (тест 0)
+IP6_LOOKUP_URLS:
+  - "https://api64.ipify.org"
+  - "https://icanhazip.com"
+  - "https://ifconfig.me/ip"
+  - "https://v6.ident.me"
+
+# Совместимость: общий список URL
 IP_LOOKUP_URLS:
+  - "https://api4.ipify.org"
   - "https://api.ipify.org"
   - "https://icanhazip.com"
   - "https://ifconfig.me/ip"
-
 # DoH-эндпоинты Team Cymru (определение ASN/провайдера по IP, RFC 8484 POST)
 CYMRU_DOH_SERVERS:
   - "https://dns.google/dns-query"

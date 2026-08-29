@@ -9,9 +9,9 @@ import glob
 
 from utils import config
 
-_TCPIP_BASE = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces"
-_NET_CLASS  = r"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}"
-
+_TCPIP_BASE  = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces"
+_TCPIP6_BASE = r"SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces"
+_NET_CLASS   = r"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}"
 
 def _live_adapter_guids() -> set:
     """GUID'ы реально существующих адаптеров (реестр Control\\Network), нижний регистр."""
@@ -127,15 +127,21 @@ def _read_dns_entries(guid: str) -> List[tuple]:
     entries: List[tuple] = []
     try:
         import winreg
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _TCPIP_BASE + "\\" + guid) as k:
-            for val, src in (("NameServer", "static"), ("DhcpNameServer", "dhcp")):
-                try:
-                    raw = winreg.QueryValueEx(k, val)[0]
-                except OSError:
-                    continue
-                for s in re.split(r"[,\s]+", str(raw)):
-                    if s and not any(s == e[0] for e in entries):
-                        entries.append((s, src))
+        for base in (_TCPIP_BASE, _TCPIP6_BASE):
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base + "\\" + guid) as k:
+                    for val, src in (("NameServer", "static"), ("DhcpNameServer", "dhcp"),
+                                     ("Dhcpv6DNSServers", "dhcp"), ("ProfileNameServer", "dhcp")):
+                        try:
+                            raw = winreg.QueryValueEx(k, val)[0]
+                        except OSError:
+                            continue
+                        for s in re.split(r"[,\s]+", str(raw)):
+                            s = s.strip()
+                            if s and not any(s == e[0] for e in entries):
+                                entries.append((s, src))
+            except OSError:
+                continue
     except OSError:
         pass
     return entries
