@@ -29,21 +29,28 @@ def _ip_net24(ip: str) -> str:
     return ".".join(parts[:3]) if len(parts) == 4 else ip
 
 
-_KNOWN_RESOLVER_NETS: set = {
-    # Точные /24 (3 октета) из конфига ниже + отдельные известные сети
-    "91.239.100",                                                        # UncensoredDNS
-    "64.6.64", "64.6.65",                                                # Verisign
-    "156.154.70", "156.154.71",                                          # Neustar
-    "114.114.114",                                                       # 114DNS
-    *(f"109.200.{o}" for o in range(192, 224)),                          # i3D.net (AS49544) — anycast Quad9
-}
+# Белый список известных публичных резолверов: выход на них не считается
+# перехватом. Переопределяется в config.yml (DNS_KNOWN_RESOLVER_NETS/_SPANS).
+_KNOWN_RESOLVER_NETS: set = set(getattr(
+    config, "DNS_KNOWN_RESOLVER_NETS",
+    [   # точные /24 (3 октета)
+        "91.239.100",                                                # UncensoredDNS
+        "64.6.64", "64.6.65",                                        # Verisign
+        "156.154.70", "156.154.71",                                  # Neustar
+        "114.114.114",                                               # 114DNS
+        *(f"109.200.{o}" for o in range(192, 224)),                  # i3D.net (AS49544) — anycast Quad9
+    ],
+))
 # Широкие префиксы (2 октета) anycast-пулов крупных резолверов:
 # whoami.akamai.net отвечает адресом из всего anycast, а не только .0/24
-_KNOWN_RESOLVER_SPANS: set = {
-    "74.125", "172.217", "172.253", "142.250", "216.58",   # Google
-    "104.16", "172.64", "162.158",                         # Cloudflare
-    "37.140",                                              # Yandex
-}
+_KNOWN_RESOLVER_SPANS: set = set(getattr(
+    config, "DNS_KNOWN_RESOLVER_SPANS",
+    [
+        "74.125", "172.217", "172.253", "142.250", "216.58",   # Google
+        "104.16", "172.64", "162.158",                         # Cloudflare
+        "37.140",                                              # Yandex
+    ],
+))
 for _srv in config.DNS_AVAILABILITY_SERVERS:
     _a = _srv[0]
     if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", _a):
