@@ -366,7 +366,7 @@ def _render_banner(badge: str = "Проверка обновлений...") -> t
 def _version_badge(latest: Optional[str]) -> str:
     """Бейдж статуса обновлений для баннера."""
     if not latest:
-        return "✖ Не удалось проверить обновления"
+        return "× Не удалось проверить обновления"
     if is_newer(latest, CURRENT_VERSION):
         return f"↑ Доступна новая версия {latest}"
     return "✓ Актуальная версия"

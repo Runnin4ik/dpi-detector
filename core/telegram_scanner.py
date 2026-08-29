@@ -45,7 +45,7 @@ STALL_TIMEOUT   = getattr(config, "TELEGRAM_STALL_TIMEOUT", 10.0)   # сек б�
 TOTAL_TIMEOUT   = getattr(config, "TELEGRAM_TOTAL_TIMEOUT", 60.0)   # общий таймаут
 DC_PING_TIMEOUT = getattr(config, "TELEGRAM_DC_PING_TIMEOUT", 5.0)
 
-_SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+_SPIN = ["|", "/", "-", "\\"]
 
 # ─── Форматирование ──────────────────────────────────────────────────────────
 def _fmt_speed(bps: float) -> str:
@@ -136,7 +136,7 @@ async def _check_dc(display: LiveDisplay) -> List[dict]:
         if d["reachable"]:
             parts.append(f"[green]{d['label']}[/green][dim]{rtt_s}[/dim]")
         else:
-            parts.append(f"[red]{d['label']}✗[/red]")
+            parts.append(f"[red]{d['label']}×[/red]")
 
     if ok == total:
         st = f"[green]ОК {ok}/{total}[/green]"

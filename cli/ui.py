@@ -107,7 +107,7 @@ _MENU_BODY = (
 # Строка подсказки меню — эталон ширины всех обводок (баннер, инфо, меню)
 _MENU_HINT = (
     "  [bold white on dark_cyan] ↑↓ [/] строка │ "
-    "[bold white on dark_cyan] ⇄ [/] изменить │ "
+    "[bold white on dark_cyan] ←→ [/] изменить │ "
     "[bold white on dark_cyan] 0-6 [/] тесты │ "
     "[bold white on dark_green] Enter [/] старт │ "
     "[bold white on dark_red] Q [/] выход"
@@ -282,23 +282,23 @@ async def _ask_selection_interactive(header_state: dict = None,
         from rich import box
         if v6_ok:
             ip_opts = (
-                f"{'◉' if ipv == 'ipv4' else '○'} IPv4   "
-                f"{'◉' if ipv == 'ipv6' else '○'} IPv6"
+                f"{'●' if ipv == 'ipv4' else '○'} IPv4   "
+                f"{'●' if ipv == 'ipv6' else '○'} IPv6"
             )
         else:
-            ip_opts = "◉ IPv4   [dim]○ IPv6 (недоступен)[/dim]"
+            ip_opts = "● IPv4   [dim]○ IPv6 (недоступен)[/dim]"
         conc_opts = "   ".join(
-            f"{'◉' if p == conc else '○'} {p}" for p in CONCURRENCY_PRESETS
+            f"{'●' if p == conc else '○'} {p}" for p in CONCURRENCY_PRESETS
         )
         param_lines = [
             "",
-            f"  {'▶' if cursor == 0 else ' '} {'IP-версия':<{LABEL_W}} {ip_opts}",
-            f"  {'▶' if cursor == 1 else ' '} {'Параллельность':<{LABEL_W}} {conc_opts}",
+            f"  {'►' if cursor == 0 else ' '} {'IP-версия':<{LABEL_W}} {ip_opts}",
+            f"  {'►' if cursor == 1 else ' '} {'Параллельность':<{LABEL_W}} {conc_opts}",
         ]
         test_lines = []
         for i, (d, label) in enumerate(_MENU_OPTIONS):
-            box_mark = "\\[x]" if d in tests else "[ ]"   # \[x] — литерал, не rich-тег
-            test_lines.append(f"  {'▶' if cursor == i + 2 else ' '} {box_mark} {d}. {label}")
+            box_mark = "\\[√]" if d in tests else "[ ]"   # \[√] — галочка (литерал, не rich-тег)
+            test_lines.append(f"  {'►' if cursor == i + 2 else ' '} {box_mark} {d}. {label}")
         from rich.cells import cell_len
         from rich.text import Text
         # Разделитель — между параметрами и списком тестов, по ширине контента

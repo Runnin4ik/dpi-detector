@@ -548,7 +548,7 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
             else:
                 console.print(
                     f"  [cyan]{provider}[/cyan] [dim]{asn_str}[/dim]  "
-                    f"[red]✗ SNI не найден[/red] [dim](все заблокированы)[/dim]"
+                    f"[red]× SNI не найден[/red] [dim](все заблокированы)[/dim]"
                 )
 
         return bool(found)
