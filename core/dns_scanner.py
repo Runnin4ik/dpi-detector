@@ -1273,6 +1273,18 @@ async def check_dns_availability() -> dict:
 
     truth_ips = await _fetch_truth()
 
+    # Fallback для колонки "Подмена": если глобальная правда из чистых DoH
+    # (DNS_TRUTH_DOH_SERVERS) не собралась, строим её из ответов любого живого
+    # DoH-wire-резолвера из таблицы. Иначе судить не с чем и колонка пустая.
+    if not truth_ips:
+        for (kind, _addr, _name, d), parsed in doh_answers.items():
+            if kind != "doh_wire":
+                continue
+            if isinstance(parsed, list) and parsed:
+                real = [ip for ip in parsed if get_fake_ip_type(ip) != "fakeip"]
+                if real:
+                    truth_ips.setdefault(d, set()).update(real)
+
     def _udp_server_available(a: str, name: str) -> bool:
         dm = raw.get(("udp", a, name), {})
         return any(dm.get(d) is not None for d in allowed)
