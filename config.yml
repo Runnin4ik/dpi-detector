@@ -180,8 +180,6 @@ DNS_AVAILABILITY_SERVERS:
   - ["1.0.0.1",                               "Cloudflare IP 2",        "dot"]
   - ["one.one.one.one",                       "Cloudflare one",       "dot"]
   - ["1dot1dot1dot1.cloudflare-dns.com",      "Cloudflare dot",       "dot"]
-  - ["cloudflare-dns.com",                    "Cloudflare",           "dot"]
-  - ["dns.cloudflare.com",                    "Cloudflare dns",     "dot"]
   - ["security.cloudflare-dns.com",           "Cloudflare (Security)","dot"]
   - ["dns.comss.one",                         "Comss.one",            "dot"]
   - ["p0.freedns.controld.com",               "ControlD",             "dot"]
