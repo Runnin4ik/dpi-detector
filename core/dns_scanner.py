@@ -35,8 +35,8 @@ _KNOWN_RESOLVER_NAME_TOKENS: set = set(getattr(
      "wikimedia", "xboxdns", "comss", "yandex", "geohide", "msk-ix", "нсди",
      # Реальные org-сети резолверов (после "→" в таблице): не перехват,
      # а обычный транзит хостинга/провайдера (RIPN-NS5-RU-MSK, RU-JSCIOT...)
-     "ripn", "cdn77", "vultr", "cdnext", "xtom", "tencent", "misaka",
-     "anexia", "ru-jsciot", "i3d"],
+     "ripn", "cdn77", "as-vultr", "cdnext", "xtom", "tencent-net-ap-cn",
+     "misaka-cis-as", "as-anexia", "ru-jsciot", "i3dnet"],
 ))
 
 
