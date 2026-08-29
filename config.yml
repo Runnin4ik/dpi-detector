@@ -221,12 +221,6 @@ CYMRU_DOH_SERVERS:
   - "https://dns.google/resolve"
   - "https://cloudflare-dns.com/dns-query"
 
-# Эталонные DoH теста 1 — "правда" по запрещённым доменам (сравнение подмены)
-DNS_TRUTH_DOH_SERVERS:
-  - "https://cloudflare-dns.com/dns-query"
-  - "https://dns.google/resolve"
-  - "https://dns.quad9.net/dns-query"
-
 # Конкурентность внутри фаз теста 1
 DNS_UDP_CONCURRENCY: 15    # одновременные UDP-сокеты
 DNS_DOH_CONCURRENCY: 20    # одновременные DoH-запросы

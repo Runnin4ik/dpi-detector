@@ -1219,71 +1219,28 @@ async def check_dns_availability() -> dict:
                 lines.append(f"[red]{a}→{_org_label(eip)}[/red]")
         return "\n".join(lines)
 
-    # ── Глобальная правда по запрещённым доменам (из любого чистого DoH) ───────
-    # Все UDP-ответы сравниваются с ЭТИМ единым набором IP, а не с DoH конкретного
-    # провайдера. Так проверяются и серверы без своего DoH (MSK-IX, НСДИ, dnsforge...).
-    TRUTH_DOH = list(getattr(
-        config, "DNS_TRUTH_DOH_SERVERS",
-        ["https://cloudflare-dns.com/dns-query",
-         "https://dns.google/resolve",
-         "https://dns.quad9.net/dns-query"],
-    ))
-
-    async def _fetch_truth() -> dict[str, set]:
+    # ── Глобальная правда по запрещённым доменам (из любого резолвера) ────────
+    # Все UDP-ответы сравниваются с ЭТИМ единым набором IP. Правда строится из
+    # ответов любого живого DoH-wire/DoT-резолвера из таблицы (криптозаверенные,
+    # реальные IP), а не из внешних DNS_TRUTH_DOH_SERVERS. Это гарантирует, что
+    # колонка "Подмена" всегда судит по ответам хотя бы одного рабочего сервера.
+    def _collect_truth() -> dict[str, set]:
         truth: dict[str, set] = {}
-        if not forbidden:
-            return truth
-        cli_timeout = httpx.Timeout(timeout, connect=timeout, pool=2.0)
-
-        async def _resolve(endpoint: str) -> dict[str, set]:
-            out: dict[str, set] = {}
-            try:
-                url, ehost = await pin_host(endpoint)
-            except Exception:
-                url, ehost = endpoint, ""
-            headers = {"Content-Type": "application/dns-message",
-                       "Accept": "application/dns-message",
-                       "User-Agent": config.USER_AGENT}
-            if ehost:
-                headers["Host"] = ehost
-            ext = {"sni_hostname": ehost} if ehost else None
-            for d in forbidden:
-                try:
-                    q = _build_dns_query(d)
-                    r = await cli.post(url, content=q, headers=headers, extensions=ext)
-                    if r.status_code != 200:
-                        continue
-                    ips = _parse_dns_response(r.content, q[:2])
-                    if isinstance(ips, list):
-                        out[d] = set(ips)
-                except Exception:
-                    continue
-            return out
-
-        try:
-            async with httpx.AsyncClient(timeout=cli_timeout, proxy=proxy_url,
-                                         trust_env=False, http2=True) as cli:
-                results = await asyncio.gather(*[_resolve(e) for e in TRUTH_DOH])
-        except Exception:
-            return truth
-        for r in results:
-            for d, ips in r.items():
-                truth.setdefault(d, set()).update(ips)
-        return truth
-
-    truth_ips = await _fetch_truth()
-
-    # Fallback для колонки "Подмена": если глобальная правда из чистых DoH
-    # (DNS_TRUTH_DOH_SERVERS) не собралась, строим её из ответов любого живого
-    # DoH-wire-резолвера из таблицы. Иначе судить не с чем и колонка пустая.
-    if not truth_ips:
         for (kind, _addr, _name, d), parsed in doh_answers.items():
             if kind != "doh_wire":
                 continue
             if isinstance(parsed, list) and parsed:
                 real = [ip for ip in parsed if get_fake_ip_type(ip) != "fakeip"]
                 if real:
-                    truth_ips.setdefault(d, set()).update(real)
+                    truth.setdefault(d, set()).update(real)
+        for (kind, _addr, _name, d), parsed in dot_answers.items():
+            if isinstance(parsed, list) and parsed:
+                real = [ip for ip in parsed if get_fake_ip_type(ip) != "fakeip"]
+                if real:
+                    truth.setdefault(d, set()).update(real)
+        return truth
+
+    truth_ips = _collect_truth()
 
     def _udp_server_available(a: str, name: str) -> bool:
         dm = raw.get(("udp", a, name), {})
