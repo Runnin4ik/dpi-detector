@@ -302,7 +302,6 @@ BYPASS_TOOLS:
 # org-имя (после "→" в таблице) содержит одну из подстрок ниже (регистр не важен).
 DNS_KNOWN_RESOLVER_NAMES:
   - "google"
-  - "ripn-ns5-ru-msk"
   - "cloudflarenet"
   - "i3dnet"
   - "cdn77"
@@ -315,4 +314,3 @@ DNS_KNOWN_RESOLVER_NAMES:
   - "as-anexia"
   - "ru-jsciot"
   - "yandex"
-  - "ripn-ru-rnd"
