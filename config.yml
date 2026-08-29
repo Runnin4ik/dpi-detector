@@ -221,6 +221,8 @@ CYMRU_DOH_SERVERS:
   - "https://dns.google/dns-query"
   - "https://cloudflare-dns.com/dns-query"
   - "https://common.dot.dns.yandex.net/dns-query"
+  - "https://dns.nextdns.io/dns-query"
+  - "https://dns.opendns.com/dns-query"
 
 # Конкурентность внутри фаз теста 1
 DNS_UDP_CONCURRENCY: 15    # одновременные UDP-сокеты
