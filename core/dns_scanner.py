@@ -27,17 +27,10 @@ from utils.error_classifier import classify_connect_error, classify_read_error
 # Белый список серверов по имени (подстроки, регистр не важен): если заявленный
 # DNS-сервер называется, например, "Google", его выход не считается перехватом.
 # Список вынесен в config.yml (DNS_KNOWN_RESOLVER_NAMES).
-_KNOWN_RESOLVER_NAME_TOKENS: set = set(getattr(
-    config, "DNS_KNOWN_RESOLVER_NAMES",
-    ["google", "cloudflare", "quad9", "adguard", "alibaba", "cleanbrowsing",
-     "controld", "digitale gesellschaft", "dns.sb", "dns4all", "dnsforge",
-     "dnspod", "libredns", "mullvad", "nextdns", "opendns", "uncensoreddns",
-     "wikimedia", "xboxdns", "comss", "yandex", "geohide", "msk-ix", "нсди",
-     # Реальные org-сети резолверов (после "→" в таблице): не перехват,
-     # а обычный транзит хостинга/провайдера (RIPN-NS5-RU-MSK, RU-JSCIOT...)
-     "ripn", "cdn77", "as-vultr", "cdnext", "xtom", "tencent-net-ap-cn",
-     "misaka-cis-as", "as-anexia", "ru-jsciot", "i3dnet"],
-))
+# Белый список резолверов по имени — весь в config.yml (DNS_KNOWN_RESOLVER_NAMES).
+_KNOWN_RESOLVER_NAME_TOKENS: set = set(
+    getattr(config, "DNS_KNOWN_RESOLVER_NAMES", [])
+)
 
 
 def _known_resolver(name: str) -> bool:
