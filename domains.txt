@@ -34,4 +34,4 @@ shikimori.io
 kinopub.online
 vk.ru
 www.google.com
-aws.amazon.com
+workers.dev
