@@ -1192,22 +1192,6 @@ async def check_dns_availability() -> dict:
         return _brand(name).lower() in _DOMESTIC_BRANDS
 
     # ── Ячейки единой таблицы ─────────────────────────────────────────────────
-    def _kind_stats(kind: str, name: str):
-        if kind == "udp":
-            addrs = udp_by_name.get(name, [])
-        elif kind == "dot":
-            addrs = dot_by_name.get(name, [])
-        else:
-            addrs = doh_by_name.get(name, [])
-        vals_all, ok_q, total_q = [], 0, 0
-        for a in addrs:
-            dm = raw.get((kind, a, name), {})
-            vals = [v for v in dm.values() if v is not None]
-            vals_all += vals
-            ok_q += len(vals)
-            total_q += len(dm)
-        return vals_all, ok_q, total_q
-
     def _allowed_vals(a: str, name: str) -> tuple[list, int]:
         """Тайминги по ДОВЕРЕННЫМ доменам для UDP (реальная задержка резолвера),
         заблокированные домены не участвуют — их 3–5мс заглушки занижают мин."""
@@ -1251,15 +1235,21 @@ async def check_dns_availability() -> dict:
                 ratio = f" [dim]{ok_q}/{total_q}[/dim]" if ok_q < total_q else ""
                 lines.append(f"[green]{round(min(vals), 1)}мс[/green]{ratio}")
             return "\n".join(lines)
-        vals_all, ok_q, total_q = _kind_stats(kind, name)
-        if not vals_all:
-            for a in addrs:
+        # DoH Wire: по строке на каждый эндпоинт (как DoT), чтобы при нескольких
+        # DoH одного имени (#1, #2) был виден пинг каждого, а не один агрегат.
+        lines = []
+        for a in addrs:
+            dm = raw.get((kind, a, name), {})
+            vals = [v for v in dm.values() if v is not None]
+            if not vals:
                 reason = fail_reasons.get((kind, a, name))
-                if reason:
-                    return reason
-            return "[red]TIMEOUT[/red]"
-        ratio = f" [dim]{ok_q}/{total_q}[/dim]" if ok_q < total_q else ""
-        return f"[green]{round(min(vals_all), 1)}мс[/green]{ratio}"
+                lines.append(reason if reason else "[red]TIMEOUT[/red]")
+                continue
+            total_q = len(dm)
+            ok_q = len(vals)
+            ratio = f" [dim]{ok_q}/{total_q}[/dim]" if ok_q < total_q else ""
+            lines.append(f"[green]{round(min(vals), 1)}мс[/green]{ratio}")
+        return "\n".join(lines)
 
     def _egress_cell(pname: str) -> str:
         addrs = udp_by_name.get(pname, [])
