@@ -941,7 +941,11 @@ async def main():
             header["net_lines"] = 0
             net_task = asyncio.create_task(_net_updater())
             try:
-                await asyncio.wait_for(asyncio.shield(net_task), timeout=10.0)
+                if sys.stdout.isatty():
+                    with console.status("Получение сетевых данных...", spinner="line", spinner_style="cyan"):
+                        await asyncio.wait_for(asyncio.shield(net_task), timeout=10.0)
+                else:
+                    await asyncio.wait_for(asyncio.shield(net_task), timeout=10.0)
             except Exception:
                 pass
             net_text = header.get("net_text")
