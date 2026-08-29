@@ -216,10 +216,11 @@ IP_LOOKUP_URLS:
   - "https://icanhazip.com"
   - "https://ifconfig.me/ip"
 
-# DoH-эндпоинты Team Cymru (определение ASN/провайдера по IP)
+# DoH-эндпоинты Team Cymru (определение ASN/провайдера по IP, RFC 8484 POST)
 CYMRU_DOH_SERVERS:
-  - "https://dns.google/resolve"
+  - "https://dns.google/dns-query"
   - "https://cloudflare-dns.com/dns-query"
+  - "https://common.dot.dns.yandex.net/dns-query"
 
 # Конкурентность внутри фаз теста 1
 DNS_UDP_CONCURRENCY: 15    # одновременные UDP-сокеты

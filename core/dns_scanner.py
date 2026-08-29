@@ -64,8 +64,8 @@ def _dns_name_sort_key(name: str) -> tuple:
 
 # ── DNS wire-format helpers ───────────────────────────────────────────────────
 
-def _build_dns_query(domain: str) -> bytes:
-    """Собирает DNS-запрос в wire-формате (RFC 1035)."""
+def _build_dns_query(domain: str, qtype: int = 1) -> bytes:
+    """Собирает DNS-запрос в wire-формате (RFC 1035). qtype: 1=A, 16=TXT."""
     tx_id = os.urandom(2)
     flags = b'\x01\x00'       # RD=1
     qdcount = b'\x00\x01'
@@ -77,7 +77,7 @@ def _build_dns_query(domain: str) -> bytes:
         qname += bytes([len(part)]) + part.encode('ascii')
     qname += b'\x00'
 
-    qtype  = b'\x00\x01'   # A
+    qtype  = struct.pack('>H', qtype)   # qtype (1=A, 16=TXT, ...)
     qclass = b'\x00\x01'   # IN
     question = qname + qtype + qclass
 
@@ -148,6 +148,54 @@ def _parse_dns_response(data: bytes, expected_tx_id: bytes) -> Union[List[str], 
             break
 
     return ips if ips else "PARSE_ERR"
+
+
+def _parse_txt_response(data: bytes) -> Optional[str]:
+    """Извлекает TXT-строку из DNS wire-ответа (тип 16). None — если нет TXT."""
+    if len(data) < 12:
+        return None
+    ancount = struct.unpack(">H", data[6:8])[0]
+    offset = 12
+    try:
+        while True:
+            if offset >= len(data):
+                return None
+            length = data[offset]
+            if length == 0:
+                offset += 1
+                break
+            if length & 0xC0 == 0xC0:
+                offset += 2
+                break
+            offset += length + 1
+        offset += 4
+        for _ in range(ancount):
+            if offset >= len(data):
+                return None
+            if data[offset] & 0xC0 == 0xC0:
+                offset += 2
+            else:
+                while offset < len(data) and data[offset] != 0:
+                    offset += data[offset] + 1
+                offset += 1
+            if offset + 10 > len(data):
+                return None
+            rtype  = struct.unpack(">H", data[offset:offset+2])[0]
+            rdlen  = struct.unpack(">H", data[offset+8:offset+10])[0]
+            offset += 10
+            rdata = data[offset:offset+rdlen]
+            offset += rdlen
+            if rtype == 16:
+                s = b""
+                i = 0
+                while i < len(rdata):
+                    n = rdata[i]
+                    s += rdata[i+1:i+1+n]
+                    i += 1 + n
+                return s.decode("utf-8", "replace")
+    except (IndexError, struct.error):
+        return None
+    return None
 
 
 # ── UDP low-level ────────────────────────────────────────────────────────────
@@ -980,66 +1028,67 @@ async def check_dns_availability() -> dict:
         async with egress_sem:
             await _probe_egress(addr, name, port)
 
-    # ── Имена организаций выходных IP (временная подмена: ipinfo.io → Cymru) ──
+    # ── Имена организаций выходных IP (Team Cymru через DoH, RFC 8484) ────────
+    # Эндпоинты в config (CYMRU_DOH_SERVERS): dns.google → cloudflare → yandex.
     _CYMRU_DOH = tuple(getattr(config, "CYMRU_DOH_SERVERS",
-                               ("https://dns.google/resolve",
-                                "https://cloudflare-dns.com/dns-query")))
+                               ("https://dns.google/dns-query",
+                                "https://cloudflare-dns.com/dns-query",
+                                "https://common.dot.dns.yandex.net/dns-query")))
 
-    def _doh_txt_fields(txt: str) -> list:
-        return [p.strip() for p in txt.strip('"').split("|")]
+    async def _lookup_asn_name(client: httpx.AsyncClient, ip: str) -> Optional[str]:
+        """Имя организации по IP через Team Cymru (DoH RFC 8484, TXT-запрос).
 
-    async def _lookup_asn_name_cymru(client: httpx.AsyncClient, ip: str) -> Optional[str]:
-        """Имя организации по IP через Team Cymru (DoH) — запасной вариант."""
+        Перебирает эндпоинты по очереди; первый ответивший на origin.asn.cymru.com
+        даёт ASN, затем запрашивается AS<asn>.asn.cymru.com для org-имени.
+        """
         if ip.count(".") != 3:
             return None
         rev = ".".join(reversed(ip.split(".")))
+        tq = _build_dns_query(f"{rev}.origin.asn.cymru.com", qtype=16)
         asn = None
         for url, ehost in [await pin_host(u) for u in _CYMRU_DOH]:
+            headers = {"Content-Type": "application/dns-message",
+                       "Accept": "application/dns-message"}
+            if ehost:
+                headers["Host"] = ehost
+            ext = {"sni_hostname": ehost} if ehost else None
             try:
-                resp = await client.get(
-                    url, params={"name": f"{rev}.origin.asn.cymru.com", "type": "TXT"},
-                    headers={"Host": ehost} if ehost else None,
-                    extensions={"sni_hostname": ehost} if ehost else None,
-                )
-                answers = resp.json().get("Answer", []) if resp.status_code == 200 else []
-                if answers:
-                    m = re.match(r"\s*(\d+)", _doh_txt_fields(answers[0]["data"])[0])
-                    if m:
-                        asn = m.group(1)
-                        break
+                resp = await client.post(url, content=tq, headers=headers,
+                                         extensions=ext)
+                if resp.status_code != 200:
+                    continue
+                txt = _parse_txt_response(resp.content)
+                if txt is None:
+                    continue
+                m = re.match(r"\s*(\d+)", txt.split("|")[0].strip())
+                if m:
+                    asn = m.group(1)
+                    break
             except Exception:
                 continue
         if not asn:
             return None
         for url, ehost in [await pin_host(u) for u in _CYMRU_DOH]:
+            headers = {"Content-Type": "application/dns-message",
+                       "Accept": "application/dns-message"}
+            if ehost:
+                headers["Host"] = ehost
+            ext = {"sni_hostname": ehost} if ehost else None
             try:
-                resp = await client.get(
-                    url, params={"name": f"AS{asn}.asn.cymru.com", "type": "TXT"},
-                    headers={"Host": ehost} if ehost else None,
-                    extensions={"sni_hostname": ehost} if ehost else None,
-                )
-                answers = resp.json().get("Answer", []) if resp.status_code == 200 else []
-                if answers:
-                    fields = _doh_txt_fields(answers[0]["data"])
-                    name = fields[-1] if len(fields) >= 3 else fields[0]
-                    return re.sub(r"\s+", " ", name).strip() or None
+                resp = await client.post(
+                    url, content=_build_dns_query(f"AS{asn}.asn.cymru.com", qtype=16),
+                    headers=headers, extensions=ext)
+                if resp.status_code != 200:
+                    continue
+                txt = _parse_txt_response(resp.content)
+                if txt is None:
+                    continue
+                fields = [p.strip() for p in txt.strip('"').split("|")]
+                name = fields[-1] if len(fields) >= 3 else fields[0]
+                return re.sub(r"\s+", " ", name).strip() or None
             except Exception:
                 continue
         return None
-
-    async def _lookup_asn_name(client: httpx.AsyncClient, ip: str) -> Optional[str]:
-        """Временная подмена: сначала ipinfo.io, при неудаче — Team Cymru."""
-        if ip.count(".") != 3:
-            return None
-        try:
-            resp = await client.get(f"https://ipinfo.io/{ip}/json")
-            if resp.status_code == 200:
-                org = resp.json().get("org")
-                if isinstance(org, str) and org.strip():
-                    return org
-        except Exception:
-            pass
-        return await _lookup_asn_name_cymru(client, ip)
 
     _ASN_CACHE_FILE = getattr(
         config, "ASN_CACHE_FILE",
@@ -1068,7 +1117,7 @@ async def check_dns_availability() -> dict:
         sem = asyncio.Semaphore(getattr(config, "DNS_ASN_CONCURRENCY", 8))
         fresh: dict[str, str] = {}
         async with httpx.AsyncClient(
-            timeout=4, headers=headers,
+            timeout=4, headers=headers, http2=True,
             proxy=getattr(config, "PROXY_URL", None), trust_env=False,
         ) as cli:
             async def one(uip: str):
