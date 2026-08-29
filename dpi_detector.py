@@ -382,26 +382,23 @@ def _net_info_lines(net_info: dict, sys_dns: dict, bypass: list) -> list:
     return lines
 
 
-def _render_net_info_block(net_info: dict, sys_dns: dict, bypass: list) -> tuple:
-    """Отрендеренная панель инфо о сети: (plain-текст, высота). Пусто → ("", 0)."""
+def _net_info_panel(net_info: dict, sys_dns: dict, bypass: list) -> Optional[Panel]:
+    """Возвращает Panel для блока 'Информация о сети и системе' или None."""
     lines = _net_info_lines(net_info, sys_dns, bypass)
     if not lines:
-        return "", 0
+        return None
     from rich.cells import cell_len
     from rich.text import Text
     # Общая ширина обводок (BOX_W — по подсказке меню); если контент шире — по нему
     width = max(BOX_W, max(cell_len(Text.from_markup("  " + l).plain) for l in lines) + 6)
-    with console.capture() as cap:
-        console.print(Panel(
-            "\n".join("  " + l for l in lines),
-            title="Информация о сети и системе",
-            border_style="dim",
-            box=box.ROUNDED,
-            padding=(0, 1),
-            width=width,
-        ))
-    text = cap.get()
-    return text, len(text.splitlines())
+    return Panel(
+        "\n".join("  " + l for l in lines),
+        title="Информация о сети и системе",
+        border_style="dim",
+        box=box.ROUNDED,
+        padding=(0, 1),
+        width=width,
+    )
 
 
 def _render_banner(badge: str = "Проверка обновлений...") -> tuple:
@@ -750,80 +747,70 @@ async def main():
     banner, banner_lines = _render_banner()
     header = {
         "banner": banner, "banner_lines": banner_lines,
-        "net_text": None, "net_lines": 0,
     }
 
     version_task = asyncio.create_task(_fetch_latest_version())
 
-    async def _net_updater() -> None:
-        """Сбор инфо для теста 0 («Информация о сети и системе»)."""
+    async def _fetch_network_panel() -> Optional[Panel]:
+        """Сбор инфо для теста 0 («Информация о сети и системе») и построение Panel."""
+        dns_info = get_system_dns()
+        bypass   = detect_bypass_tools()
         try:
-            dns_info = get_system_dns()
-            bypass   = detect_bypass_tools()
-
-            def _publish(info: dict) -> None:
-                text, lines = _render_net_info_block(info, dns_info, bypass)
-                header["net_text"], header["net_lines"] = text, lines
-
-            _publish({})          # 1) скелет: все поля "…"
-            try:
-                ips_data = await _fetch_public_ips()
-            except Exception:
-                ips_data = {"v4": (None, None), "v6": (None, None)}
-
-            v4_ip, v4_ttlb = ips_data.get("v4", (None, None))
-            v6_ip, v6_ttlb = ips_data.get("v6", (None, None))
-
-            if not v4_ip and not v6_ip:
-                _publish({"v4": {"ip": "timeout", "ttlb_ms": "timeout"},
-                          "v6": {"ip": "timeout", "ttlb_ms": "timeout"}})
-                return
-
-            info = {
-                "v4": {"ip": v4_ip, "ttlb_ms": v4_ttlb} if v4_ip else None,
-                "v6": {"ip": v6_ip, "ttlb_ms": v6_ttlb} if v6_ip else None,
-            }
-            _publish(info)        # 2) внешние IP пришли
-
-            # 3) Cymru для найденных IP (параллельно)
-            v4_task = _fetch_ip_info(v4_ip) if v4_ip else None
-            v6_task = _fetch_ip_info(v6_ip) if v6_ip else None
-
-            v4_extra, v6_extra = await asyncio.gather(
-                v4_task if v4_task else asyncio.sleep(0),
-                v6_task if v6_task else asyncio.sleep(0)
-            )
-
-            if info.get("v4") and isinstance(v4_extra, dict):
-                info["v4"].update({k: (v if v is not None else "timeout") for k, v in v4_extra.items()})
-                for k in ("subnet", "org", "cc"):
-                    info["v4"].setdefault(k, "timeout")
-            if info.get("v6") and isinstance(v6_extra, dict):
-                info["v6"].update({k: (v if v is not None else "timeout") for k, v in v6_extra.items()})
-                for k in ("subnet", "org", "cc"):
-                    info["v6"].setdefault(k, "timeout")
-
-            _publish(info)        # 3) Cymru: org/asn/subnet/cc готовы
-
-            # 4) upstream роутера: активный DNS == шлюз → роутер-релей (dnsmasq и т.п.)
-            gw = dns_info.get("gateway")
-            active_ips = {ip for ip, _ in dns_info.get("active", [])}
-            if gw and gw in active_ips:
-                up = await probe_resolver_ip(gw)
-                if up:
-                    org = ""
-                    try:
-                        up_info = await _fetch_ip_info(up)
-                        org = up_info.get("org") or ""
-                    except Exception:
-                        pass
-                    a_name = dns_info.get("active_name") or ""
-                    label = "Upstream VPN" if _is_tun_name(a_name) else "Резолвер роутера"
-                    dns_info["upstream"] = up + (f" ({org})" if org else "")
-                    dns_info["upstream_label"] = label
-                    _publish(info)
+            ips_data = await _fetch_public_ips()
         except Exception:
-            pass
+            ips_data = {"v4": (None, None), "v6": (None, None)}
+
+        v4_ip, v4_ttlb = ips_data.get("v4", (None, None))
+        v6_ip, v6_ttlb = ips_data.get("v6", (None, None))
+
+        if not v4_ip and not v6_ip:
+            info = {
+                "v4": {"ip": "timeout", "ttlb_ms": "timeout"},
+                "v6": {"ip": "timeout", "ttlb_ms": "timeout"},
+            }
+            return _net_info_panel(info, dns_info, bypass)
+
+        info = {
+            "v4": {"ip": v4_ip, "ttlb_ms": v4_ttlb} if v4_ip else None,
+            "v6": {"ip": v6_ip, "ttlb_ms": v6_ttlb} if v6_ip else None,
+        }
+
+        # Cymru для найденных IP (параллельно)
+        v4_task = _fetch_ip_info(v4_ip) if v4_ip else None
+        v6_task = _fetch_ip_info(v6_ip) if v6_ip else None
+
+        v4_extra, v6_extra = await asyncio.gather(
+            v4_task if v4_task else asyncio.sleep(0),
+            v6_task if v6_task else asyncio.sleep(0)
+        )
+
+        if info.get("v4") and isinstance(v4_extra, dict):
+            info["v4"].update({k: (v if v is not None else "timeout") for k, v in v4_extra.items()})
+            for k in ("subnet", "org", "cc"):
+                info["v4"].setdefault(k, "timeout")
+        if info.get("v6") and isinstance(v6_extra, dict):
+            info["v6"].update({k: (v if v is not None else "timeout") for k, v in v6_extra.items()})
+            for k in ("subnet", "org", "cc"):
+                info["v6"].setdefault(k, "timeout")
+
+        # upstream роутера: активный DNS == шлюз → роутер-релей (dnsmasq и т.п.)
+        gw = dns_info.get("gateway")
+        active_ips = {ip for ip, _ in dns_info.get("active", [])}
+        if gw and gw in active_ips:
+            up = await probe_resolver_ip(gw)
+            if up:
+                org = ""
+                try:
+                    up_info = await _fetch_ip_info(up)
+                    org = up_info.get("org") or ""
+                except Exception:
+                    pass
+                a_name = dns_info.get("active_name") or ""
+                label = "Upstream VPN" if _is_tun_name(a_name) else "Резолвер роутера"
+                dns_info["upstream"] = up + (f" ({org})" if org else "")
+                dns_info["upstream_label"] = label
+
+        return _net_info_panel(info, dns_info, bypass)
 
     async def _version_updater() -> None:
         try:
@@ -937,26 +924,18 @@ async def main():
 
         # ── Тест 0: информация о сети и системе ─────────────────────────────
         if run_net_info:
-            header["net_text"] = None
-            header["net_lines"] = 0
-            net_task = asyncio.create_task(_net_updater())
+            panel = None
             try:
                 if sys.stdout.isatty():
                     with console.status("Получение сетевых данных...", spinner="line", spinner_style="cyan"):
-                        await asyncio.wait_for(asyncio.shield(net_task), timeout=10.0)
+                        panel = await asyncio.wait_for(_fetch_network_panel(), timeout=10.0)
                 else:
-                    await asyncio.wait_for(asyncio.shield(net_task), timeout=10.0)
+                    panel = await asyncio.wait_for(_fetch_network_panel(), timeout=10.0)
             except Exception:
-                pass
-            net_text = header.get("net_text")
-            if net_text:
-                # Панель уже отрендерена (ANSI) — печатаем сырьём, как шапку;
-                # console.print пережевал бы ESC-коды как markup (мусор)
-                if sys.stdout.isatty():
-                    sys.stdout.write(net_text)
-                else:
-                    sys.stdout.write(re.sub(r"\x1b\[[0-9;]*m", "", net_text))
-                sys.stdout.flush()
+                panel = None
+
+            if panel:
+                console.print(panel)
             else:
                 console.print("[yellow]Информация о сети недоступна.[/yellow]")
             # В пачке с другими тестами — пауза, чтобы панель не пролетела
