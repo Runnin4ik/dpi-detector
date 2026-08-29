@@ -980,7 +980,7 @@ async def check_dns_availability() -> dict:
         async with egress_sem:
             await _probe_egress(addr, name, port)
 
-    # ── Имена организаций выходных IP (Team Cymru через DoH) ──────────────────
+    # ── Имена организаций выходных IP (временная подмена: ipinfo.io → Cymru) ──
     _CYMRU_DOH = tuple(getattr(config, "CYMRU_DOH_SERVERS",
                                ("https://dns.google/resolve",
                                 "https://cloudflare-dns.com/dns-query")))
@@ -988,7 +988,8 @@ async def check_dns_availability() -> dict:
     def _doh_txt_fields(txt: str) -> list:
         return [p.strip() for p in txt.strip('"').split("|")]
 
-    async def _lookup_asn_name(client: httpx.AsyncClient, ip: str) -> Optional[str]:
+    async def _lookup_asn_name_cymru(client: httpx.AsyncClient, ip: str) -> Optional[str]:
+        """Имя организации по IP через Team Cymru (DoH) — запасной вариант."""
         if ip.count(".") != 3:
             return None
         rev = ".".join(reversed(ip.split(".")))
@@ -1025,6 +1026,20 @@ async def check_dns_availability() -> dict:
             except Exception:
                 continue
         return None
+
+    async def _lookup_asn_name(client: httpx.AsyncClient, ip: str) -> Optional[str]:
+        """Временная подмена: сначала ipinfo.io, при неудаче — Team Cymru."""
+        if ip.count(".") != 3:
+            return None
+        try:
+            resp = await client.get(f"https://ipinfo.io/{ip}/json")
+            if resp.status_code == 200:
+                org = resp.json().get("org")
+                if isinstance(org, str) and org.strip():
+                    return org
+        except Exception:
+            pass
+        return await _lookup_asn_name_cymru(client, ip)
 
     _ASN_CACHE_FILE = getattr(
         config, "ASN_CACHE_FILE",
