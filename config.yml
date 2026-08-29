@@ -351,3 +351,16 @@ DNS_KNOWN_RESOLVER_SPANS:
   - "172.64"            # Cloudflare
   - "162.158"           # Cloudflare
   - "37.140"            # Yandex
+# Белый список по имени сервера (подстроки, регистр не важен): выход на сервер
+# с таким именем не считается перехватом, даже если IP не попал в списки выше.
+DNS_KNOWN_RESOLVER_NAMES:
+  - "google"
+  - "cloudflare"
+  - "quad9"
+  - "adguard"
+  - "uncensoreddns"
+  - "verisign"
+  - "neustar"
+  - "114dns"
+  - "i3d"
+  - "yandex"
