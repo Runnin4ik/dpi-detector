@@ -326,3 +326,15 @@ DNS_KNOWN_RESOLVER_NAMES:
   - "geohide"
   - "msk-ix"
   - "нсди"
+  # Реальные org-сети резолверов (после "→" в таблице теста 1): не перехват,
+  # а обычный транзит хостинга/провайдера (RIPN-NS5-RU-MSK, RU-JSCIOT, CDN77...)
+  - "ripn"
+  - "cdn77"
+  - "as-vultr"
+  - "cdnext"
+  - "xtom"
+  - "tencent"
+  - "misaka"
+  - "anexia"
+  - "ru-jsciot"
+  - "i3d"

@@ -32,7 +32,11 @@ _KNOWN_RESOLVER_NAME_TOKENS: set = set(getattr(
     ["google", "cloudflare", "quad9", "adguard", "alibaba", "cleanbrowsing",
      "controld", "digitale gesellschaft", "dns.sb", "dns4all", "dnsforge",
      "dnspod", "libredns", "mullvad", "nextdns", "opendns", "uncensoreddns",
-     "wikimedia", "xboxdns", "comss", "yandex", "geohide", "msk-ix", "нсди"],
+     "wikimedia", "xboxdns", "comss", "yandex", "geohide", "msk-ix", "нсди",
+     # Реальные org-сети резолверов (после "→" в таблице): не перехват,
+     # а обычный транзит хостинга/провайдера (RIPN-NS5-RU-MSK, RU-JSCIOT...)
+     "ripn", "cdn77", "vultr", "cdnext", "xtom", "tencent", "misaka",
+     "anexia", "ru-jsciot", "i3d"],
 ))
 
 
@@ -1216,7 +1220,7 @@ async def check_dns_availability() -> dict:
                 lines.append(f"[magenta]{a}→FakeIP[/magenta]")
             elif _is_domestic(pname):
                 lines.append(f"{a}→{_org_label(eip)}")
-            elif _known_resolver(pname):
+            elif _known_resolver(pname) or _known_resolver(_org_label(eip)):
                 lines.append(f"[green]{a}→{_org_label(eip)}[/green]")
             elif _is_hijacked(eip):
                 lines.append(f"[red]{a}→{_org_label(eip)}[/red]")
@@ -1384,7 +1388,9 @@ async def check_dns_availability() -> dict:
         for ha in haddrs:
             heip = egress.get(("egress", ha, hname))
             if heip and heip != "0.0.0.0" and _is_hijacked(heip) \
-                    and not _known_resolver(hname) and not _is_domestic(hname):
+                    and not _known_resolver(hname) \
+                    and not _known_resolver(_org_label(heip)) \
+                    and not _is_domestic(hname):
                 hi_brand_set.add(_brand(hname))
     hijacked_brands = sorted(hi_brand_set)
     console.print()
