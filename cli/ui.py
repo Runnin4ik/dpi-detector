@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from cli.console import console, supports_vt
 from utils import config
 from utils.error_classifier import clean_detail
+from utils.updater import is_newer, get_launch_type
 
 
 def clean_hostname(url_or_domain: str) -> str:
@@ -205,10 +206,17 @@ def _read_key_sync() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-async def _ask_selection_line_based() -> str:
-    """Fallback для не-терминала (пайп/CI): прежний ввод строкой."""
+async def _ask_selection_line_based(header_state: dict = None) -> str:
+    """Fallback для не-терминала (пайп/CI): прежний ввод строкой.
+    'u' — обновить до последней версии (если доступна)."""
     valid = _valid_selections()
+    latest = (header_state or {}).get("latest") or ""
+    current = (header_state or {}).get("current") or ""
+    update_avail = bool(latest and current and is_newer(latest, current)
+                        and get_launch_type() != "docker")
     console.print(_MENU_BODY)
+    if update_avail:
+        console.print(f"  [bold green]u[/bold green]    — Обновить до [bold green]v{latest}[/bold green]")
     loop = asyncio.get_running_loop()
     try:
         raw = (await loop.run_in_executor(
@@ -219,6 +227,8 @@ async def _ask_selection_line_based() -> str:
 
     if raw == "":
         return "123"
+    if raw.lower() in ("u", "у") and update_avail:
+        return "u"
     if raw in valid:
         return raw
 
@@ -233,11 +243,12 @@ async def _ask_selection_interactive(header_state: dict = None,
       ↑↓            — навигация по всем строкам (параметры + тесты)
       ←→            — изменить IP-версию / параллельность / чекбокс теста
       0-6           — включить/выключить тест
-      Enter         — запуск выбранных тестов
+      Enter         — запуск выбранных тестов (или обновление, если курсор на нём)
       Q / ESC / Й   — выход (в любом состоянии)
     header_state — шапка (баннер + лениво подгружаемая версия):
       задача version_task завершается в фоне — _draw перерисовывает.
     Записывает config.IP_VERSION и config.MAX_CONCURRENT.
+    Возвращает 'u' — запрошено обновление до новой версии.
 """
     from utils import config
     loop = asyncio.get_running_loop()
@@ -272,6 +283,16 @@ async def _ask_selection_interactive(header_state: dict = None,
         else:
             tests.add(d)
 
+    def _update_row() -> tuple:
+        """(доступно обновление, строка меню для него). None если нечего обновлять."""
+        latest = (header_state or {}).get("latest") or ""
+        current = (header_state or {}).get("current") or ""
+        if not (latest and current and is_newer(latest, current)
+                and get_launch_type() != "docker"):
+            return False, None
+        return True, (f"  {'►' if cursor == 2 else ' '} "
+                      f"{'Обновить':<{LABEL_W}} до [bold green]v{latest}[/bold green]")
+
     menu_h = [0]   # высота области меню (панель + подсказка) — для стирания
 
     def _draw(first: bool = False) -> None:
@@ -287,15 +308,19 @@ async def _ask_selection_interactive(header_state: dict = None,
         conc_opts = "   ".join(
             f"{'●' if p == conc else '○'} {p}" for p in CONCURRENCY_PRESETS
         )
+        up_avail, up_row = _update_row()
         param_lines = [
             "",
             f"  {'►' if cursor == 0 else ' '} {'IP-версия':<{LABEL_W}} {ip_opts}",
             f"  {'►' if cursor == 1 else ' '} {'Параллельность':<{LABEL_W}} {conc_opts}",
         ]
+        if up_avail:
+            param_lines.append(up_row)
         test_lines = []
+        offset = 3 if up_avail else 2   # тесты начинаются после параметров
         for i, (d, label) in enumerate(_MENU_OPTIONS):
             box_mark = "\\[√]" if d in tests else "[ ]"   # \[√] — галочка (литерал, не rich-тег)
-            test_lines.append(f"  {'►' if cursor == i + 2 else ' '} {box_mark} {d}. {label}")
+            test_lines.append(f"  {'►' if cursor == i + offset else ' '} {box_mark} {d}. {label}")
         from rich.cells import cell_len
         from rich.text import Text
         # Разделитель — между параметрами и списком тестов, по ширине контента
@@ -341,10 +366,12 @@ async def _ask_selection_interactive(header_state: dict = None,
             raise KeyboardInterrupt
         key_fut = None
 
+        up_avail, _ = _update_row()
+        total_rows = (3 if up_avail else 2) + len(_MENU_OPTIONS)
         if key == "up":
-            cursor = (cursor - 1) % 9
+            cursor = (cursor - 1) % total_rows
         elif key == "down":
-            cursor = (cursor + 1) % 9
+            cursor = (cursor + 1) % total_rows
         elif key in ("left", "right"):
             if cursor == 0:            # IP-версия: переключение семейства
                 if v6_ok:
@@ -353,9 +380,14 @@ async def _ask_selection_interactive(header_state: dict = None,
                 idx = CONCURRENCY_PRESETS.index(conc)
                 step = 1 if key == "right" else -1
                 conc = CONCURRENCY_PRESETS[(idx + step) % len(CONCURRENCY_PRESETS)]
+            elif cursor == 2 and up_avail:
+                continue               # «Обновить» — стрелки не меняют
             else:                      # тест под курсором: чекбокс
-                _toggle_test(_MENU_OPTIONS[cursor - 2][0])
+                offset = 3 if up_avail else 2
+                _toggle_test(_MENU_OPTIONS[cursor - offset][0])
         elif key == "enter":
+            if cursor == 2 and up_avail:
+                break                  # обновление — выходим с 'u'
             if not tests:
                 console.print("[yellow]Выберите хотя бы один тест[/yellow]")
                 continue
@@ -384,6 +416,8 @@ async def _ask_selection_interactive(header_state: dict = None,
 
     config.IP_VERSION = ipv
     config.MAX_CONCURRENT = conc
+    if cursor == 2 and _update_row()[0]:
+        return "u"
     chosen = "".join(sorted(tests))
     return chosen if chosen in valid else "123"
 
@@ -396,7 +430,7 @@ async def ask_test_selection(header_state: dict = None,
     записывает config.IP_VERSION и config.MAX_CONCURRENT.
     """
     if sys.stdin is None or not sys.stdin.isatty():
-        return await _ask_selection_line_based()
+        return await _ask_selection_line_based(header_state)
     return await _ask_selection_interactive(header_state, version_task)
 
 

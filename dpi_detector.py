@@ -37,6 +37,7 @@ from core.dns_scanner import (
 from utils.network import ipv6_supported, is_local_or_relay_ip
 from utils.files import load_domains, load_tcp_targets, load_whitelist_sni, get_base_dir
 from utils.system_check import get_system_dns, detect_bypass_tools
+from utils.updater import perform_update, cleanup_old_binaries
 
 CURRENT_VERSION = "4.0.11"
 GITHUB_REPO     = "Runnin4ik/dpi-detector"
@@ -425,12 +426,13 @@ def _render_banner(badge: str = "Проверка обновлений...") -> t
     )
     return panel, 4
 
-def _version_badge(latest: Optional[str]) -> str:
+def _version_badge(latest: Optional[dict]) -> str:
     """Бейдж статуса обновлений для баннера."""
     if not latest:
         return "× Не удалось проверить обновления"
-    if is_newer(latest, CURRENT_VERSION):
-        return f"↑ Доступна новая версия {latest}"
+    version = latest.get("version") or ""
+    if version and is_newer(version, CURRENT_VERSION):
+        return f"↑ Доступна новая версия {version}"
     return "✓ Актуальная версия"
 
 
@@ -460,16 +462,26 @@ def parse_arguments():
     return parser.parse_args()
 
 
-async def _fetch_latest_version() -> Optional[str]:
-    """Запрашивает последний тег с GitHub API. Возвращает строку версии или None."""
+async def _fetch_latest_version() -> Optional[dict]:
+    """Последний релиз: {'tag': 'v4.0.12', 'version': '4.0.12', 'assets': [...]} или None."""
     url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
     proxy_url = getattr(config, "PROXY_URL", None)
     try:
         async with httpx.AsyncClient(timeout=3.0, proxy=proxy_url, trust_env=False) as client:
             resp = await client.get(url, headers={"Accept": "application/vnd.github+json"})
             if resp.status_code == 200:
-                tag = resp.json().get("tag_name", "")
-                return tag.lstrip("v") if tag else None
+                data = resp.json()
+                tag = data.get("tag_name", "")
+                if not tag:
+                    return None
+                return {
+                    "tag": tag,
+                    "version": tag.lstrip("v"),
+                    "assets": [
+                        {"name": a.get("name"), "digest": a.get("digest")}
+                        for a in data.get("assets", [])
+                    ],
+                }
     except Exception:
         pass
     return None
@@ -712,10 +724,14 @@ async def main():
 
     console.clear()
 
+    # Старые версионные бинарники (после обновлений) — убрать тихо
+    cleanup_old_binaries(CURRENT_VERSION)
+
     # ── Шапка: баннер (фикс. ширина) + лениво подгружаемые инфо/версия ──
     banner, banner_lines = _render_banner()
     header = {
         "banner": banner, "banner_lines": banner_lines,
+        "latest": None, "current": CURRENT_VERSION,
     }
 
     version_task = asyncio.create_task(_fetch_latest_version())
@@ -799,6 +815,7 @@ async def main():
             latest = await asyncio.wait_for(asyncio.shield(version_task), timeout=4.0)
         except Exception:
             latest = None
+        header["latest"] = latest
         banner, banner_lines = _render_banner(_version_badge(latest))
         header["banner"], header["banner_lines"] = banner, banner_lines
 
@@ -820,9 +837,24 @@ async def main():
             except Exception:
                 pass
             console.print(_header_render(header))
-        selection = await ask_test_selection(
-            header_state=header, version_task=ver_task,
-        )
+        while True:
+            selection = await ask_test_selection(
+                header_state=header, version_task=ver_task,
+            )
+            if selection != "u":
+                break
+            # Пользователь выбрал «Обновить до vX.Y.Z» — выполняем обновление.
+            # После успеха процесс перезапускается через execv (binary/git);
+            # при неудаче — снова показываем меню.
+            console.print()
+            ok = await perform_update(header.get("latest"), CURRENT_VERSION)
+            if ok:
+                return
+            console.clear()
+            if header.get("latest"):
+                banner, banner_lines = _render_banner(_version_badge(header["latest"]))
+                header["banner"], header["banner_lines"] = banner, banner_lines
+            console.print(_header_render(header))
 
     console.print(
         f"[dim]Семейство IP: [cyan]{getattr(config, 'IP_VERSION', 'ipv4')}[/cyan]"
@@ -992,7 +1024,18 @@ async def main():
             if key in ("m", "ь", "v", "м"):   # M и V на английской и русской раскладках
                 console.print()
                 while True:
-                    selection = await ask_test_selection()
+                    selection = await ask_test_selection(header_state=header)
+                    if selection == "u":
+                        console.print()
+                        ok = await perform_update(header.get("latest"), CURRENT_VERSION)
+                        if ok:
+                            return
+                        console.clear()
+                        if header.get("latest"):
+                            banner, banner_lines = _render_banner(_version_badge(header["latest"]))
+                            header["banner"], header["banner_lines"] = banner, banner_lines
+                        console.print(_header_render(header))
+                        continue
                     (run_net_info, run_dns_avail, run_domains, run_tcp,
                      run_wl_sni, run_telegram, run_legend, only_legend) = _selection_flags(selection)
                     if not only_legend:
