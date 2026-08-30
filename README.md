@@ -158,6 +158,29 @@ python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
 Переопределите нужные файлы: `domains.txt`, `tcp16.json`, `config.yml`, `whitelist_sni.txt`
 И положите их в папку рядом с `.exe` файлом.
 
+## 🐧 Linux (Готовые бинарники)
+
+Для запуска не требуется устанавливать Python или Docker. Скачайте бинарник под вашу архитектуру из [Releases -> Assets](https://github.com/Runnin4ik/dpi-detector/releases):
+
+*   **[Скачать для x86_64 / AMD64](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_x86_64)** (ПК, серверы, ноутбуки, большинство дистрибутивов)
+*   **[Скачать для ARM64 / AArch64](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_arm64)** (Raspberry Pi 3/4/5, Orange Pi, Apple Silicon Linux, ARM VPS)
+*   **[Скачать для ARMv7 (32-bit)](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_armv7)** (Raspberry Pi 2, одноплатники, роутеры)
+*   **[Скачать для x86 (32-bit)](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_x86)** (Старые 32-битные системы)
+
+#### Запуск
+
+```bash
+chmod +x dpi_detector_v4.0.7_linux_x86_64
+./dpi_detector_v4.0.7_linux_x86_64
+# или с параметрами
+./dpi_detector_v4.0.7_linux_x86_64 -t 2 -d discord.com
+```
+
+#### С кастомизацией
+
+Переопределите нужные файлы: `domains.txt`, `tcp16.json`, `config.yml`, `whitelist_sni.txt`
+И положите их рядом с бинарным файлом.
+
 ## 🍎 macOS (Экспериментально)
 
 Готовые сборки для macOS появились недавно и **экспериментальны** — протестированы не на всех конфигурациях. Буду благодарен за фидбек в [Issue](https://github.com/Runnin4ik/dpi-detector/issues).

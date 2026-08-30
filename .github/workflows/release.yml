@@ -1,4 +1,4 @@
-name: Release CI (Docker + EXE)
+name: Release CI (Docker + Binaries)
 
 on:
   release:
@@ -64,6 +64,59 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            suffix: 'linux_x86_64'
+          - platform: linux/arm64
+            suffix: 'linux_arm64'
+          - platform: linux/arm/v7
+            suffix: 'linux_armv7'
+          - platform: linux/386
+            suffix: 'linux_x86'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build binary inside container
+        run: |
+          VERSION="${{ github.event.release.tag_name || inputs.version }}"
+          BIN_NAME="dpi_detector_${VERSION}_${{ matrix.suffix }}"
+          
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v "$(pwd)":/src -w /src \
+            python:3.11-slim-bullseye \
+            bash -c "
+              apt-get update && apt-get install -y --no-install-recommends binutils gcc libc6-dev && \
+              python -m pip install --upgrade pip && \
+              pip install 'httpx[socks,http2]' rich pyinstaller pyyaml && \
+              pyinstaller --onefile --console --clean \
+                --collect-all rich \
+                --collect-all httpx \
+                --collect-all yaml \
+                --add-data 'domains.txt:.' \
+                --add-data 'tcp16.json:.' \
+                --add-data 'whitelist_sni.txt:.' \
+                --add-data 'config.yml:.' \
+                --name \"\$BIN_NAME\" \
+                dpi_detector.py && \
+              chmod +x dist/\$BIN_NAME
+            "
+
+      - name: Upload binary to Release Assets
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/dpi_detector_*_${{ matrix.suffix }}
+          tag_name: ${{ github.event.release.tag_name || inputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-macos:
     runs-on: ${{ matrix.os }}
