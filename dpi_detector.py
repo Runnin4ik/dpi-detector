@@ -39,7 +39,7 @@ from utils.files import load_domains, load_tcp_targets, load_whitelist_sni, get_
 from utils.system_check import get_system_dns, detect_bypass_tools
 from utils.updater import perform_update, cleanup_old_binaries
 
-CURRENT_VERSION = "4.0.12"
+CURRENT_VERSION = "4.0.13"
 GITHUB_REPO     = "Runnin4ik/dpi-detector"
 
 # DoH-эндпоинты для запросов Team Cymru (dns.google первым — работает и без SNI)
@@ -464,7 +464,7 @@ def parse_arguments():
 
 
 async def _fetch_latest_version() -> Optional[dict]:
-    """Последний релиз: {'tag': 'v4.0.12', 'version': '4.0.12', 'assets': [...]} или None."""
+    """Последний релиз: {'tag': 'v4.0.X', 'version': '4.0.X', 'assets': [...]} или None."""
     url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
     proxy_url = getattr(config, "PROXY_URL", None)
     try:
