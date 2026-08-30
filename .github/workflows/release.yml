@@ -8,7 +8,7 @@ on:
       version:
         description: 'Тег версии для имён артефактов, например v3.6.0'
         required: true
-        default: 'v4.0.10'
+        default: 'v4.0.11'
 
 permissions:
   contents: write
