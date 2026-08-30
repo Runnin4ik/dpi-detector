@@ -50,6 +50,18 @@
                 <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.11/dpi_detector_v4.0.11_macos_intel"><img src="https://img.shields.io/badge/Intel-x86__64-555555.svg?logo=apple&logoColor=white" alt="macOS Intel"></a>
             </td>
         </tr>
+        <tr>
+            <td><b>📱 Android (Termux)</b></td>
+            <td>
+                <a href="#android-termux">Инструкция</a>
+            </td>
+        </tr>
+        <tr>
+            <td><b>🐳 Docker</b></td>
+            <td>
+                <a href="#docker">Инструкция</a>
+            </td>
+        </tr>
     </tbody>
 </table>
 </div>
@@ -139,7 +151,6 @@ curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.11/
 ```
 *(Приложение не нотаризовано: `xattr -cr` снимает системный карантин macOS на запуск)*
 
-```markdown
 ## 📱 Android (Termux)
 
 Для запуска требуется терминал **Termux**.  
@@ -250,7 +261,7 @@ docker compose up -d
 python dpi_detector.py -t 0 --batch
 ```
 
-#### Бинарник
+#### Бинарник (любой)
 ```bash
 ./dpi_detector_v4.0.11_linux_x86_64 -t 0 --batch
 ```
