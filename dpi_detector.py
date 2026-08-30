@@ -726,7 +726,6 @@ async def main():
     # ── CLI-обновление: --update — проверить и обновить, затем выйти ──
     if args.update:
         console.clear()
-        from utils.updater import perform_update
         latest = await _fetch_latest_version()
         if not latest:
             console.print("[yellow]Не удалось проверить обновления (GitHub недоступен).[/yellow]")
