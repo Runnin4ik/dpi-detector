@@ -165,16 +165,6 @@ async def _update_git() -> bool:
     return True
 
 
-def _macos_cleanup(path: Path) -> None:
-    """Снимает quarantine и переподписывает ad-hoc после замены бинарника."""
-    for cmd in (["xattr", "-cr", str(path)],
-                ["codesign", "--force", "-s", "-", str(path)]):
-        try:
-            subprocess.run(cmd, capture_output=True, timeout=30)
-        except Exception:
-            pass
-
-
 async def _update_binary(latest: dict) -> bool:
     """Обновление собранного бинарника (PyInstaller)."""
     tag = (latest.get("tag") or "").lstrip("v")
@@ -201,26 +191,14 @@ async def _update_binary(latest: dict) -> bool:
     if not await _download(url, dest, expected):
         return False
 
-    if sys.platform == "win32":
-        # Имя версионное — новый файл рядом не конфликтует с запущенным exe.
-        # Старые версии уберёт cleanup_old_binaries при следующем старте.
-        console.print("[green]Новая версия скачана. Перезапуск...[/green]")
-        _execv([str(dest)] + sys.argv[1:])
-        return True
-
-    # POSIX: атомарная замена текущего бинарника (можно поверх запущенного)
-    current = Path(sys.executable)
-    bak = current.with_name(current.name + ".bak")
-    try:
-        shutil.copy2(current, bak)
-    except Exception:
-        pass
+    # POSIX: onefile-бинарник нельзя заменять ПОВЕРХ запущенного файла —
+    # PyInstaller при старте дочернего процесса проверяет целостность своего
+    # файла и падает («appears to have been moved or deleted...»), если он
+    # подменён. Пишем новый версионный файл рядом (как в Windows) и
+    # перезапускаемся через него; старые версии уберёт cleanup_old_binaries.
     os.chmod(dest, 0o755)
-    os.replace(dest, current)
-    if sys.platform == "darwin":
-        _macos_cleanup(current)
-    console.print("[green]Обновлено! Перезапуск...[/green]")
-    _execv([str(current)] + sys.argv[1:])
+    console.print("[green]Новая версия скачана. Перезапуск...[/green]")
+    _execv([str(dest)] + sys.argv[1:])
     return True
 
 
