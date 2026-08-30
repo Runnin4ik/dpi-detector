@@ -139,8 +139,6 @@ curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.11/
 ```
 *(Приложение не нотаризовано: `xattr -cr` снимает системный карантин macOS на запуск)*
 
-Вот готовый блок, оформленный в общем стиле вашего `README.md`:
-
 ```markdown
 ## 📱 Android (Termux)
 
@@ -166,6 +164,7 @@ git clone https://github.com/Runnin4ik/dpi-detector.git && cd dpi-detector
 pip install -r requirements.txt
 ```
 
+Перед запустом переведите телефон в горизонтальный режим!
 ```bash
 python dpi_detector.py
 ```
@@ -241,6 +240,35 @@ docker compose up -d
 | `-c`, `--concurrency` | Количество конкурентных запросов (переопределяет `MAX_CONCURRENT`). | `-c 50`                      |
 | `-o`, `--output`      | Автоматически сохранить лог в указанный файл.                       | `-o report_log.txt`          |
 | `--batch`             | Отключает все вопросы и паузы в консоли.                            | `--batch`                    |
+
+> **Параметры работают и для готовых бинарников** (`.exe` / Linux / macOS) — они принимают те же флаги, что и запуск из исходников `python dpi_detector.py`.
+
+### Примеры запуска
+
+#### Из исходников (Python)
+```bash
+python dpi_detector.py -t 0 --batch
+python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
+python dpi_detector.py -t 123 -c 50 -o report_log.txt
+```
+
+#### Бинарник Windows (PowerShell)
+```powershell
+.\dpi_detector.exe -t 0 --batch
+.\dpi_detector.exe -t 2 -d discord.com -o report_log.txt
+```
+
+#### Бинарник Linux
+```bash
+./dpi_detector_v4.0.11_linux_x86_64 -t 0 --batch
+./dpi_detector_v4.0.11_linux_arm64 -t 123 -c 50 -o report_log.txt
+```
+
+#### Бинарник macOS
+```bash
+./dpi_detector_v4.0.11_macos_arm64 -t 0 --batch
+./dpi_detector_v4.0.11_macos_intel -t 2 -d vk.com -d youtube.com
+```
 
 > **Прокси:** при заданном `PROXY_URL`/`-p` весь трафик всех тестов идёт через прокси,
 > включая UDP-пробы теста 1 (через SOCKS5 UDP-relay; для HTTP-прокси UDP-релей невозможен —
