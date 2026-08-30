@@ -57,7 +57,7 @@ jobs:
             dpi_detector.py
 
       - name: Upload EXE to Release Assets
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.3
         with:
           files: dist/*.exe
           tag_name: ${{ github.event.release.tag_name || inputs.version }}
@@ -84,7 +84,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Build binary inside container
         run: |
@@ -114,7 +114,7 @@ jobs:
               chmod +x "dist/$BIN_NAME"
             '
       - name: Upload binary to Release Assets
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.3
         with:
           files: dist/dpi_detector_*_${{ matrix.suffix }}
           tag_name: ${{ github.event.release.tag_name || inputs.version }}
@@ -189,7 +189,7 @@ jobs:
         run: codesign --force -s - "dist/dpi_detector_${{ inputs.version || github.event.release.tag_name }}_${{ matrix.suffix }}"
 
       - name: Upload binary to Release Assets
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.3
         with:
           files: dist/dpi_detector_*
           tag_name: ${{ github.event.release.tag_name || inputs.version }}
@@ -204,13 +204,13 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -218,7 +218,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -227,7 +227,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push CLI Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -240,7 +240,7 @@ jobs:
 
       - name: Extract metadata for Web image
         id: meta-web
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           flavor: |
@@ -251,7 +251,7 @@ jobs:
             type=raw,value=web
             type=raw,value=web-latest
       - name: Build and push Web Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.web
