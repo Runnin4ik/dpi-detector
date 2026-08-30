@@ -187,12 +187,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
-          flavor: |
-            prefix=web-,onlatest=true
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern=web-{{version}}
+            type=semver,pattern=web-{{major}}.{{minor}}
             type=raw,value=web
+            type=raw,value=web-latest
 
       - name: Build and push Web Docker image
         uses: docker/build-push-action@v5
@@ -201,9 +200,7 @@ jobs:
           file: Dockerfile.web
           push: true
           platforms: linux/amd64,linux/arm64,linux/arm/v7
-          tags: |
-            ${{ steps.meta-web.outputs.tags }}
-            ghcr.io/${{ github.repository }}:web
+          tags: ${{ steps.meta-web.outputs.tags }}
           labels: ${{ steps.meta-web.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
