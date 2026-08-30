@@ -165,7 +165,7 @@ docker run --rm -it --pull=always ^
   ghcr.io/runnin4ik/dpi-detector:latest
 ```
 
-Docker с монтированием файлов
+Docker с Web интерфейсом:
 ```bash
 docker run -d --name dpi-detector-web -p 7681:7681 \
   -v $(pwd)/config.yml:/app/config.yml \
