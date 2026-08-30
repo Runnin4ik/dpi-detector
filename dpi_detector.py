@@ -490,6 +490,8 @@ async def _fetch_latest_version() -> Optional[dict]:
 
 def fast_exit_handler(sig, frame):
     console.print("\n[bold red]Прервано пользователем.[/bold red]")
+    from cli.ui import restore_terminal
+    restore_terminal()
     os._exit(0)
 
 async def _readline_cancelable() -> str:
@@ -529,6 +531,8 @@ def _read_key_sync() -> str:
     import termios, tty
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
+    from cli.ui import _save_termios
+    _save_termios()
     try:
         tty.setraw(fd)
         ch = sys.stdin.read(1)
@@ -1125,4 +1129,6 @@ if __name__ == "__main__":
         if sys.platform == 'win32':
             print("\nНажмите Enter для выхода...")
             input()
+        from cli.ui import restore_terminal
+        restore_terminal()
         os._exit(1)

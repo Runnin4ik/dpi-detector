@@ -10,6 +10,38 @@ from utils.error_classifier import clean_detail
 from utils.updater import is_newer, get_launch_type
 
 
+# Исходные атрибуты терминала (до raw/cbreak) — для восстановления при выходе
+_SAVED_TERMIOS = None
+
+
+def _save_termios() -> None:
+    """Запоминает исходные атрибуты stdin при первом входе в raw/cbreak."""
+    global _SAVED_TERMIOS
+    if os.name == "nt" or _SAVED_TERMIOS is not None:
+        return
+    try:
+        import termios
+        _SAVED_TERMIOS = termios.tcgetattr(sys.stdin.fileno())
+    except Exception:
+        pass
+
+
+def restore_terminal() -> None:
+    """Восстанавливает исходные атрибуты терминала.
+
+    raw/cbreak (setraw/setcbreak) выключают ECHO и ICANON. Если процесс
+    выходит через os._exit (Ctrl+C в fast_exit_handler, критическая
+    ошибка), finally с tcsetattr не выполняется — консоль остаётся без
+    эха ввода. Вызывается перед аварийным выходом."""
+    if os.name == "nt" or _SAVED_TERMIOS is None:
+        return
+    try:
+        import termios
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _SAVED_TERMIOS)
+    except Exception:
+        pass
+
+
 def clean_hostname(url_or_domain: str) -> str:
     """Оставляет только домен (без протокола, пути и порта)."""
     url_or_domain = url_or_domain.strip().lower()
@@ -148,6 +180,7 @@ def _read_key_sync() -> str:
     import select
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
+    _save_termios()
     try:
         # setcbreak, а не setraw: raw отключает OPOST/ONLCR — пока читается
         # клавиша, событийные перерисовки (_draw) печатают \n без \r и шапка
