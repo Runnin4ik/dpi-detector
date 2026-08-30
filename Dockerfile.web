@@ -1,0 +1,24 @@
+FROM python:3.14-alpine
+
+WORKDIR /app
+
+# Установка ttyd (легковесный web-терминал xterm.js) и зависимостей Python
+RUN apk add --no-cache ttyd \
+    && apk add --no-cache --virtual .build-deps build-base yaml-dev \
+    && pip install --no-cache-dir "httpx[socks,http2]" rich pyyaml \
+    && apk del .build-deps
+
+COPY cli/ ./cli/
+COPY core/ ./core/
+COPY utils/ ./utils/
+COPY dpi_detector.py .
+COPY domains.txt .
+COPY tcp16.json .
+COPY config.yml .
+COPY whitelist_sni.txt .
+
+EXPOSE 7681
+
+# Интерактивный Web-терминал через ttyd
+ENTRYPOINT ["ttyd", "-p", "7681", "-W", "-t", "fontSize=16", "-t", "theme={\"background\":\"#181825\",\"foreground\":\"#cdd6f4\",\"cursor\":\"#f5e0dc\"}", "-t", "titleFixed=DPI Detector Web"]
+CMD ["sh", "-c", "while true; do python dpi_detector.py; echo ''; echo 'Нажмите Enter для нового запуска...'; read -r _; done"]

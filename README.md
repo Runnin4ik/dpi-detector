@@ -104,6 +104,31 @@ docker run --rm -it --pull=always ^
   ghcr.io/runnin4ik/dpi-detector:latest
 ```
 </details>
+### 🌐 Web-интерфейс в браузере (Proxmox / Docker / Portainer / Home Server)
+
+Запуск полноценного интерактивного Web-терминала на порту `7681`. Работает в любом браузере с поддержкой интерактивного меню, стрелочек и цветных таблиц:
+
+```bash
+docker run -d --name dpi-detector-web -p 7681:7681 --restart unless-stopped ghcr.io/runnin4ik/dpi-detector:web
+```
+
+Откройте в браузере: **`http://<IP_сервера>:7681`** (или `http://localhost:7681`).
+
+#### С монтированием конфигов (для быстрого редактирования на хосте):
+```bash
+docker run -d --name dpi-detector-web -p 7681:7681 \
+  -v $(pwd)/config.yml:/app/config.yml \
+  -v $(pwd)/domains.txt:/app/domains.txt \
+  -v $(pwd)/whitelist_sni.txt:/app/whitelist_sni.txt \
+  --restart unless-stopped \
+  ghcr.io/runnin4ik/dpi-detector:web
+```
+
+#### Через Docker Compose:
+```bash
+docker compose up -d
+```
+
 
 ## 🐍 Python 3.8+
 **Требования:** httpx[socks,http2]>=0.28.1, rich>=14.3.2, PyYAML>=6.0.3

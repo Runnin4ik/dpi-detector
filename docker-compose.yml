@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  dpi-detector-web:
+    image: ghcr.io/runnin4ik/dpi-detector:web
+    container_name: dpi-detector-web
+    restart: unless-stopped
+    ports:
+      - "7681:7681"
+    environment:
+      - TERM=xterm-256color
+    # Для кастомизации конфигов на хосте раскомментируйте нужные строки:
+    # volumes:
+    #   - ./config.yml:/app/config.yml
+    #   - ./domains.txt:/app/domains.txt
+    #   - ./whitelist_sni.txt:/app/whitelist_sni.txt
+    #   - ./tcp16.json:/app/tcp16.json
