@@ -104,6 +104,7 @@ docker run --rm -it --pull=always ^
   ghcr.io/runnin4ik/dpi-detector:latest
 ```
 </details>
+
 ### 🌐 Web-интерфейс (Docker / Proxmox / Portainer)
 
 Интерактивный запуск в браузере на порту `7681`:
