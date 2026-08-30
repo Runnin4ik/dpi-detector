@@ -133,8 +133,8 @@ chmod +x dpi_detector_v4.0.7_macos_arm64
 - **Для готовых сборок (.exe / Linux / macOS):** скачайте нужные файлы из репозитория в папку рядом с исполняемым файлом и измените их.
 - **Для Docker:** Запустите с монтированием (можно монтировать один или несколько файлов)
 
-<summary>Список команд для разны OS:</summary>
 <details>
+<summary>Команды монтирования для разных ОС</summary>
 ```bash
 # Bash (Linux / macOS)
 docker run --rm -it --pull=always \
