@@ -572,39 +572,65 @@ async def check_dns_availability() -> dict:
     )
     console.print()
 
-    # ── Таблица эндпоинтов ────────────────────────────────────────────────────
+    # ── Таблицы эндпоинтов (DoH, DoT, UDP) ───────────────────────────────────
     from rich.table import Table as _Table
-    ep_table = _Table(show_header=True, header_style="bold magenta",
-                      border_style="dim", box=None, pad_edge=False)
-    ep_table.add_column("Провайдер", style="bold cyan", no_wrap=True, min_width=16)
-    ep_table.add_column("DoH эндпоинты", style="dim", no_wrap=False)
+
+    if doh_servers:
+        doh_table = _Table(title="[bold magenta]DoH эндпоинты[/bold magenta]",
+                           show_header=True, header_style="bold magenta",
+                           border_style="dim", box=None, pad_edge=False)
+        doh_table.add_column("Провайдер", style="bold cyan", no_wrap=True, min_width=16)
+        doh_table.add_column("DoH URL", style="dim", no_wrap=False)
+        for name in all_names:
+            urls = doh_by_name.get(name, [])
+            if not urls:
+                continue
+            dports = doh_ports.get(name, [])
+            doh_disp = [_doh_url_with_port(u, p) if p != 443 else u
+                        for u, p in zip(urls, dports)]
+            doh_str = "\n".join(f"{u} [dim]#{i+1}[/dim]" if len(doh_disp) > 1 else u
+                                for i, u in enumerate(doh_disp))
+            doh_table.add_row(name, doh_str)
+        console.print(doh_table)
+        console.print()
+
     if dot_servers:
-        ep_table.add_column("DoT", style="dim", no_wrap=True)
-    ep_table.add_column("UDP",            style="dim",   no_wrap=True)
+        dot_table = _Table(title="[bold magenta]DoT эндпоинты[/bold magenta]",
+                           show_header=True, header_style="bold magenta",
+                           border_style="dim", box=None, pad_edge=False)
+        dot_table.add_column("Провайдер", style="bold cyan", no_wrap=True, min_width=16)
+        dot_table.add_column("DoT эндпоинты", style="dim", no_wrap=False)
+        for name in all_names:
+            eps = dot_by_name.get(name, [])
+            if not eps:
+                continue
+            eports = dot_ports.get(name, [])
+            dot_disp = [f"{e}:{p}" if p != 853 else e
+                        for e, p in zip(eps, eports)]
+            dot_str = ", ".join(f"{e} [dim]#{i+1}[/dim]" if len(dot_disp) > 1 else e
+                                for i, e in enumerate(dot_disp))
+            dot_table.add_row(name, dot_str)
+        console.print(dot_table)
+        console.print()
 
-    for name in all_names:
-        doh_urls = doh_by_name.get(name, [])
-        udp_ips  = udp_by_name.get(name, [])
-        dot_eps  = dot_by_name.get(name, [])
-        dports, uports, eports = (doh_ports.get(name, []), udp_ports.get(name, []),
-                                  dot_ports.get(name, []))
-        # Порт показываем, если нестандартный
-        doh_disp = [_doh_url_with_port(u, p) if p != 443 else u
-                    for u, p in zip(doh_urls, dports)]
-        udp_disp = [f"{ip}:{p}" if p != 53 else ip for ip, p in zip(udp_ips, uports)]
-        dot_disp = [f"{e}:{p}" if p != 853 else e for e, p in zip(dot_eps, eports)]
-        # Номера эндпоинтов (#1..#N) — чтобы сопоставить с «Имя #N» в таблице результатов
-        doh_str  = "\n".join(f"{u} [dim]#{i+1}[/dim]" for i, u in enumerate(doh_disp)) if doh_disp else "[dim]—[/dim]"
-        udp_str  = ", ".join(f"{ip} [dim]#{i+1}[/dim]" for i, ip in enumerate(udp_disp)) if udp_disp else "[dim]—[/dim]"
-        dot_str  = ", ".join(f"{e} [dim]#{i+1}[/dim]" for i, e in enumerate(dot_disp)) if dot_disp else "[dim]—[/dim]"
-        ep_row = [name, doh_str]
-        if dot_servers:
-            ep_row.append(dot_str)
-        ep_row.append(udp_str)
-        ep_table.add_row(*ep_row)
-
-    console.print(ep_table)
-    console.print()
+    if udp_servers:
+        udp_table = _Table(title="[bold magenta]UDP эндпоинты[/bold magenta]",
+                           show_header=True, header_style="bold magenta",
+                           border_style="dim", box=None, pad_edge=False)
+        udp_table.add_column("Провайдер", style="bold cyan", no_wrap=True, min_width=16)
+        udp_table.add_column("UDP эндпоинты", style="dim", no_wrap=False)
+        for name in all_names:
+            ips = udp_by_name.get(name, [])
+            if not ips:
+                continue
+            uports = udp_ports.get(name, [])
+            udp_disp = [f"{ip}:{p}" if p != 53 else ip
+                        for ip, p in zip(ips, uports)]
+            udp_str = ", ".join(f"{ip} [dim]#{i+1}[/dim]" if len(udp_disp) > 1 else ip
+                                for i, ip in enumerate(udp_disp))
+            udp_table.add_row(name, udp_str)
+        console.print(udp_table)
+        console.print()
 
     # ── Домены проверки и дисклеймер ──────────────────────────────────────────
     console.print(
