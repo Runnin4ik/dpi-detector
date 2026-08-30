@@ -14,7 +14,6 @@
 Инструмент для анализа цензуры трафика в России: обнаруживает и классифицирует блокировки сайтов, хостингов и CDN (TCP16-20 блокировки), а также подмену DNS-запросов провайдером.
 
 > <b>Инструмент был полезен? Поставь ⭐ в качестве "спасибо"!</b>
-
 > 🕊️ Заглядывайте в наш <a href="https://t.me/DPI_detector">телеграм чат</a>
 
 ## 📥 Скачать / Download
@@ -51,13 +50,6 @@
                 <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_macos_intel"><img src="https://img.shields.io/badge/Intel-x86__64-555555.svg?logo=apple&logoColor=white" alt="macOS Intel"></a>
             </td>
         </tr>
-        <tr>
-            <td><b>🐳 Docker</b></td>
-            <td>
-                <a href="https://github.com/Runnin4ik/dpi-detector/pkgs/container/dpi-detector"><img src="https://img.shields.io/badge/Docker_CLI-ghcr.io-2496ED.svg?logo=docker&logoColor=white" alt="Docker CLI"></a>
-                <a href="https://github.com/Runnin4ik/dpi-detector/pkgs/container/dpi-detector"><img src="https://img.shields.io/badge/Docker_Web_UI-Port_7681-45bf55.svg?logo=docker&logoColor=white" alt="Docker Web"></a>
-            </td>
-        </tr>
     </tbody>
 </table>
 </div>
@@ -78,6 +70,58 @@
 > [!WARNING]  
 > Если у вас запущены средства обхода блокировок (например, zapret или GoodbyeDPI), результаты тестов будут искажены. Чтобы узнать реальное состояние фильтров вашего провайдера, выключите их перед началом проверки или убедитесь, что они работают в режиме обработки всех пакетов (режим ALL), а не только по списку.
 
+## 🐋 Docker
+
+### Быстрый старт
+Docker проверит наличие обновлений и скачает свежую версию перед запуском
+```bash
+docker run --rm -it --pull=always ghcr.io/runnin4ik/dpi-detector:latest
+```
+
+### Web-интерфейс
+```bash
+docker run -d --name dpi-detector-web -p 7681:7681 --restart unless-stopped ghcr.io/runnin4ik/dpi-detector:web
+```
+Откройте в браузере: **`http://<IP_сервера>:7681`** или **`http://localhost:7681`**
+
+## 🐍 Python 3.8+
+**Требования:** httpx[socks,http2]>=0.28.1, rich>=14.3.2, PyYAML>=6.0.3
+
+**Установка:**
+```bash
+# скачайте и распакуйте архив руками, или:
+git clone https://github.com/Runnin4ik/dpi-detector.git
+cd dpi-detector
+python -m pip install -r requirements.txt
+```
+
+**Запуск:**
+```bash
+python dpi_detector.py
+# или с параметрами
+python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
+```
+
+## 🐧 Linux
+
+Сделайте файл исполняемым и запустите:
+```bash
+chmod +x dpi_detector_v4.0.7_linux_x86_64
+./dpi_detector_v4.0.7_linux_x86_64
+```
+
+## 🍎 macOS 
+
+Приложение не нотаризовано, поэтому macOS заблокирует файл, скачанный через браузер. Снимите карантин и запустите:
+
+```bash
+xattr -cr dpi_detector_v4.0.7_macos_arm64
+chmod +x dpi_detector_v4.0.7_macos_arm64
+./dpi_detector_v4.0.7_macos_arm64
+```
+
+Либо: **Системные настройки → Конфиденциальность и безопасность → "Открыть в любом случае"** (macOS Sequoia и новее), на старых версиях — ПКМ по файлу → **Открыть**.
+
 ### ⚙️ Кастомизация
 Вы можете переопределить стандартные файлы и списки:
 
@@ -86,40 +130,11 @@
 3. `config.yml` — параметры конфигурации (таймауты, DoH-серверы и т.д.).
 4. `whitelist_sni.txt` — список белых SNI для подбора рабочих доменов.
 
-- **Для готовых сборок (.exe / Linux / macOS):** положите нужные файлы в папку рядом с исполняемым файлом.
-- **Для Docker:** пробросьте файлы через том, например `-v $(pwd)/domains.txt:/app/domains.txt`.
-- **Для Python:** редактируйте файлы прямо в папке проекта.
-### ⚙️ Запуск с параметрами (CLI)
+- **Для готовых сборок (.exe / Linux / macOS):** скачайте нужные файлы из репозитория в папку рядом с исполняемым файлом и измените их.
+- **Для Docker:** Запустите с монтированием (можно монтировать один или несколько файлов)
 
-| Параметр              | Описание                                                            | Пример использования         |
-|:----------------------|:--------------------------------------------------------------------|:-----------------------------|
-| `-t`, `--tests`       | Указать номера тестов (без меню).                                   | `-t 123` или `-t 4`          |
-| `-p`, `--proxy`       | Использовать прокси (переопределяет `PROXY_URL`).                   | `-p socks5://127.0.0.1:1080` |
-| `-d`, `--domain`      | Проверка отдельных доменов. Игнорирует `domains.txt`                | `-d vk.com -d youtube.com`   |
-| `-c`, `--concurrency` | Количество конкурентных запросов (переопределяет `MAX_CONCURRENT`). | `-c 50`                      |
-| `-o`, `--output`      | Автоматически сохранить лог в указанный файл.                       | `-o report_log.txt`          |
-| `--batch`             | Отключает все вопросы и паузы в консоли.                            | `--batch`                    |
-
-> **Прокси:** при заданном `PROXY_URL`/`-p` весь трафик всех тестов идёт через прокси,
-> включая UDP-пробы теста 1 (через SOCKS5 UDP-relay; для HTTP-прокси UDP-релей невозможен —
-> UDP-пробы идут напрямую). Для честного замера подмены своим провайдером запускайте без прокси.
-
-## 🐋 Docker (Рекомендовано)
-
-### Быстрый старт
-Docker проверит наличие обновлений и скачает свежую версию перед запуском
-```bash
-docker run --rm -it --pull=always ghcr.io/runnin4ik/dpi-detector:latest
-```
-Или запускайте с указанием определенной версии  
-Это избавляет от постоянных скачиваний, но нужно следить за актуальностью версий
-```bash
-docker run --rm -it ghcr.io/runnin4ik/dpi-detector:4.0.7
-```
-
-#### С кастомизацией
-Переопределите нужные файлы: `domains.txt`, `tcp16.json`...
-Запустите с монтированием (можно монтировать один или несколько файлов)
+<summary>Список команд для разны OS:</summary>
+<details>
 ```bash
 # Bash (Linux / macOS)
 docker run --rm -it --pull=always \
@@ -129,8 +144,6 @@ docker run --rm -it --pull=always \
   -v $(pwd)/whitelist_sni.txt:/app/whitelist_sni.txt \
   ghcr.io/runnin4ik/dpi-detector:latest -t 123 -d discord.com
 ```
-<details>
-<summary>Команды для PowerShell и CMD</summary>
 
 PowerShell (Windows)
 ```bash
@@ -151,17 +164,8 @@ docker run --rm -it --pull=always ^
   -v %cd%/whitelist_sni.txt:/app/whitelist_sni.txt ^
   ghcr.io/runnin4ik/dpi-detector:latest
 ```
-</details>
 
-### 🌐 Web-интерфейс
-
-Интерактивный запуск в браузере на порту `7681`:
-```bash
-docker run -d --name dpi-detector-web -p 7681:7681 --restart unless-stopped ghcr.io/runnin4ik/dpi-detector:web
-```
-Откройте в браузере: **`http://<IP_сервера>:7681`** или **`http://localhost:7681`**
-
-#### С монтированием конфигов (для редактирования на хосте):
+Docker с монтированием файлов
 ```bash
 docker run -d --name dpi-detector-web -p 7681:7681 \
   -v $(pwd)/config.yml:/app/config.yml \
@@ -171,61 +175,27 @@ docker run -d --name dpi-detector-web -p 7681:7681 \
   ghcr.io/runnin4ik/dpi-detector:web
 ```
 
-Либо через Docker Compose:
+Либо через Docker Compose в скачанной папке проекта:
 ```bash
 docker compose up -d
 ```
+</details>
 
-## 🐍 Python 3.8+
-**Требования:** httpx[socks,http2]>=0.28.1, rich>=14.3.2, PyYAML>=6.0.3
 
-**Установка:**
-```bash
-# скачайте и распакуйте архив руками, или:
-git clone https://github.com/Runnin4ik/dpi-detector.git
-cd dpi-detector
-python -m pip install -r requirements.txt
-```
+### ⚙️ Запуск с параметрами (CLI)
 
-**Запуск:**
-```bash
-python dpi_detector.py
-# или с параметрами
-python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
-```
+| Параметр              | Описание                                                            | Пример использования         |
+|:----------------------|:--------------------------------------------------------------------|:-----------------------------|
+| `-t`, `--tests`       | Указать номера тестов (без меню).                                   | `-t 123` или `-t 4`          |
+| `-p`, `--proxy`       | Использовать прокси (переопределяет `PROXY_URL`).                   | `-p socks5://127.0.0.1:1080` |
+| `-d`, `--domain`      | Проверка отдельных доменов. Игнорирует `domains.txt`                | `-d vk.com -d youtube.com`   |
+| `-c`, `--concurrency` | Количество конкурентных запросов (переопределяет `MAX_CONCURRENT`). | `-c 50`                      |
+| `-o`, `--output`      | Автоматически сохранить лог в указанный файл.                       | `-o report_log.txt`          |
+| `--batch`             | Отключает все вопросы и паузы в консоли.                            | `--batch`                    |
 
-## 🪟 Windows
-
-Запустите `.exe` файл двойным кликом в проводнике или через командную строку:
-```bash
-.\dpi_detector_v4.0.7_win10.exe
-# или с параметрами
-.\dpi_detector_v4.0.7_win10.exe -t 2 -d discord.com
-```
-
-## 🐧 Linux
-
-Сделайте файл исполняемым и запустите:
-```bash
-chmod +x dpi_detector_v4.0.7_linux_x86_64
-./dpi_detector_v4.0.7_linux_x86_64
-# или с параметрами
-./dpi_detector_v4.0.7_linux_x86_64 -t 2 -d discord.com
-```
-
-## 🍎 macOS (Экспериментально)
-
-Готовые сборки для macOS **экспериментальны** — протестированы не на всех конфигурациях. Буду благодарен за фидбек в [Issue](https://github.com/Runnin4ik/dpi-detector/issues).
-
-Приложение не нотаризовано, поэтому macOS заблокирует файл, скачанный через браузер. Снимите карантин и запустите:
-
-```bash
-xattr -cr dpi_detector_v4.0.7_macos_arm64
-chmod +x dpi_detector_v4.0.7_macos_arm64
-./dpi_detector_v4.0.7_macos_arm64
-```
-
-Либо: **Системные настройки → Конфиденциальность и безопасность → "Открыть в любом случае"** (macOS Sequoia и новее), на старых версиях — ПКМ по файлу → **Открыть**.
+> **Прокси:** при заданном `PROXY_URL`/`-p` весь трафик всех тестов идёт через прокси,
+> включая UDP-пробы теста 1 (через SOCKS5 UDP-relay; для HTTP-прокси UDP-релей невозможен —
+> UDP-пробы идут напрямую). Для честного замера подмены своим провайдером запускайте без прокси.
 
 ## 🤝 Вклад в проект
 Приветствуются Issue и Pull Request'ы и предложения функционала!
