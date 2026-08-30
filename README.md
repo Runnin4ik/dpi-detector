@@ -139,6 +139,37 @@ curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.11/
 ```
 *(Приложение не нотаризовано: `xattr -cr` снимает системный карантин macOS на запуск)*
 
+Вот готовый блок, оформленный в общем стиле вашего `README.md`:
+
+```markdown
+## 📱 Android (Termux)
+
+Для запуска требуется терминал **Termux**.  
+> ⚠️ Устанавливайте Termux только из **[F-Droid](https://f-droid.org/packages/com.termux/)** или **[GitHub Releases](https://github.com/termux/termux-app/releases)** (версия из Google Play устарела и не поддерживается).
+
+#### Установка и запуск
+
+```bash
+pkg update && pkg upgrade -y
+```
+*(Если при обновлении спросит \[default=N\] — просто нажимайте Enter)*
+
+```bash
+pkg install git python clang make -y
+```
+
+```bash
+git clone https://github.com/Runnin4ik/dpi-detector.git && cd dpi-detector
+```
+
+```bash
+pip install -r requirements.txt
+```
+
+```bash
+python dpi_detector.py
+```
+
 ### ⚙️ Кастомизация
 Вы можете переопределить стандартные файлы и списки:
 
