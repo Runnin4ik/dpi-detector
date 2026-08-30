@@ -53,13 +53,13 @@
         <tr>
             <td><b>📱 Android (Termux)</b></td>
             <td>
-                <a href="#android-termux">Инструкция</a>
+                <a href="#-android-termux">Инструкция</a>
             </td>
         </tr>
         <tr>
             <td><b>🐳 Docker</b></td>
             <td>
-                <a href="#docker">Инструкция</a>
+                <a href="#-docker">Инструкция</a>
             </td>
         </tr>
     </tbody>
