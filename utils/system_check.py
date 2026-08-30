@@ -136,8 +136,26 @@ def _read_dns_entries(guid: str) -> List[tuple]:
                             raw = winreg.QueryValueEx(k, val)[0]
                         except OSError:
                             continue
-                        for s in re.split(r"[,\s]+", str(raw)):
-                            s = s.strip()
+                        cand: List[str] = []
+                        if isinstance(raw, (bytes, bytearray)):
+                            import ipaddress
+                            for i in range(0, len(raw) - len(raw) % 16, 16):
+                                chunk = bytes(raw[i:i + 16])
+                                try:
+                                    cand.append(str(ipaddress.IPv6Address(chunk)))
+                                except Exception:
+                                    pass
+                        elif isinstance(raw, (list, tuple)):
+                            for item in raw:
+                                for s in re.split(r"[,\s]+", str(item)):
+                                    if s.strip():
+                                        cand.append(s.strip())
+                        elif isinstance(raw, str):
+                            for s in re.split(r"[,\s]+", raw):
+                                if s.strip():
+                                    cand.append(s.strip())
+
+                        for s in cand:
                             if s and not any(s == e[0] for e in entries):
                                 entries.append((s, src))
             except OSError:
