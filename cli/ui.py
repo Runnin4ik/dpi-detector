@@ -210,7 +210,8 @@ async def _ask_selection_line_based(header_state: dict = None) -> str:
     """Fallback для не-терминала (пайп/CI): прежний ввод строкой.
     'u' — обновить до последней версии (если доступна)."""
     valid = _valid_selections()
-    latest = (header_state or {}).get("latest") or ""
+    latest_info = (header_state or {}).get("latest") or {}
+    latest = latest_info.get("version") if isinstance(latest_info, dict) else ""
     current = (header_state or {}).get("current") or ""
     update_avail = bool(latest and current and is_newer(latest, current)
                         and get_launch_type() != "docker")
@@ -285,7 +286,8 @@ async def _ask_selection_interactive(header_state: dict = None,
 
     def _update_row() -> tuple:
         """(доступно обновление, строка меню для него). None если нечего обновлять."""
-        latest = (header_state or {}).get("latest") or ""
+        latest_info = (header_state or {}).get("latest") or {}
+        latest = latest_info.get("version") if isinstance(latest_info, dict) else ""
         current = (header_state or {}).get("current") or ""
         if not (latest and current and is_newer(latest, current)
                 and get_launch_type() != "docker"):
