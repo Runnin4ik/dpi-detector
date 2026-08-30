@@ -95,8 +95,9 @@ jobs:
             -v "$(pwd)":/src -w /src \
             -e BIN_NAME="$BIN_NAME" \
             -e PYI_STATIC_ZLIB=1 \
-            python:3.11-slim-bullseye \
+            python:3.11-slim-bookworm \
             bash -c '
+              export DEBIAN_FRONTEND=noninteractive && \
               apt-get update && apt-get install -y --no-install-recommends binutils gcc libc6-dev zlib1g-dev && \
               python -m pip install --upgrade pip && \
               pip install "httpx[socks,http2]" rich pyinstaller pyyaml && \
