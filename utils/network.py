@@ -133,6 +133,19 @@ def get_fake_ip_type(ip_str: str) -> str:
     except ValueError:
         return None
 
+def is_local_or_relay_ip(ip_str: str) -> bool:
+    """True, если IP — локальный/приватный, петлевой, fake-ip или CGNAT-шлюз/релей."""
+    if not ip_str:
+        return False
+    fake_type = get_fake_ip_type(ip_str)
+    if fake_type in ("fakeip", "local", "isp"):
+        return True
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_reserved
+    except ValueError:
+        return False
+
 
 from time import monotonic as _monotonic
 

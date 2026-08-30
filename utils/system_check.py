@@ -421,7 +421,7 @@ def get_system_dns() -> dict:
                 if g == active_guid:
                     continue
                 for ip, src in _read_dns_entries(g):
-                    if src == "static" and ip not in shown:
+                    if ip not in shown:
                         res["other_static"].append((ip, names.get(g) or "{" + g[:8] + "}"))
                         shown.add(ip)
             return res

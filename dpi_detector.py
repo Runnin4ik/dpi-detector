@@ -34,7 +34,7 @@ from core.dns_scanner import (
     _build_dns_query,
     _parse_txt_response,
 )
-from utils.network import ipv6_supported
+from utils.network import ipv6_supported, is_local_or_relay_ip
 from utils.files import load_domains, load_tcp_targets, load_whitelist_sni, get_base_dir
 from utils.system_check import get_system_dns, detect_bypass_tools
 
@@ -793,23 +793,36 @@ async def main():
             for k in ("subnet", "org", "cc"):
                 info["v6"].setdefault(k, "timeout")
 
-        # upstream роутера: активный DNS == шлюз → роутер-релей (dnsmasq и т.п.)
+        # upstream роутера / VPN: опрашиваем локальные релеи (dnsmasq, xray, sing-box, fake-ip и т.п.)
         gw = dns_info.get("gateway")
-        active_ips = {ip for ip, _ in dns_info.get("active", [])}
-        if gw and gw in active_ips:
-            up = await probe_resolver_ip(gw)
-            if up:
-                org = ""
-                try:
-                    up_info = await _fetch_ip_info(up)
-                    org = up_info.get("org") or ""
-                except Exception:
-                    pass
-                a_name = dns_info.get("active_name") or ""
-                label = "Upstream VPN" if _is_tun_name(a_name) else "Резолвер роутера"
-                dns_info["upstream"] = up + (f" ({org})" if org else "")
-                dns_info["upstream_label"] = label
+        active_ips = [ip for ip, _ in dns_info.get("active", [])]
+        candidates = []
+        for ip in active_ips:
+            if is_local_or_relay_ip(ip) and ip not in candidates:
+                candidates.append(ip)
+        if gw and is_local_or_relay_ip(gw) and gw not in candidates:
+            candidates.append(gw)
 
+        up = None
+        for cand in candidates:
+            try:
+                up = await probe_resolver_ip(cand)
+                if up:
+                    break
+            except Exception:
+                pass
+
+        if up:
+            org = ""
+            try:
+                up_info = await _fetch_ip_info(up)
+                org = up_info.get("org") or ""
+            except Exception:
+                pass
+            a_name = dns_info.get("active_name") or ""
+            label = "Upstream VPN" if _is_tun_name(a_name) else "Резолвер роутера"
+            dns_info["upstream"] = up + (f" ({org})" if org else "")
+            dns_info["upstream_label"] = label
         return _net_info_panel(info, dns_info, bypass)
 
     async def _version_updater() -> None:
