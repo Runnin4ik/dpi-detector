@@ -17,6 +17,51 @@
 
 > 🕊️ Заглядывайте в наш <a href="https://t.me/DPI_detector">телеграм чат</a>
 
+## 📥 Скачать / Download
+
+<div align="left">
+<table>
+    <thead align="left">
+        <tr>
+            <th>ОС / Платформа</th>
+            <th>Готовые сборки</th>
+        </tr>
+    </thead>
+    <tbody align="left">
+        <tr>
+            <td><b>🪟 Windows</b></td>
+            <td>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_win10.exe"><img src="https://img.shields.io/badge/Windows_10_/_11-x64-0078d7.svg?logo=windows&logoColor=white" alt="Windows 10/11"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_win7.exe"><img src="https://img.shields.io/badge/Windows_7_/_8-Legacy-00a4ef.svg?logo=windows&logoColor=white" alt="Windows 7/8"></a>
+            </td>
+        </tr>
+        <tr>
+            <td><b>🐧 Linux</b></td>
+            <td>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_x86_64"><img src="https://img.shields.io/badge/Linux-x86__64-f84e29.svg?logo=linux&logoColor=white" alt="Linux x86_64"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_arm64"><img src="https://img.shields.io/badge/Linux-ARM64-168039.svg?logo=linux&logoColor=white" alt="Linux ARM64"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_armv7"><img src="https://img.shields.io/badge/Linux-ARMv7-45bf55.svg?logo=linux&logoColor=white" alt="Linux ARMv7"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_x86"><img src="https://img.shields.io/badge/Linux-x86_32bit-FF9966.svg?logo=linux&logoColor=white" alt="Linux x86"></a>
+            </td>
+        </tr>
+        <tr>
+            <td><b>🍎 macOS</b></td>
+            <td>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_macos_arm64"><img src="https://img.shields.io/badge/Apple_Silicon-M1--M4-000000.svg?logo=apple&logoColor=white" alt="macOS Apple Silicon"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_macos_intel"><img src="https://img.shields.io/badge/Intel-x86__64-555555.svg?logo=apple&logoColor=white" alt="macOS Intel"></a>
+            </td>
+        </tr>
+        <tr>
+            <td><b>🐳 Docker</b></td>
+            <td>
+                <a href="https://github.com/Runnin4ik/dpi-detector/pkgs/container/dpi-detector"><img src="https://img.shields.io/badge/Docker_CLI-ghcr.io-2496ED.svg?logo=docker&logoColor=white" alt="Docker CLI"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/pkgs/container/dpi-detector"><img src="https://img.shields.io/badge/Docker_Web_UI-Port_7681-45bf55.svg?logo=docker&logoColor=white" alt="Docker Web"></a>
+            </td>
+        </tr>
+    </tbody>
+</table>
+</div>
+
 ![Пример результатов](https://raw.githubusercontent.com/Runnin4ik/dpi-detector/main/images/screenshot.png)
 
 ## 🎯 Возможности
@@ -148,10 +193,7 @@ python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
 
 ## 🪟 Windows (Готовые сборки)
 
-Для использования программы не обязательно устанавливать Python. Скачайте подходящий `.exe` файл в разделе [Releases -> Assets](https://github.com/Runnin4ik/dpi-detector/releases):
-
-*   **[Скачать для Windows 10 / 11](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_win10.exe)**
-*   **[Скачать для Windows 7 / 8](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_win7.exe)**
+Для использования программы не обязательно устанавливать Python — скачайте подходящий `.exe` файл в [таблице выше](#-скачать--download) или в разделе [Releases](https://github.com/Runnin4ik/dpi-detector/releases).
 
 #### С кастомизацией
 
@@ -160,12 +202,7 @@ python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
 
 ## 🐧 Linux (Готовые бинарники)
 
-Для запуска не требуется устанавливать Python или Docker. Скачайте бинарник под вашу архитектуру из [Releases -> Assets](https://github.com/Runnin4ik/dpi-detector/releases):
-
-*   **[Скачать для x86_64 / AMD64](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_x86_64)** (ПК, серверы, ноутбуки, большинство дистрибутивов)
-*   **[Скачать для ARM64 / AArch64](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_arm64)** (Raspberry Pi 3/4/5, Orange Pi, Apple Silicon Linux, ARM VPS)
-*   **[Скачать для ARMv7 (32-bit)](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_armv7)** (Raspberry Pi 2, одноплатники, роутеры)
-*   **[Скачать для x86 (32-bit)](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_linux_x86)** (Старые 32-битные системы)
+Для запуска не требуется устанавливать Python или Docker — скачайте бинарник под вашу архитектуру в [таблице выше](#-скачать--download) или в разделе [Releases](https://github.com/Runnin4ik/dpi-detector/releases).
 
 #### Запуск
 
@@ -185,10 +222,7 @@ chmod +x dpi_detector_v4.0.7_linux_x86_64
 
 Готовые сборки для macOS появились недавно и **экспериментальны** — протестированы не на всех конфигурациях. Буду благодарен за фидбек в [Issue](https://github.com/Runnin4ik/dpi-detector/issues).
 
-Скачайте подходящий бинарник в разделе [Releases -> Assets](https://github.com/Runnin4ik/dpi-detector/releases):
-
-*   **[Скачать для Apple Silicon (M1–M4)](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_macos_arm64)**
-*   **[Скачать для Intel](https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.7/dpi_detector_v4.0.7_macos_intel)**
+Скачайте подходящий бинарник в [таблице выше](#-скачать--download) или в разделе [Releases](https://github.com/Runnin4ik/dpi-detector/releases).
 
 #### Запуск
 
