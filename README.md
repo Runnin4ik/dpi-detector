@@ -134,7 +134,8 @@ chmod +x dpi_detector_v4.0.8_macos_arm64
 - **Для Docker:** Запустите с монтированием (можно монтировать один или несколько файлов)
 
 <details>
-<summary>Команды монтирования для разных ОС (Нажмите чтобы открыть)</summary>
+<summary><b>Команды монтирования для разных ОС (Нажмите чтобы открыть)</b></summary>
+
 ```bash
 # Bash (Linux / macOS)
 docker run --rm -it --pull=always \
@@ -231,13 +232,3 @@ docker compose up -d
 | **SOL**  |        | `9obMiD8hYfs4D8XskQjHPPtAKYPq9CaEZTbBMxtCjQ3k`     |
 | **BTC**  |        | `bc1q7579xpmxcrz34lzmrxfupkpcczvemeqk2e9f4h`       |
 | **ETH**  |        | `0x97413028546b5da4cbba4d9838c9d635a5333ab1`       |
-
-## Star History
-
-<a href="https://www.star-history.com/#Runnin4ik/dpi-detector&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Runnin4ik/dpi-detector&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Runnin4ik/dpi-detector&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Runnin4ik/dpi-detector&type=date&legend=top-left" />
- </picture>
-</a>
