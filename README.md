@@ -248,26 +248,11 @@ docker compose up -d
 #### Из исходников (Python)
 ```bash
 python dpi_detector.py -t 0 --batch
-python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
-python dpi_detector.py -t 123 -c 50 -o report_log.txt
 ```
 
-#### Бинарник Windows (PowerShell)
-```powershell
-.\dpi_detector.exe -t 0 --batch
-.\dpi_detector.exe -t 2 -d discord.com -o report_log.txt
-```
-
-#### Бинарник Linux
+#### Бинарник
 ```bash
 ./dpi_detector_v4.0.11_linux_x86_64 -t 0 --batch
-./dpi_detector_v4.0.11_linux_arm64 -t 123 -c 50 -o report_log.txt
-```
-
-#### Бинарник macOS
-```bash
-./dpi_detector_v4.0.11_macos_arm64 -t 0 --batch
-./dpi_detector_v4.0.11_macos_intel -t 2 -d vk.com -d youtube.com
 ```
 
 > **Прокси:** при заданном `PROXY_URL`/`-p` весь трафик всех тестов идёт через прокси,
