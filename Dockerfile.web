@@ -1,8 +1,12 @@
-FROM ghcr.io/runnin4ik/dpi-detector:latest
+FROM python:3.14-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache ttyd
+COPY requirements.txt .
+RUN apk add --no-cache ttyd \
+    && apk add --no-cache --virtual .build-deps build-base yaml-dev \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apk del .build-deps
 
 COPY cli/ ./cli/
 COPY core/ ./core/

@@ -240,12 +240,13 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern=web-{{version}}
             type=semver,pattern=web-{{major}}.{{minor}}
             type=raw,value=web
             type=raw,value=web-latest
-
       - name: Build and push Web Docker image
         uses: docker/build-push-action@v5
         with:
