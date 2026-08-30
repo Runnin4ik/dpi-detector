@@ -39,7 +39,7 @@ from utils.files import load_domains, load_tcp_targets, load_whitelist_sni, get_
 from utils.system_check import get_system_dns, detect_bypass_tools
 from utils.updater import perform_update, cleanup_old_binaries
 
-CURRENT_VERSION = "4.0.11"
+CURRENT_VERSION = "4.0.12"
 GITHUB_REPO     = "Runnin4ik/dpi-detector"
 
 # DoH-эндпоинты для запросов Team Cymru (dns.google первым — работает и без SNI)
@@ -459,6 +459,7 @@ def parse_arguments():
     parser.add_argument("-d", "--domain",      type=str, action="append", help="Проверить конкретный домен(ы), игнорируя domains.txt.\nМожно указывать несколько раз: -d vk.com -d ya.ru")
     parser.add_argument("-o", "--output",      type=str, help="Путь для автосохранения отчета (например: report.txt).")
     parser.add_argument("--batch",             action="store_true", help="Отключает паузы и вопросы")
+    parser.add_argument("--update",            action="store_true", help="Проверить и обновить до последней версии, затем выйти")
     return parser.parse_args()
 
 
@@ -721,6 +722,24 @@ async def main():
         from cli.ui import clean_hostname
         DOMAINS = [clean_hostname(d) for d in args.domain]
         config.DNS_CHECK_DOMAINS = DOMAINS
+
+    # ── CLI-обновление: --update — проверить и обновить, затем выйти ──
+    if args.update:
+        console.clear()
+        from utils.updater import perform_update
+        latest = await _fetch_latest_version()
+        if not latest:
+            console.print("[yellow]Не удалось проверить обновления (GitHub недоступен).[/yellow]")
+            raise SystemExit(1)
+        version = latest.get("version") or ""
+        if not (version and is_newer(version, CURRENT_VERSION)):
+            console.print(f"[green]✓ Установлена актуальная версия v{CURRENT_VERSION}.[/green]")
+            raise SystemExit(0)
+        console.print(f"[cyan]Доступна новая версия v{version}. Обновление...[/cyan]")
+        ok = await perform_update(latest, CURRENT_VERSION)
+        if not ok:
+            raise SystemExit(1)
+        raise SystemExit(0)
 
     console.clear()
 

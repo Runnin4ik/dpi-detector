@@ -87,6 +87,14 @@ def cleanup_old_binaries(current_version: str) -> None:
                 pass
 
 
+def _execv(argv: list) -> None:
+    """Перезапуск процесса. Убирает --update из аргументов: после обновления
+    перезапущенный экземпляр не должен снова входить в CLI-обновление."""
+    if "--update" in argv:
+        argv = [a for a in argv if a != "--update"]
+    os.execv(argv[0], argv)
+
+
 async def _download(url: str, dest: Path, expected_sha: Optional[str] = None) -> bool:
     """Скачивает файл в dest (рядом с ним), при expected_sha сверяет SHA-256
     ДО финального переименования. Возвращает True при успехе."""
@@ -153,7 +161,7 @@ async def _update_git() -> bool:
     except Exception as e:
         console.print(f"[yellow]pip install: {e}[/yellow]")
     console.print("[green]Обновлено! Перезапуск...[/green]")
-    os.execv(sys.executable, [sys.executable] + sys.argv)
+    _execv([sys.executable] + sys.argv)
     return True
 
 
@@ -197,7 +205,7 @@ async def _update_binary(latest: dict) -> bool:
         # Имя версионное — новый файл рядом не конфликтует с запущенным exe.
         # Старые версии уберёт cleanup_old_binaries при следующем старте.
         console.print("[green]Новая версия скачана. Перезапуск...[/green]")
-        os.execv(str(dest), [str(dest)] + sys.argv[1:])
+        _execv([str(dest)] + sys.argv[1:])
         return True
 
     # POSIX: атомарная замена текущего бинарника (можно поверх запущенного)
@@ -212,7 +220,7 @@ async def _update_binary(latest: dict) -> bool:
     if sys.platform == "darwin":
         _macos_cleanup(current)
     console.print("[green]Обновлено! Перезапуск...[/green]")
-    os.execv(str(current), [str(current)] + sys.argv[1:])
+    _execv([str(current)] + sys.argv[1:])
     return True
 
 
