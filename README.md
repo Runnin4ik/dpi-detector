@@ -105,13 +105,13 @@ docker run --rm -it --pull=always ^
 ```
 </details>
 
-### 🌐 Web-интерфейс (Docker / Proxmox / Portainer)
+### 🌐 Web-интерфейс
 
 Интерактивный запуск в браузере на порту `7681`:
 ```bash
 docker run -d --name dpi-detector-web -p 7681:7681 --restart unless-stopped ghcr.io/runnin4ik/dpi-detector:web
 ```
-Откройте в браузере: **`http://<IP_сервера>:7681`**
+Откройте в браузере: **`http://<IP_сервера>:7681`** или **`http://localhost:7681`**
 
 #### С монтированием конфигов (для редактирования на хосте):
 ```bash
