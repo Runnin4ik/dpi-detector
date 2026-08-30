@@ -106,7 +106,7 @@ python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
 
 Быстрое скачивание и запуск в PowerShell одной командой:
 ```powershell
-curl.exe -L -o dpi_detector.exe https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.9/dpi_detector_v4.0.9_win10.exe; .\dpi_detector.exe
+curl.exe -fL -o dpi_detector.exe https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.9/dpi_detector_v4.0.9_win10.exe; if ($LASTEXITCODE -eq 0) { .\dpi_detector.exe }
 ```
 *Либо скачайте `.exe` файл из [таблицы выше](#-скачать--download) и запустите двойным кликом.*
 
@@ -115,10 +115,10 @@ curl.exe -L -o dpi_detector.exe https://github.com/Runnin4ik/dpi-detector/releas
 Быстрое скачивание и запуск одной командой:
 ```bash
 # x86_64 (AMD / Intel):
-curl -sSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.9/dpi_detector_v4.0.9_linux_x86_64 && chmod +x dpi_detector_v4.0.9_linux_x86_64 && ./dpi_detector_v4.0.9_linux_x86_64
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.9/dpi_detector_v4.0.9_linux_x86_64 && chmod +x dpi_detector_v4.0.9_linux_x86_64 && ./dpi_detector_v4.0.9_linux_x86_64
 
 # ARM64 (Raspberry Pi 3–5, Orange Pi, ARM VPS):
-curl -sSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.9/dpi_detector_v4.0.9_linux_arm64 && chmod +x dpi_detector_v4.0.9_linux_arm64 && ./dpi_detector_v4.0.9_linux_arm64
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.9/dpi_detector_v4.0.9_linux_arm64 && chmod +x dpi_detector_v4.0.9_linux_arm64 && ./dpi_detector_v4.0.9_linux_arm64
 ```
 
 ## 🍎 macOS
@@ -126,10 +126,10 @@ curl -sSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.9/dp
 Быстрое скачивание и запуск одной командой (со снятием карантина):
 ```bash
 # Apple Silicon (M1–M4):
-curl -sSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.9/dpi_detector_v4.0.9_macos_arm64 && chmod +x dpi_detector_v4.0.9_macos_arm64 && xattr -cr dpi_detector_v4.0.9_macos_arm64 && ./dpi_detector_v4.0.9_macos_arm64
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.9/dpi_detector_v4.0.9_macos_arm64 && chmod +x dpi_detector_v4.0.9_macos_arm64 && xattr -cr dpi_detector_v4.0.9_macos_arm64 && ./dpi_detector_v4.0.9_macos_arm64
 
 # Intel:
-curl -sSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.9/dpi_detector_v4.0.9_macos_intel && chmod +x dpi_detector_v4.0.9_macos_intel && xattr -cr dpi_detector_v4.0.9_macos_intel && ./dpi_detector_v4.0.9_macos_intel
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.0.9/dpi_detector_v4.0.9_macos_intel && chmod +x dpi_detector_v4.0.9_macos_intel && xattr -cr dpi_detector_v4.0.9_macos_intel && ./dpi_detector_v4.0.9_macos_intel
 ```
 *(Приложение не нотаризовано: `xattr -cr` снимает системный карантин macOS на запуск)*
 
