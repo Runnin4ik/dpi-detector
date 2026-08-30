@@ -1,12 +1,8 @@
-FROM python:3.14-alpine
+FROM ghcr.io/runnin4ik/dpi-detector:latest
 
 WORKDIR /app
 
-# Установка ttyd (легковесный web-терминал xterm.js) и зависимостей Python
-RUN apk add --no-cache ttyd \
-    && apk add --no-cache --virtual .build-deps build-base yaml-dev \
-    && pip install --no-cache-dir "httpx[socks,http2]" rich pyyaml \
-    && apk del .build-deps
+RUN apk add --no-cache ttyd
 
 COPY cli/ ./cli/
 COPY core/ ./core/
