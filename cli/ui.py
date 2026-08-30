@@ -4,7 +4,7 @@ import re
 import sys
 from urllib.parse import urlparse
 
-from cli.console import console
+from cli.console import console, supports_vt
 from utils import config
 from utils.error_classifier import clean_detail
 
@@ -243,19 +243,16 @@ async def _ask_selection_interactive(header_state: dict = None,
     loop = asyncio.get_running_loop()
     valid = _valid_selections()
 
-    def _header_render() -> str:
-        """Баннер + блок версии (инфо о сети — теперь тест 0, не в шапке)."""
+    def _header_render():
+        """Баннер (инфо о сети — теперь тест 0, не в шапке)."""
         if not header_state:
-            return ""
-        parts = [header_state["banner"]]
-        if header_state.get("ver_text"):
-            parts.append(header_state["ver_text"])
-        return "".join(parts)
+            return None
+        return header_state.get("banner")
 
     def _header_height() -> int:
         if not header_state:
             return 0
-        return header_state["banner_lines"] + (header_state.get("ver_lines") or 0)
+        return header_state.get("banner_lines", 0)
 
     ipv = getattr(config, "IP_VERSION", "ipv4")
     conc = config.MAX_CONCURRENT if config.MAX_CONCURRENT in CONCURRENCY_PRESETS else 50
@@ -310,10 +307,13 @@ async def _ask_selection_interactive(header_state: dict = None,
         total = _header_height() + len(lines) + 2 + 1   # шапка + панель + подсказка
         menu_h[0] = len(lines) + 2 + 1
         if not first:
-            sys.stdout.write(f"\x1b[{total}A")
-            sys.stdout.write("\r\x1b[0J")
+            if supports_vt():
+                sys.stdout.write(f"\x1b[{total}A\r\x1b[0J")
+                sys.stdout.flush()
+            else:
+                console.clear()
         if header:
-            sys.stdout.write(header)
+            console.print(header)
         console.print(Panel("\n".join(lines), title="Параметры и выбор тестов", box=box.ROUNDED, padding=(0, 1), width=PANEL_W))
         console.print(_MENU_HINT)
         sys.stdout.flush()
@@ -371,8 +371,14 @@ async def _ask_selection_interactive(header_state: dict = None,
     # Стираем меню с экрана: после Enter не должно оставаться «живого»
     # меню, в которое пользователь жмёт стрелки впустую (тест уже пошёл)
     try:
-        sys.stdout.write(f"\x1b[{menu_h[0]}A\r\x1b[0J")
-        sys.stdout.flush()
+        if supports_vt():
+            sys.stdout.write(f"\x1b[{menu_h[0]}A\r\x1b[0J")
+            sys.stdout.flush()
+        else:
+            console.clear()
+            header = _header_render()
+            if header:
+                console.print(header)
     except Exception:
         pass
 

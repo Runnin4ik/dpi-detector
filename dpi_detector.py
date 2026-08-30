@@ -38,7 +38,7 @@ from utils.network import ipv6_supported, is_local_or_relay_ip
 from utils.files import load_domains, load_tcp_targets, load_whitelist_sni, get_base_dir
 from utils.system_check import get_system_dns, detect_bypass_tools
 
-CURRENT_VERSION = "4.0.6"
+CURRENT_VERSION = "4.0.7"
 GITHUB_REPO     = "Runnin4ik/dpi-detector"
 
 # DoH-эндпоинты для запросов Team Cymru (dns.google первым — работает и без SNI)
@@ -402,57 +402,28 @@ def _net_info_panel(net_info: dict, sys_dns: dict, bypass: list) -> Optional[Pan
 
 
 def _render_banner(badge: str = "Проверка обновлений...") -> tuple:
-    """Баннер (ширина по контенту + запас): заголовок в верхней рамке;
-    две строки по два поля — автор/GitHub и чат/статус обновлений (4-й
-    элемент). Цвета: рамка/заголовок — cyan, подписи — серые, "Runni" —
-    пастельный фиолетовый, разделители — cyan, бейдж "актуально" — мягкий
-    зелёный (в пайпе цвета отключаются)."""
-    from rich.cells import cell_len
-
-    def _w(s: str, code: str) -> str:
-        return f"\x1b[{code}m{s}\x1b[0m"
-
-    color = console.color_system is not None
-    cyan   = "36"                 # ANSI Cyan (рамка, заголовок, разделители)
-    purple = "38;2;214;180;255"   # пастельный фиолетовый (автор)
-    green  = "38;2;90;247;142"    # зелёный #5af78e (бейдж "актуально")
-    gray   = "90"                 # серый (подписи полей)
-
-    title = f"DPI Detector v{CURRENT_VERSION}"
-    top_left = f"── {title} ─"
-
-    badge_colored = _w(badge, green) if badge == "✓ Актуальная версия" else badge
-    rows_plain = [
-        "  Автор: Runni • GitHub: Runnin4ik/dpi-detector",
-        f"  Чат: t.me/DPI_detector • {badge}",
-    ]
-    # Общая ширина обводок (BOX_W — по подсказке меню); если контент шире — по нему
-    W = max(BOX_W, max(cell_len(r) for r in rows_plain) + 4)
-    k = (W - 2) - cell_len(top_left)
-    if color:
-        top = _w("╭" + top_left + "─" * k + "╮", cyan)
+    """Баннер: Panel со стилями Rich Markup (заголовок, автор, GitHub, чат, обновления)."""
+    if badge == "✓ Актуальная версия":
+        badge_colored = "[#5af78e]✓ Актуальная версия[/#5af78e]"
+    elif badge.startswith("↑"):
+        badge_colored = f"[yellow]{badge}[/yellow]"
+    elif badge.startswith("×"):
+        badge_colored = f"[dim]{badge}[/dim]"
     else:
-        top = "╭" + top_left + "─" * k + "╮"
+        badge_colored = f"[dim]{badge}[/dim]"
 
-    body = []
-    for i, plain in enumerate(rows_plain):
-        gap = (W - 2) - cell_len(plain)
-        if not color:
-            body.append("│" + plain + " " * gap + "│")
-            continue
-        if i == 0:
-            row = (f"  {_w('Автор:', gray)} {_w('Runni', purple)}"
-                   f"{_w(' • ', cyan)}"
-                   f"{_w('GitHub:', gray)} Runnin4ik/dpi-detector")
-        else:
-            row = (f"  {_w('Чат:', gray)} t.me/DPI_detector"
-                   f"{_w(' • ', cyan)}"
-                   f"{badge_colored}")
-        body.append(_w("│", cyan) + row + " " * gap + _w("│", cyan))
-    bottom = _w("╰" + "─" * (W - 2) + "╯", cyan) if color else "╰" + "─" * (W - 2) + "╯"
-    text = "\n".join([top] + body + [bottom]) + "\n"
-    return text, len(text.splitlines())
-
+    row1 = "  [dim]Автор:[/dim] [rgb(214,180,255)]Runni[/rgb(214,180,255)] [cyan]•[/cyan] [dim]GitHub:[/dim] Runnin4ik/dpi-detector"
+    row2 = f"  [dim]Чат:[/dim] t.me/DPI_detector [cyan]•[/cyan] {badge_colored}"
+    panel = Panel(
+        f"{row1}\n{row2}",
+        title=f"DPI Detector v{CURRENT_VERSION}",
+        title_align="left",
+        border_style="cyan",
+        box=box.ROUNDED,
+        padding=(0, 1),
+        width=BOX_W,
+    )
+    return panel, 4
 
 def _version_badge(latest: Optional[str]) -> str:
     """Бейдж статуса обновлений для баннера."""
@@ -463,13 +434,13 @@ def _version_badge(latest: Optional[str]) -> str:
     return "✓ Актуальная версия"
 
 
-def _header_render(header: dict) -> str:
+def _header_render(header: dict):
     """Шапка: баннер (со статусом обновлений). Инфо о сети — тест 0."""
-    return header["banner"]
+    return header.get("banner")
 
 
 def _header_height(header: dict) -> int:
-    return header["banner_lines"]
+    return header.get("banner_lines", 0)
 
 DOMAINS         = load_domains()
 TCP_16_20_ITEMS = load_tcp_targets()
@@ -505,10 +476,8 @@ async def _fetch_latest_version() -> Optional[str]:
 
 
 def fast_exit_handler(sig, frame):
-    sys.stdout.write("\n\033[91m\033[1mПрервано пользователем.\033[0m\n")
-    sys.stdout.flush()
+    console.print("\n[bold red]Прервано пользователем.[/bold red]")
     os._exit(0)
-
 
 async def _readline_cancelable() -> str:
     loop = asyncio.get_running_loop()
@@ -842,8 +811,7 @@ async def main():
             await asyncio.wait_for(asyncio.shield(ver_task), timeout=4.0)
         except Exception:
             pass
-        sys.stdout.write(_header_render(header))
-        sys.stdout.flush()
+        console.print(_header_render(header))
     else:
         if sys.stdin is None or not sys.stdin.isatty():
             # пайп/CI: интерактивного обновления нет — ждём и печатаем сразу
@@ -851,8 +819,7 @@ async def main():
                 await asyncio.wait_for(asyncio.shield(ver_task), timeout=4.0)
             except Exception:
                 pass
-            sys.stdout.write(_header_render(header))
-            sys.stdout.flush()
+            console.print(_header_render(header))
         selection = await ask_test_selection(
             header_state=header, version_task=ver_task,
         )
