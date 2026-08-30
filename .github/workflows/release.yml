@@ -92,24 +92,24 @@ jobs:
           
           docker run --rm --platform ${{ matrix.platform }} \
             -v "$(pwd)":/src -w /src \
+            -e BIN_NAME="$BIN_NAME" \
             python:3.11-slim-bullseye \
-            bash -c "
+            bash -c '
               apt-get update && apt-get install -y --no-install-recommends binutils gcc libc6-dev && \
               python -m pip install --upgrade pip && \
-              pip install 'httpx[socks,http2]' rich pyinstaller pyyaml && \
-              pyinstaller --onefile --console --clean \
+              pip install "httpx[socks,http2]" rich pyinstaller pyyaml && \
+              pyinstaller --onefile --console --clean --noconfirm \
                 --collect-all rich \
                 --collect-all httpx \
                 --collect-all yaml \
-                --add-data 'domains.txt:.' \
-                --add-data 'tcp16.json:.' \
-                --add-data 'whitelist_sni.txt:.' \
-                --add-data 'config.yml:.' \
-                --name \"\$BIN_NAME\" \
+                --add-data "domains.txt:." \
+                --add-data "tcp16.json:." \
+                --add-data "whitelist_sni.txt:." \
+                --add-data "config.yml:." \
+                --name "$BIN_NAME" \
                 dpi_detector.py && \
-              chmod +x dist/\$BIN_NAME
-            "
-
+              chmod +x "dist/$BIN_NAME"
+            '
       - name: Upload binary to Release Assets
         uses: softprops/action-gh-release@v3
         with:
