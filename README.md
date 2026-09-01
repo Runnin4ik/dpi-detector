@@ -180,10 +180,6 @@ pip install -r requirements.txt
 Теперь закройте приложение, переведите телефон в горизонтальный режим и откройте a-Shell заново.
 
 ```bash
-cd dpi-detector.git
-```
-
-```bash
 python dpi_detector.py -t 123 --batch
 ```
 
