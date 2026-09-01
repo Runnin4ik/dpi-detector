@@ -170,13 +170,13 @@ pip install "httpx[socks,http2]" "rich" "pyyaml"
 ```
 
 ```bash
-git clone https://github.com/Runnin4ik/dpi-detector.git
+lg2 clone https://github.com/Runnin4ik/dpi-detector.git
 ```
 
 Теперь закройте приложение, переведите телефон в горизонтальный режим и откройте a-Shell заново.
 
 ```bash
-cd dpi-detector
+cd dpi-detector.git
 python dpi_detector.py -t 123 --batch
 ```
 
