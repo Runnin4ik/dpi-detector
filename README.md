@@ -166,7 +166,7 @@ curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.1.0/d
 #### Установка и запуск
 
 ```bash
-pip install "httpx[socks,http2]" "rich" "pyyaml"
+pip install -r requirements.txt
 ```
 
 ```bash
