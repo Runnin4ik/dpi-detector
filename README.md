@@ -161,7 +161,7 @@ curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.1.0/d
 
 Для запуска требуется терминал **a-Shell mini** ([App Store](https://apps.apple.com/us/app/a-shell-mini/id1543537943?l=ru)).
 
-> ⚠️ **Доступность в РФ:** приложение a-Shell mini может быть недоступно в App Store для вашего региона. В этом случае установите a-Shell mini под Apple ID другого региона или воспользуйтесь другой платформой (Android / Windows / Linux / macOS / Docker).
+> ⚠️ **Доступность в РФ:** Приложение a-Shell mini может быть недоступно в App Store для РФ региона.
 
 #### Установка и запуск
 
