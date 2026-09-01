@@ -57,6 +57,12 @@
             </td>
         </tr>
         <tr>
+            <td><b>📲 iOS (a-Shell)</b></td>
+            <td>
+                <a href="#-ios-a-shell">Инструкция</a>
+            </td>
+        </tr>
+        <tr>
             <td><b>🐳 Docker</b></td>
             <td>
                 <a href="#-docker">Инструкция</a>
@@ -150,6 +156,31 @@ curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.1.0/d
 curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.1.0/dpi_detector_v4.1.0_macos_intel && chmod +x dpi_detector_v4.1.0_macos_intel && xattr -cr dpi_detector_v4.1.0_macos_intel && ./dpi_detector_v4.1.0_macos_intel
 ```
 *(Приложение не нотаризовано: `xattr -cr` снимает системный карантин macOS на запуск)*
+
+## 📲 iOS (a-Shell)
+
+Для запуска требуется терминал **a-Shell mini** ([App Store](https://apps.apple.com/us/app/a-shell-mini/id1543537943?l=ru)).
+
+> ⚠️ **Доступность в РФ:** приложение a-Shell mini может быть недоступно в App Store для вашего региона. В этом случае установите a-Shell mini под Apple ID другого региона или воспользуйтесь другой платформой (Android / Windows / Linux / macOS / Docker).
+
+#### Установка и запуск
+
+```bash
+pip install "httpx[socks,http2]" "rich" "pyyaml"
+```
+
+```bash
+git clone https://github.com/Runnin4ik/dpi-detector.git
+```
+
+Теперь закройте приложение, переведите телефон в горизонтальный режим и откройте a-Shell заново.
+
+```bash
+cd dpi-detector
+python dpi_detector.py -t 123 --batch
+```
+
+> ⚠️ **Интерактивный режим не работает** в a-Shell — запускайте с параметрами: укажите нужные тесты через `-t` и добавьте `--batch`.
 
 ## 📱 Android (Termux)
 
