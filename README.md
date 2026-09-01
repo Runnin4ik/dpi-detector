@@ -166,17 +166,17 @@ curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.1.0/d
 #### Установка и запуск
 
 ```bash
-pip install -r requirements.txt
+lg2 clone https://github.com/Runnin4ik/dpi-detector.git
 ```
 
 ```bash
-lg2 clone https://github.com/Runnin4ik/dpi-detector.git
+cd dpi-detector.git
+pip install -r requirements.txt
 ```
 
 Теперь закройте приложение, переведите телефон в горизонтальный режим и откройте a-Shell заново.
 
 ```bash
-cd dpi-detector.git
 python dpi_detector.py -t 123 --batch
 ```
 
