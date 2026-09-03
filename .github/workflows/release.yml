@@ -76,8 +76,9 @@ jobs:
 
       - name: Install Rust toolchain (for cross)
         if: matrix.use_cross
-        uses: dtolnay/rust-toolchain@stable
-
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
       - name: Install musl-tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -119,23 +120,23 @@ jobs:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && !cancelled()
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: dist
+          path: release-files
+          pattern: dpi-detector-*
+          merge-multiple: true
 
-      - name: Flatten artifacts directory
+      - name: List artifacts to publish
         run: |
-          mkdir -p release-files
-          find dist -type f -exec mv -t release-files/ {} +
-          ls -la release-files/
+          ls -lh release-files/
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: release-files/*
           draft: false
-          prerelease: false
+          prerelease: true
           generate_release_notes: true
