@@ -217,7 +217,8 @@ fn draw_menu(
     notice: Option<&str>,
 ) {
     print!("\x1b[H\x1b[J");
-    print!("{}", render_banner(msg, profile, badge));
+    let banner = render_banner(msg, profile, badge).replace("\r\n", "\n").replace('\n', "\r\n");
+    print!("{}", banner);
 
     let mut lines = Vec::new();
     let offset = 2;
@@ -274,19 +275,19 @@ fn draw_menu(
         ("╭", "╮", "╰", "╯", "─", "│")
     };
 
-    println!("\x1b[1;36m{}{}\x1b[1;36m{}\x1b[1;36m{}\x1b[1;36m{}\x1b[0m", tl, hb, title_clean, hb.repeat(border_total), tr);
+    print!("\x1b[1;36m{}{}\x1b[1;36m{}\x1b[1;36m{}\x1b[1;36m{}\x1b[0m\r\n", tl, hb, title_clean, hb.repeat(border_total), tr);
 
     for line in &lines {
         let plain_len = strip_ansi_len(line);
         let pad = BOX_WIDTH.saturating_sub(plain_len + 3);
-        println!("\x1b[1;36m{}\x1b[0m {}{}\x1b[1;36m{}\x1b[0m", vb, line, " ".repeat(pad), vb);
+        print!("\x1b[1;36m{}\x1b[0m {}{}\x1b[1;36m{}\x1b[0m\r\n", vb, line, " ".repeat(pad), vb);
     }
 
-    println!("\x1b[1;36m{}{}{}\x1b[0m", bl, hb.repeat(BOX_WIDTH - 2), br);
-    println!("{}", asc(&format!("  \x1b[1;46;37m ↑↓ \x1b[0m {} │ \x1b[1;46;37m ←→ \x1b[0m {} │ \x1b[1;46;37m 0-6 \x1b[0m {} │ \x1b[1;42;37m Enter \x1b[0m {} │ \x1b[1;41;37m Q \x1b[0m {}\r",
+    print!("\x1b[1;36m{}{}{}\x1b[0m\r\n", bl, hb.repeat(BOX_WIDTH - 2), br);
+    print!("{}\r\n", asc(&format!("  \x1b[1;46;37m ↑↓ \x1b[0m {} │ \x1b[1;46;37m ←→ \x1b[0m {} │ \x1b[1;46;37m 0-6 \x1b[0m {} │ \x1b[1;42;37m Enter \x1b[0m {} │ \x1b[1;41;37m Q \x1b[0m {}",
         msg.menu_hw_row, msg.menu_hw_change, msg.menu_hw_tests, msg.menu_hw_start, msg.menu_hw_quit)));
     if let Some(n) = notice {
-        println!("  \x1b[1;33m{}\x1b[0m\r", n);
+        print!("  \x1b[1;33m{}\x1b[0m\r\n", n);
     }
     let _ = stdout().flush();
 }
@@ -322,56 +323,10 @@ pub fn sorted_selection(selected: &HashSet<char>) -> String {
     v.into_iter().collect()
 }
 
-/// Strict validity: non-empty subset of 0-6, ascending, no repeats
-/// (mirrors Python `_valid_selections`).
-pub fn is_valid_selection(s: &str) -> bool {
-    if s.is_empty() || s.len() > 7 {
-        return false;
-    }
-    let mut prev: Option<char> = None;
-    for c in s.chars() {
-        if !('0'..='6').contains(&c) {
-            return false;
-        }
-        if prev.is_some_and(|p| c <= p) {
-            return false;
-        }
-        prev = Some(c);
-    }
-    true
-}
-
-/// Parses one line-based selection (mirrors `_ask_selection_line_based`):
-/// empty → "123"; valid combo → itself; anything else warns on stderr (so a
-/// piped stdout report stays clean) and falls back to "123".
-pub fn parse_line_selection(raw: &str, msg: &Messages) -> String {
-    let t = raw.trim();
-    if t.is_empty() {
-        return "123".to_string();
-    }
-    if is_valid_selection(t) {
-        return t.to_string();
-    }
-    eprintln!("{}", msg.menu_invalid_line);
-    "123".to_string()
-}
-
-/// Reads one selection line from stdin (EOF/error → "123").
-pub fn read_line_selection(msg: &Messages) -> String {
-    use std::io::BufRead;
-    eprint!("{}", msg.menu_line_prompt);
-    let _ = stdout().flush();
-    let mut line = String::new();
-    match std::io::stdin().lock().read_line(&mut line) {
-        Ok(_) => parse_line_selection(&line, msg),
-        Err(_) => "123".to_string(),
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dpi_core::i18n::{get_messages, Language};
 
     #[test]
     fn test_toggle_and_sort() {
@@ -383,22 +338,4 @@ mod tests {
         assert_eq!(sorted_selection(&s), "3");
     }
 
-    #[test]
-    fn test_valid_selections_mirror_python() {
-        for good in ["0", "123", "0123456", "26", "6"] {
-            assert!(is_valid_selection(good), "{good}");
-        }
-        for bad in ["", "321", "112", "7", "u", "1a", "01234567"] {
-            assert!(!is_valid_selection(bad), "{bad}");
-        }
-    }
-
-    #[test]
-    fn test_parse_line_selection() {
-        let msg = get_messages(Language::Ru);
-        assert_eq!(parse_line_selection("", &msg), "123");
-        assert_eq!(parse_line_selection("  26\n", &msg), "26");
-        assert_eq!(parse_line_selection("xyz", &msg), "123");
-        assert_eq!(parse_line_selection("321", &msg), "123");
-    }
 }

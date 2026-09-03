@@ -35,7 +35,7 @@ mod menu;
 mod render;
 
 use args::CliArgs;
-use menu::{read_line_selection, run_interactive_menu, MenuResult, VersionSlot};
+use menu::{run_interactive_menu, MenuResult, VersionSlot};
 use render::{
     asc, panel_to_string, render_banner, render_dns_availability, render_dns_endpoints,
     render_dns_resolve_notes, render_domain_table, render_netinfo_panel, render_summary,
@@ -307,13 +307,7 @@ async fn main() {
     let is_interactive =
         args.tests.is_none() && !args.batch && !args.json && std::io::stdin().is_terminal();
 
-    // Line-based selection for pipes/CI (mirrors `_ask_selection_line_based`):
-    // one stdin line, empty/EOF/invalid → "123".
-    let mut tests_str = match args.tests.clone() {
-        Some(t) => t,
-        None if args.batch || args.json || std::io::stdin().is_terminal() => "123".to_string(),
-        None => read_line_selection(&msg),
-    };
+    let mut tests_str = args.tests.clone().unwrap_or_else(|| "123".to_string());
     let mut concurrency = cfg.max_concurrent;
     let mut ip_version = cfg.ip_version.clone();
 
