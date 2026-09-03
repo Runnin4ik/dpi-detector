@@ -1,10 +1,59 @@
 import ssl
-import math
 import errno
 import socket
 import asyncio
 from typing import Tuple, Optional
+from enum import Enum
 
+
+class ProbeStatus(str, Enum):
+    OK = "OK"
+    REDIR = "REDIR"
+    BLOCKED = "BLOCKED"
+    ISP_PAGE = "ISP PAGE"
+    LOCAL_IP = "LOCAL IP"
+    TIMEOUT = "TIMEOUT"
+    TCP16_20 = "TCP16-20"
+    TLS_RST = "TLS RST"
+    TLS_ALERT = "TLS ALERT"
+    TLS_BLOCK = "TLS BLOCK"
+    TLS_MITM = "TLS MITM"
+    NO_CA = "NO CA BUNDLE"
+    TLS_SPOOF = "TLS SPOOF"
+    TLS_EOF = "TLS EOF"
+    NO_TLS13 = "NO TLS1.3"
+    DNS_FAIL = "DNS FAIL"
+    OS_ERR = "OS ERR"
+    ERR = "ERR"
+
+    @classmethod
+    def is_ok(cls, status_str: str) -> bool:
+        """Проверяет, считается ли статус успехом (зелёный OK или легитимный редирект)."""
+        if not status_str:
+            return False
+        import re
+        plain = re.sub(r"\[.*?\]", "", status_str).strip().upper()
+        if "REDIR_SUSPECT" in status_str or "BLOCKED" in plain:
+            return False
+        if "[red]" in status_str or "[bold red]" in status_str:
+            return False
+        if "[green]" in status_str:
+            return True
+        return plain in (cls.OK.value, cls.REDIR.value) or plain.startswith(("OK", "REDIR"))
+
+    @classmethod
+    def is_blocked(cls, status_str: str) -> bool:
+        if not status_str:
+            return False
+        import re
+        plain = re.sub(r"\[.*?\]", "", status_str).strip().upper()
+        block_markers = (
+            cls.BLOCKED.value, cls.ISP_PAGE.value, cls.TCP16_20.value,
+            cls.TLS_RST.value, cls.TLS_ALERT.value, cls.TLS_BLOCK.value,
+            cls.TLS_MITM.value, cls.TLS_SPOOF.value, cls.TLS_EOF.value,
+            "TLS DPI", "TCP RST", "TCP ABORT"
+        )
+        return any(m in plain for m in block_markers)
 import httpx
 
 from utils import config
@@ -83,7 +132,7 @@ def classify_ssl_error(error: ssl.SSLError, bytes_read: int, stage: str = "unkno
     if "pop from an empty deque" in full_text or "brokenresourceerror" in full_text:
         return ("[bold red]TLS RST[/bold red]", "TCP RST на ClientHello", bytes_read)
 
-    if "wrong version number" in msg:
+    if "wrong version number" in msg or "wrong_version_number" in msg:
         return ("[bold red]TLS SPOOF[/bold red]", "Подмена ответа (Wrong Version)", bytes_read)
     if any(x in msg for x in ["record overflow", "oversized", "record layer failure", "decode error", "decoding error", "illegal parameter"]):
         return ("[bold red]TLS SPOOF[/bold red]", "Подмена ответа (Garbage Data)", bytes_read)
@@ -109,11 +158,13 @@ def classify_ssl_error(error: ssl.SSLError, bytes_read: int, stage: str = "unkno
 
     if isinstance(error, ssl.SSLCertVerificationError) or "certificate" in msg or "unknown ca" in msg:
         verify_code = getattr(error, 'verify_code', None)
+        if verify_code == 20 or "unable to get local issuer certificate" in msg:
+            return ("[bold yellow]NO CA BUNDLE[/bold yellow]", "Отсутствуют корневые сертификаты", bytes_read)
         if verify_code == 10 or "expired" in msg:
             return ("[bold red]TLS MITM[/bold red]", "Cert expired", bytes_read)
-        elif verify_code in (18, 19) or "self-signed" in msg:
+        if verify_code in (18, 19) or "self-signed" in msg:
             return ("[bold red]TLS MITM[/bold red]", "Self-signed cert", bytes_read)
-        elif verify_code == 62 or "hostname mismatch" in msg:
+        if verify_code == 62 or "hostname mismatch" in msg:
             return ("[bold red]TLS MITM[/bold red]", "Hostname mismatch", bytes_read)
         return ("[bold red]TLS MITM[/bold red]", "Подмена сертификата", bytes_read)
 
@@ -139,14 +190,13 @@ def classify_connect_error(error: Exception, bytes_read: int, stage: str = "unkn
     if isinstance(error, httpx.ConnectTimeout) or "connect timeout" in full_text or "timed out" in full_text:
         if stage == "tls_handshake":
             return ("[bold red]TLS DROP[/bold red]", "TLS Handshake timeout", bytes_read)
-        elif stage == "tcp_connect":
+        if stage == "tcp_connect":
             return ("[bold red]SYN DROP[/bold red]", "TCP SYN timeout", bytes_read)
-        elif stage == "sending_data":
+        if stage == "sending_data":
             return ("[red]SEND TIMEOUT[/red]", "Таймаут отправки данных", bytes_read)
-        elif stage == "reading_data":
+        if stage == "reading_data":
             return ("[red]READ TIMEOUT[/red]", "Таймаут чтения данных", bytes_read)
-        else:
-            return ("[red]TIMEOUT[/red]", f"Timeout ({stage})", bytes_read)
+        return ("[red]TIMEOUT[/red]", f"Timeout ({stage})", bytes_read)
 
     # DNS
     gai = find_cause(error, socket.gaierror)
@@ -154,12 +204,11 @@ def classify_connect_error(error: Exception, bytes_read: int, stage: str = "unkn
         gai_errno = getattr(gai, 'errno', None)
         if gai_errno in (socket.EAI_NONAME, 11001):
             return ("[yellow]DNS FAIL[/yellow]", "Домен не найден", bytes_read)
-        elif gai_errno in (getattr(socket, 'EAI_AGAIN', -3), 11002):
+        if gai_errno in (getattr(socket, 'EAI_AGAIN', -3), 11002):
             if "connection" in full_text and any(x in full_text for x in ("reset", "refused", "closed")):
                 return ("[yellow]DNS FAIL[/yellow]", "DNS ошибка/дроп", bytes_read)
             return ("[yellow]DNS FAIL[/yellow]", "DNS таймаут/недоступен", bytes_read)
-        else:
-            return ("[yellow]DNS FAIL[/yellow]", "Ошибка DNS", bytes_read)
+        return ("[yellow]DNS FAIL[/yellow]", "Ошибка DNS", bytes_read)
 
     if any(x in full_text for x in [
         "getaddrinfo failed", "name resolution", "11001", "11002",
@@ -171,16 +220,15 @@ def classify_connect_error(error: Exception, bytes_read: int, stage: str = "unkn
     if "sslv3_alert" in full_text or "ssl alert" in full_text or ("alert" in full_text and "handshake" in full_text):
         if "handshake_failure" in full_text or "handshake failure" in full_text:
             return ("[bold red]TLS ALERT[/bold red]", "Handshake alert", bytes_read)
-        elif "unrecognized_name" in full_text:
+        if "unrecognized_name" in full_text:
             return ("[bold red]TLS ALERT[/bold red]", "SNI alert", bytes_read)
-        elif "protocol_version" in full_text or "alert_protocol_version" in full_text:
+        if "protocol_version" in full_text or "alert_protocol_version" in full_text:
             return ("[bold red]TLS ALERT[/bold red]", "Version alert", bytes_read)
-        else:
-            return ("[bold red]TLS ALERT[/bold red]", "TLS alert", bytes_read)
+        return ("[bold red]TLS ALERT[/bold red]", "TLS alert", bytes_read)
 
     ssl_err = find_cause(error, ssl.SSLError)
     if ssl_err is not None:
-        return classify_ssl_error(ssl_err, bytes_read)
+        return classify_ssl_error(ssl_err, bytes_read, stage=stage)
 
     # TCP ОШИБКИ (L4)
     if find_cause(error, ConnectionRefusedError) is not None or err_errno in (errno.ECONNREFUSED, config.WSAECONNREFUSED) or "refused" in full_text:
@@ -201,7 +249,7 @@ def classify_connect_error(error: Exception, bytes_read: int, stage: str = "unkn
     if is_timeout_error(error) or err_errno in (errno.ETIMEDOUT, config.WSAETIMEDOUT) or "timed out" in full_text:
         if stage == "tls_handshake":
             return ("[bold red]TLS DROP[/bold red]", "TLS Handshake timeout", bytes_read)
-        elif stage == "tcp_connect":
+        if stage == "tcp_connect":
             return ("[bold red]SYN DROP[/bold red]", "TCP SYN timeout", bytes_read)
         return ("[red]TIMEOUT[/red]", f"Timeout ({stage})", bytes_read)
 
@@ -246,10 +294,9 @@ def classify_read_error(error: Exception, bytes_read: int, stage: str = "unknown
     if isinstance(error, httpx.RemoteProtocolError) or "remoteprotocolerror" in full_text:
         if "peer closed" in full_text or "connection closed" in full_text:
             return ("[bold red]ABORT[/bold red]", "Closed early", bytes_read)
-        elif "incomplete" in full_text:
+        if "incomplete" in full_text:
             return ("[bold red]ABORT[/bold red]", "Incomplete response", bytes_read)
-        else:
-            return (f"[red]UNKNOWN[/red] [dim]{type(error).__name__}[/dim]", "Protocol error", bytes_read)
+        return (f"[red]UNKNOWN[/red] [dim]{type(error).__name__}[/dim]", "Protocol error", bytes_read)
     if isinstance(error, httpx.ReadError):
         ssl_err = find_cause(error, ssl.SSLError)
         if ssl_err is not None:
