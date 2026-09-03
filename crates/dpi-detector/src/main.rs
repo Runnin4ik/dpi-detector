@@ -35,7 +35,7 @@ mod menu;
 mod render;
 
 use args::CliArgs;
-use menu::{run_interactive_menu, MenuResult, VersionSlot};
+use menu::{run_interactive_menu, tui_available, MenuResult, VersionSlot};
 use render::{
     asc, panel_to_string, render_banner, render_dns_availability, render_dns_endpoints,
     render_dns_resolve_notes, render_domain_table, render_netinfo_panel, render_summary,
@@ -304,8 +304,15 @@ async fn main() {
         });
     }
 
-    let is_interactive =
+    let wants_menu =
         args.tests.is_none() && !args.batch && !args.json && std::io::stdin().is_terminal();
+    // Stripped consoles / limited SSH clients without raw mode get an explicit
+    // hint instead of a silent quit: TUI or explicit parameters, nothing else.
+    if wants_menu && !tui_available() {
+        eprintln!("TUI недоступно в этом терминале. Запустите с параметрами, например: dpi-detector -t 1,2,3 --batch (см. dpi-detector --help).");
+        std::process::exit(2);
+    }
+    let is_interactive = wants_menu;
 
     let mut tests_str = args.tests.clone().unwrap_or_else(|| "123".to_string());
     let mut concurrency = cfg.max_concurrent;

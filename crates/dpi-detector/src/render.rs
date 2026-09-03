@@ -47,7 +47,7 @@ pub fn asc_with(s: &str, ascii: bool) -> String {
             '→' => out.push_str("->"),
             '►' => out.push('>'),
             '•' | '─' | '╌' | '–' | '—' => out.push('-'),
-            '●' => out.push('*'),
+            '◉' | '●' => out.push('*'),
             '○' => out.push('o'),
             '√' => out.push('x'),
             '↑' => out.push('^'),

@@ -28,6 +28,15 @@ pub enum MenuResult {
 /// Shared slot for the background version check: None = pending.
 pub type VersionSlot = Arc<Mutex<Option<Option<ReleaseInfo>>>>;
 
+/// Probes whether this terminal supports raw mode (TUI) without visible side effects.
+pub fn tui_available() -> bool {
+    if enable_raw_mode().is_err() {
+        return false;
+    }
+    let _ = disable_raw_mode();
+    true
+}
+
 pub fn run_interactive_menu(
     msg: &Messages,
     profile: RegionProfile,
