@@ -1,10 +1,10 @@
-from typing import Tuple
 import re
-import sys
 import time
 import asyncio
 import socket
+import logging
 
+logger = logging.getLogger(__name__)
 import httpx
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -14,8 +14,8 @@ from cli.console import console
 from cli.ui import clean_hostname, build_domain_row
 from core.tls_scanner import check_domain_tls, check_http_injection, create_dpi_client
 from core.tcp16_scanner import check_tcp_16_20, check_tcp_16_20_with_rtt, probe_tcp_16_20
-from core.telegram_scanner import run_telegram_test as _run_telegram_test
 from utils.network import get_resolved_ip, get_fake_ip_type
+from utils.error_classifier import ProbeStatus
 
 
 # ── Воркеры ──────────────────────────────────────────────────────────────────
@@ -93,13 +93,15 @@ async def _tls_worker(
     """Фаза TLS: пишет результат в entry in-place."""
     if entry["dns_fake"] is not False:
         return
-    try:
-        result = await check_domain_tls(
-            entry["domain"], client, semaphore,
-            stub_ips=stub_ips, resolved_ip=entry.get("resolved_ipv4")
-        )
-    except Exception:
-        result = ("[dim]ERR[/dim]", "Unknown error", 0.0)
+    async with semaphore:
+        try:
+            result = await check_domain_tls(
+                entry["domain"], client,
+                stub_ips=stub_ips, resolved_ip=entry.get("resolved_ipv4")
+            )
+        except Exception as e:
+            logger.debug("TLS worker failed for %s: %s", entry.get("domain"), e, exc_info=True)
+            result = ("[dim]ERR[/dim]", "Unknown error", 0.0)
     entry[tls_key] = result
 
 
@@ -114,8 +116,9 @@ async def _http_worker(
         return
     async with semaphore:
         try:
-            result = await check_http_injection(entry["domain"], client, semaphore, stub_ips=stub_ips)
-        except Exception:
+            result = await check_http_injection(entry["domain"], client, stub_ips=stub_ips)
+        except Exception as e:
+            logger.debug("HTTP worker failed for %s: %s", entry.get("domain"), e, exc_info=True)
             result = ("[dim]ERR[/dim]", "Unknown error")
     entry["http_res"] = result
 
@@ -127,7 +130,7 @@ async def _tcp16_worker(item: dict, semaphore: asyncio.Semaphore) -> list:
     # ВРЕМЕННО: чистое время пробы (без ожидания слота семафора)
     async with semaphore:
         t0 = time.perf_counter()
-        alive_str, status, detail, rtt = await probe_tcp_16_20(ip, port, sni)
+        _alive_str, status, detail, _rtt = await probe_tcp_16_20(ip, port, sni)
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
     asn_raw = str(item.get("asn", "")).strip()
@@ -162,10 +165,8 @@ async def _run_phase_with_progress(tasks: list, description: str) -> None:
     total = len(tasks)
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
         task_id = progress.add_task(description, total=total)
-        completed = 0
-        for future in asyncio.as_completed(tasks):
+        for completed, future in enumerate(asyncio.as_completed(tasks), 1):
             await future
-            completed += 1
             progress.update(task_id, completed=completed, description=f"{description} ({completed}/{total})...")
 
 
@@ -247,7 +248,7 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
     # рекомендации по DoH к нему неприменимы → блок не показываем
     real_dns_fail = dns_fail_count - no_ipv6_count
     if isp_stubs or local_stubs or fakeip_stubs or real_dns_fail > 0:
-        console.print(f"\n[bold yellow][i][!] ИНФОРМАЦИЯ О DNS РЕЗОЛВЕ:[/bold yellow]")
+        console.print("\n[bold yellow][i][!] ИНФОРМАЦИЯ О DNS РЕЗОЛВЕ:[/bold yellow]")
 
         if fakeip_stubs:
             total_fake = sum(fakeip_stubs.values())
@@ -256,7 +257,7 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
         if isp_stubs:
             total_isp = sum(isp_stubs.values())
             if len(isp_stubs) <= 3:
-                ips_text = [f"[red]{ip}[/red]" for ip in isp_stubs.keys()]
+                ips_text = [f"[red]{ip}[/red]" for ip in isp_stubs]
                 console.print(f"DNS вернул IP заглушки провайдера ({', '.join(ips_text)}): у {total_isp} доменов")
             else:
                 console.print(f"DNS вернул IP заглушки провайдера: у [red]{total_isp}[/red] доменов")
@@ -264,7 +265,7 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
         if local_stubs:
             total_local = sum(local_stubs.values())
             if len(local_stubs) <= 3:
-                ips_text = [f"[yellow]{ip}[/yellow]" for ip in local_stubs.keys()]
+                ips_text = [f"[yellow]{ip}[/yellow]" for ip in local_stubs]
                 console.print(f"DNS вернул локальные IP (работает AdGuard/hosts?): ({', '.join(ips_text)}): у {total_local} доменов")
             else:
                 console.print(f"DNS вернул локальные IP (AdGuard/hosts/Pi-hole?): у [yellow]{total_local}[/yellow] доменов")
@@ -279,22 +280,21 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
             console.print("MacOS: [dim]sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder[/dim]")
             console.print("Linux: [dim]sudo resolvectl flush-caches[/dim]\n")
 
-    # Статистика по колонкам: зелёные OK и зелёный REDIR (редирект на свой домен) считаются успехом
+    # Статистика по колонкам: OK и легитимный REDIR считаются успехом
     def _col_ok(col: int) -> int:
-        return sum(1 for r in rows if "[green]" in r[col])
+        return sum(1 for r in rows if ProbeStatus.is_ok(r[col]))
 
     stats_extra = {
         "http_ok": _col_ok(1),
         "t12_ok":  _col_ok(2),
         "t13_ok":  _col_ok(3),
     }
-    block_markers = ("TLS DPI", "TLS MITM", "TLS BLOCK", "TLS RST", "ISP PAGE", "BLOCKED", "TCP RST", "TCP ABORT")
-    stats_extra["blocked"]  = sum(1 for r in rows if any(m in r[c] for c in (1,2,3) for m in block_markers))
+    stats_extra["blocked"] = sum(1 for r in rows if any(ProbeStatus.is_blocked(r[c]) for c in (1, 2, 3)))
     return {
         "total":    len(domains),
-        "ok":       sum(1 for r in rows if "OK" in r[3] or "OK" in r[2]),
-        "timeout":  sum(1 for r in rows if "TIMEOUT" in r[3] or "TIMEOUT" in r[2]),
-        "dns_fail": sum(1 for r in rows if "DNS FAIL" in r[3]),
+        "ok":       sum(1 for r in rows if ProbeStatus.is_ok(r[3]) or ProbeStatus.is_ok(r[2])),
+        "timeout":  sum(1 for r in rows if ProbeStatus.TIMEOUT.value in r[3] or ProbeStatus.TIMEOUT.value in r[2]),
+        "dns_fail": sum(1 for r in rows if ProbeStatus.DNS_FAIL.value in r[3]),
         **stats_extra,
     }
 
@@ -355,8 +355,8 @@ async def run_tcp_test(semaphore: asyncio.Semaphore, tcp_items: list) -> dict:
 
 # ── Тест 4: Поиск белых SNI для ASN ──────────────────────────────────────────
 
-_SNI_BATCH_SIZE = getattr(config, "SNI_BATCH_SIZE", 5)
-_SNI_TOP_N = getattr(config, "SNI_TOP_N", 3)
+_DEFAULT_SNI_BATCH_SIZE = 5
+_DEFAULT_SNI_TOP_N = 3
 
 
 async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, whitelist_sni: list) -> None:
@@ -394,13 +394,14 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
     asn_to_items: dict = defaultdict(list)
     for item in port443_items:
         asn_raw = str(item.get("asn", "")).strip()
-        asn_key = asn_raw.upper().lstrip("AS") if asn_raw else item["ip"]
+        asn_key = asn_raw.upper().removeprefix("AS") if asn_raw else item["ip"]
         asn_to_items[asn_key].append(item)
 
+    batch_size_initial = getattr(config, "SNI_BATCH_SIZE", _DEFAULT_SNI_BATCH_SIZE)
     console.print(
         f"\n[bold]Поиск белых SNI для ASN[/bold]  "
         f"[dim]AS: {len(asn_to_items)} | IP: {len(port443_items)}"
-        f" | SNI: {len(clean_sni_list)} | батч: {_SNI_BATCH_SIZE}[/dim]"
+        f" | SNI: {len(clean_sni_list)} | батч: {batch_size_initial}[/dim]"
     )
 
     # ── Фаза 1: базовая проверка всех IP ─────────────────────────────────────
@@ -413,7 +414,7 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
             if asn_raw and not asn_raw.upper().startswith("AS")
             else asn_raw.upper()
         ) or "-"
-        asn_key = asn_raw.upper().lstrip("AS") if asn_raw else ip
+        asn_key = asn_raw.upper().removeprefix("AS") if asn_raw else ip
         alive_str, status, detail, rtt = await check_tcp_16_20_with_rtt(ip, 443, sni, semaphore)
         return {
             "item":     item,
@@ -456,9 +457,11 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
     total_sni  = len(clean_sni_list)
     print_lock = asyncio.Lock()
 
+    batch_size = getattr(config, "SNI_BATCH_SIZE", _DEFAULT_SNI_BATCH_SIZE)
+    top_n = getattr(config, "SNI_TOP_N", _DEFAULT_SNI_TOP_N)
     console.print(
         f"[dim]Фаза 2/2: Параллельный перебор SNI для {len(detected_rows)} AS "
-        f"(батч {_SNI_BATCH_SIZE}, топ-{_SNI_TOP_N})...[/dim]\n"
+        f"(батч {batch_size}, топ-{top_n})...[/dim]\n"
     )
 
     # ── Воркер одной AS ──────────────────────────────────────────────────────
@@ -481,17 +484,17 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
             elif "DETECTED" not in st0 and "at " not in d0:
                 ban_detected = True
                 ban_detail   = st0
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Probe without SNI failed for %s: %s", ip, e, exc_info=True)
 
-        if len(found) < _SNI_TOP_N and not ban_detected:
+        if len(found) < top_n and not ban_detected:
             batches = [
-                clean_sni_list[i:i + _SNI_BATCH_SIZE]
-                for i in range(0, total_sni, _SNI_BATCH_SIZE)
+                clean_sni_list[i:i + batch_size]
+                for i in range(0, total_sni, batch_size)
             ]
 
             for batch in batches:
-                if len(found) >= _SNI_TOP_N:
+                if len(found) >= top_n:
                     break
 
                 async def _one(sni: str):
@@ -519,7 +522,7 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
 
                 # Собираем OK в порядке файла
                 for sni in batch:
-                    if len(found) >= _SNI_TOP_N:
+                    if len(found) >= top_n:
                         break
                     for res in results:
                         if isinstance(res, tuple) and res[0] == sni and "OK" in res[1]:
@@ -530,7 +533,7 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
             if found:
                 parts = []
                 for label, n in found:
-                    safe  = label.replace(".", "\u200b.")
+                    safe  = label
                     n_str = f" [dim]#{n}[/dim]" if n else ""
                     parts.append(f"[bold green]{safe}[/bold green]{n_str}")
                 suffix = "  [dim yellow]⚠ бан после[/dim yellow]" if ban_detected else ""

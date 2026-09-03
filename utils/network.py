@@ -1,8 +1,45 @@
 import asyncio
 import socket
 import ipaddress
+import logging
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
+logger = logging.getLogger(__name__)
+
+
+def mask_proxy_url(url: Optional[str]) -> str:
+    """Маскирует пароль в URL прокси: socks5://user:pass@host:port -> socks5://user:***@host:port."""
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(url)
+        if parts.password:
+            user = parts.username or ""
+            host = parts.hostname or ""
+            port = f":{parts.port}" if parts.port else ""
+            masked_netloc = f"{user}:***@{host}{port}"
+            return urlunsplit((parts.scheme, masked_netloc, parts.path, parts.query, parts.fragment))
+        return url
+    except Exception:
+        return url
+
+def create_insecure_dpi_ssl_context(tls_version: Optional[str] = None):
+    """Создаёт SSLContext с CERT_NONE и check_hostname=False ИСКЛЮЧИТЕЛЬНО для DPI-зондирования
+    (детекция MITM/подмены сертификатов ТСПУ/DPI и анализ L4-блокировок).
+    Категорически запрещено использовать для передачи учетных данных, API или обновлений.
+    """
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    if tls_version == "TLSv1.2":
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+    elif tls_version == "TLSv1.3":
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_3
+    return ctx
 
 def _ip_family() -> int:
     """AF_INET6 если config.IP_VERSION == "ipv6", иначе AF_INET."""
@@ -78,7 +115,8 @@ async def get_resolved_ip(domain: str, family: int = None) -> Optional[str]:
             )
             if addrs:
                 return addrs[0][4][0]
-        except Exception:
+        except Exception as e:
+            logger.debug("getaddrinfo failed for %s: %s", domain, e)
             if attempt == 0:
                 await asyncio.sleep(0.2)
                 continue
@@ -114,9 +152,10 @@ def get_fake_ip_type(ip_str: str) -> str:
         return None
     try:
         ip = ipaddress.ip_address(ip_str)
-        if not isinstance(ip, ipaddress.IPv4Address):
+        if isinstance(ip, ipaddress.IPv6Address):
+            if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_unspecified or ip.is_reserved:
+                return "local"
             return None
-
         # 198.18.0.0/15 — Fake-IP
         if ip in ipaddress.ip_network('198.18.0.0/15'):
             return "fakeip"
@@ -152,8 +191,13 @@ from time import monotonic as _monotonic
 from utils import config
 
 _pin_cache: dict = {}
-_PIN_CACHE_MAX = getattr(config, "PIN_CACHE_MAX", 256)     # максимум записей
-_PIN_CACHE_TTL = getattr(config, "PIN_CACHE_TTL", 3600.0)  # TTL в секундах
+_PIN_CACHE_MAX = 256     # дефолтный максимум записей
+_PIN_CACHE_TTL = 3600.0  # дефолтный TTL в секундах
+
+
+def clear_pin_cache() -> None:
+    """Очищает кэш пининга хостов (при смене PROXY_URL или IP_VERSION)."""
+    _pin_cache.clear()
 
 
 async def pin_host(url: str):
@@ -169,9 +213,13 @@ async def pin_host(url: str):
     """
     now = _monotonic()
     cached = _pin_cache.get(url)
-    if cached is not None and now - cached[0] < _PIN_CACHE_TTL:
+    ttl = getattr(config, "PIN_CACHE_TTL", _PIN_CACHE_TTL)
+    max_entries = getattr(config, "PIN_CACHE_MAX", _PIN_CACHE_MAX)
+    if cached is not None and now - cached[0] < ttl:
         return cached[1]
+
     result = (url, None)
+    should_cache = True
     try:
         from ipaddress import ip_address
         from urllib.parse import urlsplit, urlunsplit
@@ -190,9 +238,14 @@ async def pin_host(url: str):
                         (parts.scheme, netloc, parts.path, parts.query, parts.fragment)
                     )
                     result = (new_url, host)
-    except Exception:
-        pass
-    if len(_pin_cache) >= _PIN_CACHE_MAX:
-        _pin_cache.pop(next(iter(_pin_cache)))  # вытесняем самую старую (вставки упорядочены)
-    _pin_cache[url] = (now, result)
+                else:
+                    should_cache = False  # не кэшируем временный сбой DNS
+    except Exception as e:
+        logger.debug("pin_host failed for %s: %s", url, e)
+        should_cache = False
+
+    if should_cache:
+        if len(_pin_cache) >= max_entries and _pin_cache:
+            _pin_cache.pop(next(iter(_pin_cache)))
+        _pin_cache[url] = (now, result)
     return result

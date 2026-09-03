@@ -7,7 +7,6 @@ import sys
 from typing import Dict, List
 import glob
 
-from utils import config
 
 _TCPIP_BASE  = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces"
 _TCPIP6_BASE = r"SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces"
@@ -186,7 +185,7 @@ def _wsl_config_path() -> str:
     if not home:
         try:
             out = subprocess.run(["cmd.exe", "/c", "echo %USERPROFILE%"],
-                                 capture_output=True, timeout=10).stdout.decode(errors="replace")
+                                 capture_output=True, timeout=10, check=False).stdout.decode(errors="replace")
             home = out.strip().splitlines()[-1].strip() if out.strip() else ""
         except Exception:
             home = ""
@@ -240,7 +239,7 @@ def _default_route() -> tuple:
     """Маршрут по умолчанию (низшая метрика) из route print: (gateway, iface_ip) или ('', '')."""
     try:
         out = subprocess.run(["route", "print", "0.0.0.0"],
-                             capture_output=True, timeout=5).stdout.decode(errors="replace")
+                             capture_output=True, timeout=5, check=False).stdout.decode(errors="replace")
     except Exception:
         return "", ""
     cut = out.find("Persistent Routes")
@@ -260,7 +259,7 @@ def _netsh_sections() -> List[dict]:
     """Парсинг 'netsh interface ipv4 show config': [{name, has_gw, gw, metric}]."""
     try:
         out = subprocess.run(["netsh", "interface", "ipv4", "show", "config"],
-                             capture_output=True, timeout=5).stdout
+                             capture_output=True, timeout=5, check=False).stdout
         text = out.decode("utf-8", errors="replace")
         if "\ufffd" in text:
             text = out.decode("cp866", errors="replace")  # консоль в OEM-кодировке
@@ -388,10 +387,9 @@ def get_system_dns() -> dict:
             with open("/etc/resolv.conf", "r", encoding="utf-8") as f:
                 for line in f:
                     parts = line.split()
-                    if len(parts) >= 2 and parts[0] == "nameserver":
-                        if not any(parts[1] == e[0] for e in res["active"]):
-                            src = "wsl" if (is_wsl and parts[1] == "10.255.255.254") else "static"
-                            res["active"].append((parts[1], src))
+                    if len(parts) >= 2 and parts[0] == "nameserver" and not any(parts[1] == e[0] for e in res["active"]):
+                        src = "wsl" if (is_wsl and parts[1] == "10.255.255.254") else "static"
+                        res["active"].append((parts[1], src))
         except OSError:
             pass
         res["fallback"] = True
@@ -420,7 +418,7 @@ def get_system_dns() -> dict:
             for g in sorted(live):
                 if g == active_guid:
                     continue
-                for ip, src in _read_dns_entries(g):
+                for ip, _src in _read_dns_entries(g):
                     if ip not in shown:
                         res["other_static"].append((ip, names.get(g) or "{" + g[:8] + "}"))
                         shown.add(ip)
@@ -435,66 +433,17 @@ def get_system_dns() -> dict:
     return res
 
 
-# Известные обходы DPI: имя для отображения -> подстроки имён процессов.
-# Список можно переопределить в config.yml (BYPASS_TOOLS: [[имя, [процессы]], ...]).
-_DEFAULT_BYPASS_TOOLS = (
-    ("zapret",       ("nfqws", "tpws", "zapret", "dvtws", "dbproxy", "winws")),
-    ("GoodbyeDPI",   ("goodbyedpi", "goodbye-dpi", "windivert")),
-    ("ByeDPI",       ("byedpi",)),
-    ("SpoofDPI",     ("spoofdpi",)),
-    ("DPI-Blocker",  ("dpi-blocker", "dpiblocker")),
-    ("Green Tunnel", ("greentunnel", "green-tunnel")),
-    ("PowerTunnel",  ("powertunnel",)),
-    ("Hysteria2",    ("hysteria",)),
-    ("TROJAN",       ("trojan",)),
-    ("NaiveProxy",   ("naive",)),
-    ("Wstunnel",     ("wstunnel",)),
-    ("UDP2RAW",      ("udp2raw",)),
-    ("dnscrypt-proxy", ("dnscrypt-proxy",)),
-    ("xray",         ("xray",)),
-    # FlClashX: сам GUI и mihomo-ядро; HelperService — фоновый, DPI не обходит
-    ("FlClashX",     ("flclashx", "flclashcore")),
-    ("AmneziaWG",    ("amneziawg",)),
-    ("Clash",        ("mihomo", "clash-meta", "clash-verge", "clash_verge",
-                      "verge-mihomo")),
-    ("sing-box",     ("sing-box",)),
-    ("Hiddify",      ("hiddify",)),   # ядро sing-box встроено в Hiddify.exe
-    ("Tailscale",    ("tailscale",)),
-    ("ZeroTier",     ("zerotier",)),
-    ("Mullvad",      ("mullvad",)),
-    ("WARP",         ("warp-svc", "cloudflarewarp")),
-    ("NordVPN",      ("nordvpn",)),
+from utils.bypass_detector import (
+    _DEFAULT_BYPASS_TOOLS,
+    _get_bypass_tools,
+    _BYPASS_TOOLS,
+    detect_bypass_tools,
 )
 
-_BYPASS_TOOLS = tuple(
-    (str(name), tuple(str(p) for p in procs))
-    for name, procs in getattr(config, "BYPASS_TOOLS", _DEFAULT_BYPASS_TOOLS)
-)
-
-
-def detect_bypass_tools() -> List[str]:
-    """Запущенные локально обходы DPI (по именам процессов). Пусто — ничего нет."""
-    try:
-        if sys.platform == "win32":
-            out = subprocess.run(
-                ["tasklist", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, errors="replace", timeout=10,
-            ).stdout
-            names = [l.split('","')[0].strip('"').lower() for l in out.splitlines() if l.strip()]
-        else:
-            out = subprocess.run(
-                ["ps", "-e", "-o", "comm="],
-                capture_output=True, text=True, errors="replace", timeout=10,
-            ).stdout
-            names = [os.path.basename(l.strip()).lower() for l in out.splitlines() if l.strip()]
-    except Exception:
-        return []
-    found: List[str] = []
-    for tool, patterns in _BYPASS_TOOLS:
-        for pat in patterns:
-            # Границы слов: ByeDPI не должен ловиться из GoodbyeDPI.exe
-            rx = re.compile(r"(?<![a-z0-9])" + re.escape(pat.lower()))
-            if any(rx.search(n) for n in names):
-                found.append(tool)
-                break
-    return found
+__all__ = [
+    "_BYPASS_TOOLS",
+    "_DEFAULT_BYPASS_TOOLS",
+    "_get_bypass_tools",
+    "detect_bypass_tools",
+    "get_system_dns",
+]

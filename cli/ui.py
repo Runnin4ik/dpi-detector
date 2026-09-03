@@ -7,7 +7,6 @@ from urllib.parse import urlparse
 from cli.console import console, supports_vt
 from utils import config
 from utils.error_classifier import clean_detail
-from utils.updater import is_newer, get_launch_type
 
 
 # Исходные атрибуты терминала (до raw/cbreak) — для восстановления при выходе
@@ -43,15 +42,18 @@ def restore_terminal() -> None:
 
 
 def clean_hostname(url_or_domain: str) -> str:
-    """Оставляет только домен (без протокола, пути и порта)."""
-    url_or_domain = url_or_domain.strip().lower()
-    if "://" not in url_or_domain:
-        url_or_domain = "http://" + url_or_domain
-    parsed = urlparse(url_or_domain)
-    host = parsed.netloc
-    if ":" in host:
-        host = host.split(":")[0]
-    return host
+    """Оставляет только домен или IP (без протокола, пути и порта). Поддерживает IPv6."""
+    s = url_or_domain.strip().lower()
+    if "://" not in s and "[" not in s and s.count(":") >= 2:
+        return s
+    if "://" not in s:
+        s = "http://" + s
+    parsed = urlparse(s)
+    host = parsed.hostname
+    if host:
+        return host
+    netloc = parsed.netloc or s
+    return netloc.split("/")[0].strip("[]")
 
 
 def _clean_status(status: str) -> str:
@@ -240,29 +242,19 @@ def _read_key_sync() -> str:
 
 
 async def _ask_selection_line_based(header_state: dict = None) -> str:
-    """Fallback для не-терминала (пайп/CI): прежний ввод строкой.
-    'u' — обновить до последней версии (если доступна)."""
+    """Fallback для не-терминала (пайп/CI): прежний ввод строкой."""
     valid = _valid_selections()
-    latest_info = (header_state or {}).get("latest") or {}
-    latest = latest_info.get("version") if isinstance(latest_info, dict) else ""
-    current = (header_state or {}).get("current") or ""
-    update_avail = bool(latest and current and is_newer(latest, current)
-                        and get_launch_type() != "docker")
     console.print(_MENU_BODY)
-    if update_avail:
-        console.print(f"  [bold green]u[/bold green]    — Обновить до [bold green]v{latest}[/bold green]")
     loop = asyncio.get_running_loop()
     try:
         raw = (await loop.run_in_executor(
             None, lambda: input("\nВведите выбор [123]: ")
         )).strip()
     except (EOFError, KeyboardInterrupt, asyncio.CancelledError):
-        raise KeyboardInterrupt
+        raise KeyboardInterrupt from None
 
     if raw == "":
         return "123"
-    if raw.lower() in ("u", "у") and update_avail:
-        return "u"
     if raw in valid:
         return raw
 
@@ -317,17 +309,6 @@ async def _ask_selection_interactive(header_state: dict = None,
         else:
             tests.add(d)
 
-    def _update_row() -> tuple:
-        """(доступно обновление, строка меню для него). None если нечего обновлять."""
-        latest_info = (header_state or {}).get("latest") or {}
-        latest = latest_info.get("version") if isinstance(latest_info, dict) else ""
-        current = (header_state or {}).get("current") or ""
-        if not (latest and current and is_newer(latest, current)
-                and get_launch_type() != "docker"):
-            return False, None
-        return True, (f"  {'►' if cursor == 2 else ' '} "
-                      f"{'Обновить':<{LABEL_W}} до [bold green]v{latest}[/bold green]")
-
     menu_h = [0]   # высота области меню (панель + подсказка) — для стирания
 
     def _draw(first: bool = False) -> None:
@@ -343,19 +324,15 @@ async def _ask_selection_interactive(header_state: dict = None,
         conc_opts = "   ".join(
             f"{'●' if p == conc else '○'} {p}" for p in CONCURRENCY_PRESETS
         )
-        up_avail, up_row = _update_row()
         param_lines = [
             "",
             f"  {'►' if cursor == 0 else ' '} {'IP-версия':<{LABEL_W}} {ip_opts}",
             f"  {'►' if cursor == 1 else ' '} {'Параллельность':<{LABEL_W}} {conc_opts}",
         ]
-        if up_avail:
-            param_lines.append(up_row)
         test_lines = []
-        offset = 3 if up_avail else 2   # тесты начинаются после параметров
         for i, (d, label) in enumerate(_MENU_OPTIONS):
             box_mark = "\\[√]" if d in tests else "[ ]"   # \[√] — галочка (литерал, не rich-тег)
-            test_lines.append(f"  {'►' if cursor == i + offset else ' '} {box_mark} {d}. {label}")
+            test_lines.append(f"  {'►' if cursor == i + 2 else ' '} {box_mark} {d}. {label}")
         from rich.cells import cell_len
         from rich.text import Text
         # Разделитель — между параметрами и списком тестов, по ширине контента
@@ -398,11 +375,10 @@ async def _ask_selection_interactive(header_state: dict = None,
         try:
             key = key_fut.result()
         except (EOFError, KeyboardInterrupt, asyncio.CancelledError):
-            raise KeyboardInterrupt
+            raise KeyboardInterrupt from None
         key_fut = None
 
-        up_avail, _ = _update_row()
-        total_rows = (3 if up_avail else 2) + len(_MENU_OPTIONS)
+        total_rows = 2 + len(_MENU_OPTIONS)
         if key == "up":
             cursor = (cursor - 1) % total_rows
         elif key == "down":
@@ -415,14 +391,9 @@ async def _ask_selection_interactive(header_state: dict = None,
                 idx = CONCURRENCY_PRESETS.index(conc)
                 step = 1 if key == "right" else -1
                 conc = CONCURRENCY_PRESETS[(idx + step) % len(CONCURRENCY_PRESETS)]
-            elif cursor == 2 and up_avail:
-                continue               # «Обновить» — стрелки не меняют
             else:                      # тест под курсором: чекбокс
-                offset = 3 if up_avail else 2
-                _toggle_test(_MENU_OPTIONS[cursor - offset][0])
+                _toggle_test(_MENU_OPTIONS[cursor - 2][0])
         elif key == "enter":
-            if cursor == 2 and up_avail:
-                break                  # обновление — выходим с 'u'
             if not tests:
                 console.print("[yellow]Выберите хотя бы один тест[/yellow]")
                 continue
@@ -451,8 +422,6 @@ async def _ask_selection_interactive(header_state: dict = None,
 
     config.IP_VERSION = ipv
     config.MAX_CONCURRENT = conc
-    if cursor == 2 and _update_row()[0]:
-        return "u"
     chosen = "".join(sorted(tests))
     return chosen if chosen in valid else "123"
 
@@ -476,6 +445,7 @@ def print_legend() -> None:
         ("[bold cyan]— TLS / DPI —[/bold cyan]", [
             ("TLS DPI",     "DPI обрывает или манипулирует TLS: EOF, bad record, handshake abort"),
             ("TLS MITM",    "Man-in-the-Middle: подменён сертификат (Unknown CA, Cert expired, Hostname mismatch)"),
+            ("NO CA BUNDLE","В системе отсутствуют корневые сертификаты (CA bundle) для проверки"),
             ("TLS BLOCK",   "Блокировка версии TLS или протокола целиком (protocol_version alert)"),
             ("TLS RST",     "Активный TCP RST на ClientHello (сброс TLS-хендшейка)"),
             ("TLS DROP",    "Таймаут TLS-хендшейка — пакеты молча отброшены (нет RST)"),

@@ -87,15 +87,16 @@ class _CRLFWriter:
         return getattr(self._stream, name)
 
 
+def install_crlf_stdout() -> None:
+    """Устанавливает CRLF-обёртку для sys.stdout при запуске CLI (не при импорте модуля)."""
+    if os.name != "nt" and not isinstance(sys.stdout, _CRLFWriter):
+        sys.stdout = _CRLFWriter(sys.stdout)
+
+
 if os.name == "nt":
-    if is_wine():
-        console = Console(record=True, legacy_windows=True)
-    else:
-        console = Console(record=True)
+    console = Console(record=True, legacy_windows=True) if is_wine() else Console(record=True)
 else:
-    _stdout = _CRLFWriter(sys.stdout)
-    sys.stdout = _stdout
-    console = Console(record=True, file=_stdout)
+    console = Console(record=True, file=_CRLFWriter(sys.stdout))
 
 
 def reset_record() -> None:

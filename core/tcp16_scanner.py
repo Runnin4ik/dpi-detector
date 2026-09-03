@@ -1,19 +1,31 @@
-import os
-import ssl
 import asyncio
 import random
 import string
 import time
-from typing import Tuple, Optional
+import logging
+from typing import Optional, Tuple
+
+logger = logging.getLogger(__name__)
 import httpx
 from utils import config
+from utils.network import format_ip_for_url, create_insecure_dpi_ssl_context
 from utils.error_classifier import classify_connect_error, classify_read_error
+# Ленивая генерация пула случайных символов для X-Pad (не при импорте модуля).
+_RANDOM_POOL: Optional[str] = None
 
-# Предварительно генерируем пул случайных символов для X-Pad.
-_RANDOM_POOL_SIZE = getattr(config, "FAT_RANDOM_POOL_SIZE", 100_000)
-RANDOM_POOL = "".join(random.choices(string.ascii_letters + string.digits,
-                                     k=_RANDOM_POOL_SIZE))
 
+def get_random_pool() -> str:
+    global _RANDOM_POOL
+    if _RANDOM_POOL is None:
+        size = getattr(config, "FAT_RANDOM_POOL_SIZE", 100_000)
+        _RANDOM_POOL = "".join(random.choices(string.ascii_letters + string.digits, k=size))
+    return _RANDOM_POOL
+
+
+def __getattr__(name: str):
+    if name == "RANDOM_POOL":
+        return get_random_pool()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 async def _fat_probe_keepalive(
     client: httpx.AsyncClient, ip: str, port: int, sni: Optional[str],
@@ -24,7 +36,7 @@ async def _fat_probe_keepalive(
     и сразу используем его для dynamic_timeout. Ускоряет перебор SNI.
     """
     scheme = "http" if port == 80 else "https"
-    url = f"{scheme}://{ip}:{port}/"
+    url = f"{scheme}://{format_ip_for_url(ip)}:{port}/"
 
     base_headers = {
         "User-Agent": config.USER_AGENT,
@@ -79,8 +91,9 @@ async def _fat_probe_keepalive(
         # i=0 — чистый запрос без X-Pad: только проверяем что сервер живой.
         # i>=1 — добавляем мусор
         if i > 0:
-            start_idx = random.randint(0, len(RANDOM_POOL) - chunk_size - 1)
-            headers["X-Pad"] = RANDOM_POOL[start_idx:start_idx + chunk_size]
+            pool = get_random_pool()
+            start_idx = random.randint(0, len(pool) - chunk_size - 1)
+            headers["X-Pad"] = pool[start_idx:start_idx + chunk_size]
 
         timeout_read = dynamic_timeout if dynamic_timeout is not None else config.FAT_READ_TIMEOUT
         custom_timeout = httpx.Timeout(
@@ -89,16 +102,16 @@ async def _fat_probe_keepalive(
             pool=config.POOL_TIMEOUT
         )
 
-        start_time = time.time()
+        start_time = time.monotonic()
 
         try:
-            resp = await client.request(
+            await client.request(
                 "HEAD", url, headers=headers,
                 timeout=custom_timeout,
                 extensions=extensions if extensions else None
             )
 
-            elapsed = time.time() - start_time
+            elapsed = time.monotonic() - start_time
 
             if i == 0:
                 alive_str = "[green]Да[/green]"
@@ -116,35 +129,36 @@ async def _fat_probe_keepalive(
             await asyncio.sleep(getattr(config, "FAT_CHUNK_DELAY", 0.05))
 
         except (httpx.ConnectTimeout, httpx.ConnectError) as e:
+            logger.debug("TCP16 connect error for %s (chunk %d): %s", ip, i, e)
             label, detail, _ = classify_connect_error(e, 0, stage=connection_state["stage"])
             if i == 0:
                 return "[red]Нет[/red]", label, detail, measured_rtt
             if i < min_detect_chunk:  # вне детект-диапазона DPI — обычный обрыв
                 return alive_str, "[red]TIMEOUT[/red]", detail, measured_rtt
-            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*chunk_size//1000}KB", measured_rtt
+            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*chunk_size//1024}KB", measured_rtt
 
         except (httpx.ReadTimeout, httpx.WriteTimeout) as e:
+            logger.debug("TCP16 timeout for %s (chunk %d): %s", ip, i, e)
             err_type = "Read Timeout" if isinstance(e, httpx.ReadTimeout) else "Write Timeout"
             if i == 0:
                 return "[green]Да[/green]", f"[red]{err_type.upper()}[/red]", err_type, measured_rtt
             if i < min_detect_chunk:  # вне детект-диапазона DPI
                 return alive_str, "[red]TIMEOUT[/red]", err_type, measured_rtt
-            return alive_str, "[bold red]DETECTED[/bold red]", f"{err_type} at {i*chunk_size//1000}KB", measured_rtt
+            return alive_str, "[bold red]DETECTED[/bold red]", f"{err_type} at {i*chunk_size//1024}KB", measured_rtt
 
         except Exception as e:
             # Для ReadError, WriteError, RemoteProtocolError и любых других
+            logger.debug("TCP16 read/protocol error for %s (chunk %d): %s", ip, i, e, exc_info=True)
             label, detail, _ = classify_read_error(e, 0, stage=connection_state["stage"])
             if i == 0:
                 return "[green]Да[/green]", label, detail, measured_rtt
             if i < min_detect_chunk:  # вне детект-диапазона DPI
                 return alive_str, "[red]TIMEOUT[/red]", detail, measured_rtt
-            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*chunk_size//1000}KB", measured_rtt
+            return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*chunk_size//1024}KB", measured_rtt
 
     return alive_str, "[green]OK[/green]", "", measured_rtt
 
-_SHARED_VERIFY_CTX = ssl.create_default_context()
-_SHARED_VERIFY_CTX.check_hostname = False
-_SHARED_VERIFY_CTX.verify_mode = ssl.CERT_NONE
+
 
 async def check_tcp_16_20(
     ip: str, port: int, sni: Optional[str], semaphore: asyncio.Semaphore,
@@ -164,8 +178,9 @@ async def probe_tcp_16_20(
 
     proxy_url = getattr(config, "PROXY_URL", None)
 
+    ctx = create_insecure_dpi_ssl_context()
     async with httpx.AsyncClient(
-        verify=_SHARED_VERIFY_CTX,
+        verify=ctx,
         http2=False,
         limits=limits,
         proxy=proxy_url,
@@ -178,44 +193,7 @@ async def check_tcp_16_20_with_rtt(
     ip: str, port: int, sni: Optional[str], semaphore: asyncio.Semaphore,
 ) -> Tuple[str, str, str, Optional[float]]:
     """
-    Как check_tcp_16_20, но дополнительно возвращает измеренный RTT (4й элемент).
-    RTT = среднее первых двух успешных запросов. None если измерить не удалось.
-    Используется в тесте 4 чтобы передать hint_rtt при перебое SNI.
+    Выполняет проверку TCP 16-20KB и возвращает измеренный RTT (4-й элемент).
+    RTT измеряется на чистом соединении внутри _fat_probe_keepalive.
     """
-    async with semaphore:
-
-        limits = httpx.Limits(max_keepalive_connections=1, max_connections=1)
-
-        rtt_samples = []
-        original_sleep = asyncio.sleep
-
-        proxy_url = getattr(config, "PROXY_URL", None)
-
-        async with httpx.AsyncClient(
-            verify=_SHARED_VERIFY_CTX,
-            http2=False,
-            limits=limits,
-            proxy=proxy_url,
-            trust_env=False
-        ) as client:
-            scheme = "http" if port == 80 else "https"
-            url = f"{scheme}://{ip}:{port}/"
-            base_headers = {"User-Agent": config.USER_AGENT, "Connection": "keep-alive"}
-            if sni:
-                base_headers["Host"] = sni
-            extensions = {"sni_hostname": sni} if sni and port != 80 else {}
-
-            measured_rtt = None
-            try:
-                t0 = time.time()
-                await client.request(
-                    "HEAD", url, headers=base_headers,
-                    timeout=config.FAT_READ_TIMEOUT,
-                    extensions=extensions if extensions else None,
-                )
-                measured_rtt = time.time() - t0
-            except Exception:
-                pass
-
-            result = await _fat_probe_keepalive(client, ip, port, sni, hint_rtt=measured_rtt)
-            return result[0], result[1], result[2], measured_rtt
+    return await check_tcp_16_20(ip, port, sni, semaphore)

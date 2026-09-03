@@ -6,12 +6,17 @@ from typing import List, Any
 from cli.console import console
 
 def wait_and_exit(code: int = 1):
-    print("\nНажмите любую клавишу для выхода...")
-    try:
-        import msvcrt
-        msvcrt.getch()
-    except ImportError:
-        input()
+    is_interactive = sys.stdin.isatty() and "--batch" not in sys.argv
+    if is_interactive:
+        print("\nНажмите любую клавишу для выхода...")
+        try:
+            import msvcrt
+            msvcrt.getch()
+        except (ImportError, OSError):
+            try:
+                input()
+            except (EOFError, OSError):
+                pass
     sys.exit(code)
 
 def get_base_dir() -> Path:
@@ -37,12 +42,14 @@ def get_resource_path(relative_path: str) -> Path:
 
     return external_path
 
-def load_domains(filepath: str = "domains.txt") -> List[str]:
+def load_domains(filepath: str = "domains.txt", raise_on_error: bool = False) -> List[str]:
     """Загружает список доменов из файла."""
     path = get_resource_path(filepath)
 
     if not path.exists():
-        console.print(f"[bold red]КРИТИЧЕСКАЯ ОШИБКА: Файл не найден![/bold red]")
+        if raise_on_error:
+            raise FileNotFoundError(f"Файл {filepath} не найден: {path}")
+        console.print("[bold red]КРИТИЧЕСКАЯ ОШИБКА: Файл не найден![/bold red]")
         console.print(f"[red]Путь: {path}[/red]")
         console.print(f"[yellow]Положите {filepath} рядом с программой.[/yellow]")
         wait_and_exit()
@@ -54,26 +61,36 @@ def load_domains(filepath: str = "domains.txt") -> List[str]:
                 if line.strip() and not line.startswith('#')
             ]
     except Exception as e:
+        if raise_on_error:
+            raise
         console.print(f"[bold red]Ошибка чтения файла {filepath}: {e}[/bold red]")
         wait_and_exit()
-
-def load_tcp_targets(filepath: str = "tcp16.json") -> List[Any]:
+def load_tcp_targets(filepath: str = "tcp16.json", raise_on_error: bool = False) -> List[Any]:
     """Загружает JSON с целями для TCP теста."""
     path = get_resource_path(filepath)
 
     if not path.exists():
-        console.print(f"[bold red]КРИТИЧЕСКАЯ ОШИБКА: Файл не найден![/bold red]")
+        if raise_on_error:
+            raise FileNotFoundError(f"Файл {filepath} не найден: {path}")
+        console.print("[bold red]КРИТИЧЕСКАЯ ОШИБКА: Файл не найден![/bold red]")
         console.print(f"[red]Путь: {path}[/red]")
         wait_and_exit()
 
     try:
         with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+        if not isinstance(data, list):
+            raise ValueError(f"Ожидался JSON-список, получен {type(data).__name__}")
+        return [item for item in data if isinstance(item, dict) and "ip" in item]
     except json.JSONDecodeError as e:
+        if raise_on_error:
+            raise
         console.print(f"[bold red]ОШИБКА: Некорректный JSON в {filepath}![/bold red]")
         console.print(f"[red]{e}[/red]")
         wait_and_exit()
     except Exception as e:
+        if raise_on_error:
+            raise
         console.print(f"[bold red]Ошибка чтения {filepath}: {e}[/bold red]")
         wait_and_exit()
 def load_whitelist_sni(filepath: str = "whitelist_sni.txt") -> list:
