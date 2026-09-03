@@ -1,0 +1,25 @@
+[package]
+name = "dpi-detector"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dpi-detector"
+path = "src/main.rs"
+
+[dependencies]
+dpi-core = { path = "../dpi-core" }
+tokio = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+comfy-table = { workspace = true }
+crossterm = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

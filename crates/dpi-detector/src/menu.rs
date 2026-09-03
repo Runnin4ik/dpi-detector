@@ -1,0 +1,404 @@
+use std::collections::HashSet;
+use std::io::{stdout, Write};
+use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use dpi_core::config::AppConfig;
+use dpi_core::i18n::Messages;
+use dpi_core::net::netinfo::ipv6_supported;
+use dpi_core::net::version::{version_badge, ReleaseInfo};
+use dpi_core::profile::RegionProfile;
+
+use crate::render::{asc, ascii_mode, render_banner, BOX_WIDTH};
+
+#[derive(Debug, Clone)]
+pub struct MenuSelection {
+    pub selected_tests: String,
+    #[allow(dead_code)]
+    pub ip_version: String, // "ipv4" or "ipv6"
+    pub concurrency: usize,
+}
+
+pub enum MenuResult {
+    Run(MenuSelection),
+    Quit,
+}
+
+/// Shared slot for the background version check: None = pending.
+pub type VersionSlot = Arc<Mutex<Option<Option<ReleaseInfo>>>>;
+
+pub fn run_interactive_menu(
+    msg: &Messages,
+    profile: RegionProfile,
+    cfg: &AppConfig,
+    badge: &str,
+    latest_slot: &VersionSlot,
+) -> MenuResult {
+    if enable_raw_mode().is_err() {
+        return MenuResult::Quit;
+    }
+
+    let result = run_menu_loop(msg, profile, cfg, badge, latest_slot);
+    let _ = disable_raw_mode();
+    result
+}
+
+
+/// Resolves the banner badge against the background version-check slot:
+/// a pending fetch keeps the initial "checking..." text, a finished fetch
+/// renders the real badge (version or failure notice) instead of going stale.
+fn current_badge(initial: &str, latest_slot: &VersionSlot) -> String {
+    match latest_slot.lock().ok().and_then(|g| g.clone()) {
+        None => initial.to_string(),
+        Some(maybe) => version_badge(maybe.as_ref()),
+    }
+}
+
+fn run_menu_loop(
+    msg: &Messages,
+    profile: RegionProfile,
+    cfg: &AppConfig,
+    badge: &str,
+    latest_slot: &VersionSlot,
+) -> MenuResult {
+    let mut cursor = 0usize;
+    let mut ip_version = cfg.ip_version.clone();
+    if ip_version != "ipv4" && ip_version != "ipv6" {
+        ip_version = "ipv4".to_string();
+    }
+    let presets = if cfg.concurrency_presets.is_empty() {
+        vec![1, 5, 20, 50, 100]
+    } else {
+        cfg.concurrency_presets.clone()
+    };
+    let mut conc_idx = presets
+        .iter()
+        .position(|&p| p == cfg.max_concurrent)
+        .unwrap_or_else(|| {
+            presets.iter().position(|&p| p == 50).unwrap_or(0)
+        });
+    if conc_idx >= presets.len() {
+        conc_idx = 0;
+    }
+    let v6_supported = ipv6_supported();
+
+    // Checkbox list (mirrors Python `_MENU_OPTIONS`; labels are localized,
+    // protocol badges stay Latin per Rule 4).
+    let test_options: [(char, &'static str); 7] = [
+        ('0', msg.menu_test_netinfo),
+        ('1', msg.menu_test_dns),
+        ('2', msg.menu_test_domains),
+        ('3', msg.menu_test_tcp),
+        ('4', msg.menu_test_sni),
+        ('5', msg.menu_test_telegram),
+        ('6', msg.menu_test_legend),
+    ];
+
+    let mut selected_tests: HashSet<char> = HashSet::new(); // empty by default, like Python
+
+    // Paint state: a full clear+redraw several times a second flickers, so
+    // repaint only on the first paint, a keypress, or a badge/row change.
+    let mut last_badge = String::new();
+    let mut dirty = true;
+    // Empty-selection warning (mirrors Python "Выберите хотя бы один тест"):
+    // shown until the next keypress.
+    let mut notice: Option<String> = None;
+    loop {
+        let offset = 2;
+        let total_rows = offset + test_options.len();
+
+        // Re-resolve every iteration, repaint only on change.
+        let live_badge = current_badge(badge, latest_slot);
+        if dirty || live_badge != last_badge {
+            draw_menu(
+                cursor,
+                &ip_version,
+                presets[conc_idx],
+                &presets,
+                v6_supported,
+                &test_options,
+                &selected_tests,
+                msg,
+                profile,
+                &live_badge,
+                notice.as_deref(),
+            );
+            last_badge = live_badge;
+            dirty = false;
+        }
+
+        // Poll instead of blocking so the badge above still goes live
+        // while no key is pressed.
+        if !event::poll(Duration::from_millis(300)).unwrap_or(false) {
+            continue;
+        }
+        if let Ok(Event::Key(KeyEvent { code, modifiers, kind, .. })) = event::read() {
+            if kind != KeyEventKind::Press {
+                continue;
+            }
+            dirty = true;
+            // A new keypress dismisses the empty-selection notice.
+            notice = None;
+            if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+                return MenuResult::Quit;
+            }
+
+            match code {
+                KeyCode::Up => {
+                    cursor = (cursor + total_rows - 1) % total_rows;
+                }
+                KeyCode::Down => {
+                    cursor = (cursor + 1) % total_rows;
+                }
+                KeyCode::Left | KeyCode::Right => {
+                    if cursor == 0 {
+                        if v6_supported {
+                            ip_version = if ip_version == "ipv4" { "ipv6".to_string() } else { "ipv4".to_string() };
+                        }
+                    } else if cursor == 1 {
+                        if code == KeyCode::Left {
+                            conc_idx = (conc_idx + presets.len() - 1) % presets.len();
+                        } else {
+                            conc_idx = (conc_idx + 1) % presets.len();
+                        }
+                    } else if cursor >= offset {
+                        let t_idx = cursor - offset;
+                        if t_idx < test_options.len() {
+                            toggle_test(&mut selected_tests, test_options[t_idx].0);
+                        }
+                    }
+                    // update row (cursor == 2 when up_avail): no-op on ←→
+                }
+                KeyCode::Char(' ') => {
+                    if cursor >= offset {
+                        let t_idx = cursor - offset;
+                        if t_idx < test_options.len() {
+                            toggle_test(&mut selected_tests, test_options[t_idx].0);
+                        }
+                    }
+                }
+                KeyCode::Char(c @ '0'..='6') => {
+                    toggle_test(&mut selected_tests, c);
+                }
+                KeyCode::Enter => {
+                    if selected_tests.is_empty() {
+                        // Mirrors Python: refuse to run with no tests checked.
+                        notice = Some(msg.menu_need_one.to_string());
+                        continue;
+                    }
+                    return MenuResult::Run(MenuSelection {
+                        selected_tests: sorted_selection(&selected_tests),
+                        ip_version: ip_version.clone(),
+                        concurrency: presets[conc_idx],
+                    });
+                }
+                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Char('й') | KeyCode::Char('Й') | KeyCode::Esc => {
+                    return MenuResult::Quit;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_menu(
+    cursor: usize,
+    ip_version: &str,
+    concurrency: usize,
+    presets: &[usize],
+    v6_supported: bool,
+    test_options: &[(char, &str)],
+    selected_tests: &HashSet<char>,
+    msg: &Messages,
+    profile: RegionProfile,
+    badge: &str,
+    notice: Option<&str>,
+) {
+    print!("\x1b[H\x1b[J");
+    print!("{}", render_banner(msg, profile, badge));
+
+    let mut lines = Vec::new();
+    let offset = 2;
+
+    // IP version row
+    let ip_opts = if v6_supported {
+        if ip_version == "ipv4" {
+            "\x1b[1;32m●\x1b[0m IPv4   ○ IPv6".to_string()
+        } else {
+            "○ IPv4   \x1b[1;32m●\x1b[0m IPv6".to_string()
+        }
+    } else {
+        "\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○ IPv6 (недоступен)\x1b[0m".to_string()
+    };
+    let ip_cursor = if cursor == 0 { "►" } else { " " };
+    lines.push(format!("  {} {:<15} {}", ip_cursor, msg.menu_ip_version, ip_opts));
+
+    // Concurrency row
+    let conc_opts = presets
+        .iter()
+        .map(|&p| {
+            if p == concurrency {
+                format!("\x1b[1;32m●\x1b[0m {}", p)
+            } else {
+                format!("\x1b[2m○ {}\x1b[0m", p)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("   ");
+    let conc_cursor = if cursor == 1 { "►" } else { " " };
+    lines.push(format!("  {} {:<15} {}", conc_cursor, msg.menu_concurrency, conc_opts));
+
+    lines.push(format!("  {}", "─".repeat(BOX_WIDTH - 8)));
+
+    for (i, (digit, label)) in test_options.iter().enumerate() {
+        let is_selected = selected_tests.contains(digit);
+        let check_box = if is_selected {
+            "\x1b[1;32m[√]\x1b[0m"
+        } else {
+            "\x1b[2m[ ]\x1b[0m"
+        };
+        let row_cursor = if cursor == i + offset { "►" } else { " " };
+        lines.push(format!("  {} {} {}. {}", row_cursor, check_box, digit, label));
+    }
+    // Glyph-safe content first: widths are measured after replacement.
+    let lines: Vec<String> = lines.into_iter().map(|l| asc(&l)).collect();
+
+    let title_clean = format!(" {} ", asc(msg.menu_title));
+    let title_len = strip_ansi_len(&title_clean);
+    let border_total = BOX_WIDTH.saturating_sub(title_len + 3);
+    let (tl, tr, bl, br, hb, vb) = if ascii_mode() {
+        ("+", "+", "+", "+", "-", "|")
+    } else {
+        ("╭", "╮", "╰", "╯", "─", "│")
+    };
+
+    println!("\x1b[1;36m{}{}\x1b[1;36m{}\x1b[1;36m{}\x1b[1;36m{}\x1b[0m", tl, hb, title_clean, hb.repeat(border_total), tr);
+
+    for line in &lines {
+        let plain_len = strip_ansi_len(line);
+        let pad = BOX_WIDTH.saturating_sub(plain_len + 3);
+        println!("\x1b[1;36m{}\x1b[0m {}{}\x1b[1;36m{}\x1b[0m", vb, line, " ".repeat(pad), vb);
+    }
+
+    println!("\x1b[1;36m{}{}{}\x1b[0m", bl, hb.repeat(BOX_WIDTH - 2), br);
+    println!("{}", asc(&format!("  \x1b[1;46;37m ↑↓ \x1b[0m {} │ \x1b[1;46;37m ←→ \x1b[0m {} │ \x1b[1;46;37m 0-6 \x1b[0m {} │ \x1b[1;42;37m Enter \x1b[0m {} │ \x1b[1;41;37m Q \x1b[0m {}\r",
+        msg.menu_hw_row, msg.menu_hw_change, msg.menu_hw_tests, msg.menu_hw_start, msg.menu_hw_quit)));
+    if let Some(n) = notice {
+        println!("  \x1b[1;33m{}\x1b[0m\r", n);
+    }
+    let _ = stdout().flush();
+}
+
+fn strip_ansi_len(s: &str) -> usize {
+    let mut count = 0;
+    let mut in_escape = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c == 'm' {
+                in_escape = false;
+            }
+        } else {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Toggles a test checkbox (mirrors Python `_toggle_test`).
+pub fn toggle_test(selected: &mut HashSet<char>, digit: char) {
+    if !selected.remove(&digit) {
+        selected.insert(digit);
+    }
+}
+
+/// Sorted selection string, e.g. {'3','1'} → "13".
+pub fn sorted_selection(selected: &HashSet<char>) -> String {
+    let mut v: Vec<char> = selected.iter().copied().collect();
+    v.sort_unstable();
+    v.into_iter().collect()
+}
+
+/// Strict validity: non-empty subset of 0-6, ascending, no repeats
+/// (mirrors Python `_valid_selections`).
+pub fn is_valid_selection(s: &str) -> bool {
+    if s.is_empty() || s.len() > 7 {
+        return false;
+    }
+    let mut prev: Option<char> = None;
+    for c in s.chars() {
+        if !('0'..='6').contains(&c) {
+            return false;
+        }
+        if prev.is_some_and(|p| c <= p) {
+            return false;
+        }
+        prev = Some(c);
+    }
+    true
+}
+
+/// Parses one line-based selection (mirrors `_ask_selection_line_based`):
+/// empty → "123"; valid combo → itself; anything else warns on stderr (so a
+/// piped stdout report stays clean) and falls back to "123".
+pub fn parse_line_selection(raw: &str, msg: &Messages) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        return "123".to_string();
+    }
+    if is_valid_selection(t) {
+        return t.to_string();
+    }
+    eprintln!("{}", msg.menu_invalid_line);
+    "123".to_string()
+}
+
+/// Reads one selection line from stdin (EOF/error → "123").
+pub fn read_line_selection(msg: &Messages) -> String {
+    use std::io::BufRead;
+    eprint!("{}", msg.menu_line_prompt);
+    let _ = stdout().flush();
+    let mut line = String::new();
+    match std::io::stdin().lock().read_line(&mut line) {
+        Ok(_) => parse_line_selection(&line, msg),
+        Err(_) => "123".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dpi_core::i18n::{get_messages, Language};
+
+    #[test]
+    fn test_toggle_and_sort() {
+        let mut s = HashSet::new();
+        toggle_test(&mut s, '3');
+        toggle_test(&mut s, '1');
+        assert_eq!(sorted_selection(&s), "13");
+        toggle_test(&mut s, '1');
+        assert_eq!(sorted_selection(&s), "3");
+    }
+
+    #[test]
+    fn test_valid_selections_mirror_python() {
+        for good in ["0", "123", "0123456", "26", "6"] {
+            assert!(is_valid_selection(good), "{good}");
+        }
+        for bad in ["", "321", "112", "7", "u", "1a", "01234567"] {
+            assert!(!is_valid_selection(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn test_parse_line_selection() {
+        let msg = get_messages(Language::Ru);
+        assert_eq!(parse_line_selection("", &msg), "123");
+        assert_eq!(parse_line_selection("  26\n", &msg), "26");
+        assert_eq!(parse_line_selection("xyz", &msg), "123");
+        assert_eq!(parse_line_selection("321", &msg), "123");
+    }
+}

@@ -1,0 +1,334 @@
+# ==========================================
+# Конфигурация DPI Detector
+# ==========================================
+
+# Максимальное количество одновременных запросов.
+# Чем выше значение, тем быстрее тесты, но нагрузка на систему и сеть растет.
+# В меню переключается пресетами: 1, 5, 20, 50, 100 (по умолчанию 50).
+MAX_CONCURRENT: 50
+
+# Семейство IP для DNS-резолва и проб: "ipv4" или "ipv6".
+IP_VERSION: ipv4
+
+# Адрес локального или удаленного прокси (http/socks5).
+# В формате "протокол://ip:порт" или "протокол://user:pass@ip:port"
+# Примеры: "http://127.0.0.1:8080", "socks5://admin:password@1.2.3.4:1080"
+# Если прокси не нужен — null
+PROXY_URL: null
+
+# === Таймауты (в секундах) ===
+# Время ожидания установки TCP-соединения
+CONNECT_TIMEOUT: 8.0
+# Время ожидания ответа от сервера после установки соединения
+READ_TIMEOUT: 8.0
+# Время ожидания свободного сокета в пуле соединений OS
+POOL_TIMEOUT: 2.0
+# Таймаут для первичного сбора IP-заглушек провайдера
+STUB_IPS_TIMEOUT: 5.0
+
+# === Настройки теста TCP 16-20KB ===
+TCP_BLOCK_MIN_KB: 12 # Минимальный порог данных для анализа
+TCP_BLOCK_MAX_KB: 36 # Максимальный порог данных для анализа
+FAT_DEFAULT_SNI: "example.com"
+FAT_CONNECT_TIMEOUT: 8.0
+FAT_READ_TIMEOUT: 12.0
+
+USER_AGENT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+
+# === Windows-специфичные errno коды ===
+WSAECONNRESET: 10054
+WSAECONNREFUSED: 10061
+WSAETIMEDOUT: 10060
+WSAENETUNREACH: 10051
+WSAEHOSTUNREACH: 10065
+WSAECONNABORTED: 10053
+
+# === Настройки DNS проверки ===
+DNS_CHECK_TIMEOUT: 5.0
+
+# Максимум одновременных DNS-проб (серверов) — защита от ложных TIMEOUT
+# на DPI-сети при большом количестве эндпоинтов (thundering herd).
+DNS_PROBE_CONCURRENCY: 20
+
+# Список доменов для теста доступности и подмены DNS
+DNS_CHECK_DOMAINS:
+  - "rutor.info"
+  - "flibusta.is"
+  - "clubtone.do.am"
+  - "rezka.ag"
+  - "shikimori.one"
+  # Доп домены:
+  # - "www.youtube.com"
+  # - "youtube.com"
+  # - "m.youtube.com"
+  # - "limetorrents.pro"
+  # - "www.whatsapp.com"
+  # - "newtime.ua",
+
+# Публичные DNS серверы (UDP)
+DNS_UDP_SERVERS:
+  - ["8.8.8.8", "Google"]
+  - ["1.1.1.1", "Cloudflare"]
+  - ["9.9.9.9", "Quad9"]
+  - ["94.140.14.14", "AdGuard"]
+  - ["77.88.8.8", "Yandex"]
+  - ["223.5.5.5", "Alibaba"]
+  - ["208.67.222.222", "OpenDNS"]
+  - ["76.76.2.0", "ControlD"]
+  - ["194.242.2.2", "Mullvad"]
+  - ["185.228.168.9", "CleanBrowsing"]
+  - ["76.223.122.150", "NextDNS"]
+  - ["185.222.222.222", "DNS.SB"]
+  - ["176.9.93.198", "dnsforge"]
+
+# --- Тест 2: Проверка доступности DNS-серверов ---
+DNS_AVAILABILITY_DOMAINS:
+  - "vk.ru"            # доверенные (не под цензурой): по ним пинг и "жив ли сервер"
+  - "gosuslugi.ru"
+
+# Серверы для теста доступности. Каждый сервер — [адрес, имя, тип, порт?].
+# Типы: "udp", "doh_json", "doh_wire", "dot"
+# Порт необязателен (по умолчанию: UDP 53, DoH 443, DoT 853).
+# Для нестандартного порта укажите его 4-м элементом, например:
+#   - ["dns.my-server.ru", "MyServer", "dot", 8853]
+#   - ["192.168.1.10", "LocalPiHole", "udp", 5353]
+#   - ["https://dns.my-server.ru/dns-query", "MyServer", "doh_wire", 8443]
+DNS_AVAILABILITY_SERVERS:
+  # ── UDP ──────────────────────────────────────────────────────────────────────
+  - ["94.140.14.14", "AdGuard", "udp"]
+  - ["94.140.15.15", "AdGuard", "udp"]
+  - ["94.140.14.15", "AdGuard (F)", "udp"]
+  - ["94.140.14.140", "AdGuard (UN)", "udp"]
+  - ["223.5.5.5", "Alibaba", "udp"]
+  - ["223.6.6.6", "Alibaba", "udp"]
+  - ["185.228.168.9", "CleanBrowsing", "udp"]
+  - ["185.228.169.9", "CleanBrowsing", "udp"]
+  - ["1.1.1.1", "Cloudflare IP", "udp"]
+  - ["1.0.0.1", "Cloudflare IP 2", "udp"]
+  - ["76.76.2.11", "ControlD", "udp"]
+  - ["76.76.10.11", "ControlD", "udp"]
+  - ["185.222.222.222", "DNS.SB", "udp"]
+  - ["45.11.45.11", "DNS.SB", "udp"]
+  - ["194.0.5.3", "DNS4all", "udp"]  
+  - ["176.9.93.198", "dnsforge", "udp"]
+  - ["8.8.4.4", "Google", "udp"]
+  - ["8.8.8.8", "Google", "udp"]
+  - ["62.76.62.76", "MSK-IX", "udp"]
+  - ["62.76.76.62", "MSK-IX", "udp"]
+  - ["45.90.28.0", "NextDNS", "udp"]
+  - ["45.90.30.0", "NextDNS", "udp"]
+  - ["195.208.4.1", "НСДИ", "udp"]
+  - ["195.208.5.1", "НСДИ", "udp"]
+  - ["208.67.220.220", "OpenDNS", "udp"]
+  - ["208.67.222.222", "OpenDNS", "udp"]
+  - ["9.9.9.9", "Quad9", "udp"]
+  - ["149.112.112.112", "Quad9", "udp"]
+  - ["9.9.9.10", "Quad9 (UN)", "udp"]
+  - ["9.9.9.11", "Quad9 (S)", "udp"]
+  - ["9.9.9.12", "Quad9 (UN2)", "udp"]
+  - ["111.88.96.55", "XboxDNS (RU)", "udp"]
+  - ["77.88.8.1", "Yandex", "udp"]
+  - ["77.88.8.8", "Yandex", "udp"]
+  - ["45.155.204.190", "Geohide", "udp"]
+  - ["83.220.169.155", "Comss.one", "udp"]
+  - ["212.109.195.93", "Comss.one", "udp"]
+
+  # Нестабильные:
+  #     - ["https://doh.pub/dns-query",              "DNSPod (doh.pub)",         "doh_wire"]
+  #
+  # ── DoH Wire (RFC 8484, POST/GET application/dns-message) ───────────────────
+  - ["https://dns.adguard-dns.com/dns-query",             "AdGuard",         "doh_wire"]
+  - ["https://family.adguard-dns.com/dns-query",          "AdGuard (F)", "doh_wire"]
+  - ["https://dns.adguard.com/dns-query",                 "AdGuard (L)", "doh_wire"]
+  - ["https://unfiltered.adguard-dns.com/dns-query",      "AdGuard (UN)", "doh_wire"]
+  - ["https://dns.alidns.com/dns-query",                  "Alibaba", "doh_wire"]
+  - ["https://doh.cleanbrowsing.org/doh/security-filter", "CleanBrowsing",   "doh_wire"]
+  - ["https://cloudflare-dns.com/dns-query",              "Cloudflare",      "doh_wire"]
+  - ["https://dns.cloudflare.com/dns-query",             "Cloudflare dns", "doh_wire"]
+  - ["https://1.1.1.1/dns-query",                        "Cloudflare IP",   "doh_wire"]
+  - ["https://1.0.0.1/dns-query",                        "Cloudflare IP 2",   "doh_wire"]
+  - ["https://one.one.one.one/dns-query",                 "Cloudflare one",   "doh_wire"]
+  - ["https://1dot1dot1dot1.cloudflare-dns.com/dns-query","Cloudflare dot",   "doh_wire"]
+  - ["https://mozilla.cloudflare-dns.com/dns-query",      "Cloudflare (M)",  "doh_wire"]
+  - ["https://security.cloudflare-dns.com/dns-query",     "Cloudflare (S)", "doh_wire"]
+  - ["https://dns.comss.one/dns-query",                   "Comss.one", "doh_wire"]
+  - ["https://doh.comss.one/dns-query",                   "Comss.one", "doh_wire"]
+  - ["https://freedns.controld.com/p0",                   "ControlD",        "doh_wire"]
+  - ["https://dns.digitale-gesellschaft.ch/dns-query",    "Gesellschaft", "doh_wire"]
+  - ["https://dns.sb/dns-query",                          "DNS.SB",          "doh_wire"]
+  - ["https://doh.dns4all.eu/dns-query",                  "DNS4all", "doh_wire"]
+  - ["https://dnsforge.de/dns-query",                     "dnsforge",        "doh_wire"]
+  - ["https://dns.google/dns-query",                      "Google",          "doh_wire"]
+  - ["https://doh.libredns.gr/dns-query",                 "LibreDNS",        "doh_wire"]
+  - ["https://dns.mullvad.net/dns-query",                 "Mullvad",         "doh_wire"]
+  - ["https://dns.nextdns.io/dns-query",                  "NextDNS",         "doh_wire"]
+  - ["https://doh.opendns.com/dns-query",                 "OpenDNS",         "doh_wire"]
+  - ["https://dns.opendns.com/dns-query",                 "OpenDNS",    "doh_wire"]
+  - ["https://dns.quad9.net/dns-query",                   "Quad9",           "doh_wire"]
+  - ["https://dns10.quad9.net/dns-query",                 "Quad9 (UN)", "doh_wire"]
+  - ["https://dns11.quad9.net/dns-query",                 "Quad9 (S)", "doh_wire"]
+  - ["https://dns12.quad9.net/dns-query",                 "Quad9 (UN2)", "doh_wire"]
+  - ["https://anycast.uncensoreddns.org/dns-query",       "UncensoredDNS", "doh_wire"]
+  - ["https://wikimedia-dns.org/dns-query",               "Wikimedia", "doh_wire"]
+  - ["https://xbox-dns.ru/dns-query",                   "XboxDNS (RU)", "doh_wire"]
+  - ["https://common.dot.dns.yandex.net/dns-query",       "Yandex",          "doh_wire"]
+  - ["https://dns.geohide.ru:444/dns-query",              "Geohide",         "doh_wire"]
+
+
+  # Нестабильные:
+  #   - ["dot.pub",                        "DNSPod (doh.pub)",              "dot"]
+  #
+  # ── DoT (RFC 7858, TLS:853, wire-запросы с length-prefix) ──────────────────
+  - ["dns.adguard-dns.com",                   "AdGuard",              "dot"]
+  - ["family.adguard-dns.com",                "AdGuard (F)",     "dot"]
+  - ["unfiltered.adguard-dns.com",            "AdGuard (UN)", "dot"]
+  - ["dns.adguard.com",                       "AdGuard (L)",     "dot"]
+  - ["dns.alidns.com",                        "Alibaba",              "dot"]
+  - ["security-filter-dns.cleanbrowsing.org", "CleanBrowsing",        "dot"]
+  - ["1.1.1.1",                               "Cloudflare IP",        "dot"]
+  - ["1.0.0.1",                               "Cloudflare IP 2",        "dot"]
+  - ["one.one.one.one",                       "Cloudflare one",       "dot"]
+  - ["1dot1dot1dot1.cloudflare-dns.com",      "Cloudflare dot",       "dot"]
+  - ["security.cloudflare-dns.com",           "Cloudflare (S)","dot"]
+  - ["dns.comss.one",                         "Comss.one",            "dot"]
+  - ["freedns.controld.com",               "ControlD",             "dot"]
+  - ["dns.digitale-gesellschaft.ch",          "Gesellschaft","dot"]
+  - ["dot.sb",                                "DNS.SB",               "dot"]
+  - ["dot.dns4all.eu",                        "DNS4all",              "dot"]
+  - ["dnsforge.de",                           "dnsforge",             "dot"]
+  - ["dns.google",                            "Google",               "dot"]
+  - ["8.8.8.8",                               "Google",               "dot"]
+  - ["8.8.4.4",                               "Google",               "dot"]
+  - ["dns.mullvad.net",                       "Mullvad",              "dot"]
+  - ["dns.nextdns.io",                        "NextDNS",              "dot"]
+  - ["dns.opendns.com",                       "OpenDNS",              "dot"]
+  - ["dns.quad9.net",                         "Quad9",                "dot"]
+  - ["dns10.quad9.net",                       "Quad9 (UN)",    "dot"]
+  - ["dns11.quad9.net",                       "Quad9 (S)",      "dot"]
+  - ["dns12.quad9.net",                       "Quad9 (UN2)",    "dot"]
+  - ["unicast.censurfridns.dk",               "UncensoredDNS",        "dot"]
+  - ["wikimedia-dns.org",                     "Wikimedia",            "dot"]
+  - ["xbox-dns.ru",                           "XboxDNS (RU)",         "dot"]
+  - ["common.dot.dns.yandex.net",             "Yandex",               "dot"]
+  - ["dns.geohide.ru",                        "Geohide",              "dot"]
+  - ["dot.libredns.gr",                        "LibreDNS",              "dot"]
+
+# === Дополнительные настройки (меняются без правки кода) ===
+
+# Сервисы определения внешнего IPv4 (тест 0)
+IP4_LOOKUP_URLS:
+  - "https://api4.ipify.org"
+  - "https://api.ipify.org"
+  - "https://v4.ident.me"
+  - "https://ipv4.icanhazip.com"
+
+# Сервисы определения внешнего IPv6 (тест 0)
+IP6_LOOKUP_URLS:
+  - "https://api64.ipify.org"
+  - "https://icanhazip.com"
+  - "https://ifconfig.me/ip"
+  - "https://v6.ident.me"
+
+# Совместимость: общий список URL
+IP_LOOKUP_URLS:
+  - "https://api4.ipify.org"
+  - "https://api.ipify.org"
+  - "https://icanhazip.com"
+  - "https://ifconfig.me/ip"
+# DoH-эндпоинты Team Cymru (определение ASN/провайдера по IP, RFC 8484 POST)
+CYMRU_DOH_SERVERS:
+  - "https://dns.google/dns-query"
+  - "https://cloudflare-dns.com/dns-query"
+  - "https://common.dot.dns.yandex.net/dns-query"
+  - "https://dns.nextdns.io/dns-query"
+  - "https://dns.opendns.com/dns-query"
+
+# Конкурентность внутри фаз теста 1
+DNS_UDP_CONCURRENCY: 15    # одновременные UDP-сокеты
+DNS_DOH_CONCURRENCY: 20    # одновременные DoH-запросы
+DNS_EGRESS_CONCURRENCY: 10 # одновременные egress-пробы (whoami)
+DNS_ASN_CONCURRENCY: 8     # одновременные запросы к Team Cymru
+
+# Файл кэша ASN-имён; null = %TEMP%\dpi_detector_asn_cache.json
+ASN_CACHE_FILE: null
+
+# === Тест 3: TCP 16-20KB ===
+FAT_CHUNKS_COUNT: 10       # запросов в keepalive-соединении (10 × 4КБ = 40КБ)
+FAT_CHUNK_SIZE: 4000       # размер X-Pad на шаг, байт
+FAT_CHUNK_DELAY: 0.05      # пауза между шагами, сек
+FAT_RANDOM_POOL_SIZE: 100000  # пул случайных байт для X-Pad
+
+# === Тест 4: подбор белых SNI ===
+SNI_BATCH_SIZE: 5          # пачка одновременных проверок SNI
+SNI_TOP_N: 3               # сколько рабочих SNI искать на одну AS
+
+# === Тест 5: Telegram ===
+TELEGRAM_MEDIA_URL: "https://telegram.org/img/Telegram200million.png"
+TELEGRAM_MEDIA_SIZE_MB: 30.97
+TELEGRAM_UPLOAD_IP: "149.154.167.220"
+TELEGRAM_UPLOAD_PORT: 443
+TELEGRAM_UPLOAD_SIZE_MB: 10
+TELEGRAM_STALL_TIMEOUT: 10.0   # сек без данных → прерываем
+TELEGRAM_TOTAL_TIMEOUT: 60.0   # общий таймаут теста
+TELEGRAM_DC_PING_TIMEOUT: 5.0  # таймаут TCP-пинга датацентров
+TELEGRAM_DC_PORT: 443
+TELEGRAM_DCS:
+  - ["149.154.175.53", "DC1"]
+  - ["149.154.167.51", "DC2"]
+  - ["149.154.175.100", "DC3"]
+  - ["149.154.167.91", "DC4"]
+  - ["91.108.56.130", "DC5"]
+
+# === Кэш DNS-пининга (utils/network.py) ===
+PIN_CACHE_MAX: 256         # максимум записей
+PIN_CACHE_TTL: 3600.0      # время жизни записи, сек
+
+# Пресеты конкурентности в меню (стрелки ← →)
+CONCURRENCY_PRESETS: [1, 5, 20, 50, 100]
+
+# Обнаружение софта обхода DPI (тест 0): имя → подстроки имён процессов
+BYPASS_TOOLS:
+  - ["zapret", ["nfqws", "tpws", "zapret", "dvtws", "dbproxy", "winws"]]
+  - ["GoodbyeDPI", ["goodbyedpi", "goodbye-dpi", "windivert"]]
+  - ["ByeDPI", ["byedpi"]]
+  - ["SpoofDPI", ["spoofdpi"]]
+  - ["DPI-Blocker", ["dpi-blocker", "dpiblocker"]]
+  - ["Green Tunnel", ["greentunnel", "green-tunnel"]]
+  - ["PowerTunnel", ["powertunnel"]]
+  - ["Hysteria2", ["hysteria"]]
+  - ["TROJAN", ["trojan"]]
+  - ["NaiveProxy", ["naive"]]
+  - ["Wstunnel", ["wstunnel"]]
+  - ["UDP2RAW", ["udp2raw"]]
+  - ["dnscrypt-proxy", ["dnscrypt-proxy"]]
+  - ["xray", ["xray"]]
+  - ["FlClashX", ["flclashx", "flclashcore"]]
+  - ["AmneziaWG", ["amneziawg"]]
+  - ["Clash", ["mihomo", "clash-meta", "clash-verge", "clash_verge", "verge-mihomo"]]
+  - ["sing-box", ["sing-box"]]
+  - ["Hiddify", ["hiddify"]]
+  - ["Tailscale", ["tailscale"]]
+  - ["ZeroTier", ["zerotier"]]
+  - ["Mullvad", ["mullvad"]]
+  - ["WARP", ["warp-svc", "cloudflarewarp"]]
+  - ["NordVPN", ["nordvpn"]]
+
+# === Белый список известных публичных резолверов (тест 1) ===
+# Выход DNS-запроса на реальный резолвер не считается перехватом, если его
+# org-имя (после "→" в таблице) содержит одну из подстрок ниже (регистр не важен).
+DNS_KNOWN_RESOLVER_NAMES:
+  - "google"
+  - "cloudflarenet"
+  - "i3dnet"
+  - "cdn77"
+  - "alibaba-cn-net"
+  - "as-vultr"
+  - "cdnext"
+  - "xtom"
+  - "tencent-net-ap-cn"
+  - "misaka-cis-as"
+  - "as-anexia"
+  - "ru-jsciot"
+  - "yandex"
+  - "cisco"
+  - "woodynet"
