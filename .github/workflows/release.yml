@@ -72,16 +72,16 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.use_cross && '' || matrix.target }}
 
-      - name: Install cross (for MIPS targets)
+      - name: Install cross prebuilt binary
         if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: |
+          curl -sSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /usr/local/bin
 
       - name: Build with cross (MIPS)
         if: matrix.use_cross
         run: cross build --release --target ${{ matrix.target }}
-
       - name: Build with cargo (Native & Pure-Rust targets)
         if: "!matrix.use_cross"
         run: cargo build --release --target ${{ matrix.target }}
