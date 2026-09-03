@@ -19,3 +19,9 @@ dist/
 # Logs
 *.log
 RELEASE_*.md
+
+# Binaries and outputs
+*.exe
+*_results.txt
+tcp16_vpn.json
+RUST_PORT_PLAN.md
