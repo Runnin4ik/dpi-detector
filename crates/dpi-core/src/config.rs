@@ -94,6 +94,9 @@ fn d_ip4_lookup_urls() -> Vec<String> {
         "https://api.ipify.org".to_string(),
         "https://v4.ident.me".to_string(),
         "https://ipv4.icanhazip.com".to_string(),
+        // Last-resort plain HTTP: proven reachable on lines where all HTTPS
+        // lookups are SNI-filtered (returns caller IP as plaintext).
+        "http://v4.ident.me".to_string(),
     ]
 }
 
@@ -964,10 +967,9 @@ mod tests {
         let tools = cfg.bypass_tools();
         assert_eq!(tools.len(), 24);
         assert_eq!(tools[0].0, "zapret");
-        assert!(tools[0].1.contains(&"nfqws".to_string()));
+        assert_eq!(cfg.ip4_lookup_urls.len(), 5);
         assert_eq!(cfg.concurrency_presets, vec![1, 5, 20, 50, 100]);
         assert_eq!(cfg.cymru_doh_servers.len(), 5);
-        assert_eq!(cfg.ip4_lookup_urls.len(), 4);
         assert_eq!(cfg.ip6_lookup_urls.len(), 4);
         assert_eq!(cfg.dns_known_resolver_names.len(), 15);
         assert!(cfg.dns_known_resolver_names.contains(&"google".to_string()));

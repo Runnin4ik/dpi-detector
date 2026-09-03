@@ -221,6 +221,8 @@ IP4_LOOKUP_URLS:
   - "https://api.ipify.org"
   - "https://v4.ident.me"
   - "https://ipv4.icanhazip.com"
+  # Last-resort plain HTTP for lines with SNI-filtered HTTPS lookups
+  - "http://v4.ident.me"
 
 # Сервисы определения внешнего IPv6 (тест 0)
 IP6_LOOKUP_URLS:
