@@ -6,7 +6,8 @@ COPY requirements.txt .
 RUN apk add --no-cache ttyd \
     && apk add --no-cache --virtual .build-deps build-base yaml-dev \
     && pip install --no-cache-dir -r requirements.txt \
-    && apk del .build-deps
+    && apk del .build-deps \
+    && adduser -D -u 1000 app
 
 COPY cli/ ./cli/
 COPY core/ ./core/
@@ -16,9 +17,12 @@ COPY domains.txt .
 COPY tcp16.json .
 COPY config.yml .
 COPY whitelist_sni.txt .
+RUN chown -R app:app /app
 
 EXPOSE 7681
 
-# Интерактивный Web-терминал через ttyd
+USER app
+
+# Интерактивный Web-терминал через ttyd: запускает dpi_detector без root и без shell-прослойки
 ENTRYPOINT ["ttyd", "-p", "7681", "-W", "-t", "fontSize=16", "-t", "theme={\"background\":\"#181825\",\"foreground\":\"#cdd6f4\",\"cursor\":\"#f5e0dc\"}", "-t", "titleFixed=DPI Detector Web"]
-CMD ["sh", "-c", "while true; do python dpi_detector.py; echo ''; echo 'Нажмите Enter для нового запуска...'; read -r _; done"]
+CMD ["python", "dpi_detector.py"]

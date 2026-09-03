@@ -1,7 +1,7 @@
 [
     {"id": "HE-01", "asn": "24940☆", "provider": "Hetzner", "ip": "91.98.156.82", "port": 443},
     {"id": "HE-02", "asn": "24940☆", "provider": "Hetzner", "ip": "46.62.154.37", "port": 443},
-    {"id": "HE-02", "asn": "24940☆", "provider": "Hetzner HTTP", "ip": "185.189.229.124", "port": 80},
+    {"id": "HE-02H", "asn": "24940☆", "provider": "Hetzner HTTP", "ip": "185.189.229.124", "port": 80},
     {"id": "HE-03", "asn": "213230", "provider": "Hetzner Cloud 2", "ip": "5.161.249.234", "port": 443},
     {"id": "HE-04", "asn": "213230", "provider": "Hetzner Cloud 2", "ip": "178.156.225.186", "port": 443},
     {"id": "HE-05", "asn": "212317", "provider": "Hetzner Cloud 3", "ip": "5.78.155.139", "port": 443},
@@ -124,7 +124,7 @@
     {"id": "FT-01", "asn": "53667", "provider": "FranTech", "ip": "107.189.29.143", "port": 443},
     {"id": "FT-02", "asn": "53667", "provider": "FranTech", "ip": "198.251.88.98", "port": 443},
 
-    {"id": "СV-01", "asn": "62240", "provider": "Clouvider", "ip": "185.42.222.195", "port": 443},
+    {"id": "CV-01", "asn": "62240", "provider": "Clouvider", "ip": "185.42.222.195", "port": 443},
     {"id": "CV-02", "asn": "62240", "provider": "Clouvider", "ip": "80.73.109.187", "port": 443},
 
     {"id": "ME-01", "asn": "9009", "provider": "M247 Europe SRL", "ip": "146.70.158.22", "port": 443},
