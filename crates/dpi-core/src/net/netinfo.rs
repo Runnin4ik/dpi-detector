@@ -144,7 +144,7 @@ async fn http_get_once(url: &Url, timeout_dur: Duration) -> Result<(u16, Option<
             .method(Method::GET)
             .uri(path_and_query)
             .header(HOST, &host)
-            .header(USER_AGENT, "dpi-detector/4.2.0")
+            .header(USER_AGENT, concat!("dpi-detector/", env!("CARGO_PKG_VERSION")))
             .header(ACCEPT, "*/*")
             .body(Empty::<Bytes>::new())
             .map_err(|e| e.to_string())?;
