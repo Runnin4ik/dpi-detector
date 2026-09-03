@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -333,7 +333,7 @@ pub async fn run_download(cfg: &AppConfig) -> TransferStats {
 struct UploadBody {
     remaining: u64,
     chunk: Bytes,
-    sent: Arc<AtomicU64>,
+    sent: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
 }
 
@@ -351,7 +351,7 @@ impl Body for UploadBody {
         }
         let n = this.remaining.min(this.chunk.len() as u64) as usize;
         this.remaining -= n as u64;
-        this.sent.fetch_add(n as u64, Ordering::Relaxed);
+        this.sent.fetch_add(n, Ordering::Relaxed);
         Poll::Ready(Some(Ok(Frame::data(this.chunk.slice(..n)))))
     }
 }
@@ -362,7 +362,7 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
     let total_timeout = cfg.telegram_total_timeout;
     let total_size = (cfg.telegram_upload_size_mb * 1024.0 * 1024.0) as u64;
 
-    let sent = Arc::new(AtomicU64::new(0));
+    let sent = Arc::new(AtomicUsize::new(0));
     let stop = Arc::new(AtomicBool::new(false));
 
     // High-entropy 16 KB chunk (xorshift, mirrors os.urandom usage)
@@ -464,7 +464,7 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
             }
             _ = tokio::time::sleep(Duration::from_millis(500)) => {}
         }
-        let cur = sent.load(Ordering::Relaxed);
+        let cur = sent.load(Ordering::Relaxed) as u64;
         let delta = cur.saturating_sub(prev);
         if delta > 0 {
             last_data = Instant::now();
@@ -484,7 +484,7 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
 
     stop.store(true, Ordering::Relaxed);
     let duration = t0.elapsed().as_secs_f64().max(0.001);
-    let sent_total = sent.load(Ordering::Relaxed);
+    let sent_total = sent.load(Ordering::Relaxed) as u64;
     let fully = total_size > 0 && sent_total as f64 >= total_size as f64 * 0.98;
     let avg = sent_total as f64 / duration;
 
