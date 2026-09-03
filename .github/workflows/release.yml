@@ -86,10 +86,12 @@ jobs:
         if: matrix.use_cross
         run: |
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall -y --no-confirm cross
-      - name: Build with cross (MIPS)
+          cargo binstall -y cross
+
+      - name: Build with cross (MIPS & Cross targets)
         if: matrix.use_cross
         run: cross build --release --target ${{ matrix.target }}
+
       - name: Build with cargo (Native & Pure-Rust targets)
         if: "!matrix.use_cross"
         run: cargo build --release --target ${{ matrix.target }}
@@ -97,13 +99,13 @@ jobs:
       - name: Prepare binary artifact (Windows)
         if: runner.os == 'Windows'
         run: |
-          mkdir dist
-          cp target/${{ matrix.target }}/release/dpi-detector.exe dist/${{ matrix.name }}
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/${{ matrix.target }}/release/dpi-detector.exe dist/${{ matrix.name }}
 
       - name: Prepare binary artifact (Unix)
         if: runner.os != 'Windows'
         run: |
-          mkdir dist
+          mkdir -p dist
           cp target/${{ matrix.target }}/release/dpi-detector dist/${{ matrix.name }}
           chmod +x dist/${{ matrix.name }}
 
