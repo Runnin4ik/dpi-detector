@@ -8,14 +8,14 @@ from utils.files import load_domains, load_tcp_targets
 
 class TestHelpers(unittest.TestCase):
     def test_is_newer(self):
-        self.assertTrue(is_newer("4.1.1", "4.1.0"))
-        self.assertTrue(is_newer("v4.2.0", "4.1.0"))
+        self.assertTrue(is_newer("4.2.2", "4.2.1"))
+        self.assertTrue(is_newer("v4.3.0", "4.2.1"))
         self.assertTrue(is_newer("5.0.0", "4.9.9"))
-        self.assertTrue(is_newer("4.1.1-rc1", "4.1.0"))
-        self.assertTrue(is_newer("4.2", "4.1.0"))
-        self.assertFalse(is_newer("4.1.0", "4.1.0"))
-        self.assertFalse(is_newer("4.0.9", "4.1.0"))
-        self.assertFalse(is_newer("invalid", "4.1.0"))
+        self.assertTrue(is_newer("4.2.2-rc1", "4.2.1"))
+        self.assertTrue(is_newer("4.3", "4.2.1"))
+        self.assertFalse(is_newer("4.2.1", "4.2.1"))
+        self.assertFalse(is_newer("4.2.0", "4.2.1"))
+        self.assertFalse(is_newer("invalid", "4.2.1"))
 
     def test_mask_proxy_url(self):
         self.assertEqual(mask_proxy_url("socks5://user:secret@127.0.0.1:1080"), "socks5://user:***@127.0.0.1:1080")
@@ -155,7 +155,7 @@ class TestHelpers(unittest.TestCase):
         badge_new = version_badge({"version": "99.0.0"})
         self.assertIn("99.0.0", badge_new)
 
-        badge_cur = version_badge({"version": "4.1.0"})
+        badge_cur = version_badge({"version": "4.2.1"})
         self.assertIn("Актуальная", badge_cur)
 if __name__ == "__main__":
     unittest.main()
