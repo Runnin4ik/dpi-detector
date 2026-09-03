@@ -72,4 +72,8 @@ fi
 
 chmod +x "$OUT_FILE"
 echo "Starting DPI Detector..."
-exec "$OUT_FILE" "$@"
+if [ -c /dev/tty ]; then
+  exec "$OUT_FILE" "$@" </dev/tty
+else
+  exec "$OUT_FILE" "$@"
+fi
