@@ -89,9 +89,34 @@ else
 fi
 
 chmod +x "$OUT_FILE"
+
+# Sanity check: a wrong-architecture binary fails here with a clear error
+# instead of a cryptic shell message later.
+if _ver=$("$OUT_FILE" --version 2>&1); then
+  echo "Detected: ${_ver}"
+else
+  echo "Error: ${TARGET} does not run on this system (wrong architecture?)." >&2
+  echo "Check ${BIN_URL} for a matching build." >&2
+  exit 1
+fi
+
+# Put the binary on PATH when possible (Entware /opt/bin persists on USB,
+# unlike /tmp which lives in RAM and vanishes on reboot).
+RUN_FILE="$OUT_FILE"
+if [ "$OUT_FILE" != "/opt/bin/dpi-detector" ] && [ -d /opt/bin ] && [ -w /opt/bin ]; then
+  if cp "$OUT_FILE" /opt/bin/dpi-detector 2>/dev/null; then
+    chmod +x /opt/bin/dpi-detector
+    RUN_FILE="/opt/bin/dpi-detector"
+    echo "Installed to PATH: /opt/bin/dpi-detector"
+  fi
+fi
+
+echo "Binary: ${RUN_FILE}"
+echo "Run:    ${RUN_FILE} -t 1 --batch"
+echo "Help:   ${RUN_FILE} --help"
 echo "Starting DPI Detector..."
 if [ -c /dev/tty ]; then
-  exec "$OUT_FILE" "$@" </dev/tty
+  exec "$RUN_FILE" "$@" </dev/tty
 else
-  exec "$OUT_FILE" "$@"
+  exec "$RUN_FILE" "$@"
 fi

@@ -8,5 +8,7 @@ Write-Host "Downloading DPI Detector ($version)..." -ForegroundColor Cyan
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Invoke-WebRequest -Uri $url -OutFile $out
 
+Write-Host "Binary: $out" -ForegroundColor Cyan
+Write-Host "Run:    & `"$out`" -t 1 --batch" -ForegroundColor Cyan
 Write-Host "Starting DPI Detector..." -ForegroundColor Green
 & $out @args
