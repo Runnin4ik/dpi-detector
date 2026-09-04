@@ -90,8 +90,9 @@ fn d_cymru_doh_servers() -> Vec<String> {
 
 fn d_ip4_lookup_urls() -> Vec<String> {
     vec![
-        "https://api4.ipify.org".to_string(),
-        "https://api.ipify.org".to_string(),
+        // NOTE: api4/api.ipify.org removed: several RF ISPs spoof their DNS
+        // to bogus 8.x addresses, so these endpoints can never win the race.
+        // Uncomment them back on clean networks if needed.
         "https://v4.ident.me".to_string(),
         "https://ipv4.icanhazip.com".to_string(),
         // Last-resort plain HTTP: proven reachable on lines where all HTTPS
@@ -967,7 +968,7 @@ mod tests {
         let tools = cfg.bypass_tools();
         assert_eq!(tools.len(), 24);
         assert_eq!(tools[0].0, "zapret");
-        assert_eq!(cfg.ip4_lookup_urls.len(), 5);
+        assert_eq!(cfg.ip4_lookup_urls.len(), 3);
         assert_eq!(cfg.concurrency_presets, vec![1, 5, 20, 50, 100]);
         assert_eq!(cfg.cymru_doh_servers.len(), 5);
         assert_eq!(cfg.ip6_lookup_urls.len(), 4);

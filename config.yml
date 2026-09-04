@@ -217,11 +217,14 @@ DNS_AVAILABILITY_SERVERS:
 
 # Сервисы определения внешнего IPv4 (тест 0)
 IP4_LOOKUP_URLS:
-  - "https://api4.ipify.org"
-  - "https://api.ipify.org"
+  # api4/api.ipify.org ЗАКОММЕНТИРОВАНЫ: ряд провайдеров РФ подменяют их DNS
+  # на мусорные 8.x-адреса, поэтому эти endpoint'ы никогда не выигрывают гонку.
+  # На чистых сетях можно раскомментировать обратно.
+  # - "https://api4.ipify.org"
+  # - "https://api.ipify.org"
   - "https://v4.ident.me"
   - "https://ipv4.icanhazip.com"
-  # Last-resort plain HTTP for lines with SNI-filtered HTTPS lookups
+  # Last-resort plain HTTP для линий с SNI-фильтром HTTPS-lookup'ов
   - "http://v4.ident.me"
 
 # Сервисы определения внешнего IPv6 (тест 0)
