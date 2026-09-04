@@ -205,12 +205,12 @@ async fn main() {
         cfg.max_concurrent = c;
     }
 
-    let lang = if args.lang == "auto" {
+    let mut lang = if args.lang == "auto" {
         Language::autodetect()
     } else {
-        Language::from_code(&args.lang).unwrap_or_default()
+        Language::from_code(&args.lang).unwrap_or(Language::En)
     };
-    let msg = get_messages(lang);
+    let mut msg = get_messages(lang);
     let profile = RegionProfile::from_code(&args.profile).unwrap_or_default();
 
     let level = if args.verbose {
@@ -349,11 +349,13 @@ async fn main() {
                 badge = version_badge(latest.as_ref());
             }
         }
-        match run_interactive_menu(&msg, profile, &cfg, &badge, &version_slot) {
+        match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot) {
             MenuResult::Run(sel) => {
                 tests_str = sel.selected_tests;
                 concurrency = sel.concurrency;
                 ip_version = sel.ip_version;
+                lang = sel.language;
+                msg = get_messages(lang);
             }
             MenuResult::Quit => return,
         }
@@ -375,11 +377,12 @@ async fn main() {
     // Selection info line (mirrors dpi_detector.py)
     if !args.json {
         println!(
-            "\x1b[2mСемейство IP: \x1b[36m{}\x1b[0m\x1b[2m | Параллельных запросов: \x1b[36m{}\x1b[0m",
-            ip_version, concurrency
+            "\x1b[2m{}: \x1b[36m{}\x1b[0m\x1b[2m | {}: \x1b[36m{}\x1b[0m",
+            msg.menu_ip_version, ip_version, msg.menu_concurrency, concurrency
         );
         if let Some(p) = cfg.effective_proxy() {
-            println!("\x1b[2mИспользуется прокси: \x1b[33m{}\x1b[0m", mask_proxy(p));
+            let proxy_label = if lang == Language::Ru { "Используется прокси" } else { "Proxy in use" };
+            println!("\x1b[2m{}: \x1b[33m{}\x1b[0m", proxy_label, mask_proxy(p));
         }
     }
     let (_, _, _, _, _, _, _, only_legend) = selection_flags(&tests_str);
@@ -389,11 +392,13 @@ async fn main() {
             MenuAction::Menu => {
                 // Re-enter interactive menu once, then run
                 if is_interactive {
-                    match run_interactive_menu(&msg, profile, &cfg, &badge, &version_slot) {
+                    match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot) {
                         MenuResult::Run(sel) => {
                             tests_str = sel.selected_tests;
                             concurrency = sel.concurrency;
                             ip_version = sel.ip_version;
+                            lang = sel.language;
+                            msg = get_messages(lang);
                         }
                         MenuResult::Quit => return,
                     }
@@ -472,11 +477,13 @@ async fn main() {
                             badge = version_badge(latest.as_ref());
                         }
                     }
-                    match run_interactive_menu(&msg, profile, &cfg, &badge, &version_slot) {
+                    match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot) {
                         MenuResult::Run(sel) => {
                             selection = sel.selected_tests;
                             concurrency = sel.concurrency;
                             cfg.ip_version = sel.ip_version.clone();
+                            lang = sel.language;
+                            msg = get_messages(lang);
                         }
                         MenuResult::Quit => return,
                     }

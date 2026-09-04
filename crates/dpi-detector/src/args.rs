@@ -22,8 +22,8 @@ pub struct CliArgs {
     /// Enable verbose / debug logging
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
-    /// Interface language (ru, en, auto, fa, zh, es, ar). Default ru: Python has no i18n.
-    #[arg(short = 'l', long = "lang", default_value = "ru")]
+    /// Interface language (ru, en, auto, fa, zh, es, ar). Default auto.
+    #[arg(short = 'l', long = "lang", default_value = "auto")]
     pub lang: String,
 
     /// Regional censorship profile (ru, ir, cn, global)

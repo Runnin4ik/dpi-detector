@@ -14,6 +14,25 @@ pub enum Language {
 }
 
 impl Language {
+    pub const ALL: [Self; 6] = [
+        Self::En,
+        Self::Ru,
+        Self::Fa,
+        Self::Zh,
+        Self::Es,
+        Self::Ar,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::En => "En",
+            Self::Ru => "Ru",
+            Self::Fa => "Fa",
+            Self::Zh => "Zh",
+            Self::Es => "Es",
+            Self::Ar => "Ar",
+        }
+    }
     pub fn from_code(code: &str) -> Option<Self> {
         match code.trim().to_lowercase().as_str() {
             "en" | "en_us" | "en_gb" | "english" => Some(Self::En),
@@ -63,8 +82,26 @@ impl Language {
                 }
             }
         }
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(lang) = detect_windows_language() {
+                return lang;
+            }
+        }
         Self::En
     }
+}
+
+#[cfg(target_os = "windows")]
+fn detect_windows_language() -> Option<Language> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let intl = hkcu.open_subkey("Control Panel\\International").ok()?;
+    let locale_name: String = intl.get_value("LocaleName").ok()?;
+    let prefix = locale_name.split('-').next().unwrap_or(&locale_name);
+    Language::from_code(prefix)
 }
 
 pub struct Messages {
@@ -101,6 +138,7 @@ pub struct Messages {
     pub tcp16_drop_desc: &'static str,
     pub unreachable_desc: &'static str,
     pub menu_title: &'static str,
+    pub menu_language: &'static str,
     pub menu_ip_version: &'static str,
     pub menu_concurrency: &'static str,
     pub menu_hw_row: &'static str,
@@ -173,6 +211,7 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (Window throttled or connection dropped)",
             unreachable_desc: "UNREACHABLE (Network route unreachable)",
             menu_title: "Parameters & test selection",
+            menu_language: "Language",
             menu_ip_version: "IP version",
             menu_concurrency: "Concurrency",
             menu_hw_row: "row",
@@ -225,6 +264,7 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (Сброс соединения при передаче большого окна)",
             unreachable_desc: "UNREACHABLE (Сеть или хост недоступны)",
             menu_title: "Параметры и выбор тестов",
+            menu_language: "Язык",
             menu_ip_version: "IP-версия",
             menu_concurrency: "Параллельность",
             menu_hw_row: "строка",
@@ -277,6 +317,7 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (محدودسازی پهنای باند پنجره TCP)",
             unreachable_desc: "UNREACHABLE (شبکه یا میزبان در دسترس نیست)",
             menu_title: "پارامترها و انتخاب آزمون‌ها",
+            menu_language: "زبان",
             menu_ip_version: "نسخه IP",
             menu_concurrency: "هم‌زمانی",
             menu_hw_row: "سطر",
@@ -329,6 +370,7 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (大窗口传输被限制或切断)",
             unreachable_desc: "UNREACHABLE (网络不可达)",
             menu_title: "参数与测试选择",
+            menu_language: "语言",
             menu_ip_version: "IP 版本",
             menu_concurrency: "并发数",
             menu_hw_row: "行",
@@ -381,6 +423,7 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (Limitación de ventana o conexión cerrada)",
             unreachable_desc: "UNREACHABLE (Red o destino inalcanzable)",
             menu_title: "Parámetros y selección de pruebas",
+            menu_language: "Idioma",
             menu_ip_version: "Versión IP",
             menu_concurrency: "Concurrencia",
             menu_hw_row: "fila",
@@ -433,6 +476,7 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (تم خنق نافذة الإرسال أو إسقاط الاتصال)",
             unreachable_desc: "UNREACHABLE (الشبكة أو المضيف غير متاح)",
             menu_title: "المعلمات واختيار الاختبارات",
+            menu_language: "اللغة",
             menu_ip_version: "إصدار IP",
             menu_concurrency: "التزامن",
             menu_hw_row: "سطر",
@@ -609,6 +653,7 @@ mod tests {
             assert!(!msg.tls_rst_desc.is_empty());
             // Interactive checkbox menu: every string present in all languages.
             assert!(!msg.menu_title.is_empty());
+            assert!(!msg.menu_language.is_empty());
             assert!(!msg.menu_ip_version.is_empty());
             assert!(!msg.menu_concurrency.is_empty());
             assert!(!msg.menu_hw_row.is_empty());

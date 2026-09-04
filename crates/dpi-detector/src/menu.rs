@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dpi_core::config::AppConfig;
-use dpi_core::i18n::Messages;
+use dpi_core::i18n::{get_messages, Language, Messages};
 use dpi_core::net::netinfo::ipv6_supported;
 use dpi_core::net::version::{version_badge, ReleaseInfo};
 use dpi_core::profile::RegionProfile;
@@ -18,6 +18,7 @@ pub struct MenuSelection {
     #[allow(dead_code)]
     pub ip_version: String, // "ipv4" or "ipv6"
     pub concurrency: usize,
+    pub language: Language,
 }
 
 pub enum MenuResult {
@@ -38,7 +39,7 @@ pub fn tui_available() -> bool {
 }
 
 pub fn run_interactive_menu(
-    msg: &Messages,
+    initial_lang: Language,
     profile: RegionProfile,
     cfg: &AppConfig,
     badge: &str,
@@ -48,7 +49,7 @@ pub fn run_interactive_menu(
         return MenuResult::Quit;
     }
 
-    let result = run_menu_loop(msg, profile, cfg, badge, latest_slot);
+    let result = run_menu_loop(initial_lang, profile, cfg, badge, latest_slot);
     let _ = disable_raw_mode();
     result
 }
@@ -65,13 +66,15 @@ fn current_badge(initial: &str, latest_slot: &VersionSlot) -> String {
 }
 
 fn run_menu_loop(
-    msg: &Messages,
+    initial_lang: Language,
     profile: RegionProfile,
     cfg: &AppConfig,
     badge: &str,
     latest_slot: &VersionSlot,
 ) -> MenuResult {
     let mut cursor = 0usize;
+    let mut current_lang = initial_lang;
+    let mut msg = get_messages(current_lang);
     let mut ip_version = cfg.ip_version.clone();
     if ip_version != "ipv4" && ip_version != "ipv6" {
         ip_version = "ipv4".to_string();
@@ -92,18 +95,6 @@ fn run_menu_loop(
     }
     let v6_supported = ipv6_supported();
 
-    // Checkbox list (mirrors Python `_MENU_OPTIONS`; labels are localized,
-    // protocol badges stay Latin per Rule 4).
-    let test_options: [(char, &'static str); 7] = [
-        ('0', msg.menu_test_netinfo),
-        ('1', msg.menu_test_dns),
-        ('2', msg.menu_test_domains),
-        ('3', msg.menu_test_tcp),
-        ('4', msg.menu_test_sni),
-        ('5', msg.menu_test_telegram),
-        ('6', msg.menu_test_legend),
-    ];
-
     let mut selected_tests: HashSet<char> = HashSet::new(); // empty by default, like Python
 
     // Paint state: a full clear+redraw several times a second flickers, so
@@ -114,7 +105,8 @@ fn run_menu_loop(
     // shown until the next keypress.
     let mut notice: Option<String> = None;
     loop {
-        let offset = 2;
+        let offset = 3;
+        let test_options = get_test_options(&msg);
         let total_rows = offset + test_options.len();
 
         // Re-resolve every iteration, repaint only on change.
@@ -122,13 +114,14 @@ fn run_menu_loop(
         if dirty || live_badge != last_badge {
             draw_menu(
                 cursor,
+                current_lang,
                 &ip_version,
                 presets[conc_idx],
                 &presets,
                 v6_supported,
                 &test_options,
                 &selected_tests,
-                msg,
+                &msg,
                 profile,
                 &live_badge,
                 notice.as_deref(),
@@ -162,10 +155,20 @@ fn run_menu_loop(
                 }
                 KeyCode::Left | KeyCode::Right => {
                     if cursor == 0 {
+                        let all = Language::ALL;
+                        let cur_idx = all.iter().position(|&l| l == current_lang).unwrap_or(0);
+                        let next_idx = if code == KeyCode::Left {
+                            (cur_idx + all.len() - 1) % all.len()
+                        } else {
+                            (cur_idx + 1) % all.len()
+                        };
+                        current_lang = all[next_idx];
+                        msg = get_messages(current_lang);
+                    } else if cursor == 1 {
                         if v6_supported {
                             ip_version = if ip_version == "ipv4" { "ipv6".to_string() } else { "ipv4".to_string() };
                         }
-                    } else if cursor == 1 {
+                    } else if cursor == 2 {
                         if code == KeyCode::Left {
                             conc_idx = (conc_idx + presets.len() - 1) % presets.len();
                         } else {
@@ -200,6 +203,7 @@ fn run_menu_loop(
                         selected_tests: sorted_selection(&selected_tests),
                         ip_version: ip_version.clone(),
                         concurrency: presets[conc_idx],
+                        language: current_lang,
                     });
                 }
                 KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Char('й') | KeyCode::Char('Й') | KeyCode::Esc => {
@@ -214,6 +218,7 @@ fn run_menu_loop(
 #[allow(clippy::too_many_arguments)]
 fn draw_menu(
     cursor: usize,
+    current_lang: Language,
     ip_version: &str,
     concurrency: usize,
     presets: &[usize],
@@ -230,7 +235,22 @@ fn draw_menu(
     print!("{}", banner);
 
     let mut lines = Vec::new();
-    let offset = 2;
+    let offset = 3;
+
+    // Language row
+    let lang_opts = Language::ALL
+        .iter()
+        .map(|&l| {
+            if l == current_lang {
+                format!("\x1b[1;32m●\x1b[0m {}", l.label())
+            } else {
+                format!("\x1b[2m○ {}\x1b[0m", l.label())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("   ");
+    let lang_cursor = if cursor == 0 { "►" } else { " " };
+    lines.push(format!("  {} {:<15} {}", lang_cursor, msg.menu_language, lang_opts));
 
     // IP version row
     let ip_opts = if v6_supported {
@@ -242,7 +262,7 @@ fn draw_menu(
     } else {
         "\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○ IPv6 (недоступен)\x1b[0m".to_string()
     };
-    let ip_cursor = if cursor == 0 { "►" } else { " " };
+    let ip_cursor = if cursor == 1 { "►" } else { " " };
     lines.push(format!("  {} {:<15} {}", ip_cursor, msg.menu_ip_version, ip_opts));
 
     // Concurrency row
@@ -257,7 +277,7 @@ fn draw_menu(
         })
         .collect::<Vec<_>>()
         .join("   ");
-    let conc_cursor = if cursor == 1 { "►" } else { " " };
+    let conc_cursor = if cursor == 2 { "►" } else { " " };
     lines.push(format!("  {} {:<15} {}", conc_cursor, msg.menu_concurrency, conc_opts));
 
     lines.push(format!("  {}", "─".repeat(BOX_WIDTH - 8)));
@@ -346,5 +366,27 @@ mod tests {
         toggle_test(&mut s, '1');
         assert_eq!(sorted_selection(&s), "3");
     }
+    #[test]
+    fn test_menu_selection_with_language() {
+        let sel = MenuSelection {
+            selected_tests: "123".to_string(),
+            ip_version: "ipv4".to_string(),
+            concurrency: 50,
+            language: Language::Ru,
+        };
+        assert_eq!(sel.language, Language::Ru);
+        assert_eq!(sel.selected_tests, "123");
+    }
+}
 
+fn get_test_options(msg: &Messages) -> [(char, &'static str); 7] {
+    [
+        ('0', msg.menu_test_netinfo),
+        ('1', msg.menu_test_dns),
+        ('2', msg.menu_test_domains),
+        ('3', msg.menu_test_tcp),
+        ('4', msg.menu_test_sni),
+        ('5', msg.menu_test_telegram),
+        ('6', msg.menu_test_legend),
+    ]
 }
