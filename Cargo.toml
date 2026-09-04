@@ -33,7 +33,6 @@ comfy-table = { version = "7.1", default-features = false, features = ["custom_s
 unicode-width = "0.2"
 rand = "0.8"
 arabic_reshaper = "0.4.2"
-unicode-bidi = "0.3"
 thiserror = "1.0"
 base64 = "0.22"
 

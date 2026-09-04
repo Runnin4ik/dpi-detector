@@ -433,6 +433,28 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_menu_persian_rows_natural_order() {
+        let msg = get_messages(Language::Fa);
+        let title = format_bidi(msg.menu_title, Language::Fa);
+        assert!(title.starts_with('ﭘ'), "title starts with initial PEH (ﭘ): {}", title);
+
+        let row0 = format_bidi(msg.menu_test_netinfo, Language::Fa);
+        assert!(row0.starts_with('ﺍ'), "row0 starts with ALEF (ﺍ): {}", row0);
+
+        let start = format_bidi(msg.menu_hw_start, Language::Fa);
+        assert_eq!(start, "ﺷﺮﻭﻉ", "start button is ﺷﺮﻭﻉ: {}", start);
+
+        let quit = format_bidi(msg.menu_hw_quit, Language::Fa);
+        assert_eq!(quit, "ﺧﺮﻭﺝ", "quit button is ﺧﺮﻭﺝ: {}", quit);
+
+        let change = format_bidi(msg.menu_hw_change, Language::Fa);
+        assert_eq!(change, "ﺗﻐﯿﯿﺮ", "change button is ﺗﻐﯿﯿﺮ: {}", change);
+
+        let row = format_bidi(msg.menu_hw_row, Language::Fa);
+        assert_eq!(row, "ﺳﻄﺮ", "row button is ﺳﻄﺮ: {}", row);
+    }
 }
 
 fn get_test_options(msg: &Messages) -> [(char, &'static str); 7] {

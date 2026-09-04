@@ -92,8 +92,8 @@ impl Language {
     }
 }
 
-/// Shapes Arabic and Persian text into cursive presentation glyphs and reorders
-/// them according to the Unicode Bidirectional Algorithm for visual display in LTR terminals.
+/// Shapes Arabic and Persian text into cursive presentation glyphs for terminal display.
+/// Preserves natural character order (no backwards flipping) and preserves ANSI escape sequences.
 /// For LTR languages (English, Russian, Chinese, Spanish), returns the text unchanged.
 pub fn format_bidi(text: &str, lang: Language) -> String {
     if !lang.is_rtl() {
@@ -105,32 +105,14 @@ pub fn format_bidi(text: &str, lang: Language) -> String {
 /// Shapes Arabic script characters into connected cursive ligatures/presentation forms
 /// without reversing character order.
 pub fn reshape_arabic(text: &str) -> String {
-    if !text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
-        return text.to_string();
-    }
-    arabic_reshaper::arabic_reshape(text)
+    format_bidi_segment(text)
 }
 
 fn format_bidi_segment(text: &str) -> String {
     if !text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
         return text.to_string();
     }
-
-    let reshaped = arabic_reshaper::arabic_reshape(text);
-    let bidi_info = unicode_bidi::BidiInfo::new(&reshaped, None);
-    if bidi_info.paragraphs.is_empty() {
-        return reshaped;
-    }
-
-    let mut out = String::with_capacity(reshaped.len());
-    for (i, para) in bidi_info.paragraphs.iter().enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        let line = bidi_info.reorder_line(para, para.range.clone());
-        out.push_str(&line);
-    }
-    out
+    arabic_reshaper::arabic_reshape(text)
 }
 
 /// Shapes Arabic script characters into connected ligatures/presentation forms
@@ -1692,7 +1674,6 @@ mod tests {
             assert!(!msg.doh_min.is_empty());
             assert!(!msg.telegram_check_title.is_empty());
             assert!(!msg.summary_title.is_empty());
-
             for (d, field) in [
                 ('0', msg.menu_test_netinfo),
                 ('1', msg.menu_test_dns),
@@ -1715,22 +1696,26 @@ mod tests {
         assert_eq!(format_bidi("English text", Language::En), "English text");
         assert_eq!(format_bidi("Русский текст", Language::Ru), "Русский текст");
 
-        // Farsi words are shaped and reordered
-        let shaped = format_bidi("خروج", Language::Fa);
-        assert_ne!(shaped, "خروج");
-        // Contains Arabic Presentation Forms
-        assert!(shaped.chars().any(|c| matches!(c, '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')));
+        // Farsi words are shaped into connected cursive forms without reversing character order
+        let shaped_exit = format_bidi("خروج", Language::Fa);
+        assert_eq!(shaped_exit, "ﺧﺮﻭﺝ"); // Starts with initial KHA (ﺧ), ends with JEEM (ﺝ)
 
-        // Complex Farsi sentence
+        let shaped_start = format_bidi("شروع", Language::Fa);
+        assert_eq!(shaped_start, "ﺷﺮﻭﻉ"); // Starts with initial SHEEN (ﺷ), ends with AIN (ﻉ)
+
+        let shaped_change = format_bidi("تغییر", Language::Fa);
+        assert_eq!(shaped_change, "ﺗﻐﯿﯿﺮ"); // Starts with initial TEH (ﺗ)
+
+        // Complex Farsi title
         let menu_title = "پارامترها و انتخاب آزمون‌ها";
         let shaped_title = format_bidi(menu_title, Language::Fa);
-        assert_ne!(shaped_title, menu_title);
+        assert!(shaped_title.starts_with('ﭘ')); // Starts with initial PEH (ﭘ), NOT reversed
         assert!(shaped_title.chars().any(|c| matches!(c, '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')));
 
         // Arabic string
         let ar_text = "المعلمات واختيار الاختبارات";
         let shaped_ar = format_bidi(ar_text, Language::Ar);
-        assert_ne!(shaped_ar, ar_text);
+        assert!(shaped_ar.starts_with('ﺍ')); // Starts with ALEF, NOT reversed
     }
 
 }
