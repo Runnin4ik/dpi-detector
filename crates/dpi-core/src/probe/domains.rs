@@ -24,6 +24,8 @@ use tokio::time::timeout;
 
 use crate::classify::{
     classify_connect_error_full, classify_ssl_error, ConnectionStage, DpiStatus,
+    DET_DOMAIN_NOT_FOUND, DET_IPV6_UNSUPPORTED, DET_ISP_STUB_ARROW, DET_ISP_STUB_SPACE,
+    DET_LOCAL_IP_ARROW, DET_RST_HELLO,
 };
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
@@ -301,7 +303,7 @@ pub async fn check_domain_tls(
             Ok(Err(e)) => {
                 let st = tracker.state.lock();
                 if let Some(s) = st.last_status {
-                    let d = st.last_error_msg.clone().unwrap_or_else(|| "TCP RST на ClientHello".to_string());
+                    let d = st.last_error_msg.clone().unwrap_or_else(|| DET_RST_HELLO.to_string());
                     return (s, d, 0usize);
                 }
                 drop(st);
@@ -440,7 +442,7 @@ pub async fn check_http_injection(
         if stub_ips.contains(&ip) {
             return HttpCheck {
                 status: DpiStatus::IspPage,
-                detail: format!("Заглушка провайдера {}", ip),
+                detail: format!("{}{}", DET_ISP_STUB_SPACE, ip),
             };
         }
     }
@@ -453,7 +455,7 @@ pub async fn check_http_injection(
             None => match resolve_ip(domain_owned.as_str(), IpFamily::V4).await {
                 Some(ip) => ip,
                 None => {
-                    return HttpCheck { status: DpiStatus::DnsFail, detail: "Домен не найден".to_string() };
+                    return HttpCheck { status: DpiStatus::DnsFail, detail: DET_DOMAIN_NOT_FOUND.to_string() };
                 }
             },
         };
@@ -599,9 +601,9 @@ pub async fn resolve_all(
                 None => {
                     let mut e = DomainEntry::pending(domain, None, None);
                     let detail = if v4_fallback.is_some() {
-                        "IPv6 не поддерживается/отключён"
+                        DET_IPV6_UNSUPPORTED
                     } else {
-                        "Домен не найден"
+                        DET_DOMAIN_NOT_FOUND
                     };
                     e.t13 = TlsCheck { status: DpiStatus::DnsFail, detail: detail.into(), elapsed: 0.0 };
                     e.t12 = e.t13.clone();
@@ -616,7 +618,7 @@ pub async fn resolve_all(
                     match ftype {
                         FakeIpType::Isp => {
                             let mut e = DomainEntry::pending(domain, Some(ip), Some(true));
-                            let detail = format!("Заглушка провайдера -> {}", ip);
+                            let detail = format!("{}{}", DET_ISP_STUB_ARROW, ip);
                             e.t13 = TlsCheck { status: DpiStatus::DnsFake, detail: detail.clone(), elapsed: 0.0 };
                             e.t12 = e.t13.clone();
                             e.http = HttpCheck { status: DpiStatus::DnsFake, detail };
@@ -624,7 +626,7 @@ pub async fn resolve_all(
                         }
                         FakeIpType::Local => {
                             let mut e = DomainEntry::pending(domain, Some(ip), Some(true));
-                            let detail = format!("Локальный IP -> {}", ip);
+                            let detail = format!("{}{}", DET_LOCAL_IP_ARROW, ip);
                             e.t13 = TlsCheck { status: DpiStatus::LocalIp, detail: detail.clone(), elapsed: 0.0 };
                             e.t12 = e.t13.clone();
                             e.http = HttpCheck { status: DpiStatus::LocalIp, detail };

@@ -5,6 +5,7 @@ use std::task::{Context, Poll};
 use parking_lot::Mutex;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use super::constants::*;
 use super::types::{ConnectionStage, DpiStatus, ProbeMetrics};
 
 #[derive(Debug, Clone, Default)]
@@ -104,8 +105,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for DpiProbeStream<S> {
                         // Premature EOF after sending ClientHello
                         if state.stage == ConnectionStage::TlsClientHelloSent {
                             state.last_status = Some(DpiStatus::TlsRst);
-                            state.last_error_msg =
-                                Some("DPI closed connection immediately after TLS ClientHello".into());
+                            state.last_error_msg = Some(DET_STREAM_EOF_HELLO.into());
                         }
                     } else if n > 0 && state.stage == ConnectionStage::TlsClientHelloSent {
                         // Received ServerHello
@@ -117,11 +117,10 @@ impl<S: AsyncRead + Unpin> AsyncRead for DpiProbeStream<S> {
                     if kind == io::ErrorKind::ConnectionReset || kind == io::ErrorKind::ConnectionAborted {
                         if state.stage == ConnectionStage::TlsClientHelloSent && state.bytes_recv == 0 {
                             state.last_status = Some(DpiStatus::TlsRst);
-                            state.last_error_msg =
-                                Some("TCP RST on ClientHello".into());
+                            state.last_error_msg = Some(DET_STREAM_RST_HELLO.into());
                         } else if state.stage <= ConnectionStage::TcpConnected {
                             state.last_status = Some(DpiStatus::TcpRst);
-                            state.last_error_msg = Some("TCP RST received from DPI on connect".into());
+                            state.last_error_msg = Some(DET_STREAM_RST_CONNECT.into());
                         }
                     }
                 }

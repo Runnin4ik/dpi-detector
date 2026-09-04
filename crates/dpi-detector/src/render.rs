@@ -1,6 +1,6 @@
 use comfy_table::presets::{ASCII_FULL_CONDENSED, UTF8_FULL_CONDENSED};
 use comfy_table::{Cell, Color, ContentArrangement, Table};
-use dpi_core::classify::DpiStatus;
+use dpi_core::classify::*;
 use dpi_core::config::AppConfig;
 use dpi_core::dns::availability::{
     known_resolver, net24, org_label, subst_counts, DnsAvailReport, ProbeKind,
@@ -1005,31 +1005,34 @@ pub fn localize_detail(d: &str, lang: Language) -> String {
         return d.to_string();
     }
     match d {
-        "TCP RST на ClientHello" => "TCP RST on ClientHello".to_string(),
-        "TCP RST после handshake" => "TCP RST after handshake".to_string(),
-        "Подмена ответа (Wrong Version)" => "Response spoofing (Wrong Version)".to_string(),
-        "Подмена ответа (Garbage Data)" => "Response spoofing (Garbage Data)".to_string(),
-        "Поддельный TLS Alert" => "Fake TLS Alert".to_string(),
-        "Отсутствуют корневые сертификаты" => "Missing root certificates".to_string(),
-        "Подмена сертификата" => "Certificate spoofing".to_string(),
-        "Обрыв при передаче (EOF)" => "Transfer EOF".to_string(),
-        "Тихий обрыв (Handshake EOF)" => "Handshake EOF".to_string(),
-        "Нехватка сокетов, снизьте параллелизм" => "Socket pool exhausted".to_string(),
-        "Таймаут отправки данных" => "Send timeout".to_string(),
-        "Таймаут чтения данных" => "Read timeout".to_string(),
-        "Домен не найден" => "Domain not found".to_string(),
-        "DNS таймаут/недоступен" => "DNS timeout/unavailable".to_string(),
-        "Ошибка DNS" => "DNS error".to_string(),
-        "TCP соединение отклонено" => "TCP connection refused".to_string(),
-        "TCP соединение сброшено" => "TCP connection reset".to_string(),
-        "IPv6 не поддерживается/отключён" => "IPv6 not supported/disabled".to_string(),
-        "IPv6 не поддерживается" => "IPv6 not supported".to_string(),
+        DET_RST_HELLO | DET_STREAM_RST_HELLO => "TCP RST on ClientHello".to_string(),
+        DET_RST_AFTER_HANDSHAKE => "TCP RST after handshake".to_string(),
+        DET_WRONG_VERSION => "Response spoofing (Wrong Version)".to_string(),
+        DET_GARBAGE_DATA => "Response spoofing (Garbage Data)".to_string(),
+        DET_FAKE_TLS_ALERT => "Fake TLS Alert".to_string(),
+        DET_NO_ROOT_CA => "Missing root certificates".to_string(),
+        DET_FAKE_CERT => "Certificate spoofing".to_string(),
+        DET_TRANSFER_EOF => "Transfer EOF".to_string(),
+        DET_HANDSHAKE_EOF => "Handshake EOF".to_string(),
+        DET_POOL_TIMEOUT => "Socket pool exhausted".to_string(),
+        DET_SEND_TIMEOUT => "Send timeout".to_string(),
+        DET_READ_TIMEOUT => "Read timeout".to_string(),
+        DET_DOMAIN_NOT_FOUND => "Domain not found".to_string(),
+        DET_DNS_TIMEOUT_UNAVAIL => "DNS timeout/unavailable".to_string(),
+        DET_DNS_ERROR => "DNS error".to_string(),
+        DET_CONN_REFUSED => "TCP connection refused".to_string(),
+        DET_CONN_RESET => "TCP connection reset".to_string(),
+        DET_ABORTED | DET_TCP_ABORTED => "Connection aborted".to_string(),
+        DET_NET_UNREACH => "Net unreachable".to_string(),
+        DET_HOST_UNREACH => "Host unreachable".to_string(),
+        DET_IPV6_UNSUPPORTED => "IPv6 not supported/disabled".to_string(),
+        DET_IPV6_NOT_SUPPORTED_SHORT => "IPv6 not supported".to_string(),
         other => {
-            if let Some(rest) = other.strip_prefix("Заглушка провайдера -> ") {
+            if let Some(rest) = other.strip_prefix(DET_ISP_STUB_ARROW) {
                 format!("ISP blockpage -> {}", rest)
-            } else if let Some(rest) = other.strip_prefix("Заглушка провайдера ") {
+            } else if let Some(rest) = other.strip_prefix(DET_ISP_STUB_SPACE) {
                 format!("ISP blockpage {}", rest)
-            } else if let Some(rest) = other.strip_prefix("Локальный IP -> ") {
+            } else if let Some(rest) = other.strip_prefix(DET_LOCAL_IP_ARROW) {
                 format!("Local IP -> {}", rest)
             } else {
                 other.to_string()
@@ -1718,5 +1721,16 @@ mod tests {
             .collect();
         // inner width 9, title " AB " (4): 2 left + 3 right
         assert!(plain.contains("╭── AB ───╮"), "title centered, extra dash goes right");
+    }
+
+    #[test]
+    fn test_localize_detail_constants() {
+        use dpi_core::classify::*;
+        assert_eq!(localize_detail(DET_RST_HELLO, Language::Ru), DET_RST_HELLO);
+        assert_eq!(localize_detail(DET_RST_HELLO, Language::En), "TCP RST on ClientHello");
+        assert_eq!(localize_detail(DET_RST_HELLO, Language::Zh), "TCP RST on ClientHello");
+        assert_eq!(localize_detail(DET_WRONG_VERSION, Language::En), "Response spoofing (Wrong Version)");
+        assert_eq!(localize_detail(DET_STREAM_RST_HELLO, Language::Ru), DET_STREAM_RST_HELLO);
+        assert_eq!(localize_detail(DET_STREAM_RST_HELLO, Language::En), "TCP RST on ClientHello");
     }
 }
