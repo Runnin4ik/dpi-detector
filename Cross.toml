@@ -6,3 +6,6 @@ build-std = true
 
 [target.mips-unknown-linux-musl]
 build-std = true
+
+[target.aarch64-linux-android]
+image = "ghcr.io/cross-rs/aarch64-linux-android:edge"
