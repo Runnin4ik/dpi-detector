@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dpi_core::config::AppConfig;
-use dpi_core::i18n::{get_messages, Language, Messages};
+use dpi_core::i18n::{format_bidi, get_messages, Language, Messages};
 use dpi_core::net::netinfo::ipv6_supported;
 use dpi_core::net::version::{version_badge_lang, ReleaseInfo};
 use dpi_core::profile::RegionProfile;
@@ -241,10 +241,11 @@ fn draw_menu(
     let lang_opts = Language::ALL
         .iter()
         .map(|&l| {
+            let lbl = format_bidi(l.label(), current_lang);
             if l == current_lang {
-                format!("\x1b[1;32m●\x1b[0m {}", l.label())
+                format!("\x1b[1;32m●\x1b[0m {}", lbl)
             } else {
-                format!("\x1b[2m○ {}\x1b[0m", l.label())
+                format!("\x1b[2m○ {}\x1b[0m", lbl)
             }
         })
         .collect::<Vec<_>>()
@@ -268,10 +269,12 @@ fn draw_menu(
             Language::Es => "(no disponible)",
             Language::En => "(unavailable)",
         };
-        format!("\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○ IPv6 {}\x1b[0m", unavail)
+        let unavail_bidi = format_bidi(unavail, current_lang);
+        format!("\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○ IPv6 {}\x1b[0m", unavail_bidi)
     };
     let ip_cursor = if cursor == 1 { "►" } else { " " };
-    lines.push(format!("  {} {} {}", ip_cursor, pad_width(msg.menu_ip_version, 15), ip_opts));
+    let ip_lbl = format_bidi(msg.menu_ip_version, current_lang);
+    lines.push(format!("  {} {} {}", ip_cursor, pad_width(&ip_lbl, 15), ip_opts));
 
     // Concurrency row
     let conc_opts = presets
@@ -286,8 +289,8 @@ fn draw_menu(
         .collect::<Vec<_>>()
         .join("   ");
     let conc_cursor = if cursor == 2 { "►" } else { " " };
-    lines.push(format!("  {} {} {}", conc_cursor, pad_width(msg.menu_concurrency, 15), conc_opts));
-
+    let conc_lbl = format_bidi(msg.menu_concurrency, current_lang);
+    lines.push(format!("  {} {} {}", conc_cursor, pad_width(&conc_lbl, 15), conc_opts));
     lines.push(format!("  {}", "─".repeat(BOX_WIDTH - 8)));
 
     for (i, (digit, label)) in test_options.iter().enumerate() {
@@ -298,12 +301,12 @@ fn draw_menu(
             "\x1b[2m[ ]\x1b[0m"
         };
         let row_cursor = if cursor == i + offset { "►" } else { " " };
-        lines.push(format!("  {} {} {}. {}", row_cursor, check_box, digit, label));
+        lines.push(format!("  {} {} {}. {}", row_cursor, check_box, digit, format_bidi(label, current_lang)));
     }
     // Glyph-safe content first: widths are measured after replacement.
     let lines: Vec<String> = lines.into_iter().map(|l| asc(&l)).collect();
 
-    let title_clean = format!(" {} ", asc(msg.menu_title));
+    let title_clean = format!(" {} ", asc(&format_bidi(msg.menu_title, current_lang)));
     let title_len = strip_ansi_len(&title_clean);
     let border_total = BOX_WIDTH.saturating_sub(title_len + 3);
     let (tl, tr, bl, br, hb, vb) = if ascii_mode() {
@@ -322,9 +325,13 @@ fn draw_menu(
 
     print!("\x1b[1;36m{}{}{}\x1b[0m\r\n", bl, hb.repeat(BOX_WIDTH - 2), br);
     print!("{}\r\n", asc(&format!("  \x1b[1;46;37m ↑↓ \x1b[0m {} │ \x1b[1;46;37m ←→ \x1b[0m {} │ \x1b[1;46;37m 0-6 \x1b[0m {} │ \x1b[1;42;37m Enter \x1b[0m {} │ \x1b[1;41;37m Q \x1b[0m {}",
-        msg.menu_hw_row, msg.menu_hw_change, msg.menu_hw_tests, msg.menu_hw_start, msg.menu_hw_quit)));
+        format_bidi(msg.menu_hw_row, current_lang),
+        format_bidi(msg.menu_hw_change, current_lang),
+        format_bidi(msg.menu_hw_tests, current_lang),
+        format_bidi(msg.menu_hw_start, current_lang),
+        format_bidi(msg.menu_hw_quit, current_lang))));
     if let Some(n) = notice {
-        print!("  \x1b[1;33m{}\x1b[0m\r\n", n);
+        print!("  \x1b[1;33m{}\x1b[0m\r\n", format_bidi(n, current_lang));
     }
     let _ = stdout().flush();
 }
@@ -385,7 +392,7 @@ mod tests {
             let test_options = get_test_options(&msg);
 
             // Title
-            let title_clean = format!(" {} ", asc(msg.menu_title));
+            let title_clean = format!(" {} ", asc(&format_bidi(msg.menu_title, lang)));
             let title_len = strip_ansi_len(&title_clean);
             assert!(title_len + 3 <= BOX_WIDTH, "title for {:?} overflows box: {}", lang, title_len);
 
@@ -393,31 +400,35 @@ mod tests {
             let lang_opts = Language::ALL
                 .iter()
                 .map(|&l| {
+                    let lbl = format_bidi(l.label(), lang);
                     if l == lang {
-                        format!("\x1b[1;32m●\x1b[0m {}", l.label())
+                        format!("\x1b[1;32m●\x1b[0m {}", lbl)
                     } else {
-                        format!("\x1b[2m○ {}\x1b[0m", l.label())
+                        format!("\x1b[2m○ {}\x1b[0m", lbl)
                     }
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
-            let lang_line = format!("  ► {} {}", pad_width(msg.menu_language, 8), lang_opts);
+            let lang_lbl = format_bidi(msg.menu_language, lang);
+            let lang_line = format!("  ► {} {}", pad_width(&lang_lbl, 8), lang_opts);
             let w = strip_ansi_len(&lang_line);
             assert!(w + 3 <= BOX_WIDTH, "language row for {:?} overflows box: w={}", lang, w);
 
             // IP version row
-            let ip_line = format!("    {} ● IPv4   ○ IPv6", pad_width(msg.menu_ip_version, 15));
+            let ip_lbl = format_bidi(msg.menu_ip_version, lang);
+            let ip_line = format!("    {} ● IPv4   ○ IPv6", pad_width(&ip_lbl, 15));
             let w = strip_ansi_len(&ip_line);
             assert!(w + 3 <= BOX_WIDTH, "ip row for {:?} overflows box: w={}", lang, w);
 
             // Concurrency row
-            let conc_line = format!("    {} ● 50   ○ 100", pad_width(msg.menu_concurrency, 15));
+            let conc_lbl = format_bidi(msg.menu_concurrency, lang);
+            let conc_line = format!("    {} ● 50   ○ 100", pad_width(&conc_lbl, 15));
             let w = strip_ansi_len(&conc_line);
             assert!(w + 3 <= BOX_WIDTH, "conc row for {:?} overflows box: w={}", lang, w);
 
             // Test options
             for (digit, label) in test_options {
-                let test_line = format!("    [ ] {}. {}", digit, label);
+                let test_line = format!("    [ ] {}. {}", digit, format_bidi(label, lang));
                 let w = strip_ansi_len(&test_line);
                 assert!(w + 3 <= BOX_WIDTH, "test row {} for {:?} overflows box: w={}", digit, lang, w);
             }

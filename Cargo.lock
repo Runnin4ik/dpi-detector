@@ -107,6 +107,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arabic_reshaper"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb963411bc62b3888e69ad0d821ac03a3176ec7d74c2096bb5555a4cc419545b"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -444,6 +450,7 @@ dependencies = [
 name = "dpi-core"
 version = "4.0.0-rust"
 dependencies = [
+ "arabic_reshaper",
  "base64",
  "bytes",
  "http-body-util",
@@ -460,6 +467,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
+ "unicode-bidi",
  "url",
  "webpki-roots 0.26.11",
  "winreg",
@@ -1935,6 +1943,12 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "unicode-bidi"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
 
 [[package]]
 name = "unicode-ident"

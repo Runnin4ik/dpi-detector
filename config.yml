@@ -81,9 +81,13 @@ DNS_UDP_SERVERS:
   - ["76.76.2.0", "ControlD"]
   - ["194.242.2.2", "Mullvad"]
   - ["185.228.168.9", "CleanBrowsing"]
+  - ["76.76.19.19", "Alternate DNS"]
   - ["76.223.122.150", "NextDNS"]
   - ["185.222.222.222", "DNS.SB"]
   - ["176.9.93.198", "dnsforge"]
+  - ["8.26.56.26", "Comodo"]
+  - ["84.200.69.80", "DNS Watch"]
+  - ["209.244.0.3", "Level 3"]
 
 # --- Тест 2: Проверка доступности DNS-серверов ---
 DNS_AVAILABILITY_DOMAINS:
@@ -136,6 +140,19 @@ DNS_AVAILABILITY_SERVERS:
   - ["45.155.204.190", "Geohide", "udp"]
   - ["83.220.169.155", "Comss.one", "udp"]
   - ["212.109.195.93", "Comss.one", "udp"]
+  - ["76.76.19.19", "Alternate DNS", "udp"]
+  - ["76.223.122.150", "Alternate DNS 2", "udp"]
+  - ["8.26.56.26", "Comodo", "udp"]
+  - ["8.20.247.20", "Comodo 2", "udp"]
+  - ["84.200.69.80", "DNS Watch", "udp"]
+  - ["84.200.70.40", "DNS Watch 2", "udp"]
+  - ["209.244.0.3", "Level 3", "udp"]
+  - ["209.244.0.4", "Level 3 2", "udp"]
+  - ["209.224.0.3", "Level 3 (alt)", "udp"]
+  - ["209.224.0.4", "Level 3 2 (alt)", "udp"]
+  - ["149.112.112.10", "Quad9 (UN 2)", "udp"]
+  - ["77.88.8.88", "Yandex (Safe)", "udp"]
+  - ["77.88.8.2", "Yandex (Safe 2)", "udp"]
 
   # Нестабильные:
   #     - ["https://doh.pub/dns-query",              "DNSPod (doh.pub)",         "doh_wire"]
@@ -177,6 +194,7 @@ DNS_AVAILABILITY_SERVERS:
   - ["https://xbox-dns.ru/dns-query",                   "XboxDNS (RU)", "doh_wire"]
   - ["https://common.dot.dns.yandex.net/dns-query",       "Yandex",          "doh_wire"]
   - ["https://dns.geohide.ru:444/dns-query",              "Geohide",         "doh_wire"]
+  - ["https://safe.dot.dns.yandex.net/dns-query",       "Yandex (Safe)",   "doh_wire"]
 
 
   # Нестабильные:
@@ -216,6 +234,7 @@ DNS_AVAILABILITY_SERVERS:
   - ["common.dot.dns.yandex.net",             "Yandex",               "dot"]
   - ["dns.geohide.ru",                        "Geohide",              "dot"]
   - ["dot.libredns.gr",                        "LibreDNS",              "dot"]
+  - ["safe.dot.dns.yandex.net",                         "Yandex (Safe)",        "dot"]
 
 # === Дополнительные настройки (меняются без правки кода) ===
 

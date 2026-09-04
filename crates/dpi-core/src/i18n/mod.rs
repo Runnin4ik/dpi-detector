@@ -92,6 +92,44 @@ impl Language {
     }
 }
 
+/// Shapes Arabic and Persian text into cursive presentation glyphs and reorders
+/// them according to the Unicode Bidirectional Algorithm for visual display in LTR terminals.
+/// For LTR languages (English, Russian, Chinese, Spanish), returns the text unchanged.
+pub fn format_bidi(text: &str, lang: Language) -> String {
+    if !lang.is_rtl() {
+        return text.to_string();
+    }
+    format_bidi_str(text)
+}
+
+/// Shapes Arabic script characters into connected ligatures/presentation forms
+/// and reorders lines for terminal display.
+pub fn format_bidi_str(text: &str) -> String {
+    // If text contains no Arabic/Persian characters, return early
+    if !text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
+        return text.to_string();
+    }
+
+    // 1. Reshape cursive Arabic / Persian characters into connected presentation forms
+    let reshaped = arabic_reshaper::arabic_reshape(text);
+
+    // 2. Reorder for visual display using Unicode Bidirectional Algorithm per line/paragraph
+    let bidi_info = unicode_bidi::BidiInfo::new(&reshaped, None);
+    if bidi_info.paragraphs.is_empty() {
+        return reshaped;
+    }
+
+    let mut out = String::with_capacity(reshaped.len());
+    for (i, para) in bidi_info.paragraphs.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let line = bidi_info.reorder_line(para, para.range.clone());
+        out.push_str(&line);
+    }
+    out
+}
+
 #[cfg(target_os = "windows")]
 fn detect_windows_language() -> Option<Language> {
     use winreg::enums::HKEY_CURRENT_USER;
@@ -1260,7 +1298,7 @@ pub fn get_messages(lang: Language) -> Messages {
 /// Terms stay Latin; descriptions follow the selected language (en/ru full,
 /// other languages fall back to English descriptions).
 pub fn print_legend(lang: Language, msg: &Messages) {
-    println!("{}", msg.legend_title);
+    println!("{}", format_bidi(msg.legend_title, lang));
     let sections = match lang {
         Language::Ru => legend_sections(),
         Language::Zh => legend_sections_zh(),
@@ -1270,9 +1308,9 @@ pub fn print_legend(lang: Language, msg: &Messages) {
         Language::En => legend_sections_en(),
     };
     for (section, items) in &sections {
-        println!("  {}", section);
+        println!("  {}", format_bidi(section, lang));
         for (term, desc) in items {
-            println!("    \x1b[36m{:<14}\x1b[0m \x1b[2m{}\x1b[0m", term, desc);
+            println!("    \x1b[36m{:<14}\x1b[0m \x1b[2m{}\x1b[0m", term, format_bidi(desc, lang));
         }
         println!();
     }
@@ -1629,5 +1667,29 @@ mod tests {
             }
             assert_eq!(msg.menu_test_label('7'), "");
         }
+    }
+
+    #[test]
+    fn test_format_bidi_farsi_and_arabic() {
+        // LTR strings remain unchanged
+        assert_eq!(format_bidi("English text", Language::En), "English text");
+        assert_eq!(format_bidi("Русский текст", Language::Ru), "Русский текст");
+
+        // Farsi words are shaped and reordered
+        let shaped = format_bidi("خروج", Language::Fa);
+        assert_ne!(shaped, "خروج");
+        // Contains Arabic Presentation Forms
+        assert!(shaped.chars().any(|c| matches!(c, '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')));
+
+        // Complex Farsi sentence
+        let menu_title = "پارامترها و انتخاب آزمون‌ها";
+        let shaped_title = format_bidi(menu_title, Language::Fa);
+        assert_ne!(shaped_title, menu_title);
+        assert!(shaped_title.chars().any(|c| matches!(c, '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')));
+
+        // Arabic string
+        let ar_text = "المعلمات واختيار الاختبارات";
+        let shaped_ar = format_bidi(ar_text, Language::Ar);
+        assert_ne!(shaped_ar, ar_text);
     }
 }

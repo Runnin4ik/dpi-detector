@@ -135,8 +135,9 @@ pub fn panel_to_string(title: &str, lines: &[String]) -> String {
 /// Mirrors Rich: banner is left-titled cyan, netinfo centered dim.
 pub fn panel_with(title: &str, lines: &[String], width: usize, centered: bool, border: &str) -> String {
     // Glyph-safe content first: widths are measured after replacement.
-    let title_clean = format!(" {} ", asc(title));
-    let lines: Vec<String> = lines.iter().map(|l| asc(l)).collect();
+    let title_bidi = dpi_core::i18n::format_bidi_str(title);
+    let title_clean = format!(" {} ", asc(&title_bidi));
+    let lines: Vec<String> = lines.iter().map(|l| asc(&dpi_core::i18n::format_bidi_str(l))).collect();
     let mut out = String::new();
     // Titles may carry SGR escapes (e.g. the bold banner title): measure visible
     // width only, and re-arm the border color after the title so an inner reset

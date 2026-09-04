@@ -68,9 +68,13 @@ fn d_dns_udp_servers() -> Vec<Vec<String>> {
         vec!["76.76.2.0".to_string(), "ControlD".to_string()],
         vec!["194.242.2.2".to_string(), "Mullvad".to_string()],
         vec!["185.228.168.9".to_string(), "CleanBrowsing".to_string()],
+        vec!["76.76.19.19".to_string(), "Alternate DNS".to_string()],
         vec!["76.223.122.150".to_string(), "NextDNS".to_string()],
         vec!["185.222.222.222".to_string(), "DNS.SB".to_string()],
         vec!["176.9.93.198".to_string(), "dnsforge".to_string()],
+        vec!["8.26.56.26".to_string(), "Comodo".to_string()],
+        vec!["84.200.69.80".to_string(), "DNS Watch".to_string()],
+        vec!["209.244.0.3".to_string(), "Level 3".to_string()],
     ]
 }
 
@@ -962,14 +966,14 @@ mod tests {
             cfg.dns_check_domains,
             vec!["rutor.info", "flibusta.is", "clubtone.do.am", "rezka.ag", "shikimori.one"]
         );
-        assert_eq!(cfg.dns_udp_servers.len(), 13);
+        assert_eq!(cfg.dns_udp_servers.len(), 17);
         assert_eq!(cfg.dns_udp_servers[0], vec!["8.8.8.8", "Google"]);
         assert_eq!(cfg.dns_availability_domains, vec!["vk.ru", "gosuslugi.ru"]);
         let servers = cfg.availability_servers();
-        assert_eq!(servers.iter().filter(|s| s.kind == "udp").count(), 37);
-        assert_eq!(servers.iter().filter(|s| s.kind == "doh_wire").count(), 36);
-        assert_eq!(servers.iter().filter(|s| s.kind == "dot").count(), 33);
-        assert_eq!(servers.len(), 106);
+        assert_eq!(servers.iter().filter(|s| s.kind == "udp").count(), 50);
+        assert_eq!(servers.iter().filter(|s| s.kind == "doh_wire").count(), 37);
+        assert_eq!(servers.iter().filter(|s| s.kind == "dot").count(), 34);
+        assert_eq!(servers.len(), 121);
         assert_eq!(servers[0].addr, "94.140.14.14");
         assert_eq!(servers.last().map(|s| s.kind.as_str()), Some("dot"));
         assert_eq!(cfg.telegram_dc_list().len(), 5);
@@ -1016,6 +1020,6 @@ mod tests {
         assert!(!embedded_tcp16_targets().is_empty());
         assert!(!embedded_whitelist_sni().is_empty());
         let cfg = AppConfig::from_yaml_str(EMBEDDED_CONFIG_YML);
-        assert_eq!(cfg.availability_servers().len(), 106);
+        assert_eq!(cfg.availability_servers().len(), 121);
     }
 }
