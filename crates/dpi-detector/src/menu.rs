@@ -2,15 +2,17 @@ use std::collections::HashSet;
 use std::io::{stdout, Write};
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
+use crossterm::cursor::MoveTo;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::execute;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use dpi_core::config::AppConfig;
 use dpi_core::i18n::{format_bidi, get_messages, Language, Messages};
 use dpi_core::net::netinfo::ipv6_supported;
 use dpi_core::net::version::{version_badge_lang, ReleaseInfo};
 use dpi_core::profile::RegionProfile;
 
-use crate::render::{asc, ascii_mode, render_banner, strip_ansi_len, BOX_WIDTH};
+use crate::render::{asc, ascii_mode, clean_output, plain_mode, render_banner, strip_ansi_len, BOX_WIDTH};
 
 #[derive(Debug, Clone)]
 pub struct MenuSelection {
@@ -31,9 +33,6 @@ pub type VersionSlot = Arc<Mutex<Option<Option<ReleaseInfo>>>>;
 
 /// Probes whether this terminal supports raw mode (TUI) without visible side effects.
 pub fn tui_available() -> bool {
-    if crate::render::plain_mode() {
-        return false;
-    }
     if enable_raw_mode().is_err() {
         return false;
     }
@@ -233,10 +232,10 @@ fn draw_menu(
     badge: &str,
     notice: Option<&str>,
 ) {
-    print!("\x1b[H\x1b[J");
+    let _ = execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0));
     let banner = render_banner(msg, profile, badge).replace("\r\n", "\n").replace('\n', "\r\n");
-    print!("{}", banner);
-
+    let mut out = std::io::stdout();
+    let _ = out.write_all(clean_output(&banner).as_bytes());
     let mut lines = Vec::new();
     let offset = 3;
 
@@ -317,27 +316,45 @@ fn draw_menu(
         ("╭", "╮", "╰", "╯", "─", "│")
     };
 
-    print!("\x1b[1;36m{}{}\x1b[1;36m{}\x1b[1;36m{}\x1b[1;36m{}\x1b[0m\r\n", tl, hb, title_clean, hb.repeat(border_total), tr);
+    let top_border = format!("\x1b[1;36m{}{}\x1b[1;36m{}\x1b[1;36m{}\x1b[1;36m{}\x1b[0m\r\n", tl, hb, title_clean, hb.repeat(border_total), tr);
+    let _ = out.write_all(clean_output(&top_border).as_bytes());
 
     for line in &lines {
         let plain_len = strip_ansi_len(line);
         let pad = BOX_WIDTH.saturating_sub(plain_len + 3);
-        print!("\x1b[1;36m{}\x1b[0m {}{}\x1b[1;36m{}\x1b[0m\r\n", vb, line, " ".repeat(pad), vb);
+        let row = format!("\x1b[1;36m{}\x1b[0m {}{}\x1b[1;36m{}\x1b[0m\r\n", vb, line, " ".repeat(pad), vb);
+        let _ = out.write_all(clean_output(&row).as_bytes());
     }
 
-    print!("\x1b[1;36m{}{}{}\x1b[0m\r\n", bl, hb.repeat(BOX_WIDTH - 2), br);
-    print!("{}\r\n", asc(&format!("  \x1b[1;46;37m ↑↓ \x1b[0m {} │ \x1b[1;46;37m ←→ \x1b[0m {} │ \x1b[1;46;37m 0-6 \x1b[0m {} │ \x1b[1;42;37m Enter \x1b[0m {} │ \x1b[1;41;37m Q \x1b[0m {}",
-        format_bidi(msg.menu_hw_row, current_lang),
-        format_bidi(msg.menu_hw_change, current_lang),
-        format_bidi(msg.menu_hw_tests, current_lang),
-        format_bidi(msg.menu_hw_start, current_lang),
-        format_bidi(msg.menu_hw_quit, current_lang))));
+    let bot_border = format!("\x1b[1;36m{}{}{}\x1b[0m\r\n", bl, hb.repeat(BOX_WIDTH - 2), br);
+    let _ = out.write_all(clean_output(&bot_border).as_bytes());
+
+    let hotkey_row = if plain_mode() {
+        format!(
+            "  [↑↓] {} | [←→] {} | [0-6] {} | [Enter] {} | [Q] {}\r\n",
+            format_bidi(msg.menu_hw_row, current_lang),
+            format_bidi(msg.menu_hw_change, current_lang),
+            format_bidi(msg.menu_hw_tests, current_lang),
+            format_bidi(msg.menu_hw_start, current_lang),
+            format_bidi(msg.menu_hw_quit, current_lang)
+        )
+    } else {
+        format!(
+            "  \x1b[1;46;37m ↑↓ \x1b[0m {} │ \x1b[1;46;37m ←→ \x1b[0m {} │ \x1b[1;46;37m 0-6 \x1b[0m {} │ \x1b[1;42;37m Enter \x1b[0m {} │ \x1b[1;41;37m Q \x1b[0m {}\r\n",
+            format_bidi(msg.menu_hw_row, current_lang),
+            format_bidi(msg.menu_hw_change, current_lang),
+            format_bidi(msg.menu_hw_tests, current_lang),
+            format_bidi(msg.menu_hw_start, current_lang),
+            format_bidi(msg.menu_hw_quit, current_lang)
+        )
+    };
+    let _ = out.write_all(clean_output(&asc(&hotkey_row)).as_bytes());
     if let Some(n) = notice {
-        print!("  \x1b[1;33m{}\x1b[0m\r\n", format_bidi(n, current_lang));
+        let n_str = format!("  \x1b[1;33m{}\x1b[0m\r\n", format_bidi(n, current_lang));
+        let _ = out.write_all(clean_output(&n_str).as_bytes());
     }
-    let _ = stdout().flush();
+    let _ = out.flush();
 }
-
 fn pad_width(s: &str, target_width: usize) -> String {
     let w = strip_ansi_len(s);
     if w >= target_width {
