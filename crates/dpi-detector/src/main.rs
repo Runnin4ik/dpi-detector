@@ -173,8 +173,17 @@ enum MenuAction {
 
 #[tokio::main]
 async fn main() {
-    let args = CliArgs::parse();
+    // Panic hook: write crash details to file and pause so console does not instantly vanish.
+    std::panic::set_hook(Box::new(|info| {
+        let err_msg = format!("\n=== DPI DETECTOR FATAL ERROR ===\n{}\n================================\n", info);
+        eprintln!("{}", err_msg);
+        let _ = std::fs::write("dpi_detector_crash.log", &err_msg);
+        eprintln!("Press Enter to close...");
+        let mut s = String::new();
+        let _ = std::io::stdin().read_line(&mut s);
+    }));
 
+    let args = CliArgs::parse();
     #[cfg(windows)]
     let has_vt = {
         extern "system" {
