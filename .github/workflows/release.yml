@@ -97,6 +97,8 @@ jobs:
           chmod +x ~/.cargo/bin/cross
       - name: Build with cross (MIPS & Cross targets)
         if: matrix.use_cross
+        env:
+          RUSTFLAGS: "--cfg rustix_use_libc"
         run: cross build --release --target ${{ matrix.target }}
 
       - name: Build with cargo (Windows 7 legacy)

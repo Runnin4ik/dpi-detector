@@ -347,6 +347,28 @@ async fn main() {
     let wants_menu = !has_explicit_cmd && std::io::stdin().is_terminal() && tui_available();
     let is_interactive = wants_menu;
 
+    // If user ran the binary with NO arguments and TUI is unavailable:
+    if !has_explicit_cmd && !wants_menu {
+        let banner = render_banner(&msg, profile, msg.checking_updates);
+        print_out(&clean_output(&banner));
+        let notice = if lang == Language::Ru {
+            "\r\nИнтерактивное меню (TUI) недоступно в этом терминале.\r\n\
+             Запустите диагностику с параметрами:\r\n\
+             \x1b[36m  dpi-detector -t 1\x1b[0m       — проверка DNS-серверов\r\n\
+             \x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — базовые тесты (DNS + сайты + TCP16)\r\n\
+             \x1b[36m  dpi-detector -t 12345\x1b[0m   — все тесты\r\n\
+             \x1b[36m  dpi-detector --help\x1b[0m     — список всех параметров\r\n\r\n"
+        } else {
+            "\r\nInteractive menu (TUI) is unavailable in this terminal.\r\n\
+             Run diagnostics using command-line arguments:\r\n\
+             \x1b[36m  dpi-detector -t 1\x1b[0m       — DNS servers test\r\n\
+             \x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — basic tests (DNS + sites + TCP16)\r\n\
+             \x1b[36m  dpi-detector -t 12345\x1b[0m   — all tests\r\n\
+             \x1b[36m  dpi-detector --help\x1b[0m     — full list of options\r\n\r\n"
+        };
+        print_out(&clean_output(notice));
+        return;
+    }
     let mut tests_str = if let Some(ref t) = args.tests {
         t.chars().filter(|c| ('0'..='6').contains(c)).collect::<String>()
     } else if !args.domain.is_empty() || args.domains.is_some() {
