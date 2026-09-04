@@ -118,7 +118,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for DpiProbeStream<S> {
                         if state.stage == ConnectionStage::TlsClientHelloSent && state.bytes_recv == 0 {
                             state.last_status = Some(DpiStatus::TlsRst);
                             state.last_error_msg =
-                                Some("TCP RST received from DPI after TLS ClientHello".into());
+                                Some("TCP RST on ClientHello".into());
                         } else if state.stage <= ConnectionStage::TcpConnected {
                             state.last_status = Some(DpiStatus::TcpRst);
                             state.last_error_msg = Some("TCP RST received from DPI on connect".into());
