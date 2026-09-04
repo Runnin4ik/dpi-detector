@@ -22,27 +22,10 @@
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
 ```
-*С передачей параметров (например, тесты 1, 2 и 3 без интерактивного меню):*
-```bash
-curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh -s -- -t 1,2,3
-```
-*Если в системе установлен `wget`:*
-```sh
-wget -qO- https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
-```
 
 ### 🪟 Windows (PowerShell):
 ```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | iex"
-```
-*С передачей параметров:*
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1))) -t 1,2,3
-```
-
-### 💻 Windows (Командная строка CMD):
-```cmd
-cmd /c "curl -fsSL -o %TEMP%\dpi-detector.exe https://github.com/Runnin4ik/dpi-detector/releases/latest/download/dpi-detector-windows-x86_64.exe && %TEMP%\dpi-detector.exe"
+irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | iex
 ```
 
 ## 📥 Скачать / Download
@@ -134,30 +117,11 @@ docker run -d --name dpi-detector-web -p 7681:7681 --restart unless-stopped ghcr
 ## 🐍 Python 3.8+
 **Требования:** httpx[socks,http2]>=0.28.1, rich>=14.3.2, PyYAML>=6.0.3
 
-**Установка:**
-```bash
-# скачайте и распакуйте архив руками, или:
-git clone https://github.com/Runnin4ik/dpi-detector.git
-cd dpi-detector
-python -m pip install -r requirements.txt
-```
-
-**Запуск:**
-```bash
-python dpi_detector.py
-# или с параметрами
-python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
-```
-
 ## 🪟 Windows
 
-Быстрый запуск в PowerShell одной командой:
+Быстрый запуск в PowerShell:
 ```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | iex"
-```
-*Либо в классической командной строке `cmd.exe`:*
-```cmd
-cmd /c "curl -fsSL -o %TEMP%\dpi-detector.exe https://github.com/Runnin4ik/dpi-detector/releases/latest/download/dpi-detector-windows-x86_64.exe && %TEMP%\dpi-detector.exe"
+irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | iex
 ```
 
 ## 🐧 Linux & Роутеры (Keenetic, OpenWrt, Entware)
@@ -166,15 +130,13 @@ cmd /c "curl -fsSL -o %TEMP%\dpi-detector.exe https://github.com/Runnin4ik/dpi-d
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
 ```
-*Скрипт автоматически распознает архитектуру (x86_64, ARM64, ARMv7, MIPS, MIPSEL) и установит бинарник прямо в `/opt/bin` или `/usr/local/bin`.*
 
 ## 🍎 macOS
 
-Быстрый запуск одной командой (автоматически определяет Apple Silicon M1-M4 / Intel):
+Быстрый запуск одной командой:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
 ```
-
 ## 📲 iOS (a-Shell)
 
 Для запуска требуется терминал **a-Shell mini** ([App Store](https://apps.apple.com/us/app/a-shell-mini/id1543537943?l=ru)).
