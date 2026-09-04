@@ -75,7 +75,24 @@ case "$OS" in
 esac
 
 BIN_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARGET}"
-OUT_FILE="/tmp/dpi-detector"
+# Pick a writable directory: $TMPDIR may be unset, /tmp may not exist
+# (Android/Termux), $HOME is the last resort before cwd.
+pick_dir() {
+  for _d in "${TMPDIR:-}" "$HOME" /tmp .; do
+    [ -n "$_d" ] || continue
+    if [ -d "$_d" ] && touch "$_d/.dpi-wtest" 2>/dev/null; then
+      rm -f "$_d/.dpi-wtest"
+      echo "$_d"
+      return 0
+    fi
+  done
+  return 1
+}
+OUT_DIR=$(pick_dir) || {
+  echo "Error: no writable directory found (tried \$TMPDIR, \$HOME, /tmp, .)." >&2
+  exit 1
+}
+OUT_FILE="${OUT_DIR}/dpi-detector"
 
 echo "Downloading ${TARGET} (${VERSION})..."
 
