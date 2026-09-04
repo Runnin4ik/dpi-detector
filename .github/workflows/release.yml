@@ -69,8 +69,18 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             name: dpi-detector-macos-arm64
-            use_cross: false
 
+          # 9. Android ARM64 (Termux, ADB, Android 5.0+ phones/tablets)
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+            name: dpi-detector-android-arm64
+            use_cross: true
+
+          # 10. Android ARM32 (Older phones, Smart TVs, Android 5.0+)
+          - os: ubuntu-latest
+            target: armv7-linux-androideabi
+            name: dpi-detector-android-armv7
+            use_cross: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

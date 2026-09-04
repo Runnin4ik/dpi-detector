@@ -3,57 +3,81 @@ set -e
 
 main() {
   REPO="Runnin4ik/dpi-detector"
-  VERSION="${DPI_VERSION:-v5.0.0-alpha.3}"
+  VERSION="${DPI_VERSION:-v5.0.0-alpha.4}"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 case "$OS" in
   Linux)
-    case "$ARCH" in
-      x86_64|amd64)
-        TARGET="dpi-detector-linux-x86_64"
-        ;;
-      aarch64|arm64)
-        TARGET="dpi-detector-linux-arm64"
-        ;;
-      armv7*|armv6*|armhf)
-        TARGET="dpi-detector-linux-armv7"
-        ;;
-      mipsel*|mips*el*)
-        TARGET="dpi-detector-linux-mipsel"
-        ;;
-      mips*)
-        # uname -m reports "mips" for BOTH endians. Check the kernel byte
-        # order first, then fall back to ELF EI_DATA of a system binary.
-        # busybox hexdump lacks -e, so use od (POSIX) for the fallback.
-        mips_endian=""
-        if grep -qi "little endian" /proc/cpuinfo 2>/dev/null; then
-          mips_endian="le"
-        elif grep -qi "big endian" /proc/cpuinfo 2>/dev/null; then
-          mips_endian="be"
-        else
-          for _b in /bin/busybox /bin/sh /bin/ls; do
-            if [ -f "$_b" ]; then
-              _ei=$(od -A n -t u1 -j 5 -N 1 "$_b" 2>/dev/null | tr -d ' ')
-              if [ "$_ei" = "1" ]; then mips_endian="le"; break; fi
-              if [ "$_ei" = "2" ]; then mips_endian="be"; break; fi
-            fi
-          done
-        fi
-        if [ "$mips_endian" = "be" ]; then
-          TARGET="dpi-detector-linux-mips"
-        else
-          # Little-endian (MediaTek, Realtek, modern Qualcomm) is the
-          # common case; default to it when detection is inconclusive.
+    # Check if running on Android (Termux, ADB shell, Android terminal)
+    is_android=""
+    if [ -n "${TERMUX_VERSION:-}" ] || [ -f "/system/bin/getprop" ] || [ "$(uname -o 2>/dev/null)" = "Android" ]; then
+      is_android="1"
+    fi
+
+    if [ -n "$is_android" ]; then
+      case "$ARCH" in
+        aarch64|arm64)
+          TARGET="dpi-detector-android-arm64"
+          ;;
+        armv7*|armv8l*|armhf|arm)
+          TARGET="dpi-detector-android-armv7"
+          ;;
+        x86_64|amd64)
+          TARGET="dpi-detector-linux-x86_64"
+          ;;
+        *)
+          echo "Unsupported Android architecture: $ARCH" >&2
+          exit 1
+          ;;
+      esac
+    else
+      case "$ARCH" in
+        x86_64|amd64)
+          TARGET="dpi-detector-linux-x86_64"
+          ;;
+        aarch64|arm64)
+          TARGET="dpi-detector-linux-arm64"
+          ;;
+        armv7*|armv6*|armhf)
+          TARGET="dpi-detector-linux-armv7"
+          ;;
+        mipsel*|mips*el*)
           TARGET="dpi-detector-linux-mipsel"
-        fi
-        ;;
-      *)
-        echo "Unsupported Linux architecture: $ARCH" >&2
-        exit 1
-        ;;
-    esac
+          ;;
+        mips*)
+          # uname -m reports "mips" for BOTH endians. Check the kernel byte
+          # order first, then fall back to ELF EI_DATA of a system binary.
+          # busybox hexdump lacks -e, so use od (POSIX) for the fallback.
+          mips_endian=""
+          if grep -qi "little endian" /proc/cpuinfo 2>/dev/null; then
+            mips_endian="le"
+          elif grep -qi "big endian" /proc/cpuinfo 2>/dev/null; then
+            mips_endian="be"
+          else
+            for _b in /bin/busybox /bin/sh /bin/ls; do
+              if [ -f "$_b" ]; then
+                _ei=$(od -A n -t u1 -j 5 -N 1 "$_b" 2>/dev/null | tr -d ' ')
+                if [ "$_ei" = "1" ]; then mips_endian="le"; break; fi
+                if [ "$_ei" = "2" ]; then mips_endian="be"; break; fi
+              fi
+            done
+          fi
+          if [ "$mips_endian" = "be" ]; then
+            TARGET="dpi-detector-linux-mips"
+          else
+            # Little-endian (MediaTek, Realtek, modern Qualcomm) is the
+            # common case; default to it when detection is inconclusive.
+            TARGET="dpi-detector-linux-mipsel"
+          fi
+          ;;
+        *)
+          echo "Unsupported Linux architecture: $ARCH" >&2
+          exit 1
+          ;;
+      esac
+    fi
     ;;
   Darwin)
     case "$ARCH" in
@@ -82,6 +106,10 @@ esac
 pick_install_dir() {
   if [ -n "${DPI_INSTALL_DIR:-}" ] && [ -d "$DPI_INSTALL_DIR" ] && [ -w "$DPI_INSTALL_DIR" ]; then
     echo "$DPI_INSTALL_DIR"
+    return 0
+  fi
+  if [ -n "${PREFIX:-}" ] && [ -d "${PREFIX}/bin" ] && [ -w "${PREFIX}/bin" ]; then
+    echo "${PREFIX}/bin"
     return 0
   fi
   if [ -d /opt/bin ] && [ -w /opt/bin ]; then

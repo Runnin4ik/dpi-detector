@@ -9,7 +9,7 @@
 
 [![Language: Rust](https://img.shields.io/badge/Language-Rust_2021-DEA584.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v5.0.0--alpha.3-blue.svg)](https://github.com/Runnin4ik/dpi-detector/releases)
+[![Release](https://img.shields.io/badge/Release-v5.0.0--alpha.4-blue.svg)](https://github.com/Runnin4ik/dpi-detector/releases)
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0.svg?logo=telegram&logoColor=white)](https://t.me/DPI_detector)
 
 Полностью переписанный нативный инструмент для анализа цензуры и блокировок трафика на **чистом Rust**:
@@ -27,6 +27,12 @@
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
 ```
+### 📱 Android (Termux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
+```
+Скрипт автоматически определит Termux, установит нативный Android-бинарник в `$PREFIX/bin/dpi-detector` и запустит его. Для повторного запуска достаточно ввести `dpi-detector`.
 
 ---
 
@@ -53,6 +59,8 @@ irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | 
 | **Роутеры MIPS BE** (Atheros, Qualcomm, OpenWrt) | mips musl | `dpi-detector-linux-mips` |
 | **macOS Apple Silicon** (M1, M2, M3, M4) | aarch64 | `dpi-detector-macos-arm64` |
 | **macOS Intel** | x86_64 | `dpi-detector-macos-intel` |
+| **Android ARM64** (Смартфоны, планшеты, Termux, ADB) | aarch64 bionic | `dpi-detector-android-arm64` |
+| **Android ARM32** (Старые устройства, Android TV) | armv7 bionic | `dpi-detector-android-armv7` |
 
 ---
 
