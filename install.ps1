@@ -1,10 +1,39 @@
+[CmdletBinding()]
+param(
+    [string]$InstallDir = "",
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$AppArgs
+)
+
 $ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 $repo = "Runnin4ik/dpi-detector"
 $version = if ($env:DPI_VERSION) { $env:DPI_VERSION } else { "latest" }
+
+# Architecture detection with 32-bit WoW64 fallback protection
+$rawArch = $env:PROCESSOR_ARCHITECTURE
+if ($env:PROCESSOR_ARCHITEW6432) {
+    $rawArch = $env:PROCESSOR_ARCHITEW6432
+}
+
 $isLegacyWin = [System.Environment]::OSVersion.Version.Major -lt 10
 $target = if ($isLegacyWin) { "dpi-detector-windows-7-x86_64.exe" } else { "dpi-detector-windows-x86_64.exe" }
-$out = "$env:TEMP\dpi-detector.exe"
-$tmp = "$env:TEMP\dpi-detector.tmp.$([System.Diagnostics.Process]::GetCurrentProcess().Id).exe"
+
+$outDir = if ($InstallDir -ne "") {
+    $InstallDir
+} elseif ($env:DPI_INSTALL_DIR) {
+    $env:DPI_INSTALL_DIR
+} else {
+    $env:TEMP
+}
+
+if (-not (Test-Path $outDir)) {
+    New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+}
+
+$out = Join-Path $outDir "dpi-detector.exe"
+$tmp = Join-Path $outDir "dpi-detector.tmp.$([System.Diagnostics.Process]::GetCurrentProcess().Id).exe"
 
 $urls = [System.Collections.Generic.List[string]]::new()
 if ($env:DPI_MIRRORS) {
@@ -27,7 +56,6 @@ $urls.Add("https://gh-proxy.org/$ghUrl")
 $urls.Add("https://github.boki.moe/$ghUrl")
 
 Write-Host "Downloading DPI Detector ($version)..." -ForegroundColor Cyan
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $downloaded = $false
 foreach ($u in $urls) {
@@ -63,4 +91,8 @@ Write-Host "Binary: $out" -ForegroundColor Cyan
 Write-Host "Run:    & `"$out`" -t 1" -ForegroundColor Cyan
 Write-Host "Menu:   & `"$out`"" -ForegroundColor Cyan
 Write-Host "Starting DPI Detector..." -ForegroundColor Green
-& $out @args
+if ($AppArgs -and $AppArgs.Count -gt 0) {
+    & $out @AppArgs
+} else {
+    & $out
+}

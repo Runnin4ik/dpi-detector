@@ -1,8 +1,9 @@
 #!/bin/sh
 set -e
 
-REPO="Runnin4ik/dpi-detector"
-VERSION="${DPI_VERSION:-latest}"
+main() {
+  REPO="Runnin4ik/dpi-detector"
+  VERSION="${DPI_VERSION:-latest}"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -79,6 +80,10 @@ esac
 # 2. /usr/local/bin (Standard Linux with root/sudo)
 # 3. $TMPDIR, /tmp, $HOME, or current directory
 pick_install_dir() {
+  if [ -n "${DPI_INSTALL_DIR:-}" ] && [ -d "$DPI_INSTALL_DIR" ] && [ -w "$DPI_INSTALL_DIR" ]; then
+    echo "$DPI_INSTALL_DIR"
+    return 0
+  fi
   if [ -d /opt/bin ] && [ -w /opt/bin ]; then
     echo "/opt/bin"
     return 0
@@ -131,9 +136,11 @@ download_file() {
   _url="$1"
   _dest="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest"
+    curl -fsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null || \
+    curl -kfsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null
   elif command -v wget >/dev/null 2>&1; then
-    wget -q --timeout=4 -O "$_dest" "$_url"
+    wget -q --timeout=4 -O "$_dest" "$_url" 2>/dev/null || \
+    wget -q --no-check-certificate --timeout=4 -O "$_dest" "$_url" 2>/dev/null
   else
     echo "Error: neither curl nor wget found in PATH." >&2
     exit 1
@@ -176,8 +183,11 @@ echo "All tests: ${RUN_FILE} -t 12345"
 echo "Menu:      ${RUN_FILE}"
 echo "Help:      ${RUN_FILE} --help"
 echo "Starting DPI Detector..."
-if [ -c /dev/tty ]; then
-  exec "$RUN_FILE" "$@" </dev/tty
-else
-  exec "$RUN_FILE" "$@"
-fi
+  if [ -c /dev/tty ]; then
+    exec "$RUN_FILE" "$@" </dev/tty
+  else
+    exec "$RUN_FILE" "$@"
+  fi
+}
+
+main "$@"
