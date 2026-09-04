@@ -1191,7 +1191,7 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_ip_version: "إصدار IP",
             menu_concurrency: "التزامن",
             menu_hw_row: "سطر",
-            menu_hw_change: "تغییر",
+            menu_hw_change: "تغيير",
             menu_hw_tests: "اختبارات",
             menu_hw_start: "بدء",
             menu_hw_quit: "خروج",
