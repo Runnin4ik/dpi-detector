@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $repo = "Runnin4ik/dpi-detector"
-$version = if ($env:DPI_VERSION) { $env:DPI_VERSION } else { "latest" }
+$version = if ($env:DPI_VERSION) { $env:DPI_VERSION } else { "v5.0.0-alpha.1" }
 
 # Architecture detection with 32-bit WoW64 fallback protection
 $rawArch = $env:PROCESSOR_ARCHITECTURE
@@ -40,24 +40,19 @@ if ($env:DPI_MIRRORS) {
         $urls.Add("$($m.TrimEnd('/'))/$target")
     }
 }
-if ($version -eq "latest") {
-    $candidates = @(
-        "https://github.com/$repo/releases/latest/download/$target",
-        "https://github.com/$repo/releases/download/v5.0.0-alpha.1/$target"
-    )
+$ghUrl = if ($version -eq "latest") {
+    "https://github.com/$repo/releases/latest/download/$target"
 } else {
-    $candidates = @("https://github.com/$repo/releases/download/$version/$target")
+    "https://github.com/$repo/releases/download/$version/$target"
 }
 
-foreach ($base in $candidates) {
-    $urls.Add($base)
-    $urls.Add("https://ghfast.top/$base")
-    $urls.Add("https://ghproxy.net/$base")
-    $urls.Add("https://gh-proxy.com/$base")
-    $urls.Add("https://ghproxy.vip/$base")
-    $urls.Add("https://gh-proxy.org/$base")
-    $urls.Add("https://github.boki.moe/$base")
-}
+$urls.Add($ghUrl)
+$urls.Add("https://ghfast.top/$ghUrl")
+$urls.Add("https://ghproxy.net/$ghUrl")
+$urls.Add("https://gh-proxy.com/$ghUrl")
+$urls.Add("https://ghproxy.vip/$ghUrl")
+$urls.Add("https://gh-proxy.org/$ghUrl")
+$urls.Add("https://github.boki.moe/$ghUrl")
 Write-Host "Downloading DPI Detector ($version)..." -ForegroundColor Cyan
 
 $downloaded = $false

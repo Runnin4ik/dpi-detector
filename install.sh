@@ -3,7 +3,7 @@ set -e
 
 main() {
   REPO="Runnin4ik/dpi-detector"
-  VERSION="${DPI_VERSION:-latest}"
+  VERSION="${DPI_VERSION:-v5.0.0-alpha.1}"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -120,20 +120,18 @@ if [ -n "${DPI_MIRRORS:-}" ]; then
 fi
 
 if [ "$VERSION" = "latest" ]; then
-  CANDIDATE_URLS="https://github.com/${REPO}/releases/latest/download/${TARGET} https://github.com/${REPO}/releases/download/v5.0.0-alpha.1/${TARGET}"
+  _GH_URL="https://github.com/${REPO}/releases/latest/download/${TARGET}"
 else
-  CANDIDATE_URLS="https://github.com/${REPO}/releases/download/${VERSION}/${TARGET}"
+  _GH_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARGET}"
 fi
 
-for _gh_url in $CANDIDATE_URLS; do
-  URL_LIST="${URL_LIST} ${_gh_url}"
-  URL_LIST="${URL_LIST} https://ghfast.top/${_gh_url}"
-  URL_LIST="${URL_LIST} https://ghproxy.net/${_gh_url}"
-  URL_LIST="${URL_LIST} https://gh-proxy.com/${_gh_url}"
-  URL_LIST="${URL_LIST} https://ghproxy.vip/${_gh_url}"
-  URL_LIST="${URL_LIST} https://gh-proxy.org/${_gh_url}"
-  URL_LIST="${URL_LIST} https://github.boki.moe/${_gh_url}"
-done
+URL_LIST="${_GH_URL}"
+URL_LIST="${URL_LIST} https://ghfast.top/${_GH_URL}"
+URL_LIST="${URL_LIST} https://ghproxy.net/${_GH_URL}"
+URL_LIST="${URL_LIST} https://gh-proxy.com/${_GH_URL}"
+URL_LIST="${URL_LIST} https://ghproxy.vip/${_GH_URL}"
+URL_LIST="${URL_LIST} https://gh-proxy.org/${_GH_URL}"
+URL_LIST="${URL_LIST} https://github.boki.moe/${_GH_URL}"
 download_file() {
   _url="$1"
   _dest="$2"
@@ -179,17 +177,26 @@ mv -f "$TMP_FILE" "$OUT_FILE"
 chmod +x "$OUT_FILE"
 RUN_FILE="$OUT_FILE"
 
-echo "Installed: ${RUN_FILE}"
-echo "Run:       ${RUN_FILE} -t 1"
-echo "All tests: ${RUN_FILE} -t 12345"
-echo "Menu:      ${RUN_FILE}"
-echo "Help:      ${RUN_FILE} --help"
-echo "Starting DPI Detector..."
-  if [ -c /dev/tty ]; then
-    exec "$RUN_FILE" "$@" </dev/tty
-  else
-    exec "$RUN_FILE" "$@"
-  fi
+echo ""
+echo "=============================================="
+echo "  DPI Detector successfully installed!"
+echo "  Location: ${RUN_FILE}"
+echo "=============================================="
+echo ""
+echo "To start the interactive menu:"
+echo "  ${RUN_FILE}"
+echo ""
+echo "Quick test:"
+echo "  ${RUN_FILE} -t 1"
+echo ""
+echo "All tests:"
+echo "  ${RUN_FILE} -t 12345"
+echo ""
+
+# Only run automatically if user explicitly passed arguments (e.g. sh -s -- -t 1)
+if [ $# -gt 0 ]; then
+  exec "$RUN_FILE" "$@"
+fi
 }
 
 main "$@"
