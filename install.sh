@@ -2,7 +2,7 @@
 set -e
 
 REPO="Runnin4ik/dpi-detector"
-VERSION="v5.0.0-alpha.2"
+VERSION="v4.0.0-rust"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"

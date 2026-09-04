@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $repo = "Runnin4ik/dpi-detector"
-$version = "v5.0.0-alpha.2"
+$version = "v4.0.0-rust"
 $url = "https://github.com/$repo/releases/download/$version/dpi-detector-windows-x86_64.exe"
 $out = "$env:TEMP\dpi-detector.exe"
 
