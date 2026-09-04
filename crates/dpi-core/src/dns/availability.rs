@@ -28,13 +28,6 @@ pub fn brand(name: &str) -> String {
     name.split(" (").next().unwrap_or(name).trim().to_string()
 }
 
-fn domestic_brands() -> HashSet<&'static str> {
-    ["msk-ix", "нсди"].into_iter().collect()
-}
-
-pub fn is_domestic(name: &str) -> bool {
-    domestic_brands().contains(brand(name).to_lowercase().as_str())
-}
 
 /// Provider sort key: popular → others (alpha) → Russian last.
 pub fn dns_name_sort_key(name: &str) -> (u8, usize, String) {
@@ -642,9 +635,10 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
             let eip = report.egress.get(&(a.clone(), name.clone())).copied().flatten();
             if let Some(eip) = eip {
                 let org = report.org_names.get(&eip.to_string()).cloned().unwrap_or_default();
+                // NOTE: no domestic exemption (unlike Python): a hijacked
+                // MSK-IX/NSDI answer must be visible, not silently shielded.
                 if is_hijacked(&eip)
                     && !known_resolver(&org_label(&org), &cfg.dns_known_resolver_names)
-                    && !is_domestic(&name)
                 {
                     hi.insert(brand(&name));
                 }
@@ -655,10 +649,6 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
     let resolvers_total = udp_by_name(report)
         .keys()
         .map(|n| brand(n))
-        .filter(|b| {
-            let low = b.to_lowercase();
-            low != "msk-ix" && low != "нсди"
-        })
         .collect::<HashSet<_>>()
         .len();
 

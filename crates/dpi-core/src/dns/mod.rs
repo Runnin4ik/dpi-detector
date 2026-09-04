@@ -7,7 +7,7 @@ pub mod udp;
 pub mod wire;
 
 pub use doh::{doh_connect, probe_doh_dns, query_doh_raw, query_doh_txt, DohSession};
-pub use availability::{check_dns_availability, connect_fail_label, dns_name_sort_key, is_domestic, known_resolver, net24, org_label, subst_counts, brand, DnsAnswer, DnsAvailReport, DnsAvailStats, ProbeKey, ProbeKind};
+pub use availability::{check_dns_availability, connect_fail_label, dns_name_sort_key, known_resolver, net24, org_label, subst_counts, brand, DnsAnswer, DnsAvailReport, DnsAvailStats, ProbeKey, ProbeKind};
 pub use dot::{probe_dot, split_dot_endpoint, DotSession};
 pub use socks::{parse_socks_proxy, SocksProxyConfig};
 pub use types::{DnsError, DnsRecord, DnsResponse};

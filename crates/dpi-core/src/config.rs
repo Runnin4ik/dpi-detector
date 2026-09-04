@@ -158,7 +158,7 @@ fn d_dns_known_resolver_names() -> Vec<String> {
         // matches too broadly and would whitelist hijacker ASNs).
         "cloudflare", "quad9", "adguard", "opendns", "cleanbrowsing",
         "nextdns", "controld", "mullvad", "dns0", "ahadns",
-        "comss", "geohide", "нсди",
+        "comss", "geohide",
     ]
     .into_iter()
     .map(|s| s.to_string())
@@ -981,7 +981,7 @@ mod tests {
         assert_eq!(cfg.concurrency_presets, vec![1, 5, 20, 50, 100]);
         assert_eq!(cfg.cymru_doh_servers.len(), 5);
         assert_eq!(cfg.ip6_lookup_urls.len(), 4);
-        assert_eq!(cfg.dns_known_resolver_names.len(), 28);
+        assert_eq!(cfg.dns_known_resolver_names.len(), 27);
         assert!(cfg.dns_known_resolver_names.contains(&"google".to_string()));
         assert!(cfg.dns_known_resolver_names.contains(&"yandex".to_string()));
     }

@@ -3,7 +3,7 @@ use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dpi_core::classify::DpiStatus;
 use dpi_core::config::AppConfig;
 use dpi_core::dns::availability::{
-    is_domestic, known_resolver, net24, org_label, subst_counts, DnsAvailReport, ProbeKind,
+    known_resolver, net24, org_label, subst_counts, DnsAvailReport, ProbeKind,
 };
 use dpi_core::dns::availability::DnsAnswer;
 use dpi_core::i18n::Messages;
@@ -856,10 +856,7 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig) -> Stri
                     } else {
                         let org = report.org_names.get(&ip.to_string()).cloned().unwrap_or_else(|| ip.to_string());
                         let label = org_label(&org);
-                        if is_domestic(name) {
-                            // Domestic brands stay uncolored (mirrors Python).
-                            egress_lines.push((format!("{}→{}", a, label), None));
-                        } else if known_resolver(&label, &cfg.dns_known_resolver_names) {
+                        if known_resolver(&label, &cfg.dns_known_resolver_names) {
                             egress_lines.push((format!("{}→{}", a, label), Some(Color::Green)));
                         } else {
                             egress_lines.push((format!("{}→{}", a, label), Some(Color::Red)));
