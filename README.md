@@ -30,24 +30,24 @@
         <tr>
             <td><b>🪟 Windows</b></td>
             <td>
-                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_win10.exe"><img src="https://img.shields.io/badge/Windows_10_/_11-x64-0078d7.svg?logo=windows&logoColor=white" alt="Windows 10/11"></a>
-                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_win7.exe"><img src="https://img.shields.io/badge/Windows_7_/_8-Legacy-00a4ef.svg?logo=windows&logoColor=white" alt="Windows 7/8"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_win10.exe"><img src="https://img.shields.io/badge/Windows_10_/_11-x64-0078d7.svg?logo=windows&logoColor=white" alt="Windows 10/11"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_win7.exe"><img src="https://img.shields.io/badge/Windows_7_/_8-Legacy-00a4ef.svg?logo=windows&logoColor=white" alt="Windows 7/8"></a>
             </td>
         </tr>
         <tr>
             <td><b>🐧 Linux</b></td>
             <td>
-                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_linux_x86_64"><img src="https://img.shields.io/badge/Linux-x86__64-f84e29.svg?logo=linux&logoColor=white" alt="Linux x86_64"></a>
-                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_linux_arm64"><img src="https://img.shields.io/badge/Linux-ARM64-168039.svg?logo=linux&logoColor=white" alt="Linux ARM64"></a>
-                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_linux_armv7"><img src="https://img.shields.io/badge/Linux-ARMv7-45bf55.svg?logo=linux&logoColor=white" alt="Linux ARMv7"></a>
-                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_linux_x86"><img src="https://img.shields.io/badge/Linux-x86_32bit-FF9966.svg?logo=linux&logoColor=white" alt="Linux x86"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_linux_x86_64"><img src="https://img.shields.io/badge/Linux-x86__64-f84e29.svg?logo=linux&logoColor=white" alt="Linux x86_64"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_linux_arm64"><img src="https://img.shields.io/badge/Linux-ARM64-168039.svg?logo=linux&logoColor=white" alt="Linux ARM64"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_linux_armv7"><img src="https://img.shields.io/badge/Linux-ARMv7-45bf55.svg?logo=linux&logoColor=white" alt="Linux ARMv7"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_linux_x86"><img src="https://img.shields.io/badge/Linux-x86_32bit-FF9966.svg?logo=linux&logoColor=white" alt="Linux x86"></a>
             </td>
         </tr>
         <tr>
             <td><b>🍎 macOS</b></td>
             <td>
-                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_macos_arm64"><img src="https://img.shields.io/badge/Apple_Silicon-M1--M4-000000.svg?logo=apple&logoColor=white" alt="macOS Apple Silicon"></a>
-                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_macos_intel"><img src="https://img.shields.io/badge/Intel-x86__64-555555.svg?logo=apple&logoColor=white" alt="macOS Intel"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_macos_arm64"><img src="https://img.shields.io/badge/Apple_Silicon-M1--M4-000000.svg?logo=apple&logoColor=white" alt="macOS Apple Silicon"></a>
+                <a href="https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_macos_intel"><img src="https://img.shields.io/badge/Intel-x86__64-555555.svg?logo=apple&logoColor=white" alt="macOS Intel"></a>
             </td>
         </tr>
         <tr>
@@ -124,7 +124,7 @@ python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
 
 Быстрое скачивание и запуск в PowerShell одной командой:
 ```powershell
-curl.exe -fL -o dpi_detector.exe https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_win10.exe; if ($LASTEXITCODE -eq 0) { .\dpi_detector.exe }
+curl.exe -fL -o dpi_detector.exe https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_win10.exe; if ($LASTEXITCODE -eq 0) { .\dpi_detector.exe }
 ```
 *Либо скачайте `.exe` файл из [таблицы выше](#-скачать--download) и запустите двойным кликом.*
 
@@ -134,12 +134,12 @@ curl.exe -fL -o dpi_detector.exe https://github.com/Runnin4ik/dpi-detector/relea
 
 **x86_64 (AMD / Intel):**
 ```bash
-curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_linux_x86_64 && chmod +x dpi_detector_v4.2.1_linux_x86_64 && ./dpi_detector_v4.2.1_linux_x86_64
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_linux_x86_64 && chmod +x dpi_detector_v4.2.4_linux_x86_64 && ./dpi_detector_v4.2.4_linux_x86_64
 ```
 
 **ARM64 (Raspberry Pi 3–5, Orange Pi, ARM VPS):**
 ```bash
-curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_linux_arm64 && chmod +x dpi_detector_v4.2.1_linux_arm64 && ./dpi_detector_v4.2.1_linux_arm64
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_linux_arm64 && chmod +x dpi_detector_v4.2.4_linux_arm64 && ./dpi_detector_v4.2.4_linux_arm64
 ```
 
 ## 🍎 macOS
@@ -148,12 +148,12 @@ curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/d
 
 **Apple Silicon (M1–M4):**
 ```bash
-curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_macos_arm64 && chmod +x dpi_detector_v4.2.1_macos_arm64 && xattr -cr dpi_detector_v4.2.1_macos_arm64 && ./dpi_detector_v4.2.1_macos_arm64
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_macos_arm64 && chmod +x dpi_detector_v4.2.4_macos_arm64 && xattr -cr dpi_detector_v4.2.4_macos_arm64 && ./dpi_detector_v4.2.4_macos_arm64
 ```
 
 **Intel:**
 ```bash
-curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_macos_intel && chmod +x dpi_detector_v4.2.1_macos_intel && xattr -cr dpi_detector_v4.2.1_macos_intel && ./dpi_detector_v4.2.1_macos_intel
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.4/dpi_detector_v4.2.4_macos_intel && chmod +x dpi_detector_v4.2.4_macos_intel && xattr -cr dpi_detector_v4.2.4_macos_intel && ./dpi_detector_v4.2.4_macos_intel
 ```
 *(Приложение не нотаризовано: `xattr -cr` снимает системный карантин macOS на запуск)*
 
@@ -297,7 +297,7 @@ python dpi_detector.py -t 0 --batch
 
 #### Бинарник (любой)
 ```bash
-./dpi_detector_v4.2.1_linux_x86_64 -t 0 --batch
+./dpi_detector_v4.2.4_linux_x86_64 -t 0 --batch
 ```
 
 > **Прокси:** при заданном `PROXY_URL`/`-p` весь трафик всех тестов идёт через прокси,
