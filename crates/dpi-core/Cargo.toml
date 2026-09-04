@@ -7,7 +7,6 @@ license.workspace = true
 
 [dependencies]
 tokio = { workspace = true }
-socket2 = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 webpki-roots = { workspace = true }
