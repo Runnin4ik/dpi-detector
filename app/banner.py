@@ -10,7 +10,7 @@ from cli.ui import BOX_W
 from utils import config
 from utils.version import is_newer
 
-CURRENT_VERSION = "4.2.3"
+CURRENT_VERSION = "4.2.4"
 GITHUB_REPO     = "Runnin4ik/dpi-detector"
 
 
