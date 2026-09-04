@@ -23,11 +23,29 @@ case "$OS" in
         TARGET="dpi-detector-linux-mipsel"
         ;;
       mips*)
-        # Check endianness if possible
-        if [ -f /bin/busybox ] && hexdump -s 5 -n 1 -e '"%d"' /bin/busybox 2>/dev/null | grep -q '1'; then
-          TARGET="dpi-detector-linux-mipsel"
+        # uname -m reports "mips" for BOTH endians. Check the kernel byte
+        # order first, then fall back to ELF EI_DATA of a system binary.
+        # busybox hexdump lacks -e, so use od (POSIX) for the fallback.
+        mips_endian=""
+        if grep -qi "little endian" /proc/cpuinfo 2>/dev/null; then
+          mips_endian="le"
+        elif grep -qi "big endian" /proc/cpuinfo 2>/dev/null; then
+          mips_endian="be"
         else
+          for _b in /bin/busybox /bin/sh /bin/ls; do
+            if [ -f "$_b" ]; then
+              _ei=$(od -A n -t u1 -j 5 -N 1 "$_b" 2>/dev/null | tr -d ' ')
+              if [ "$_ei" = "1" ]; then mips_endian="le"; break; fi
+              if [ "$_ei" = "2" ]; then mips_endian="be"; break; fi
+            fi
+          done
+        fi
+        if [ "$mips_endian" = "be" ]; then
           TARGET="dpi-detector-linux-mips"
+        else
+          # Little-endian (MediaTek, Realtek, modern Qualcomm) is the
+          # common case; default to it when detection is inconclusive.
+          TARGET="dpi-detector-linux-mipsel"
         fi
         ;;
       *)
