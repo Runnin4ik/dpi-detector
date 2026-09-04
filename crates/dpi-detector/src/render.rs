@@ -110,7 +110,7 @@ pub fn status_color(s: DpiStatus) -> Color {
     }
 }
 
-fn strip_ansi_len(s: &str) -> usize {
+pub fn strip_ansi_len(s: &str) -> usize {
     let mut count = 0;
     let mut in_escape = false;
     for c in s.chars() {
@@ -121,7 +121,7 @@ fn strip_ansi_len(s: &str) -> usize {
                 in_escape = false;
             }
         } else {
-            count += 1;
+            count += unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
         }
     }
     count

@@ -10,7 +10,7 @@ use dpi_core::net::netinfo::ipv6_supported;
 use dpi_core::net::version::{version_badge, ReleaseInfo};
 use dpi_core::profile::RegionProfile;
 
-use crate::render::{asc, ascii_mode, render_banner, BOX_WIDTH};
+use crate::render::{asc, ascii_mode, render_banner, strip_ansi_len, BOX_WIDTH};
 
 #[derive(Debug, Clone)]
 pub struct MenuSelection {
@@ -237,7 +237,7 @@ fn draw_menu(
     let mut lines = Vec::new();
     let offset = 3;
 
-    // Language row
+    // Language row: 1 space separator so all 6 native names fit within BOX_WIDTH (71).
     let lang_opts = Language::ALL
         .iter()
         .map(|&l| {
@@ -248,9 +248,9 @@ fn draw_menu(
             }
         })
         .collect::<Vec<_>>()
-        .join("  ");
+        .join(" ");
     let lang_cursor = if cursor == 0 { "►" } else { " " };
-    lines.push(format!("  {} {:<10} {}", lang_cursor, msg.menu_language, lang_opts));
+    lines.push(format!("  {} {} {}", lang_cursor, pad_width(msg.menu_language, 8), lang_opts));
 
     // IP version row
     let ip_opts = if v6_supported {
@@ -260,10 +260,18 @@ fn draw_menu(
             "○ IPv4   \x1b[1;32m●\x1b[0m IPv6".to_string()
         }
     } else {
-        "\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○ IPv6 (недоступен)\x1b[0m".to_string()
+        let unavail = match current_lang {
+            Language::Ru => "(недоступен)",
+            Language::Zh => "(不可用)",
+            Language::Fa => "(در دسترس نیست)",
+            Language::Ar => "(غير متوفر)",
+            Language::Es => "(no disponible)",
+            Language::En => "(unavailable)",
+        };
+        format!("\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○ IPv6 {}\x1b[0m", unavail)
     };
     let ip_cursor = if cursor == 1 { "►" } else { " " };
-    lines.push(format!("  {} {:<15} {}", ip_cursor, msg.menu_ip_version, ip_opts));
+    lines.push(format!("  {} {} {}", ip_cursor, pad_width(msg.menu_ip_version, 15), ip_opts));
 
     // Concurrency row
     let conc_opts = presets
@@ -278,7 +286,7 @@ fn draw_menu(
         .collect::<Vec<_>>()
         .join("   ");
     let conc_cursor = if cursor == 2 { "►" } else { " " };
-    lines.push(format!("  {} {:<15} {}", conc_cursor, msg.menu_concurrency, conc_opts));
+    lines.push(format!("  {} {} {}", conc_cursor, pad_width(msg.menu_concurrency, 15), conc_opts));
 
     lines.push(format!("  {}", "─".repeat(BOX_WIDTH - 8)));
 
@@ -321,22 +329,15 @@ fn draw_menu(
     let _ = stdout().flush();
 }
 
-fn strip_ansi_len(s: &str) -> usize {
-    let mut count = 0;
-    let mut in_escape = false;
-    for c in s.chars() {
-        if c == '\x1b' {
-            in_escape = true;
-        } else if in_escape {
-            if c == 'm' {
-                in_escape = false;
-            }
-        } else {
-            count += 1;
-        }
+fn pad_width(s: &str, target_width: usize) -> String {
+    let w = strip_ansi_len(s);
+    if w >= target_width {
+        s.to_string()
+    } else {
+        format!("{}{}", s, " ".repeat(target_width - w))
     }
-    count
 }
+
 
 /// Toggles a test checkbox (mirrors Python `_toggle_test`).
 pub fn toggle_test(selected: &mut HashSet<char>, digit: char) {
@@ -376,6 +377,51 @@ mod tests {
         };
         assert_eq!(sel.language, Language::Ru);
         assert_eq!(sel.selected_tests, "123");
+    }
+    #[test]
+    fn test_menu_rows_fit_in_box_for_all_languages() {
+        for lang in Language::ALL {
+            let msg = get_messages(lang);
+            let test_options = get_test_options(&msg);
+
+            // Title
+            let title_clean = format!(" {} ", asc(msg.menu_title));
+            let title_len = strip_ansi_len(&title_clean);
+            assert!(title_len + 3 <= BOX_WIDTH, "title for {:?} overflows box: {}", lang, title_len);
+
+            // Language row
+            let lang_opts = Language::ALL
+                .iter()
+                .map(|&l| {
+                    if l == lang {
+                        format!("\x1b[1;32m●\x1b[0m {}", l.label())
+                    } else {
+                        format!("\x1b[2m○ {}\x1b[0m", l.label())
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let lang_line = format!("  ► {} {}", pad_width(msg.menu_language, 8), lang_opts);
+            let w = strip_ansi_len(&lang_line);
+            assert!(w + 3 <= BOX_WIDTH, "language row for {:?} overflows box: w={}", lang, w);
+
+            // IP version row
+            let ip_line = format!("    {} ● IPv4   ○ IPv6", pad_width(msg.menu_ip_version, 15));
+            let w = strip_ansi_len(&ip_line);
+            assert!(w + 3 <= BOX_WIDTH, "ip row for {:?} overflows box: w={}", lang, w);
+
+            // Concurrency row
+            let conc_line = format!("    {} ● 50   ○ 100", pad_width(msg.menu_concurrency, 15));
+            let w = strip_ansi_len(&conc_line);
+            assert!(w + 3 <= BOX_WIDTH, "conc row for {:?} overflows box: w={}", lang, w);
+
+            // Test options
+            for (digit, label) in test_options {
+                let test_line = format!("    [ ] {}. {}", digit, label);
+                let w = strip_ansi_len(&test_line);
+                assert!(w + 3 <= BOX_WIDTH, "test row {} for {:?} overflows box: w={}", digit, lang, w);
+            }
+        }
     }
 }
 

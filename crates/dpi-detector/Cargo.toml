@@ -18,6 +18,7 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 comfy-table = { workspace = true }
 crossterm = { workspace = true }
+unicode-width = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
