@@ -6,7 +6,7 @@ use dpi_core::dns::availability::{
     known_resolver, net24, org_label, subst_counts, DnsAvailReport, ProbeKind,
 };
 use dpi_core::dns::availability::DnsAnswer;
-use dpi_core::i18n::{Language, Messages};
+use dpi_core::i18n::{format_bidi, Language, Messages};
 use dpi_core::net::netinfo::{flag_emoji, is_tun_name, SystemDnsInfo};
 use dpi_core::probe::domains::{fake_ip_type, DomainEntry, DomainStats, FakeIpType};
 use dpi_core::probe::telegram::TelegramFullReport;
@@ -676,7 +676,10 @@ pub fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> String {
         table
             .load_preset(table_preset())
             .set_content_arrangement(ContentArrangement::Dynamic)
-            .set_header(vec![msg.provider, title]);
+            .set_header(vec![
+                Cell::new(format_bidi(msg.provider, msg.lang)),
+                Cell::new(format_bidi(title, msg.lang)),
+            ]);
         // Group by provider name preserving order
         let mut order: Vec<String> = Vec::new();
         let mut by_name: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
@@ -807,11 +810,18 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
 
     let mut table = Table::new();
     table.load_preset(table_preset()).set_content_arrangement(ContentArrangement::Dynamic);
-    let mut header = vec![msg.provider, msg.doh_min];
+    let mut header = vec![
+        Cell::new(format_bidi(msg.provider, msg.lang)),
+        Cell::new(format_bidi(msg.doh_min, msg.lang)),
+    ];
     if has_dot {
-        header.push(msg.dot_min);
+        header.push(Cell::new(format_bidi(msg.dot_min, msg.lang)));
     }
-    header.extend([msg.udp_min, msg.real_udp_resolver, msg.spoofing]);
+    header.extend([
+        Cell::new(format_bidi(msg.udp_min, msg.lang)),
+        Cell::new(format_bidi(msg.real_udp_resolver, msg.lang)),
+        Cell::new(format_bidi(msg.spoofing, msg.lang)),
+    ]);
     table.set_header(header);
     // by-name endpoint grouping
     let mut udp_by_name: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
@@ -1073,7 +1083,13 @@ pub fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
     table
         .load_preset(table_preset())
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec![msg.domain, msg.http, msg.tls12, msg.tls13, msg.detail]);
+        .set_header(vec![
+            Cell::new(format_bidi(msg.domain, msg.lang)),
+            Cell::new(msg.http),
+            Cell::new(msg.tls12),
+            Cell::new(msg.tls13),
+            Cell::new(format_bidi(msg.detail, msg.lang)),
+        ]);
 
     for e in entries {
         let (http_s, t12_s, t13_s, raw_details) = dpi_core::probe::domains::build_domain_row(e);
@@ -1087,7 +1103,7 @@ pub fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
         ]);
     }
 
-    out.push_str(msg.domain_title);
+    out.push_str(&format_bidi(msg.domain_title, msg.lang));
     out.push('\n');
     out.push_str(&format!("{}\n", table));
     out
@@ -1205,7 +1221,13 @@ pub fn render_tcp_table(rows: &[TcpRow], msg: &Messages) -> String {
     table
         .load_preset(table_preset())
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec!["ID", "ASN", msg.provider, msg.status, msg.detail]);
+        .set_header(vec![
+            Cell::new("ID"),
+            Cell::new("ASN"),
+            Cell::new(format_bidi(msg.provider, msg.lang)),
+            Cell::new(format_bidi(msg.status, msg.lang)),
+            Cell::new(format_bidi(msg.detail, msg.lang)),
+        ]);
     let mut passed = 0;
     let mut blocked = 0;
     let mut mixed = 0;
@@ -1313,7 +1335,13 @@ pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
     table
         .load_preset(table_preset())
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec!["DC", "IP", msg.region, msg.status, msg.ping_col]);
+        .set_header(vec![
+            Cell::new("DC"),
+            Cell::new("IP"),
+            Cell::new(format_bidi(msg.region, msg.lang)),
+            Cell::new(format_bidi(msg.status, msg.lang)),
+            Cell::new(format_bidi(msg.ping_col, msg.lang)),
+        ]);
     for dc in &report.dc_results {
         let (label, color) = if dc.available {
             ("OK", Color::Green)

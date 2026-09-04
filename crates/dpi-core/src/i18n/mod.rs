@@ -1379,7 +1379,7 @@ pub fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'static st
         ("— 其他 —", vec![
             ("OK", "站点可正常访问 (状态码 200–4xx 无阻断特征)"),
             ("UNKNOWN", "未知异常 (括号内为具体异常类型)"),
-            ("READ TIMEOUT", "服务器接受了连接但未及时返回数据: DPI 切断/限速、丢包或服务器过载"),
+            ("TIMEOUT", "服务器接受了连接但未及时返回数据: DPI 切断/限速、丢包或服务器过载"),
             ("POOL TIMEOUT", "套接字连接池耗尽 — 请降低并发连接数"),
         ]),
     ]
@@ -1426,7 +1426,7 @@ pub fn legend_sections_es() -> Vec<(&'static str, Vec<(&'static str, &'static st
         ("— Otros —", vec![
             ("OK", "Sitio accesible (200–4xx sin indicios de censura)"),
             ("UNKNOWN", "Error desconocido (tipo de excepción entre paréntesis)"),
-            ("READ TIMEOUT", "El servidor aceptó la petición pero la respuesta no llegó a tiempo: corte/limitación DPI o sobrecarga"),
+            ("TIMEOUT", "El servidor aceptó la petición pero la respuesta no llegó a tiempo: corte/limitación DPI o sobrecarga"),
             ("POOL TIMEOUT", "Grupo de sockets agotado: reduzca la concurrencia"),
         ]),
     ]
@@ -1473,7 +1473,7 @@ pub fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'static st
         ("— سایر —", vec![
             ("OK", "سایت در دسترس است (کد 200–4xx بدون علائم فیلترینگ)"),
             ("UNKNOWN", "خطای ناشناخته (نوع خطا در پرانتز)"),
-            ("READ TIMEOUT", "پاسخی از سرور در زمان مقرر نرسید: اختلال/کندی DPI، افت بسته یا بار سرور"),
+            ("TIMEOUT", "پاسخی از سرور در زمان مقرر نرسید: اختلال/کندی DPI، افت بسته یا بار سرور"),
             ("POOL TIMEOUT", "تکمیل ظرفیت سوکت‌ها — لطفاً هم‌زمانی را کاهش دهید"),
         ]),
     ]
@@ -1520,7 +1520,7 @@ pub fn legend_sections_ar() -> Vec<(&'static str, Vec<(&'static str, &'static st
         ("— أخرى —", vec![
             ("OK", "الموقع متاح (200-4xx دون مؤشرات حجب)"),
             ("UNKNOWN", "خطأ غير معروف (نوع الاستثناء بين قوسين)"),
-            ("READ TIMEOUT", "قبل الخادم الطلب لكن الاستجابة لم تصل في الوقت المناسب: خنق/قطع DPI أو حمل زائد"),
+            ("TIMEOUT", "قبل الخادم الطلب لكن الاستجابة لم تصل في الوقت المناسب: خنق/قطع DPI أو حمل زائد"),
             ("POOL TIMEOUT", "استنفاد مجمع المقابس — يرجى تقليل التزامن"),
         ]),
     ]
@@ -1567,7 +1567,7 @@ pub fn legend_sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>
         ("— Прочее —", vec![
             ("OK", "Сайт доступен (200–4xx без признаков блокировки)"),
             ("UNKNOWN", "Неизвестная ошибка (в скобках — тип исключения)"),
-            ("READ TIMEOUT", "Сервер принял запрос, но ответ не пришёл вовремя: DPI-обрыв/замедление, потеря пакетов или перегрузка сервера"),
+            ("TIMEOUT", "Сервер принял запрос, но ответ не пришёл вовремя: DPI-обрыв/замедление, потеря пакетов или перегрузка сервера"),
             ("POOL TIMEOUT", "Исчерпан пул сокетов — снизьте MAX_CONCURRENT"),
         ]),
     ]
@@ -1614,7 +1614,7 @@ pub fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'static st
         ("— Other —", vec![
             ("OK", "Site reachable (200–4xx with no block signs)"),
             ("UNKNOWN", "Unknown error (exception type in parentheses)"),
-            ("READ TIMEOUT", "Server accepted the request but the reply never arrived: DPI break/throttling, packet loss or server overload"),
+            ("TIMEOUT", "Server accepted the request but the reply never arrived: DPI break/throttling, packet loss or server overload"),
             ("POOL TIMEOUT", "Socket pool exhausted — lower MAX_CONCURRENT"),
         ]),
     ]

@@ -127,7 +127,7 @@ impl DpiStatus {
             Self::LocalIp => "LOCAL IP",
             Self::Timeout => "TIMEOUT",
             Self::SendTimeout => "SEND TIMEOUT",
-            Self::ReadTimeout => "READ TIMEOUT",
+            Self::ReadTimeout => "TIMEOUT",
             Self::PoolTimeout => "POOL TIMEOUT",
             Self::Tcp16Detected => "DETECTED",
             Self::TcpRst => "TCP RST",

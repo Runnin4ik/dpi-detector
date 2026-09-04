@@ -827,14 +827,25 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, St
 
     let mut problems: Vec<(&str, String)> = Vec::new();
     if !http_ok && !e.http.detail.is_empty() && e.http.detail != "—" {
-        let hd = e.http.detail.strip_prefix("HTTP ").unwrap_or(&e.http.detail).to_string();
-        problems.push(("HTTP", hd));
+        let hd = e.http.detail.strip_prefix("HTTP ").unwrap_or(&e.http.detail).trim();
+        let is_timeout = is_timeout_status(e.http.status)
+            || hd.eq_ignore_ascii_case("timeout")
+            || hd.eq_ignore_ascii_case("read timeout");
+        if !is_timeout {
+            problems.push(("HTTP", hd.to_string()));
+        }
     }
-    if !t12_ok && !e.t12.detail.is_empty() {
-        problems.push(("T1.2", e.t12.detail.clone()));
+    if !t12_ok && !e.t12.detail.is_empty() && e.t12.detail != "—" {
+        let d = e.t12.detail.trim();
+        if !d.eq_ignore_ascii_case("timeout") && !d.eq_ignore_ascii_case("read timeout") {
+            problems.push(("T1.2", d.to_string()));
+        }
     }
-    if !t13_ok && !e.t13.detail.is_empty() {
-        problems.push(("T1.3", e.t13.detail.clone()));
+    if !t13_ok && !e.t13.detail.is_empty() && e.t13.detail != "—" {
+        let d = e.t13.detail.trim();
+        if !d.eq_ignore_ascii_case("timeout") && !d.eq_ignore_ascii_case("read timeout") {
+            problems.push(("T1.3", d.to_string()));
+        }
     }
 
     let mut details: Vec<String> = Vec::new();
@@ -859,7 +870,7 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, St
         }
     }
 
-    if http_ok && t12_ok && t13_ok {
+    if t12_ok && t13_ok {
         let mut times: Vec<f64> = Vec::new();
         if e.t12.elapsed > 0.0 {
             times.push(e.t12.elapsed);
@@ -868,6 +879,7 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, St
             times.push(e.t13.elapsed);
         }
         if let Some(min) = times.iter().cloned().reduce(f64::min) {
+            details.clear();
             details.push(format!("{:.1}s", min));
         }
     }
@@ -885,6 +897,52 @@ mod tests {
         assert_eq!(fake_ip_type(&"100.64.0.5".parse().unwrap()), FakeIpType::Isp);
         assert_eq!(fake_ip_type(&"192.168.1.1".parse().unwrap()), FakeIpType::Local);
         assert_eq!(fake_ip_type(&"8.8.8.8".parse().unwrap()), FakeIpType::Clean);
+    }
+    #[test]
+    fn test_build_domain_row_http_timeout_tls_ok_shows_time() {
+        let mut entry = DomainEntry::pending("browserleaks.com".to_string(), None, None);
+        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: "Timeout".to_string() };
+        entry.t12 = TlsCheck { status: DpiStatus::Ok, detail: String::new(), elapsed: 0.35 };
+        entry.t13 = TlsCheck { status: DpiStatus::Ok, detail: String::new(), elapsed: 0.28 };
+
+        let (http_s, t12_s, t13_s, details) = build_domain_row(&entry);
+        assert_eq!(http_s, DpiStatus::ReadTimeout);
+        assert_eq!(http_s.display_label(), "TIMEOUT");
+        assert_eq!(t12_s, DpiStatus::Ok);
+        assert_eq!(t13_s, DpiStatus::Ok);
+        assert_eq!(details, "0.3s"); // Shows elapsed time, no "Timeout"
+    }
+
+    #[test]
+    fn test_build_domain_row_http_timeout_tls_rst_omits_http_timeout() {
+        let mut entry = DomainEntry::pending("danbooru.donmai.us".to_string(), None, None);
+        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: "Timeout".to_string() };
+        entry.t12 = TlsCheck { status: DpiStatus::TlsRst, detail: "TCP RST on ClientHello".to_string(), elapsed: 0.1 };
+        entry.t13 = TlsCheck { status: DpiStatus::TlsRst, detail: "TCP RST on ClientHello".to_string(), elapsed: 0.1 };
+
+        let (http_s, t12_s, t13_s, details) = build_domain_row(&entry);
+        assert_eq!(http_s, DpiStatus::ReadTimeout);
+        assert_eq!(http_s.display_label(), "TIMEOUT");
+        assert_eq!(t12_s, DpiStatus::TlsRst);
+        assert_eq!(t13_s, DpiStatus::TlsRst);
+        // Only TLS RST is shown, NO "HTTP:Timeout"
+        assert_eq!(details, "TCP RST on ClientHello");
+    }
+
+    #[test]
+    fn test_build_domain_row_tls_drop_omits_http_timeout() {
+        let mut entry = DomainEntry::pending("discord.com".to_string(), None, None);
+        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: "Timeout".to_string() };
+        entry.t12 = TlsCheck { status: DpiStatus::TlsDropped, detail: "TLS Handshake timeout".to_string(), elapsed: 5.0 };
+        entry.t13 = TlsCheck { status: DpiStatus::TlsDropped, detail: "TLS Handshake timeout".to_string(), elapsed: 5.0 };
+
+        let (http_s, t12_s, t13_s, details) = build_domain_row(&entry);
+        assert_eq!(http_s, DpiStatus::ReadTimeout);
+        assert_eq!(http_s.display_label(), "TIMEOUT");
+        assert_eq!(t12_s, DpiStatus::TlsDropped);
+        assert_eq!(t13_s, DpiStatus::TlsDropped);
+        // Only TLS Handshake timeout is shown, NO "HTTP:Timeout"
+        assert_eq!(details, "TLS Handshake timeout");
     }
 
     #[test]
