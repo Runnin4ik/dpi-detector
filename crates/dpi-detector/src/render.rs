@@ -137,7 +137,7 @@ pub fn panel_with(title: &str, lines: &[String], width: usize, centered: bool, b
     // Glyph-safe content first: widths are measured after replacement.
     let title_bidi = dpi_core::i18n::format_bidi_str(title);
     let title_clean = format!(" {} ", asc(&title_bidi));
-    let lines: Vec<String> = lines.iter().map(|l| asc(&dpi_core::i18n::format_bidi_str(l))).collect();
+    let lines: Vec<String> = lines.iter().map(|l| asc(l)).collect();
     let mut out = String::new();
     // Titles may carry SGR escapes (e.g. the bold banner title): measure visible
     // width only, and re-arm the border color after the title so an inner reset
@@ -281,7 +281,7 @@ impl Spinner {
     }
 }
 
-pub fn render_banner(msg: &Messages, profile: RegionProfile, badge: &str) -> String {
+pub fn render_banner(msg: &Messages, _profile: RegionProfile, badge: &str) -> String {
     let badge_colored = if badge.starts_with("✓") {
         format!("\x1b[38;2;90;247;142m{}\x1b[0m", badge)
     } else if badge.starts_with("↑") {
@@ -290,15 +290,24 @@ pub fn render_banner(msg: &Messages, profile: RegionProfile, badge: &str) -> Str
         format!("\x1b[2m{}\x1b[0m", badge)
     };
     let version_line = format!("DPI Detector v{}", env!("CARGO_PKG_VERSION"));
+    let author_label = if msg.lang.is_rtl() {
+        dpi_core::i18n::reshape_arabic(msg.author)
+    } else {
+        msg.author.to_string()
+    };
+    let chat_label = if msg.lang.is_rtl() {
+        dpi_core::i18n::reshape_arabic(msg.chat)
+    } else {
+        msg.chat.to_string()
+    };
     let row1 = format!(
         "  \x1b[2m{}\x1b[0m \x1b[38;2;214;180;255mRunni\x1b[0m \x1b[36m•\x1b[0m \x1b[2mGitHub:\x1b[0m Runnin4ik/dpi-detector",
-        msg.author
+        author_label
     );
     let row2 = format!(
         "  \x1b[2m{}\x1b[0m t.me/DPI_detector \x1b[36m•\x1b[0m {}",
-        msg.chat, badge_colored
+        chat_label, badge_colored
     );
-    let _ = profile;
     panel_with(&version_line, &[row1, row2], BOX_WIDTH, false, "36")
 }
 
@@ -1733,5 +1742,17 @@ mod tests {
         assert_eq!(localize_detail(DET_WRONG_VERSION, Language::En), "Response spoofing (Wrong Version)");
         assert_eq!(localize_detail(DET_STREAM_RST_HELLO, Language::Ru), DET_STREAM_RST_HELLO);
         assert_eq!(localize_detail(DET_STREAM_RST_HELLO, Language::En), "TCP RST on ClientHello");
+    }
+
+    #[test]
+    fn test_farsi_banner_rendering_no_ansi_corruption() {
+        use dpi_core::i18n::{get_messages, Language};
+        use dpi_core::profile::RegionProfile;
+        let msg = get_messages(Language::Fa);
+        let banner = render_banner(&msg, RegionProfile::Ir, "v4.0.0-rust");
+        assert!(!banner.replace("\x1b[0m", "").contains("[0m"), "no raw [0m text leak");
+        assert!(banner.contains("ﻧﻮﯾﺴﻨﺪﻩ:"), "author label is present and connected");
+        assert!(banner.contains("ﭼﺖ:"), "chat label is present and connected");
+        assert!(banner.contains("v4.0.0-rust"), "version badge is present");
     }
 }

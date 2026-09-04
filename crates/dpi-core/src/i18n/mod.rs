@@ -102,18 +102,21 @@ pub fn format_bidi(text: &str, lang: Language) -> String {
     format_bidi_str(text)
 }
 
-/// Shapes Arabic script characters into connected ligatures/presentation forms
-/// and reorders lines for terminal display.
-pub fn format_bidi_str(text: &str) -> String {
-    // If text contains no Arabic/Persian characters, return early
+/// Shapes Arabic script characters into connected cursive ligatures/presentation forms
+/// without reversing character order.
+pub fn reshape_arabic(text: &str) -> String {
+    if !text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
+        return text.to_string();
+    }
+    arabic_reshaper::arabic_reshape(text)
+}
+
+fn format_bidi_segment(text: &str) -> String {
     if !text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
         return text.to_string();
     }
 
-    // 1. Reshape cursive Arabic / Persian characters into connected presentation forms
     let reshaped = arabic_reshaper::arabic_reshape(text);
-
-    // 2. Reorder for visual display using Unicode Bidirectional Algorithm per line/paragraph
     let bidi_info = unicode_bidi::BidiInfo::new(&reshaped, None);
     if bidi_info.paragraphs.is_empty() {
         return reshaped;
@@ -128,6 +131,43 @@ pub fn format_bidi_str(text: &str) -> String {
         out.push_str(&line);
     }
     out
+}
+
+/// Shapes Arabic script characters into connected ligatures/presentation forms
+/// and reorders lines for terminal display. Preserves ANSI escape sequences untouched.
+pub fn format_bidi_str(text: &str) -> String {
+    if !text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
+        return text.to_string();
+    }
+
+    if text.contains('\x1b') {
+        let mut out = String::with_capacity(text.len());
+        let mut i = 0;
+        let bytes = text.as_bytes();
+        let len = bytes.len();
+        while i < len {
+            if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
+                let start = i;
+                i += 2;
+                while i < len && !bytes[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                if i < len {
+                    i += 1;
+                }
+                out.push_str(&text[start..i]);
+            } else {
+                let start = i;
+                while i < len && !(bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[') {
+                    i += 1;
+                }
+                out.push_str(&format_bidi_segment(&text[start..i]));
+            }
+        }
+        return out;
+    }
+
+    format_bidi_segment(text)
 }
 
 #[cfg(target_os = "windows")]
@@ -1692,4 +1732,5 @@ mod tests {
         let shaped_ar = format_bidi(ar_text, Language::Ar);
         assert_ne!(shaped_ar, ar_text);
     }
+
 }

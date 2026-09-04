@@ -262,15 +262,14 @@ fn draw_menu(
         }
     } else {
         let unavail = match current_lang {
-            Language::Ru => "(недоступен)",
-            Language::Zh => "(不可用)",
-            Language::Fa => "(در دسترس نیست)",
-            Language::Ar => "(غير متوفر)",
-            Language::Es => "(no disponible)",
-            Language::En => "(unavailable)",
+            Language::Ru => "(недоступен)".to_string(),
+            Language::Zh => "(不可用)".to_string(),
+            Language::Fa => format!("({})", format_bidi("در دسترس نیست", current_lang)),
+            Language::Ar => format!("({})", format_bidi("غير متوفر", current_lang)),
+            Language::Es => "(no disponible)".to_string(),
+            Language::En => "(unavailable)".to_string(),
         };
-        let unavail_bidi = format_bidi(unavail, current_lang);
-        format!("\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○ IPv6 {}\x1b[0m", unavail_bidi)
+        format!("\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○ IPv6 {}\x1b[0m", unavail)
     };
     let ip_cursor = if cursor == 1 { "►" } else { " " };
     let ip_lbl = format_bidi(msg.menu_ip_version, current_lang);
