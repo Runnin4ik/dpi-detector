@@ -480,6 +480,7 @@ dependencies = [
  "comfy-table",
  "crossterm 0.28.1",
  "dpi-core",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
  "serde_yaml",

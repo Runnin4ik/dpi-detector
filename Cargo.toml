@@ -35,6 +35,7 @@ rand = "0.8"
 arabic_reshaper = "0.4.2"
 thiserror = "1.0"
 base64 = "0.22"
+rustix = { version = "0.38", default-features = false, features = ["use-libc", "termios", "stdio"] }
 
 [profile.release]
 opt-level = "s"
