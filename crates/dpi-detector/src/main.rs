@@ -108,25 +108,45 @@ fn read_post_test_action() -> PostTestAction {
             }
 
             match code {
-                KeyCode::Enter => {
+                KeyCode::Enter
+                | KeyCode::Char('r')
+                | KeyCode::Char('R')
+                | KeyCode::Char('к')
+                | KeyCode::Char('К')
+                | KeyCode::Char('ر') => {
                     let _ = disable_raw_mode();
                     print!("\r\n");
                     let _ = stdout().flush();
                     return PostTestAction::Repeat;
                 }
-                KeyCode::Char('m') | KeyCode::Char('M') | KeyCode::Char('ь') | KeyCode::Char('Ь') => {
+                KeyCode::Char('m')
+                | KeyCode::Char('M')
+                | KeyCode::Char('ь')
+                | KeyCode::Char('Ь')
+                | KeyCode::Char('پ')
+                | KeyCode::Char('م')
+                | KeyCode::Char('ة') => {
                     let _ = disable_raw_mode();
                     print!("\r\n");
                     let _ = stdout().flush();
                     return PostTestAction::Menu;
                 }
-                KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Char('ы') | KeyCode::Char('Ы') => {
+                KeyCode::Char('s')
+                | KeyCode::Char('S')
+                | KeyCode::Char('ы')
+                | KeyCode::Char('Ы')
+                | KeyCode::Char('س') => {
                     let _ = disable_raw_mode();
                     print!("\r\n");
                     let _ = stdout().flush();
                     return PostTestAction::Export;
                 }
-                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Char('й') | KeyCode::Char('Й') | KeyCode::Esc => {
+                KeyCode::Char('q')
+                | KeyCode::Char('Q')
+                | KeyCode::Char('й')
+                | KeyCode::Char('Й')
+                | KeyCode::Char('ض')
+                | KeyCode::Esc => {
                     let _ = disable_raw_mode();
                     print!("\r\n");
                     let _ = stdout().flush();

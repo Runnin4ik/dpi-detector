@@ -149,21 +149,53 @@ fn run_menu_loop(
             }
 
             match code {
-                KeyCode::Up => {
+                // Navigation: UP (Arrows, WASD, Vim, BackTab)
+                KeyCode::Up
+                | KeyCode::BackTab
+                | KeyCode::Char('w')
+                | KeyCode::Char('W')
+                | KeyCode::Char('ц')
+                | KeyCode::Char('Ц')
+                | KeyCode::Char('ص')
+                | KeyCode::Char('k')
+                | KeyCode::Char('K')
+                | KeyCode::Char('л')
+                | KeyCode::Char('Л') => {
                     cursor = (cursor + total_rows - 1) % total_rows;
                 }
-                KeyCode::Down => {
+
+                // Navigation: DOWN (Arrows, WASD, Vim, Tab)
+                KeyCode::Down
+                | KeyCode::Tab
+                | KeyCode::Char('s')
+                | KeyCode::Char('S')
+                | KeyCode::Char('ы')
+                | KeyCode::Char('Ы')
+                | KeyCode::Char('س')
+                | KeyCode::Char('j')
+                | KeyCode::Char('J')
+                | KeyCode::Char('о')
+                | KeyCode::Char('О') => {
                     cursor = (cursor + 1) % total_rows;
                 }
-                KeyCode::Left | KeyCode::Right => {
+
+                // Navigation: LEFT / PREVIOUS (Arrows, WASD, Vim, '-')
+                KeyCode::Left
+                | KeyCode::Char('a')
+                | KeyCode::Char('A')
+                | KeyCode::Char('ф')
+                | KeyCode::Char('Ф')
+                | KeyCode::Char('ش')
+                | KeyCode::Char('h')
+                | KeyCode::Char('H')
+                | KeyCode::Char('р')
+                | KeyCode::Char('Р')
+                | KeyCode::Char('-')
+                | KeyCode::Char('<') => {
                     if cursor == 0 {
                         let all = Language::ALL;
                         let cur_idx = all.iter().position(|&l| l == current_lang).unwrap_or(0);
-                        let next_idx = if code == KeyCode::Left {
-                            (cur_idx + all.len() - 1) % all.len()
-                        } else {
-                            (cur_idx + 1) % all.len()
-                        };
+                        let next_idx = (cur_idx + all.len() - 1) % all.len();
                         current_lang = all[next_idx];
                         msg = get_messages(current_lang);
                     } else if cursor == 1 {
@@ -171,31 +203,90 @@ fn run_menu_loop(
                             ip_version = if ip_version == "ipv4" { "ipv6".to_string() } else { "ipv4".to_string() };
                         }
                     } else if cursor == 2 {
-                        if code == KeyCode::Left {
-                            conc_idx = (conc_idx + presets.len() - 1) % presets.len();
-                        } else {
-                            conc_idx = (conc_idx + 1) % presets.len();
-                        }
+                        conc_idx = (conc_idx + presets.len() - 1) % presets.len();
                     } else if cursor >= offset {
                         let t_idx = cursor - offset;
                         if t_idx < test_options.len() {
                             toggle_test(&mut selected_tests, test_options[t_idx].0);
                         }
                     }
-                    // update row (cursor == 2 when up_avail): no-op on ←→
                 }
-                KeyCode::Char(' ') => {
-                    if cursor >= offset {
+
+                // Navigation: RIGHT / NEXT (Arrows, WASD, Vim, '+')
+                KeyCode::Right
+                | KeyCode::Char('d')
+                | KeyCode::Char('D')
+                | KeyCode::Char('в')
+                | KeyCode::Char('В')
+                | KeyCode::Char('ی')
+                | KeyCode::Char('ي')
+                | KeyCode::Char('l')
+                | KeyCode::Char('L')
+                | KeyCode::Char('д')
+                | KeyCode::Char('Д')
+                | KeyCode::Char('+')
+                | KeyCode::Char('>') => {
+                    if cursor == 0 {
+                        let all = Language::ALL;
+                        let cur_idx = all.iter().position(|&l| l == current_lang).unwrap_or(0);
+                        let next_idx = (cur_idx + 1) % all.len();
+                        current_lang = all[next_idx];
+                        msg = get_messages(current_lang);
+                    } else if cursor == 1 {
+                        if v6_supported {
+                            ip_version = if ip_version == "ipv4" { "ipv6".to_string() } else { "ipv4".to_string() };
+                        }
+                    } else if cursor == 2 {
+                        conc_idx = (conc_idx + 1) % presets.len();
+                    } else if cursor >= offset {
                         let t_idx = cursor - offset;
                         if t_idx < test_options.len() {
                             toggle_test(&mut selected_tests, test_options[t_idx].0);
                         }
                     }
                 }
+
+                // Toggle at cursor: Space or 'x' / 'X' / 'ч' / 'Ч'
+                KeyCode::Char(' ')
+                | KeyCode::Char('x')
+                | KeyCode::Char('X')
+                | KeyCode::Char('ч')
+                | KeyCode::Char('Ч') => {
+                    if cursor == 0 {
+                        let all = Language::ALL;
+                        let cur_idx = all.iter().position(|&l| l == current_lang).unwrap_or(0);
+                        let next_idx = (cur_idx + 1) % all.len();
+                        current_lang = all[next_idx];
+                        msg = get_messages(current_lang);
+                    } else if cursor == 1 {
+                        if v6_supported {
+                            ip_version = if ip_version == "ipv4" { "ipv6".to_string() } else { "ipv4".to_string() };
+                        }
+                    } else if cursor == 2 {
+                        conc_idx = (conc_idx + 1) % presets.len();
+                    } else if cursor >= offset {
+                        let t_idx = cursor - offset;
+                        if t_idx < test_options.len() {
+                            toggle_test(&mut selected_tests, test_options[t_idx].0);
+                        }
+                    }
+                }
+
+                // Direct toggle by digit
                 KeyCode::Char(c @ '0'..='6') => {
                     toggle_test(&mut selected_tests, c);
                 }
-                KeyCode::Enter => {
+
+                // Start tests: Enter or 'r' / 'R' / 'к' / 'К' (Run) or 'g' / 'G' / 'п' / 'П' (Go)
+                KeyCode::Enter
+                | KeyCode::Char('r')
+                | KeyCode::Char('R')
+                | KeyCode::Char('к')
+                | KeyCode::Char('К')
+                | KeyCode::Char('g')
+                | KeyCode::Char('G')
+                | KeyCode::Char('п')
+                | KeyCode::Char('П') => {
                     if selected_tests.is_empty() {
                         // Mirrors Python: refuse to run with no tests checked.
                         notice = Some(msg.menu_need_one.to_string());
@@ -208,7 +299,14 @@ fn run_menu_loop(
                         language: current_lang,
                     });
                 }
-                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Char('й') | KeyCode::Char('Й') | KeyCode::Esc => {
+
+                // Quit: 'q' / 'Q' / 'й' / 'Й' / 'ض' or Esc
+                KeyCode::Char('q')
+                | KeyCode::Char('Q')
+                | KeyCode::Char('й')
+                | KeyCode::Char('Й')
+                | KeyCode::Char('ض')
+                | KeyCode::Esc => {
                     return MenuResult::Quit;
                 }
                 _ => {}
@@ -331,7 +429,7 @@ fn draw_menu(
 
     let hotkey_row = if plain_mode() {
         format!(
-            "  [↑↓] {} | [←→] {} | [0-6] {} | [Enter] {} | [Q] {}\r\n",
+            "  [↑↓/WS] {} | [←→/AD] {} | [0-6] {} | [Enter] {} | [Q] {}\r\n",
             format_bidi(msg.menu_hw_row, current_lang),
             format_bidi(msg.menu_hw_change, current_lang),
             format_bidi(msg.menu_hw_tests, current_lang),
@@ -340,7 +438,7 @@ fn draw_menu(
         )
     } else {
         format!(
-            "  \x1b[1;46;37m ↑↓ \x1b[0m {} │ \x1b[1;46;37m ←→ \x1b[0m {} │ \x1b[1;46;37m 0-6 \x1b[0m {} │ \x1b[1;42;37m Enter \x1b[0m {} │ \x1b[1;41;37m Q \x1b[0m {}\r\n",
+            "  \x1b[1;46;37m ↑↓/WS \x1b[0m {} │ \x1b[1;46;37m ←→/AD \x1b[0m {} │ \x1b[1;46;37m 0-6 \x1b[0m {} │ \x1b[1;42;37m Enter \x1b[0m {} │ \x1b[1;41;37m Q \x1b[0m {}\r\n",
             format_bidi(msg.menu_hw_row, current_lang),
             format_bidi(msg.menu_hw_change, current_lang),
             format_bidi(msg.menu_hw_tests, current_lang),
