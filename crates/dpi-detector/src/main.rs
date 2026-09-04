@@ -57,24 +57,31 @@ fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool, bool, bool
     let only_legend = legend && !(net || dns || dom || tcp || sni || tg);
     (net, dns, dom, tcp, sni, tg, legend, only_legend)
 }
-
 fn print_out(s: &str) {
-    print!("{}", clean_output(s));
+    let text = clean_output(s);
+    let mut out = std::io::stdout();
+    let _ = out.write_all(text.as_bytes());
+    let _ = out.flush();
 }
 
 fn println_out(s: &str) {
-    println!("{}", clean_output(s));
+    let text = clean_output(s);
+    let mut out = std::io::stdout();
+    let _ = out.write_all(text.as_bytes());
+    let _ = out.write_all(b"\r\n");
+    let _ = out.flush();
 }
-
 struct Emitter {
     report: String,
     json_mode: bool,
 }
-
 impl Emitter {
     fn emit(&mut self, s: &str) {
         if !self.json_mode {
-            print!("{}", clean_output(s));
+            let text = clean_output(s);
+            let mut out = std::io::stdout();
+            let _ = out.write_all(text.as_bytes());
+            let _ = out.flush();
         }
         self.report.push_str(&strip_ansi(s));
     }
@@ -176,9 +183,11 @@ async fn main() {
     // Panic hook: write crash details to file and pause so console does not instantly vanish.
     std::panic::set_hook(Box::new(|info| {
         let err_msg = format!("\n=== DPI DETECTOR FATAL ERROR ===\n{}\n================================\n", info);
-        eprintln!("{}", err_msg);
         let _ = std::fs::write("dpi_detector_crash.log", &err_msg);
-        eprintln!("Press Enter to close...");
+        let mut stderr = std::io::stderr();
+        let _ = stderr.write_all(err_msg.as_bytes());
+        let _ = stderr.write_all(b"Press Enter to close...\r\n");
+        let _ = stderr.flush();
         let mut s = String::new();
         let _ = std::io::stdin().read_line(&mut s);
     }));
@@ -187,15 +196,9 @@ async fn main() {
     #[cfg(windows)]
     let has_vt = {
         extern "system" {
-            fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
-            fn SetConsoleCP(wCodePageID: u32) -> i32;
             fn GetStdHandle(nStdHandle: u32) -> isize;
             fn GetConsoleMode(hConsoleHandle: isize, lpMode: *mut u32) -> i32;
             fn SetConsoleMode(hConsoleHandle: isize, dwMode: u32) -> i32;
-        }
-        unsafe {
-            SetConsoleOutputCP(65001);
-            SetConsoleCP(65001);
         }
         const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
         const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
@@ -210,7 +213,6 @@ async fn main() {
     };
     #[cfg(not(windows))]
     let has_vt = true;
-
     let legacy_console = !has_vt || args.ascii;
     set_ascii_mode(legacy_console);
     set_plain_mode(legacy_console);
@@ -342,13 +344,7 @@ async fn main() {
         || args.legend
         || args.json
         || args.batch;
-    let wants_menu = !has_explicit_cmd && std::io::stdin().is_terminal();
-    // Stripped consoles / limited SSH clients without raw mode get an explicit
-    // hint instead of a silent quit: TUI or explicit parameters, nothing else.
-    if wants_menu && !tui_available() {
-        eprintln!("{}", msg.tui_unavailable);
-        std::process::exit(2);
-    }
+    let wants_menu = !has_explicit_cmd && std::io::stdin().is_terminal() && tui_available();
     let is_interactive = wants_menu;
 
     let mut tests_str = if let Some(ref t) = args.tests {
@@ -545,7 +541,7 @@ async fn main() {
                     if only {
                         match legend_loop(lang, &msg) {
                             MenuAction::Quit => return,
-                            MenuAction::Menu => continue,
+                            MenuAction::Menu => {}
                         }
                     }
                     should_repeat = true;
@@ -561,7 +557,13 @@ async fn main() {
                 PostTestAction::Quit => return,
             }
         }
-        println!();
+        println_out("");
+    }
+
+    if plain_mode() && !args.batch && std::io::stdin().is_terminal() {
+        println_out("Нажмите Enter для выхода...");
+        let mut s = String::new();
+        let _ = std::io::stdin().read_line(&mut s);
     }
 }
 

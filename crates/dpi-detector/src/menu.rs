@@ -31,6 +31,9 @@ pub type VersionSlot = Arc<Mutex<Option<Option<ReleaseInfo>>>>;
 
 /// Probes whether this terminal supports raw mode (TUI) without visible side effects.
 pub fn tui_available() -> bool {
+    if crate::render::plain_mode() {
+        return false;
+    }
     if enable_raw_mode().is_err() {
         return false;
     }
