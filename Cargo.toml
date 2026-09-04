@@ -38,8 +38,8 @@ base64 = "0.22"
 rustix = { version = "0.38", default-features = false, features = ["use-libc", "termios", "stdio"] }
 
 [profile.release]
-opt-level = "z"
-lto = true
+opt-level = "s"
+lto = "thin"
 codegen-units = 1
 panic = "abort"
-strip = true
+strip = "debuginfo"

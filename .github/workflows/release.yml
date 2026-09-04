@@ -119,8 +119,6 @@ jobs:
 
       - name: Build with cargo (Windows 10/11)
         if: "matrix.target == 'x86_64-pc-windows-msvc'"
-        env:
-          RUSTFLAGS: "-C target-feature=+crt-static"
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build with cargo (Native Unix & macOS)
