@@ -86,17 +86,15 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
-          targets: ${{ matrix.target }}
       - name: Install musl-tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Install cross via cargo-binstall
+      - name: Install cross binary
         if: matrix.use_cross
         run: |
-          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall -y cross
-
+          curl -fsSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz | tar -xz -C ~/.cargo/bin
+          chmod +x ~/.cargo/bin/cross
       - name: Build with cross (MIPS & Cross targets)
         if: matrix.use_cross
         run: cross build --release --target ${{ matrix.target }}
@@ -166,4 +164,5 @@ jobs:
           files: release-files/*
           draft: false
           prerelease: true
-          generate_release_notes: true
+          generate_release_notes: false
+          body: ""
