@@ -16,18 +16,6 @@
 > <b>Инструмент был полезен? Поставь ⭐ в качестве "спасибо"!</b>  
 > 🕊️ Заглядывайте в наш <a href="https://t.me/DPI_detector">телеграм чат</a>
 
-## 🚀 Быстрый запуск в 1 строку (Без установки)
-
-### 🐧 Linux, macOS, роутеры Keenetic, OpenWrt & Entware:
-```bash
-curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
-```
-
-### 🪟 Windows (PowerShell):
-```powershell
-irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | iex
-```
-
 ## 📥 Скачать / Download
 
 <div align="left">
@@ -117,26 +105,58 @@ docker run -d --name dpi-detector-web -p 7681:7681 --restart unless-stopped ghcr
 ## 🐍 Python 3.8+
 **Требования:** httpx[socks,http2]>=0.28.1, rich>=14.3.2, PyYAML>=6.0.3
 
-## 🪟 Windows
-
-Быстрый запуск в PowerShell:
-```powershell
-irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | iex
+**Установка:**
+```bash
+# скачайте и распакуйте архив руками, или:
+git clone https://github.com/Runnin4ik/dpi-detector.git
+cd dpi-detector
+python -m pip install -r requirements.txt
 ```
 
-## 🐧 Linux & Роутеры (Keenetic, OpenWrt, Entware)
-
-Быстрый запуск одной командой:
+**Запуск:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
+python dpi_detector.py
+# или с параметрами
+python dpi_detector.py -t 2 -d discord.com -p socks5://127.0.0.1:1080
+```
+
+## 🪟 Windows
+
+Быстрое скачивание и запуск в PowerShell одной командой:
+```powershell
+curl.exe -fL -o dpi_detector.exe https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_win10.exe; if ($LASTEXITCODE -eq 0) { .\dpi_detector.exe }
+```
+*Либо скачайте `.exe` файл из [таблицы выше](#-скачать--download) и запустите двойным кликом.*
+
+## 🐧 Linux
+
+Быстрое скачивание и запуск одной командой:
+
+**x86_64 (AMD / Intel):**
+```bash
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_linux_x86_64 && chmod +x dpi_detector_v4.2.1_linux_x86_64 && ./dpi_detector_v4.2.1_linux_x86_64
+```
+
+**ARM64 (Raspberry Pi 3–5, Orange Pi, ARM VPS):**
+```bash
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_linux_arm64 && chmod +x dpi_detector_v4.2.1_linux_arm64 && ./dpi_detector_v4.2.1_linux_arm64
 ```
 
 ## 🍎 macOS
 
-Быстрый запуск одной командой:
+Быстрое скачивание и запуск одной командой (со снятием карантина):
+
+**Apple Silicon (M1–M4):**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_macos_arm64 && chmod +x dpi_detector_v4.2.1_macos_arm64 && xattr -cr dpi_detector_v4.2.1_macos_arm64 && ./dpi_detector_v4.2.1_macos_arm64
 ```
+
+**Intel:**
+```bash
+curl -fsSLO https://github.com/Runnin4ik/dpi-detector/releases/download/v4.2.1/dpi_detector_v4.2.1_macos_intel && chmod +x dpi_detector_v4.2.1_macos_intel && xattr -cr dpi_detector_v4.2.1_macos_intel && ./dpi_detector_v4.2.1_macos_intel
+```
+*(Приложение не нотаризовано: `xattr -cr` снимает системный карантин macOS на запуск)*
+
 ## 📲 iOS (a-Shell)
 
 Для запуска требуется терминал **a-Shell mini** ([App Store](https://apps.apple.com/us/app/a-shell-mini/id1543537943?l=ru)).
