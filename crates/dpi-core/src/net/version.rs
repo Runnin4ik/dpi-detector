@@ -1,5 +1,4 @@
-//! Version metadata and semver helpers (mirrors `utils/version.py` +
-//! `app/banner.py`).
+use crate::i18n::Language;
 
 use std::time::Duration;
 
@@ -58,12 +57,38 @@ pub async fn fetch_latest_version() -> Option<ReleaseInfo> {
 
 /// Banner badge text (mirrors `version_badge`).
 pub fn version_badge(latest: Option<&ReleaseInfo>) -> String {
+    version_badge_lang(latest, Language::Ru)
+}
+
+/// Localized banner badge text.
+pub fn version_badge_lang(latest: Option<&ReleaseInfo>, lang: Language) -> String {
     match latest {
-        None => "× Не удалось проверить обновления".to_string(),
+        None => match lang {
+            Language::Ru => "× Не удалось проверить обновления".to_string(),
+            Language::Zh => "× 检查更新失败".to_string(),
+            Language::Fa => "× خطا در بررسی به‌روزرسانی‌ها".to_string(),
+            Language::Es => "× Error al buscar actualizaciones".to_string(),
+            Language::Ar => "× فشل التحقق من التحديثات".to_string(),
+            Language::En => "× Failed to check for updates".to_string(),
+        },
         Some(info) if !info.version.is_empty() && is_newer(&info.version, CURRENT_VERSION) => {
-            format!("↑ Доступна новая версия {}", info.version)
+            match lang {
+                Language::Ru => format!("↑ Доступна новая версия {}", info.version),
+                Language::Zh => format!("↑ 发现新版本 {}", info.version),
+                Language::Fa => format!("↑ نسخه جدید در دسترس است {}", info.version),
+                Language::Es => format!("↑ Nueva versión disponible {}", info.version),
+                Language::Ar => format!("↑ يتوفر إصدار جديد {}", info.version),
+                Language::En => format!("↑ New version available {}", info.version),
+            }
         }
-        _ => "✓ Актуальная версия".to_string(),
+        _ => match lang {
+            Language::Ru => "✓ Актуальная версия".to_string(),
+            Language::Zh => "✓ 已是最新版本".to_string(),
+            Language::Fa => "✓ آخرین نسخه".to_string(),
+            Language::Es => "✓ Versión actual".to_string(),
+            Language::Ar => "✓ أحدث إصدار".to_string(),
+            Language::En => "✓ Up to date".to_string(),
+        },
     }
 }
 

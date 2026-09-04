@@ -7,7 +7,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dpi_core::config::AppConfig;
 use dpi_core::i18n::{get_messages, Language, Messages};
 use dpi_core::net::netinfo::ipv6_supported;
-use dpi_core::net::version::{version_badge, ReleaseInfo};
+use dpi_core::net::version::{version_badge_lang, ReleaseInfo};
 use dpi_core::profile::RegionProfile;
 
 use crate::render::{asc, ascii_mode, render_banner, strip_ansi_len, BOX_WIDTH};
@@ -58,10 +58,10 @@ pub fn run_interactive_menu(
 /// Resolves the banner badge against the background version-check slot:
 /// a pending fetch keeps the initial "checking..." text, a finished fetch
 /// renders the real badge (version or failure notice) instead of going stale.
-fn current_badge(initial: &str, latest_slot: &VersionSlot) -> String {
+fn current_badge(initial: &str, latest_slot: &VersionSlot, lang: Language) -> String {
     match latest_slot.lock().ok().and_then(|g| g.clone()) {
         None => initial.to_string(),
-        Some(maybe) => version_badge(maybe.as_ref()),
+        Some(maybe) => version_badge_lang(maybe.as_ref(), lang),
     }
 }
 
@@ -110,7 +110,7 @@ fn run_menu_loop(
         let total_rows = offset + test_options.len();
 
         // Re-resolve every iteration, repaint only on change.
-        let live_badge = current_badge(badge, latest_slot);
+        let live_badge = current_badge(badge, latest_slot, current_lang);
         if dirty || live_badge != last_badge {
             draw_menu(
                 cursor,

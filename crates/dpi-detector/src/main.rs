@@ -19,7 +19,7 @@ use dpi_core::net::netinfo::{
     detect_bypass_tools, fetch_ip_cymru, fetch_public_ips, get_system_dns, is_tun_name, IpCymruInfo,
 };
 use dpi_core::{PhaseProgress, ProgressTick};
-use dpi_core::net::version::{fetch_latest_version, version_badge};
+use dpi_core::net::version::{fetch_latest_version, version_badge_lang};
 use dpi_core::probe::domains::{
     check_http_all, check_tls_all, collect_stub_ips, domain_stats, resolve_all, IpFamily,
 };
@@ -140,10 +140,10 @@ fn read_post_test_action() -> PostTestAction {
     }
 }
 
-fn export_report(path: &str, content: &str) {
+fn export_report(path: &str, content: &str, msg: &Messages) {
     match std::fs::write(path, content) {
-        Ok(()) => println!("{}", asc(&format!("\x1b[1;32m✓ Отчёт сохранён в {}\x1b[0m\n", path))),
-        Err(e) => println!("\x1b[1;33mНе удалось сохранить файл: {}\x1b[0m\n", e),
+        Ok(()) => println!("{}", asc(&format!("\x1b[1;32m{}\x1b[0m\n", msg.report_saved.replace("{}", path)))),
+        Err(e) => println!("\x1b[1;33m{}\x1b[0m\n", msg.report_save_fail.replace("{}", &e.to_string())),
     }
 }
 
@@ -158,8 +158,11 @@ fn legend_loop(lang: Language, msg: &Messages) -> MenuAction {
         println!(
             "{}",
             panel_to_string(
-                "Меню",
-                &["  \x1b[1;42;37m Enter \x1b[0m Повторить   \x1b[1;44;37m M \x1b[0m Меню   \x1b[1;41;37m Q \x1b[0m Выход".to_string()],
+                msg.menu_control_menu,
+                &[format!(
+                    "  \x1b[1;42;37m Enter \x1b[0m {}   \x1b[1;44;37m M \x1b[0m {}   \x1b[1;41;37m Q \x1b[0m {}",
+                    msg.menu_control_repeat, msg.menu_control_menu, msg.menu_control_exit
+                )],
             )
         );
         let _ = stdout().flush();
@@ -183,16 +186,23 @@ async fn main() {
     // Glyph-safe output for legacy consoles; must precede any printing.
     set_ascii_mode(args.ascii);
 
+    let mut lang = if args.lang == "auto" {
+        Language::autodetect()
+    } else {
+        Language::from_code(&args.lang).unwrap_or(Language::En)
+    };
+    let mut msg = get_messages(lang);
+
     // Validators (mirror argparse errors)
     if let Some(ref t) = args.tests {
         if !t.chars().all(|c| ('0'..='6').contains(&c)) {
-            eprintln!("Недопустимое значение --tests: '{}'. Допустимы только цифры 0-6.", t);
+            eprintln!("{}", msg.invalid_tests_flag.replace("{}", t));
             std::process::exit(2);
         }
     }
     if let Some(c) = args.concurrency {
         if c < 1 {
-            eprintln!("Параметр --concurrency должен быть целым числом >= 1.");
+            eprintln!("{}", msg.invalid_concurrency_flag);
             std::process::exit(2);
         }
     }
@@ -204,13 +214,6 @@ async fn main() {
     if let Some(c) = args.concurrency {
         cfg.max_concurrent = c;
     }
-
-    let mut lang = if args.lang == "auto" {
-        Language::autodetect()
-    } else {
-        Language::from_code(&args.lang).unwrap_or(Language::En)
-    };
-    let mut msg = get_messages(lang);
     let profile = RegionProfile::from_code(&args.profile).unwrap_or_default();
 
     let level = if args.verbose {
@@ -272,10 +275,7 @@ async fn main() {
     };
     // Mirrors Python: test 4 is unavailable without any SNI list.
     if whitelist_sni.is_empty() && !args.json {
-        println!(
-            "\x1b[33mФайл {} не найден, тест 4 недоступен.\x1b[0m",
-            cfg.whitelist_sni_file
-        );
+        print!("\x1b[33m{}\x1b[0m", msg.whitelist_skipped);
     }
 
 
@@ -309,7 +309,7 @@ async fn main() {
     // Stripped consoles / limited SSH clients without raw mode get an explicit
     // hint instead of a silent quit: TUI or explicit parameters, nothing else.
     if wants_menu && !tui_available() {
-        eprintln!("TUI недоступно в этом терминале. Запустите с параметрами, например: dpi-detector -t 1,2,3 --batch (см. dpi-detector --help).");
+        eprintln!("{}", msg.tui_unavailable);
         std::process::exit(2);
     }
     let is_interactive = wants_menu;
@@ -319,7 +319,7 @@ async fn main() {
     let mut ip_version = cfg.ip_version.clone();
 
     // Initial badge: wait up to 4 s only in non-interactive mode
-    let mut badge = "Проверка обновлений...".to_string();
+    let mut badge = msg.checking_updates.to_string();
     if !is_interactive {
         let remaining = Duration::from_secs(4).saturating_sub(started.elapsed());
         let slot = Arc::clone(&version_slot);
@@ -337,7 +337,7 @@ async fn main() {
         }
         if let Ok(g) = version_slot.lock() {
             if let Some(ref latest) = *g {
-                badge = version_badge(latest.as_ref());
+                badge = version_badge_lang(latest.as_ref(), lang);
             }
         }
     }
@@ -346,7 +346,7 @@ async fn main() {
         // Poll the version slot for the menu badge without blocking
         if let Ok(g) = version_slot.lock() {
             if let Some(ref latest) = *g {
-                badge = version_badge(latest.as_ref());
+                badge = version_badge_lang(latest.as_ref(), lang);
             }
         }
         match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot) {
@@ -362,7 +362,7 @@ async fn main() {
         // Refresh badge after menu dwell time
         if let Ok(g) = version_slot.lock() {
             if let Some(ref latest) = *g {
-                badge = version_badge(latest.as_ref());
+                badge = version_badge_lang(latest.as_ref(), lang);
             }
         }
     }
@@ -412,8 +412,8 @@ async fn main() {
     }
 
     if ip_version == "ipv6" && !dpi_core::net::netinfo::ipv6_supported() {
-        println!("\x1b[31mОшибка: выбран режим IPv6, но IPv6 не настроен в системе.\x1b[0m");
-        println!("{}", asc("\x1b[2mПереключите семейство на IPv4: IP_VERSION: ipv4 в config.yml или стрелки ← → в меню.\x1b[0m"));
+        println!("\x1b[31m{}\x1b[0m", msg.ipv6_not_configured);
+        println!("{}", asc(&format!("\x1b[2m{}\x1b[0m", msg.ipv6_switch_hint)));
         return;
     }
     cfg.ip_version = ip_version.clone();
@@ -444,7 +444,7 @@ async fn main() {
 
         if !args.json {
             if let Some(ref out_path) = result_path {
-                export_report(out_path, &emitter.report);
+                export_report(out_path, &emitter.report, &msg);
             }
         }
 
@@ -459,7 +459,8 @@ async fn main() {
         let rule = asc(&"─".repeat(cols.max(8)));
         println!("\x1b[2m{}\x1b[0m", rule);
         println!(
-            " \x1b[1;42;37m  Enter  \x1b[0m Повторить   \x1b[1;44;37m  M  \x1b[0m Меню   \x1b[1;43;37m  S  \x1b[0m Экспорт   \x1b[1;41;37m  Q  \x1b[0m Выход"
+            " \x1b[1;42;37m  Enter  \x1b[0m {}   \x1b[1;44;37m  M  \x1b[0m {}   \x1b[1;43;37m  S  \x1b[0m {}   \x1b[1;41;37m  Q  \x1b[0m {}",
+            msg.menu_control_repeat, msg.menu_control_menu, msg.menu_control_export, msg.menu_control_exit
         );
         println!("\x1b[2m{}\x1b[0m", rule);
         println!();
@@ -474,7 +475,7 @@ async fn main() {
                     // Refresh badge
                     if let Ok(g) = version_slot.lock() {
                         if let Some(ref latest) = *g {
-                            badge = version_badge(latest.as_ref());
+                            badge = version_badge_lang(latest.as_ref(), lang);
                         }
                     }
                     match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot) {
@@ -501,7 +502,7 @@ async fn main() {
                         result_path = Some(base_dir().join("dpi_detector_results.txt").to_string_lossy().to_string());
                     }
                     if let Some(ref p) = result_path {
-                        export_report(p, &emitter.report);
+                        export_report(p, &emitter.report, &msg);
                     }
                 }
                 PostTestAction::Quit => return,
@@ -625,7 +626,7 @@ async fn run_test_suite(
 
     // ── Test 0: network & system ──
     if run_net {
-        let spinner = (!args.json).then(|| Spinner::start("Получение сетевых данных..."));
+        let spinner = (!args.json).then(|| Spinner::start(msg.fetching_net_info));
         let net_data = tokio::time::timeout(Duration::from_secs(10), async {
             let ips = fetch_public_ips(
                 &cfg.ip4_lookup_urls,
@@ -701,7 +702,7 @@ async fn run_test_suite(
             }
             if let Some(up) = upstream {
                 let a_name = dns_info.active_name.clone().unwrap_or_default();
-                let label = if is_tun_name(&a_name) { "Upstream VPN" } else { "Резолвер роутера" };
+                let label = if is_tun_name(&a_name) { msg.upstream_vpn } else { msg.router_resolver };
                 dns_info.upstream = Some(up);
                 dns_info.upstream_label = Some(label.to_string());
             }
@@ -746,7 +747,7 @@ async fn run_test_suite(
                 );
             }
         } else if !args.json {
-            emitter.emit("Информация о сети недоступна.\n");
+            emitter.emit(msg.net_info_unavailable);
         }
 
         if !args.json && (run_dns || run_dom || run_tcp || run_sni || run_tg) && !args.batch {
@@ -763,8 +764,8 @@ async fn run_test_suite(
             let report = check_dns_availability(cfg, phases.clone()).await;
             live.finish();
             if !args.json {
-                emitter.emit(&render_dns_endpoints(&report));
-                emitter.emit(&render_dns_availability(&report, cfg));
+                emitter.emit(&render_dns_endpoints(&report, msg));
+                emitter.emit(&render_dns_availability(&report, cfg, msg));
             } else {
                 let s = &report.stats;
                 json_results.insert(
@@ -787,7 +788,9 @@ async fn run_test_suite(
     if run_dom {
         if !args.json {
             emitter.emit(&format!(
-                "\nПроверка доступности доменов  Целей: {} | IP: {} | timeout: {}s\n\n",
+                "\n{}  {}: {} | IP: {} | timeout: {}s\n\n",
+                msg.domains_check_header,
+                msg.targets_label,
                 domains.len(),
                 if cfg.ip_version == "ipv6" { "IPv6" } else { "IPv4" },
                 cfg.connect_timeout
@@ -802,22 +805,22 @@ async fn run_test_suite(
         .unwrap_or_default();
 
         if !args.json {
-            emitter.emit("Фаза 0/3: DNS-резолв...\n");
+            emitter.emit(&format!("{}\n", msg.phase_dns));
         }
         let mut entries = resolve_all(domains, family, &stub_ips, &sem, phases.clone()).await;
         live.finish();
         if !args.json {
-            emitter.emit("Фаза 1/3: TLS 1.3...\n");
+            emitter.emit(&format!("{}\n", msg.phase_tls13));
         }
         check_tls_all(&mut entries, false, cfg, &sem, phases.clone()).await;
         live.finish();
         if !args.json {
-            emitter.emit("Фаза 2/3: TLS 1.2...\n");
+            emitter.emit(&format!("{}\n", msg.phase_tls12));
         }
         check_tls_all(&mut entries, true, cfg, &sem, phases.clone()).await;
         live.finish();
         if !args.json {
-            emitter.emit("Фаза 3/3: HTTP...\n");
+            emitter.emit(&format!("{}\n", msg.phase_http));
         }
         check_http_all(&mut entries, cfg, &stub_ips, &sem, phases.clone()).await;
         live.finish();
@@ -825,7 +828,7 @@ async fn run_test_suite(
         let stats = domain_stats(&entries);
         if !args.json {
             emitter.emit(&render_domain_table(&entries, msg));
-            emitter.emit(&render_dns_resolve_notes(&entries));
+            emitter.emit(&render_dns_resolve_notes(&entries, msg));
         } else {
             let list: Vec<_> = entries
                 .iter()
@@ -851,16 +854,18 @@ async fn run_test_suite(
     if run_tcp {
         if !args.json {
             emitter.emit(&format!(
-                "\nПроверка TCP 16-20KB блокировки  Целей: {} | timeout: {}s\n",
+                "\n{}  {}: {} | timeout: {}s\n",
+                msg.tcp16_check_title,
+                msg.targets_label,
                 tcp_items.len(),
                 cfg.fat_connect_timeout
             ));
-            emitter.emit("Проверка...\n");
+            emitter.emit(&format!("{}\n", msg.checking_status));
         }
         let mut rows: Vec<TcpRow> = Vec::new();
         let tcp_tick = phases
             .as_ref()
-            .map(|p| (p.on_phase)("Проверка...".to_string(), tcp_items.len(), true));
+            .map(|p| (p.on_phase)(msg.checking_status.to_string(), tcp_items.len(), true));
         let mut handles = Vec::new();
         for item in tcp_items {
             let item = item.clone();
@@ -935,7 +940,7 @@ async fn run_test_suite(
     if run_sni {
         if whitelist_sni.is_empty() {
             if !args.json {
-                emitter.emit("Файл whitelist_sni.txt пуст или не найден — тест 4 пропущен.\n");
+                emitter.emit(msg.whitelist_skipped);
             }
         } else {
             let port443: Vec<_> = tcp_items.iter().filter(|t| t.port == 443).collect();
@@ -946,24 +951,26 @@ async fn run_test_suite(
                     asns.insert(if k.is_empty() { t.ip.clone() } else { k });
                 }
                 emitter.emit(&format!(
-                    "\nПоиск белых SNI для ASN  AS: {} | IP: {} | SNI: {} | батч: {}\n",
+                    "\n{}  AS: {} | IP: {} | SNI: {} | batch: {}\n",
+                    msg.menu_test_sni,
                     asns.len(),
                     port443.len(),
                     whitelist_sni.len(),
                     cfg.sni_batch_size
                 ));
-                emitter.emit("Фаза 1/2: Базовая проверка...\n");
+                emitter.emit(&format!("{}\n", msg.phase_sni_base));
             }
             let report = run_whitelist_sni(tcp_items, whitelist_sni, cfg, &sem, phases.clone()).await;
             live.finish();
             if !args.json {
                 if report.detected_as > 0 {
-                    emitter.emit(&format!(
-                        "Фаза 2/2: Параллельный перебор SNI для {} AS (батч {}, топ-{})...\n\n",
-                        report.detected_as, cfg.sni_batch_size, cfg.sni_top_n
-                    ));
+                    let pmsg = msg.phase_sni_parallel
+                        .replacen("{}", &report.detected_as.to_string(), 1)
+                        .replacen("{}", &cfg.sni_batch_size.to_string(), 1)
+                        .replacen("{}", &cfg.sni_top_n.to_string(), 1);
+                    emitter.emit(&format!("{}\n\n", pmsg));
                 }
-                emitter.emit(&render_whitelist(&report, port443.len()));
+                emitter.emit(&render_whitelist(&report, port443.len(), msg));
             } else {
                 json_results.insert(
                     "whitelist_sni".to_string(),
@@ -1003,15 +1010,17 @@ async fn run_test_suite(
 
     // ── Summary ──
     if !args.json {
-        emitter.emit("\n");
-        let summary = render_summary(&SummaryData {
-            run_dns,
-            dns: dns_stats.as_ref(),
-            domains: dom_stats.as_ref(),
-            tcp: tcp_summary,
-            run_telegram: run_tg,
-            telegram: tg_full.as_ref(),
-        });
+        let summary = render_summary(
+            &SummaryData {
+                run_dns,
+                dns: dns_stats.as_ref(),
+                domains: dom_stats.as_ref(),
+                tcp: tcp_summary,
+                run_telegram: run_tg,
+                telegram: tg_full.as_ref(),
+            },
+            msg,
+        );
         if !summary.is_empty() {
             emitter.emit(&summary);
         }

@@ -281,20 +281,23 @@ impl Spinner {
 }
 
 pub fn render_banner(msg: &Messages, profile: RegionProfile, badge: &str) -> String {
-    let badge_colored = if badge == "✓ Актуальная версия" {
-        "\x1b[38;2;90;247;142m✓ Актуальная версия\x1b[0m".to_string()
+    let badge_colored = if badge.starts_with("✓") {
+        format!("\x1b[38;2;90;247;142m{}\x1b[0m", badge)
     } else if badge.starts_with("↑") {
         format!("\x1b[33m{}\x1b[0m", badge)
     } else {
         format!("\x1b[2m{}\x1b[0m", badge)
     };
     let version_line = format!("DPI Detector v{}", env!("CARGO_PKG_VERSION"));
-    let row1 = "  \x1b[2mАвтор:\x1b[0m \x1b[38;2;214;180;255mRunni\x1b[0m \x1b[36m•\x1b[0m \x1b[2mGitHub:\x1b[0m Runnin4ik/dpi-detector".to_string();
-    let row2 = format!(
-        "  \x1b[2mЧат:\x1b[0m t.me/DPI_detector \x1b[36m•\x1b[0m {}",
-        badge_colored
+    let row1 = format!(
+        "  \x1b[2m{}\x1b[0m \x1b[38;2;214;180;255mRunni\x1b[0m \x1b[36m•\x1b[0m \x1b[2mGitHub:\x1b[0m Runnin4ik/dpi-detector",
+        msg.author
     );
-    let _ = (msg, profile);
+    let row2 = format!(
+        "  \x1b[2m{}\x1b[0m t.me/DPI_detector \x1b[36m•\x1b[0m {}",
+        msg.chat, badge_colored
+    );
+    let _ = profile;
     panel_with(&version_line, &[row1, row2], BOX_WIDTH, false, "36")
 }
 
@@ -431,14 +434,14 @@ pub fn render_netinfo_panel(
                     ttlb_str(&f.ttlb)
                 ));
             }
-            _ => lines.push(format!("IPv4: {}", dim_val("недоступен"))),
+            _ => lines.push(format!("IPv4: {}", dim_val(msg.unavailable))),
         }
         match data.v6.as_ref() {
             Some(f) if !f.ip.is_empty() => {
                 lines.push(format!("IPv6: {}", cyan_val(&f.ip)));
                 lines.push(format!("      Subnet: {}  TTLB: {}", cyan_val(&f.subnet), ttlb_str(&f.ttlb)));
             }
-            _ => lines.push(format!("IPv6: {}", dim_val("недоступен"))),
+            _ => lines.push(format!("IPv6: {}", dim_val(msg.unavailable))),
         }
         let v4_org = data.v4.as_ref().map(|f| f.org.as_str()).unwrap_or("");
         let v4_asn = data.v4.as_ref().map(|f| f.asn.as_str()).unwrap_or("");
@@ -508,7 +511,7 @@ pub fn render_netinfo_panel(
     }
 
     if let Some(os) = dns_info.os.as_ref() {
-        lines.push(format!("ОС: {}", cyan_val(os)));
+        lines.push(format!("{} {}", msg.os, cyan_val(os)));
     }
     if !dns_info.active.is_empty() {
         let a_name = dns_info.active_name.clone().unwrap_or_default();
@@ -537,7 +540,7 @@ pub fn render_netinfo_panel(
         } else if is_tun_name(&a_name) {
             src_label = "TUN".to_string();
         } else if srcs.len() == 1 && srcs.contains("wsl") {
-            src_label = "прокси WSL".to_string();
+            src_label = msg.wsl_proxy.to_string();
         } else if srcs.len() == 1 && srcs.contains("dhcp") {
             src_label = "DHCP".to_string();
         }
@@ -555,9 +558,9 @@ pub fn render_netinfo_panel(
         } else {
             String::new()
         };
-        lines.extend(dns_block_lines("Системный DNS: ", &mark(&ips_all), &tail));
+        lines.extend(dns_block_lines(&format!("{} ", msg.system_dns), &mark(&ips_all), &tail));
         if iface_shown {
-            lines.push(format!("Активный интерфейс: {} ({})", cyan_val(&a_ip), a_name));
+            lines.push(format!("{} {} ({})", msg.active_interface, cyan_val(&a_ip), a_name));
         }
         if !dns_info.other_static.is_empty() {
             let mut order: Vec<&String> = Vec::new();
@@ -572,7 +575,7 @@ pub fn render_netinfo_panel(
                 }
             }
             for (k, n) in order.iter().enumerate() {
-                let label = if k == 0 { "Неактивные DNS: ".to_string() } else { " ".repeat(16) };
+                let label = if k == 0 { format!("{} ", msg.inactive_dns) } else { " ".repeat(16) };
                 if let Some(v) = by_name.get(*n) {
                     lines.extend(dns_block_lines(&label, &mark(v), &format!(" ({})", n)));
                 }
@@ -580,7 +583,7 @@ pub fn render_netinfo_panel(
         }
     }
     if let Some(up) = dns_info.upstream.as_ref() {
-        let label = dns_info.upstream_label.clone().unwrap_or_else(|| "Резолвер роутера".to_string());
+        let label = dns_info.upstream_label.clone().unwrap_or_else(|| msg.router_resolver.to_string());
         lines.push(format!("{}: {}", label, cyan_val(up)));
     }
     let mut bypass: Vec<String> = bypass_tools.to_vec();
@@ -593,17 +596,19 @@ pub fn render_netinfo_panel(
         bypass.retain(|t| t != "AmneziaWG" || names_l.contains("warp") || names_l.contains("amnezia"));
     }
     if let Some(w) = dns_info.wsl_net.as_ref() {
-        lines.push(format!("WSL-сеть: {}", cyan_val(w)));
+        lines.push(format!("{} {}", msg.wsl_network, cyan_val(w)));
     }
     if !bypass.is_empty() {
         lines.push(format!(
-            "Локальный обход DPI на устройстве: \x1b[33m{}\x1b[0m",
+            "{} \x1b[33m{}\x1b[0m",
+            msg.local_bypass,
             bypass.join(", ")
         ));
     } else {
         lines.push(format!(
-            "Локальный обход DPI на устройстве: {}",
-            dim_val("не обнаружен")
+            "{} {}",
+            msg.local_bypass,
+            dim_val(msg.not_detected)
         ));
     }
 
@@ -622,31 +627,37 @@ pub fn render_netinfo_panel(
 
 // ─── Test 1: DNS availability ─────────────────────────────────────────────────
 
-pub fn render_dns_endpoints(report: &DnsAvailReport) -> String {
+pub fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "\nПроверка доступности DNS-серверов  DoH: {} | DoT: {} | UDP: {} | Запрещённых: {} | Доверенных: {} | timeout: {}s\n\n",
+        "\n{}  DoH: {} | DoT: {} | UDP: {} | {}: {} | {}: {} | timeout: {}s\n\n",
+        msg.dns_check_title,
         report.doh_servers.len(),
         report.dot_servers.len(),
         report.udp_servers.len(),
+        msg.blocked,
         report.forbidden.len(),
+        msg.available,
         report.allowed.len(),
         report.timeout_secs,
     ));
     out.push_str(&format!(
-        "Заблокированные домены для проверки: {}\nНезаблокированные домены для проверки: {}\nВНИМАНИЕ: Это независимая проверка и она не использует ваши настроенные DNS!\n",
+        "{} {}\n{} {}\n{}",
+        msg.blocked_domains_label,
         report.forbidden.join(", "),
+        msg.unblocked_domains_label,
         report.allowed.join(", "),
+        msg.dns_independent_warn,
     ));
     if report.non_socks_proxy_warn {
-        out.push_str("Прокси не SOCKS5 — UDP-пробы идут напрямую: через HTTP-прокси UDP-релей невозможен.\n");
+        out.push_str(msg.non_socks_proxy_warn);
     }
 
     // Endpoint tables per kind
     for (title, servers) in [
-        ("DoH эндпоинты", &report.doh_servers),
-        ("DoT эндпоинты", &report.dot_servers),
-        ("UDP эндпоинты", &report.udp_servers),
+        (msg.doh_endpoints, &report.doh_servers),
+        (msg.dot_endpoints, &report.dot_servers),
+        (msg.udp_endpoints, &report.udp_servers),
     ] {
         if servers.is_empty() {
             continue;
@@ -655,7 +666,7 @@ pub fn render_dns_endpoints(report: &DnsAvailReport) -> String {
         table
             .load_preset(table_preset())
             .set_content_arrangement(ContentArrangement::Dynamic)
-            .set_header(vec!["Провайдер", title]);
+            .set_header(vec![msg.provider, title]);
         // Group by provider name preserving order
         let mut order: Vec<String> = Vec::new();
         let mut by_name: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
@@ -780,19 +791,18 @@ fn join_cell(mut lines: Vec<(String, Color)>) -> (String, Color) {
     (text, color)
 }
 
-pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig) -> String {
+pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &Messages) -> String {
     let mut out = String::new();
     let has_dot = !report.dot_servers.is_empty();
 
     let mut table = Table::new();
     table.load_preset(table_preset()).set_content_arrangement(ContentArrangement::Dynamic);
-    let mut header = vec!["Провайдер", "DoH мин"];
+    let mut header = vec![msg.provider, msg.doh_min];
     if has_dot {
-        header.push("DoT мин");
+        header.push(msg.dot_min);
     }
-    header.extend(["UDP мин", "Реальный UDP резолвер", "Подмена"]);
+    header.extend([msg.udp_min, msg.real_udp_resolver, msg.spoofing]);
     table.set_header(header);
-
     // by-name endpoint grouping
     let mut udp_by_name: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     for (a, n, _) in &report.udp_servers {
@@ -845,10 +855,10 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig) -> Stri
             }).unwrap_or(false);
             let eip = report.egress.get(&(a.clone(), name.clone())).copied().flatten();
             match (alive, eip) {
-                (false, _) => egress_lines.push((format!("{}: таймаут", a), Some(Color::DarkGrey))),
-                (true, None) => egress_lines.push((format!("{}: выход н/д", a), Some(Color::DarkGrey))),
+                (false, _) => egress_lines.push((format!("{}: {}", a, msg.timeout_label), Some(Color::DarkGrey))),
+                (true, None) => egress_lines.push((format!("{}: {}", a, msg.egress_na), Some(Color::DarkGrey))),
                 (true, Some(ip)) if ip == "0.0.0.0".parse::<std::net::IpAddr>().unwrap() => {
-                    egress_lines.push((format!("{}: выход н/д", a), Some(Color::DarkGrey)));
+                    egress_lines.push((format!("{}: {}", a, msg.egress_na), Some(Color::DarkGrey)));
                 }
                 (true, Some(ip)) => {
                     if dpi_core::probe::domains::fake_ip_type(&ip) == dpi_core::probe::domains::FakeIpType::FakeIp {
@@ -940,8 +950,8 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig) -> Stri
         out.push('\n');
         let warn = warn_mark();
         out.push_str(&format!(
-            "\x1b[1;33m[{}] Частично доступные DNS-серверы (потери запросов):\x1b[0m\n",
-            warn
+            "\x1b[1;33m[{}] {}\x1b[0m\n",
+            warn, msg.partial_dns_warn
         ));
         for p in &partial_endpoints {
             let bullet = asc("•");
@@ -958,14 +968,17 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig) -> Stri
         out.push('\n');
         match st.top_stub.as_deref() {
             Some(top) if top.parse::<std::net::IpAddr>().map(|ip| dpi_core::probe::domains::fake_ip_type(&ip) == dpi_core::probe::domains::FakeIpType::FakeIp).unwrap_or(false) => {
-                out.push_str("[!] DNS-ответы содержат FakeIP\nДля честной оценки DNS отключите прокси/FakeIP на время проверки.\n");
+                out.push_str(msg.dns_fakeip_warn);
+                out.push('\n');
             }
             _ => {
-                out.push_str("[!] Ваш интернет-провайдер перехватывает DNS-запросы\nПровайдер подменяет ответы UDP DNS на заглушки или ложные NXDOMAIN/EMPTY/TIMEOUT\n");
+                out.push_str(msg.dns_intercept_warn);
+                out.push('\n');
                 if let Some(top) = st.top_stub.as_deref() {
-                    out.push_str(&format!("IP адрес заглушки провайдера - {}.\n", top));
+                    out.push_str(&format!("{}\n", msg.dns_stub_ip_label.replace("{}", top)));
                 }
-                out.push_str("Рекомендация: настройте DoH на устройстве/роутере, если еще не сделали этого.\n");
+                out.push_str(msg.doh_recommendation);
+                out.push('\n');
             }
         }
     }
@@ -993,7 +1006,7 @@ pub fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
     table
             .load_preset(table_preset())
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec!["Домен", "HTTP", "TLS1.2", "TLS1.3", "Детали"]);
+        .set_header(vec![msg.domain, msg.http, msg.tls12, msg.tls13, msg.detail]);
 
     for e in entries {
         let (http_s, t12_s, t13_s, details) = dpi_core::probe::domains::build_domain_row(e);
@@ -1013,7 +1026,7 @@ pub fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
 }
 
 /// Post-table DNS resolve notes (stubs, fake-ip, DoH recommendation).
-pub fn render_dns_resolve_notes(entries: &[DomainEntry]) -> String {
+pub fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) -> String {
     use dpi_core::probe::domains::FakeIpType;
     let mut out = String::new();
 
@@ -1050,34 +1063,38 @@ pub fn render_dns_resolve_notes(entries: &[DomainEntry]) -> String {
         return out;
     }
 
-    out.push_str("\n[i] ИНФОРМАЦИЯ О DNS РЕЗОЛВЕ:\n");
+    out.push_str(&format!("\n{}\n", msg.dns_info_title));
     if !fakeip_stubs.is_empty() {
         let total: usize = fakeip_stubs.values().sum();
-        out.push_str(&format!("Трафик перехватывается Fake-IP: у {} доменов\n", total));
+        out.push_str(&format!("{}\n", msg.traffic_fakeip.replace("{}", &total.to_string())));
     }
     if !isp_stubs.is_empty() {
         let total: usize = isp_stubs.values().sum();
         if isp_stubs.len() <= 3 {
             let ips: Vec<String> = isp_stubs.keys().cloned().collect();
-            out.push_str(&format!("DNS вернул IP заглушки провайдера ({}): у {} доменов\n", ips.join(", "), total));
+            let s = msg.dns_isp_stub.replacen("{}", &ips.join(", "), 1).replacen("{}", &total.to_string(), 1);
+            out.push_str(&format!("{}\n", s));
         } else {
-            out.push_str(&format!("DNS вернул IP заглушки провайдера: у {} доменов\n", total));
+            let s = msg.dns_isp_stub.replacen("({})", "", 1).replacen("{}", &total.to_string(), 1);
+            out.push_str(&format!("{}\n", s));
         }
     }
     if !local_stubs.is_empty() {
         let total: usize = local_stubs.values().sum();
         if local_stubs.len() <= 3 {
             let ips: Vec<String> = local_stubs.keys().cloned().collect();
-            out.push_str(&format!("DNS вернул локальные IP (работает AdGuard/hosts?): ({}): у {} доменов\n", ips.join(", "), total));
+            let s = msg.dns_local_ip.replacen("{}", &ips.join(", "), 1).replacen("{}", &total.to_string(), 1);
+            out.push_str(&format!("{}\n", s));
         } else {
-            out.push_str(&format!("DNS вернул локальные IP (AdGuard/hosts/Pi-hole?): у {} доменов\n", total));
+            let s = msg.dns_local_ip.replacen("({})", "", 1).replacen("{}", &total.to_string(), 1);
+            out.push_str(&format!("{}\n", s));
         }
     }
     if real_dns_fail > 0 {
-        out.push_str(&format!("У {} сайтов обнаружен DNS FAIL\n", real_dns_fail));
+        out.push_str(&format!("{}\n", msg.dns_fail_detected.replace("{}", &real_dns_fail.to_string())));
     }
     if !isp_stubs.is_empty() || real_dns_fail > 0 {
-        out.push_str("Рекомендация: Настройте DoH на вашем устройстве и роутере\n\nПосле настройки сбросьте кеш DNS:\nWindows: ipconfig /flushdns\nMacOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\nLinux: sudo resolvectl flush-caches\n");
+        out.push_str(msg.doh_flush_guide);
     }
     out.push('\n');
     out
@@ -1098,7 +1115,7 @@ fn provider_group(provider: &str) -> String {
     clean.split_whitespace().next().unwrap_or(&clean).to_string()
 }
 
-pub fn render_tcp_table(rows: &[TcpRow], _msg: &Messages) -> String {
+pub fn render_tcp_table(rows: &[TcpRow], msg: &Messages) -> String {
     let mut out = String::new();
     // Sort: provider group frequency desc, group name, id number (mirrors Python)
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -1118,10 +1135,9 @@ pub fn render_tcp_table(rows: &[TcpRow], _msg: &Messages) -> String {
 
     let mut table = Table::new();
     table
-            .load_preset(table_preset())
+        .load_preset(table_preset())
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec!["ID", "ASN", "Провайдер", "Статус", "Детали"]);
-
+        .set_header(vec!["ID", "ASN", msg.provider, msg.status, msg.detail]);
     let mut passed = 0;
     let mut blocked = 0;
     let mut mixed = 0;
@@ -1142,10 +1158,10 @@ pub fn render_tcp_table(rows: &[TcpRow], _msg: &Messages) -> String {
             Cell::new(&r.detail),
         ]);
     }
-    out.push_str("\nПроверка TCP 16-20KB блокировки\n");
+    out.push_str(&format!("\n{}\n", msg.tcp16_check_title));
     out.push_str(&format!("{}\n", table));
     if mixed > 0 {
-        out.push_str("Смешанные результаты указывают на балансировку DPI у провайдера\n");
+        out.push_str(&format!("{}\n", msg.tcp_mixed_warn));
     }
     let _ = (passed, blocked);
     out
@@ -1157,14 +1173,14 @@ fn id_num(id: &str) -> u64 {
 
 // ─── Test 4: whitelist SNI ────────────────────────────────────────────────────
 
-pub fn render_whitelist(report: &WhitelistReport, targets_total: usize) -> String {
+pub fn render_whitelist(report: &WhitelistReport, targets_total: usize, msg: &Messages) -> String {
     let mut out = String::new();
     if targets_total == 0 {
-        out.push_str("Нет целей с портом 443 для теста белых SNI.\n");
+        out.push_str(msg.no_port_443_targets);
         return out;
     }
     if report.detected_as == 0 {
-        out.push_str("Ни одна AS не заблокирована — перебор SNI не нужен.\n");
+        out.push_str(msg.no_as_blocked);
         return out;
     }
     for row in &report.rows {
@@ -1180,29 +1196,25 @@ pub fn render_whitelist(report: &WhitelistReport, targets_total: usize) -> Strin
                         }
                     })
                     .collect();
-                let suffix = if *ban_after { "  ⚠ бан после" } else { "" };
+                let suffix = if *ban_after { msg.ban_after_label } else { "" };
                 out.push_str(&asc(&format!("  {} {}  ✓ {}{}\n", row.provider, row.asn_str, parts.join("  "), suffix)));
             }
             AsVerdict::Banned { detail } => {
                 let clean = strip_brackets(detail);
-                out.push_str(&format!("  {} {}  {} бан/рейт-лимит ({})\n", row.provider, row.asn_str, warn_mark(), clean));
+                out.push_str(&format!("  {} {}  {} {} ({})\n", row.provider, row.asn_str, warn_mark(), msg.ban_rate_limit, clean));
             }
             AsVerdict::NotFound => {
-                out.push_str(&format!("  {} {}  × SNI не найден (все заблокированы)\n", row.provider, row.asn_str));
+                out.push_str(&format!("  {} {}  {}\n", row.provider, row.asn_str, msg.sni_not_found));
             }
         }
     }
     out.push('\n');
     if report.found_as > 0 {
-        out.push_str(&format!(
-            "Найдено белых SNI: у {} из {} заблокированных AS\n",
-            report.found_as, report.detected_as
-        ));
+        let s = msg.whitelist_found_summary.replacen("{}", &report.found_as.to_string(), 1).replacen("{}", &report.detected_as.to_string(), 1);
+        out.push_str(&format!("{}\n", s));
     } else {
-        out.push_str(&format!(
-            "Белые SNI не найдены ни для одной из {} заблокированных AS\n",
-            report.detected_as
-        ));
+        let s = msg.whitelist_none_summary.replace("{}", &report.detected_as.to_string());
+        out.push_str(&format!("{}\n", s));
     }
     out
 }
@@ -1224,16 +1236,16 @@ fn strip_brackets(s: &str) -> String {
 
 // ─── Test 5: Telegram ─────────────────────────────────────────────────────────
 
-pub fn render_telegram(report: &TelegramFullReport, _msg: &Messages) -> String {
+pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
     use dpi_core::probe::telegram::{fmt_size, fmt_speed};
     let mut out = String::new();
-    out.push_str("\nПроверка доступности Telegram\n");
+    out.push_str(&format!("\n{}\n", msg.telegram_check_title));
 
     let mut table = Table::new();
     table
-            .load_preset(table_preset())
+        .load_preset(table_preset())
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec!["DC", "IP", "Регион", "Статус", "Пинг"]);
+        .set_header(vec!["DC", "IP", msg.region, msg.status, msg.ping_col]);
     for dc in &report.dc_results {
         let (label, color) = if dc.available {
             ("OK", Color::Green)
@@ -1241,7 +1253,7 @@ pub fn render_telegram(report: &TelegramFullReport, _msg: &Messages) -> String {
             ("НЕДОСТУПЕН", Color::Red)
         };
         let ping = match dc.latency_ms {
-            Some(l) => format!("{}мс", l),
+            Some(l) => format!("{}{}", l, msg.ms_unit),
             None => dc.error.clone().unwrap_or_else(|| "—".to_string()),
         };
         // Region from telegram_dc_list order is not carried; show stored region
@@ -1256,25 +1268,27 @@ pub fn render_telegram(report: &TelegramFullReport, _msg: &Messages) -> String {
     out.push_str(&format!("{}\n", table));
 
     // Download / upload verdict lines (mirror display.finish rows)
-    for (label, t) in [("Скачивание", &report.download), ("Загрузка  ", &report.upload)] {
+    for (label, t) in [(msg.download_label, &report.download), (msg.upload_label, &report.upload)] {
         let (st_text, color) = match t.status.as_str() {
-            "ok" => ("ОК", Color::Green),
-            "stalled" => ("ОБРЫВ", Color::Yellow),
-            "slow" => ("ЗАМЕДЛЕНИЕ", Color::Yellow),
-            "blocked" => ("НЕДОСТУПНО", Color::Red),
-            _ => ("ОШИБКА", Color::Red),
+            "ok" => ("OK", Color::Green),
+            "stalled" => ("STALL", Color::Yellow),
+            "slow" => ("SLOW", Color::Yellow),
+            "blocked" => ("BLOCKED", Color::Red),
+            _ => ("ERROR", Color::Red),
         };
         let mut line = format!(
-            "  {}: {}  пик {}  ср. {}  ({} за {:.0}с",
+            "  {}: {}  {} {}  {} {}  ({} / {:.0}s",
             label,
             st_text,
+            msg.peak_label,
             fmt_speed(t.peak_bps),
+            msg.avg_label,
             fmt_speed(t.avg_bps),
             fmt_size(t.bytes_total),
             t.duration
         );
         if let Some(sec) = t.drop_at_sec {
-            line += &format!(", обрыв после {}с", sec);
+            line += &msg.stall_after.replace("{}", &sec.to_string());
         }
         line += ")";
         let _ = color;
@@ -1305,7 +1319,7 @@ pub struct SummaryData<'a> {
     pub telegram: Option<&'a TelegramFullReport>,
 }
 
-pub fn render_summary(data: &SummaryData) -> String {
+pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
     let mut items: Vec<(String, String)> = Vec::new();
 
     if data.run_dns {
@@ -1318,42 +1332,42 @@ pub fn render_summary(data: &SummaryData) -> String {
                 parts.push(format!("[{}]{}/{} DoT[/]", dot_c, d.dot_ok, d.dot_total));
             }
             parts.push(format!("[{}]{}/{} UDP[/]", udp_c, d.udp_ok, d.udp_total));
-            items.push(("DNS доступность".to_string(), parts.join("  ")));
+            items.push((msg.summary_dns_avail.to_string(), parts.join("  ")));
             if !d.hijacked_brands.is_empty() {
                 if d.resolvers_total > 0 && d.hijacked_brands.len() >= d.resolvers_total {
-                    items.push(("Подмена резолвера".to_string(), "[red]Все[/]".to_string()));
+                    items.push((msg.summary_resolver_hijack.to_string(), format!("[red]{}[/]", msg.summary_all)));
                 } else {
                     items.push((
-                        "Подмена резолвера".to_string(),
+                        msg.summary_resolver_hijack.to_string(),
                         format!("[red]{}[/]", d.hijacked_brands.join(", ")),
                     ));
                 }
             } else {
-                items.push(("Подмена резолвера".to_string(), "[dim]—[/]".to_string()));
+                items.push((msg.summary_resolver_hijack.to_string(), "[dim]—[/]".to_string()));
             }
             if d.subst_total > 0 {
                 if d.fakeip_sub > 0 {
                     items.push((
-                        "FakeIP ответов".to_string(),
-                        format!("[magenta]у {}/{} UDP[/]", d.fakeip_sub, d.subst_total),
+                        msg.summary_fakeip_resp.to_string(),
+                        format!("[magenta]{}/{} UDP[/]", d.fakeip_sub, d.subst_total),
                     ));
                 }
                 let rest = d.subst_sub.saturating_sub(d.fakeip_sub);
                 if rest > 0 {
                     let c = if rest == d.subst_total { "red" } else { "yellow" };
                     items.push((
-                        "Подмена ответов".to_string(),
-                        format!("[{}]у {}/{} UDP[/]", c, rest, d.subst_total),
+                        msg.summary_ans_hijack.to_string(),
+                        format!("[{}]{}/{} UDP[/]", c, rest, d.subst_total),
                     ));
                 } else if d.fakeip_sub == 0 {
                     items.push((
-                        "Подмена ответов".to_string(),
-                        format!("[green]у 0/{} UDP[/]", d.subst_total),
+                        msg.summary_ans_hijack.to_string(),
+                        format!("[green]0/{} UDP[/]", d.subst_total),
                     ));
                 }
             }
         } else {
-            items.push(("DNS доступность".to_string(), "[dim]—[/]".to_string()));
+            items.push((msg.summary_dns_avail.to_string(), "[dim]—[/]".to_string()));
         }
     }
 
@@ -1363,7 +1377,7 @@ pub fn render_summary(data: &SummaryData) -> String {
             format!("[{}]{}/{} {}[/]", c, ok, d.total, label)
         };
         items.push((
-            "Домены".to_string(),
+            msg.summary_domains.to_string(),
             format!("{}  {}  {}", stat("HTTP", d.http_ok), stat("TLS1.2", d.t12_ok), stat("TLS1.3", d.t13_ok)),
         ));
     }
@@ -1386,11 +1400,11 @@ pub fn render_summary(data: &SummaryData) -> String {
             use dpi_core::probe::telegram::{fmt_size, fmt_speed};
             let tg_row = |label: &str, st: &dpi_core::probe::telegram::TransferStats, speed: f64, size: u64| {
                 let (raw, color) = match st.status.as_str() {
-                    "ok" => ("ОК", "green"),
-                    "stalled" => ("ЗАМЕДЛЕНИЕ+ОБРЫВ", "yellow"),
-                    "slow" => ("ЗАМЕДЛЕНИЕ", "yellow"),
-                    "blocked" => ("НЕДОСТУПНО", "red"),
-                    _ => ("ОШИБКА", "red"),
+                    "ok" => ("OK", "green"),
+                    "stalled" => ("STALL", "yellow"),
+                    "slow" => ("SLOW", "yellow"),
+                    "blocked" => ("BLOCKED", "red"),
+                    _ => ("ERROR", "red"),
                 };
                 let mut metrics = format!("ср. {}, {}", fmt_speed(speed), fmt_size(size));
                 if let Some(sec) = st.drop_at_sec {
@@ -1398,8 +1412,8 @@ pub fn render_summary(data: &SummaryData) -> String {
                 }
                 (label.to_string(), format!("[{}]{:<16}[/] {}", color, raw, metrics))
             };
-            let (l1, v1) = tg_row("TG Скачивание", &t.download, t.download.avg_bps, t.download.bytes_total);
-            let (l2, v2) = tg_row("TG Загрузка", &t.upload, t.upload.avg_bps, t.upload.bytes_total);
+            let (l1, v1) = tg_row(msg.summary_tg_download, &t.download, t.download.avg_bps, t.download.bytes_total);
+            let (l2, v2) = tg_row(msg.summary_tg_upload, &t.upload, t.upload.avg_bps, t.upload.bytes_total);
             items.push((l1, v1));
             items.push((l2, v2));
             let dc_c = if t.dc_reachable == t.dc_total {
@@ -1410,8 +1424,8 @@ pub fn render_summary(data: &SummaryData) -> String {
                 "yellow"
             };
             items.push((
-                "TG Датацентры".to_string(),
-                format!("[{}]ОК {}/{}[/]", dc_c, t.dc_reachable, t.dc_total),
+                msg.summary_tg_datacenters.to_string(),
+                format!("[{}]OK {}/{}[/]", dc_c, t.dc_reachable, t.dc_total),
             ));
         }
     }
@@ -1423,7 +1437,7 @@ pub fn render_summary(data: &SummaryData) -> String {
     for (label, val) in items {
         lines.push(format!("  \x1b[1m{}\x1b[0m  {}", label, rich_to_ansi(&val)));
     }
-    panel_to_string("Итог", &lines)
+    panel_to_string(msg.summary_title, &lines)
 }
 
 /// Minimal Rich-markup → ANSI converter for summary values.
@@ -1521,7 +1535,7 @@ mod tests {
         );
         report.org_names.insert("8.8.4.4".to_string(), "GOOGLE - Google LLC".to_string());
         let cfg = AppConfig::default();
-        let out = render_dns_availability(&report, &cfg);
+        let out = render_dns_availability(&report, &cfg, &dpi_core::i18n::get_messages(dpi_core::i18n::Language::Ru));
         // One line per endpoint, full success shows no fraction.
         assert!(out.contains("Google #2"), "name spans tallest cell");
         assert!(!out.contains("1/5"), "no addr/domain count mix-up");
@@ -1570,6 +1584,30 @@ mod tests {
         assert!(out.contains("Неактивные DNS: \x1b[36m198.51.100.2\x1b[0m (Wi-Fi)"));
         assert!(out.contains("Резолвер роутера: \x1b[36m203.0.113.1 (EXAMPLE UP)\x1b[0m"));
         assert!(out.contains("Локальный обход DPI на устройстве: \x1b[2mне обнаружен\x1b[0m"));
+    }
+    #[test]
+    fn netinfo_panel_renders_english_and_chinese() {
+        use dpi_core::i18n::get_messages;
+        use dpi_core::i18n::Language;
+        let (data, dns, bypass) = netinfo_fixture();
+
+        let out_en = render_netinfo_panel(&data, &dns, &bypass, &get_messages(Language::En));
+        assert!(out_en.contains("IPv6: \x1b[2munavailable\x1b[0m"));
+        assert!(out_en.contains("OS: \x1b[36mWindows 11 (26200)\x1b[0m"));
+        assert!(out_en.contains("System DNS: \x1b[36m192.0.2.1\x1b[0m (DHCP)"));
+        assert!(out_en.contains("Active interface: \x1b[36m192.0.2.10\x1b[0m (Ethernet)"));
+        assert!(out_en.contains("Inactive DNS: \x1b[36m198.51.100.2\x1b[0m (Wi-Fi)"));
+        assert!(out_en.contains("Router resolver: \x1b[36m203.0.113.1 (EXAMPLE UP)\x1b[0m"));
+        assert!(out_en.contains("Local DPI bypass on device: \x1b[2mnot detected\x1b[0m"));
+
+        let out_zh = render_netinfo_panel(&data, &dns, &bypass, &get_messages(Language::Zh));
+        assert!(out_zh.contains("IPv6: \x1b[2m不可用\x1b[0m"));
+        assert!(out_zh.contains("操作系统: \x1b[36mWindows 11 (26200)\x1b[0m"));
+        assert!(out_zh.contains("系统 DNS: \x1b[36m192.0.2.1\x1b[0m (DHCP)"));
+        assert!(out_zh.contains("活动接口: \x1b[36m192.0.2.10\x1b[0m (Ethernet)"));
+        assert!(out_zh.contains("非活动 DNS: \x1b[36m198.51.100.2\x1b[0m (Wi-Fi)"));
+        assert!(out_zh.contains("路由器解析器: \x1b[36m203.0.113.1 (EXAMPLE UP)\x1b[0m"));
+        assert!(out_zh.contains("设备本地 DPI 绕过: \x1b[2m未检测到\x1b[0m"));
     }
 
     #[test]

@@ -1,4 +1,3 @@
-//! Test 5: Telegram availability (mirrors `core/telegram_scanner.py`).
 //!
 //! Three parallel sub-tests: media download with stall detection,
 //! 10 MB high-entropy upload with stall detection, and raw TCP pings
@@ -24,6 +23,7 @@ use tokio_rustls::TlsConnector;
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
 use crate::net::tls::create_insecure_dpi_tls_config;
+use crate::i18n::Language;
 use crate::PhaseProgress;
 
 #[derive(Debug, Clone)]
@@ -146,22 +146,38 @@ pub async fn run_telegram_test(timeout_dur: Duration) -> TelegramReport {
 // ─── Speed formatting (mirrors _fmt_speed / _fmt_size) ───────────────────────
 
 pub fn fmt_speed(bps: f64) -> String {
+    fmt_speed_lang(bps, Language::Ru)
+}
+
+pub fn fmt_speed_lang(bps: f64, lang: Language) -> String {
+    let is_ru = lang == Language::Ru;
     if bps >= 1024.0 * 1024.0 {
-        format!("{:>6.2} МБ/с", bps / (1024.0 * 1024.0))
+        let unit = if is_ru { "МБ/с" } else { "MB/s" };
+        format!("{:>6.2} {}", bps / (1024.0 * 1024.0), unit)
     } else if bps >= 1024.0 {
-        format!("{:>6.1} КБ/с", bps / 1024.0)
+        let unit = if is_ru { "КБ/с" } else { "KB/s" };
+        format!("{:>6.1} {}", bps / 1024.0, unit)
     } else {
-        format!("{:>6.0} Б/с", bps)
+        let unit = if is_ru { "Б/с" } else { "B/s" };
+        format!("{:>6.0} {}", bps, unit)
     }
 }
 
 pub fn fmt_size(b: u64) -> String {
+    fmt_size_lang(b, Language::Ru)
+}
+
+pub fn fmt_size_lang(b: u64, lang: Language) -> String {
+    let is_ru = lang == Language::Ru;
     if b >= 1024 * 1024 {
-        format!("{:.2} МБ", b as f64 / (1024.0 * 1024.0))
+        let unit = if is_ru { "МБ" } else { "MB" };
+        format!("{:.2} {}", b as f64 / (1024.0 * 1024.0), unit)
     } else if b >= 1024 {
-        format!("{:.1} КБ", b as f64 / 1024.0)
+        let unit = if is_ru { "КБ" } else { "KB" };
+        format!("{:.1} {}", b as f64 / 1024.0, unit)
     } else {
-        format!("{} Б", b)
+        let unit = if is_ru { "Б" } else { "B" };
+        format!("{} {}", b, unit)
     }
 }
 
