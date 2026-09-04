@@ -248,9 +248,9 @@ fn draw_menu(
             }
         })
         .collect::<Vec<_>>()
-        .join("   ");
+        .join("  ");
     let lang_cursor = if cursor == 0 { "►" } else { " " };
-    lines.push(format!("  {} {:<15} {}", lang_cursor, msg.menu_language, lang_opts));
+    lines.push(format!("  {} {:<10} {}", lang_cursor, msg.menu_language, lang_opts));
 
     // IP version row
     let ip_opts = if v6_supported {

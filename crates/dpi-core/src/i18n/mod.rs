@@ -25,12 +25,12 @@ impl Language {
 
     pub fn label(&self) -> &'static str {
         match self {
-            Self::En => "En",
-            Self::Ru => "Ru",
-            Self::Fa => "Fa",
-            Self::Zh => "Zh",
-            Self::Es => "Es",
-            Self::Ar => "Ar",
+            Self::En => "English",
+            Self::Ru => "Русский",
+            Self::Fa => "فارسی",
+            Self::Zh => "中文",
+            Self::Es => "Español",
+            Self::Ar => "العربية",
         }
     }
     pub fn from_code(code: &str) -> Option<Self> {
@@ -264,7 +264,7 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (Сброс соединения при передаче большого окна)",
             unreachable_desc: "UNREACHABLE (Сеть или хост недоступны)",
             menu_title: "Параметры и выбор тестов",
-            menu_language: "Язык",
+            menu_language: "Language",
             menu_ip_version: "IP-версия",
             menu_concurrency: "Параллельность",
             menu_hw_row: "строка",
@@ -317,7 +317,7 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (محدودسازی پهنای باند پنجره TCP)",
             unreachable_desc: "UNREACHABLE (شبکه یا میزبان در دسترس نیست)",
             menu_title: "پارامترها و انتخاب آزمون‌ها",
-            menu_language: "زبان",
+            menu_language: "Language",
             menu_ip_version: "نسخه IP",
             menu_concurrency: "هم‌زمانی",
             menu_hw_row: "سطر",
@@ -370,7 +370,7 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (大窗口传输被限制或切断)",
             unreachable_desc: "UNREACHABLE (网络不可达)",
             menu_title: "参数与测试选择",
-            menu_language: "语言",
+            menu_language: "Language",
             menu_ip_version: "IP 版本",
             menu_concurrency: "并发数",
             menu_hw_row: "行",
@@ -423,7 +423,7 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (Limitación de ventana o conexión cerrada)",
             unreachable_desc: "UNREACHABLE (Red o destino inalcanzable)",
             menu_title: "Parámetros y selección de pruebas",
-            menu_language: "Idioma",
+            menu_language: "Language",
             menu_ip_version: "Versión IP",
             menu_concurrency: "Concurrencia",
             menu_hw_row: "fila",
@@ -476,7 +476,7 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (تم خنق نافذة الإرسال أو إسقاط الاتصال)",
             unreachable_desc: "UNREACHABLE (الشبكة أو المضيف غير متاح)",
             menu_title: "المعلمات واختيار الاختبارات",
-            menu_language: "اللغة",
+            menu_language: "Language",
             menu_ip_version: "إصدار IP",
             menu_concurrency: "التزامن",
             menu_hw_row: "سطر",
