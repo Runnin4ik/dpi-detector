@@ -216,8 +216,14 @@ async fn main() {
     let legacy_console = !has_vt || args.ascii;
     set_ascii_mode(legacy_console);
     set_plain_mode(legacy_console);
+    let profile = RegionProfile::from_code(&args.profile).unwrap_or_default();
     let mut lang = if args.lang == "auto" {
-        Language::autodetect()
+        let detected = Language::autodetect();
+        if detected == Language::En && profile == RegionProfile::Ru {
+            Language::Ru
+        } else {
+            detected
+        }
     } else {
         Language::from_code(&args.lang).unwrap_or(Language::En)
     };
@@ -247,7 +253,7 @@ async fn main() {
     if let Some(c) = args.concurrency {
         cfg.max_concurrent = c;
     }
-    let profile = RegionProfile::from_code(&args.profile).unwrap_or_default();
+
 
     let level = if args.verbose {
         tracing_subscriber::filter::LevelFilter::DEBUG
@@ -351,22 +357,41 @@ async fn main() {
     if !has_explicit_cmd && !wants_menu {
         let banner = render_banner(&msg, profile, msg.checking_updates);
         print_out(&clean_output(&banner));
-        let notice = if lang == Language::Ru {
-            "\r\nИнтерактивное меню (TUI) недоступно в этом терминале.\r\n\
-             Запустите диагностику с параметрами:\r\n\
-             \x1b[36m  dpi-detector -t 1\x1b[0m       — проверка DNS-серверов\r\n\
-             \x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — базовые тесты (DNS + сайты + TCP16)\r\n\
-             \x1b[36m  dpi-detector -t 12345\x1b[0m   — все тесты\r\n\
-             \x1b[36m  dpi-detector --help\x1b[0m     — список всех параметров\r\n\r\n"
+        let raw_err = if let Err(e) = crossterm::terminal::enable_raw_mode() {
+            Some(format!("{e}"))
         } else {
-            "\r\nInteractive menu (TUI) is unavailable in this terminal.\r\n\
-             Run diagnostics using command-line arguments:\r\n\
-             \x1b[36m  dpi-detector -t 1\x1b[0m       — DNS servers test\r\n\
-             \x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — basic tests (DNS + sites + TCP16)\r\n\
-             \x1b[36m  dpi-detector -t 12345\x1b[0m   — all tests\r\n\
-             \x1b[36m  dpi-detector --help\x1b[0m     — full list of options\r\n\r\n"
+            let _ = crossterm::terminal::disable_raw_mode();
+            None
         };
-        print_out(&clean_output(notice));
+        let reason = if !std::io::stdin().is_terminal() {
+            "stdin is not a terminal (pipe or redirection)"
+        } else if let Some(ref e) = raw_err {
+            e.as_str()
+        } else {
+            "terminal does not support raw mode"
+        };
+        let notice = if lang == Language::Ru {
+            format!(
+                "\r\nИнтерактивное меню (TUI) недоступно в этом терминале [{}].\r\n\
+                 Запустите диагностику с параметрами:\r\n\
+                 \x1b[36m  dpi-detector -t 1\x1b[0m       — проверка DNS-серверов\r\n\
+                 \x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — базовые тесты (DNS + сайты + TCP16)\r\n\
+                 \x1b[36m  dpi-detector -t 12345\x1b[0m   — все тесты\r\n\
+                 \x1b[36m  dpi-detector --help\x1b[0m     — список всех параметров\r\n\r\n",
+                reason
+            )
+        } else {
+            format!(
+                "\r\nInteractive menu (TUI) is unavailable in this terminal [{}].\r\n\
+                 Run diagnostics using command-line arguments:\r\n\
+                 \x1b[36m  dpi-detector -t 1\x1b[0m       — DNS servers test\r\n\
+                 \x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — basic tests (DNS + sites + TCP16)\r\n\
+                 \x1b[36m  dpi-detector -t 12345\x1b[0m   — all tests\r\n\
+                 \x1b[36m  dpi-detector --help\x1b[0m     — full list of options\r\n\r\n",
+                reason
+            )
+        };
+        print_out(&clean_output(&notice));
         return;
     }
     let mut tests_str = if let Some(ref t) = args.tests {
