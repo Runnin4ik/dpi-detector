@@ -9,6 +9,7 @@ RUN apk add --no-cache ttyd \
     && apk del .build-deps \
     && adduser -D -u 1000 app
 
+COPY app/ ./app/
 COPY cli/ ./cli/
 COPY core/ ./core/
 COPY utils/ ./utils/
