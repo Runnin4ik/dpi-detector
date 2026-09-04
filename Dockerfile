@@ -8,6 +8,7 @@ RUN apk add --no-cache --virtual .build-deps build-base yaml-dev \
     && apk del .build-deps \
     && adduser -D -u 1000 app
 
+COPY app/ ./app/
 COPY cli/ ./cli/
 COPY core/ ./core/
 COPY utils/ ./utils/
