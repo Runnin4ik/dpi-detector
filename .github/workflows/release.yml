@@ -98,23 +98,25 @@ jobs:
       - name: Build with cross (MIPS & Cross targets)
         if: matrix.use_cross
         env:
-          RUSTFLAGS: "--cfg rustix_use_libc"
+          RUSTFLAGS: "--cfg rustix_use_libc -C link-arg=-Wl,--icf=all -C link-arg=-Wl,--gc-sections"
         run: cross build --release --target ${{ matrix.target }}
 
       - name: Build with cargo (Windows 7 legacy)
         if: "matrix.target == 'x86_64-win7-windows-msvc'"
         env:
-          RUSTFLAGS: "-C target-feature=+crt-static"
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/OPT:ICF -C link-arg=/OPT:REF"
         run: cargo +nightly build -Z build-std=std,panic_abort --release --target ${{ matrix.target }}
 
       - name: Build with cargo (Windows 10/11)
         if: "matrix.target == 'x86_64-pc-windows-msvc'"
         env:
-          RUSTFLAGS: "-C target-feature=+crt-static"
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/OPT:ICF -C link-arg=/OPT:REF"
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build with cargo (Native Unix & macOS)
         if: "!matrix.use_cross && runner.os != 'Windows'"
+        env:
+          RUSTFLAGS: "-C link-arg=-Wl,--icf=all -C link-arg=-Wl,--gc-sections"
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare binary artifact (Windows)
