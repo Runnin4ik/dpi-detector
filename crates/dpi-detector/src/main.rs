@@ -392,8 +392,7 @@ async fn main() {
         || args.domains.is_some()
         || args.tcp16.is_some()
         || args.legend
-        || args.json
-        || args.batch;
+        || args.json;
     let wants_menu = !has_explicit_cmd && std::io::stdin().is_terminal() && tui_available();
     let is_interactive = wants_menu;
 
@@ -651,7 +650,7 @@ async fn main() {
         println_out("");
     }
 
-    if plain_mode() && !args.batch && std::io::stdin().is_terminal() {
+    if plain_mode() && is_interactive && std::io::stdin().is_terminal() {
         println_out(msg.press_enter_to_exit);
         let mut s = String::new();
         let _ = std::io::stdin().read_line(&mut s);
