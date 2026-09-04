@@ -357,7 +357,7 @@ fn draw_menu(
     let lang_opts = Language::ALL
         .iter()
         .map(|&l| {
-            let lbl = format_bidi(l.label(), current_lang);
+            let lbl = l.label();
             if l == current_lang {
                 format!("\x1b[1;32m●\x1b[0m {}", lbl)
             } else {
@@ -533,7 +533,7 @@ mod tests {
             let lang_opts = Language::ALL
                 .iter()
                 .map(|&l| {
-                    let lbl = format_bidi(l.label(), lang);
+                    let lbl = l.label();
                     if l == lang {
                         format!("\x1b[1;32m●\x1b[0m {}", lbl)
                     } else {
