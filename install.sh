@@ -171,7 +171,9 @@ chmod +x "$OUT_FILE"
 RUN_FILE="$OUT_FILE"
 
 echo "Installed: ${RUN_FILE}"
-echo "Run:       ${RUN_FILE} -t 1 --batch"
+echo "Run:       ${RUN_FILE} -t 1"
+echo "All tests: ${RUN_FILE} -t 12345"
+echo "Menu:      ${RUN_FILE}"
 echo "Help:      ${RUN_FILE} --help"
 echo "Starting DPI Detector..."
 if [ -c /dev/tty ]; then

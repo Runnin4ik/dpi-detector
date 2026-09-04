@@ -15,7 +15,7 @@ pub struct CliArgs {
     #[arg(long = "json")]
     pub json: bool,
 
-    /// Non-interactive batch mode (no user prompts)
+    /// Non-interactive batch mode (default when tests or targets are passed)
     #[arg(long = "batch")]
     pub batch: bool,
 

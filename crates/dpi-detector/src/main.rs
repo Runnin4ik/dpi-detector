@@ -195,7 +195,10 @@ async fn main() {
 
     // Validators (mirror argparse errors)
     if let Some(ref t) = args.tests {
-        if !t.chars().all(|c| ('0'..='6').contains(&c)) {
+        let valid = !t.is_empty()
+            && t.chars().all(|c| ('0'..='6').contains(&c) || c == ',' || c == ' ')
+            && t.chars().any(|c| ('0'..='6').contains(&c));
+        if !valid {
             eprintln!("{}", msg.invalid_tests_flag.replace("{}", t));
             std::process::exit(2);
         }
@@ -304,8 +307,14 @@ async fn main() {
         });
     }
 
-    let wants_menu =
-        args.tests.is_none() && !args.batch && !args.json && std::io::stdin().is_terminal();
+    let has_explicit_cmd = args.tests.is_some()
+        || !args.domain.is_empty()
+        || args.domains.is_some()
+        || args.tcp16.is_some()
+        || args.legend
+        || args.json
+        || args.batch;
+    let wants_menu = !has_explicit_cmd && std::io::stdin().is_terminal();
     // Stripped consoles / limited SSH clients without raw mode get an explicit
     // hint instead of a silent quit: TUI or explicit parameters, nothing else.
     if wants_menu && !tui_available() {
@@ -314,7 +323,15 @@ async fn main() {
     }
     let is_interactive = wants_menu;
 
-    let mut tests_str = args.tests.clone().unwrap_or_else(|| "123".to_string());
+    let mut tests_str = if let Some(ref t) = args.tests {
+        t.chars().filter(|c| ('0'..='6').contains(c)).collect::<String>()
+    } else if !args.domain.is_empty() || args.domains.is_some() {
+        "2".to_string()
+    } else if args.tcp16.is_some() {
+        "3".to_string()
+    } else {
+        "123".to_string()
+    };
     let mut concurrency = cfg.max_concurrent;
     let mut ip_version = cfg.ip_version.clone();
 
@@ -750,9 +767,6 @@ async fn run_test_suite(
             emitter.emit(msg.net_info_unavailable);
         }
 
-        if !args.json && (run_dns || run_dom || run_tcp || run_sni || run_tg) && !args.batch {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
     }
     // ── Test 1: DNS availability ──
     if run_dns {
@@ -1069,5 +1083,16 @@ mod tests {
         assert!(run_net);
         assert!(run_leg);
         assert!(!only_leg);
+    }
+
+    #[test]
+    fn test_selection_flags_with_commas_and_spaces() {
+        let raw = "1, 2, 3";
+        let normalized: String = raw.chars().filter(|c| ('0'..='6').contains(c)).collect();
+        let (run_net, run_dns, run_dom, run_tcp, _, _, _, _) = selection_flags(&normalized);
+        assert!(!run_net);
+        assert!(run_dns);
+        assert!(run_dom);
+        assert!(run_tcp);
     }
 }

@@ -59,6 +59,7 @@ if (-not $downloaded) {
 Move-Item -Force $tmp $out
 
 Write-Host "Binary: $out" -ForegroundColor Cyan
-Write-Host "Run:    & `"$out`" -t 1 --batch" -ForegroundColor Cyan
+Write-Host "Run:    & `"$out`" -t 1" -ForegroundColor Cyan
+Write-Host "Menu:   & `"$out`"" -ForegroundColor Cyan
 Write-Host "Starting DPI Detector..." -ForegroundColor Green
 & $out @args
