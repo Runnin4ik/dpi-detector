@@ -314,10 +314,10 @@ async fn main() {
 
 
     if let Some(ref e) = cfg.config_load_error {
-        println!("\x1b[1;33mВнимание при загрузке config.yml:\x1b[0m {}", e);
+        println!("\x1b[1;33m{}\x1b[0m {}", msg.config_load_error_label, e);
     }
     for w in &cfg.config_warnings {
-        println!("\x1b[33mПредупреждение config.yml:\x1b[0m {}", w);
+        println!("\x1b[33m{}\x1b[0m {}", msg.config_warning_label, w);
     }
 
     if args.legend {
@@ -603,7 +603,7 @@ async fn main() {
     }
 
     if plain_mode() && !args.batch && std::io::stdin().is_terminal() {
-        println_out("Нажмите Enter для выхода...");
+        println_out(msg.press_enter_to_exit);
         let mut s = String::new();
         let _ = std::io::stdin().read_line(&mut s);
     }
@@ -693,8 +693,10 @@ async fn run_test_suite(
     let live = LiveProgress::new();
     let phases: Option<PhaseProgress> = if !args.json && std::io::stderr().is_terminal() {
         let live_c = Arc::clone(&live);
+        let msg_copy = *msg;
         Some(PhaseProgress {
-            on_phase: Arc::new(move |desc: String, total: usize, parens: bool| {
+            on_phase: Arc::new(move |phase: dpi_core::PhaseId, total: usize, parens: bool| {
+                let desc = msg_copy.phase_text(phase);
                 live_c.set(desc, total, parens);
                 let tick_c = Arc::clone(&live_c);
                 let tick: ProgressTick = Arc::new(move || tick_c.tick());
@@ -709,7 +711,7 @@ async fn run_test_suite(
         Some(url) => match parse_socks_proxy(url) {
             Ok(c) => Some(c),
             Err(e) => {
-                emitter.emit(&format!("Некорректный прокси {}: {}\n", url, e));
+                emitter.emit(&msg.invalid_proxy_err.replacen("{}", url, 1).replacen("{}", &e.to_string(), 1));
                 None
             }
         },
@@ -852,7 +854,7 @@ async fn run_test_suite(
     if run_dns {
         if cfg.availability_servers().is_empty() {
             if !args.json {
-                emitter.emit("DNS_AVAILABILITY_SERVERS не задан в config.yml — тест пропущен.\n");
+                emitter.emit(msg.dns_servers_empty_skip);
             }
         } else {
             let report = check_dns_availability(cfg, phases.clone()).await;
@@ -959,7 +961,7 @@ async fn run_test_suite(
         let mut rows: Vec<TcpRow> = Vec::new();
         let tcp_tick = phases
             .as_ref()
-            .map(|p| (p.on_phase)(msg.checking_status.to_string(), tcp_items.len(), true));
+            .map(|p| (p.on_phase)(dpi_core::PhaseId::Tcp16, tcp_items.len(), true));
         let mut handles = Vec::new();
         for item in tcp_items {
             let item = item.clone();

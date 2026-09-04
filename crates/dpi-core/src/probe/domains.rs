@@ -581,7 +581,7 @@ pub async fn resolve_all(
 ) -> Vec<DomainEntry> {
     let tick = phases
         .as_ref()
-        .map(|p| (p.on_phase)("Фаза 0/3: DNS-резолв...".to_string(), domains.len(), true));
+        .map(|p| (p.on_phase)(crate::PhaseId::DomainDns, domains.len(), true));
     let mut handles = Vec::new();
     for domain in domains {
         let domain = domain.clone();
@@ -658,8 +658,8 @@ pub async fn check_tls_all(
     phases: Option<PhaseProgress>,
 ) {
     let total = entries.iter().filter(|e| e.dns_fake == Some(false)).count();
-    let desc = if tls12_only { "Фаза 2/3: TLS 1.2..." } else { "Фаза 1/3: TLS 1.3..." };
-    let tick = phases.as_ref().map(|p| (p.on_phase)(desc.to_string(), total, true));
+    let pid = if tls12_only { crate::PhaseId::DomainTls12 } else { crate::PhaseId::DomainTls13 };
+    let tick = phases.as_ref().map(|p| (p.on_phase)(pid, total, true));
     let mut handles = Vec::new();
     for (idx, e) in entries.iter().enumerate() {
         if e.dns_fake != Some(false) {
@@ -700,7 +700,7 @@ pub async fn check_http_all(
     let total = entries.iter().filter(|e| e.dns_fake == Some(false)).count();
     let tick = phases
         .as_ref()
-        .map(|p| (p.on_phase)("Фаза 3/3: HTTP...".to_string(), total, true));
+        .map(|p| (p.on_phase)(crate::PhaseId::DomainHttp, total, true));
     let mut handles = Vec::new();
     for (idx, e) in entries.iter().enumerate() {
         if e.dns_fake != Some(false) {

@@ -772,6 +772,7 @@ pub struct PartialDnsEndpoint {
 
 /// One latency line per endpoint: per-domain minimum in green (or yellow on partial
 /// packet loss), per-addr fail label. Partial endpoints are recorded for post-table listing.
+#[allow(clippy::too_many_arguments)]
 fn dns_latency_lines(
     report: &DnsAvailReport,
     kind: ProbeKind,
@@ -780,6 +781,7 @@ fn dns_latency_lines(
     domains: &[String],
     udp: bool,
     partial: &mut Vec<PartialDnsEndpoint>,
+    ms_unit: &str,
 ) -> Vec<(String, Color)> {
     let mut lines = Vec::new();
     for a in addrs {
@@ -809,7 +811,7 @@ fn dns_latency_lines(
             continue;
         }
         let min = vals.iter().cloned().reduce(f64::min).unwrap_or(0.0);
-        let text = format!("{:.1}мс", min);
+        let text = format!("{:.1}{}", min, ms_unit);
         let color = if vals.len() == domains.len() {
             Color::Green
         } else {
@@ -888,7 +890,7 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
         let doh_lines: Vec<(String, Color)> = if doh_addrs.is_empty() {
             vec![("—".to_string(), Color::DarkGrey)]
         } else {
-            dns_latency_lines(report, ProbeKind::DohWire, name, &doh_addrs, &report.forbidden, false, &mut partial_endpoints)
+            dns_latency_lines(report, ProbeKind::DohWire, name, &doh_addrs, &report.forbidden, false, &mut partial_endpoints, msg.ms_unit.trim())
         };
 
         // DoT cell: one line per endpoint.
@@ -898,7 +900,7 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
             if dot_addrs.is_empty() {
                 dot_lines.push(("—".to_string(), Color::DarkGrey));
             } else {
-                dot_lines = dns_latency_lines(report, ProbeKind::Dot, name, &dot_addrs, &report.forbidden, false, &mut partial_endpoints);
+                dot_lines = dns_latency_lines(report, ProbeKind::Dot, name, &dot_addrs, &report.forbidden, false, &mut partial_endpoints, msg.ms_unit.trim());
             }
         }
 
@@ -907,7 +909,7 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
         let udp_lines: Vec<(String, Color)> = if udp_addrs.is_empty() {
             vec![("—".to_string(), Color::DarkGrey)]
         } else {
-            dns_latency_lines(report, ProbeKind::Udp, name, &udp_addrs, &report.allowed, true, &mut partial_endpoints)
+            dns_latency_lines(report, ProbeKind::Udp, name, &udp_addrs, &report.allowed, true, &mut partial_endpoints, msg.ms_unit.trim())
         };
         // Egress cell
         let mut egress_lines: Vec<(String, Option<Color>)> = Vec::new();
@@ -1069,6 +1071,9 @@ pub fn localize_detail(d: &str, lang: Language) -> String {
     }
     match d {
         DET_RST_HELLO | DET_STREAM_RST_HELLO => "TCP RST on ClientHello".to_string(),
+        DET_TLS_RST_HELLO => "TLS RST (connection reset after ClientHello)".to_string(),
+        DET_TLS_DROP_HANDSHAKE => "TLS DROP (connection dropped during TLS handshake)".to_string(),
+        DET_TIMEOUT_CONN => "TIMEOUT (connection timeout)".to_string(),
         DET_RST_AFTER_HANDSHAKE => "TCP RST after handshake".to_string(),
         DET_WRONG_VERSION => "Response spoofing (Wrong Version)".to_string(),
         DET_GARBAGE_DATA => "Response spoofing (Garbage Data)".to_string(),
@@ -1166,7 +1171,7 @@ pub fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) -> Stri
     for e in entries {
         if e.t13.status == DpiStatus::DnsFail || e.t12.status == DpiStatus::DnsFail || e.http.status == DpiStatus::DnsFail {
             dns_fail += 1;
-            if e.t13.detail.contains("IPv6 не поддерживается") {
+            if e.t13.detail.contains("IPv6") && (e.t13.detail.contains("не поддерживается") || e.t13.detail.contains("not supported")) {
                 no_ipv6 += 1;
             }
         }
@@ -1322,10 +1327,15 @@ pub fn render_whitelist(report: &WhitelistReport, targets_total: usize, msg: &Me
                 let parts: Vec<String> = snis
                     .iter()
                     .map(|(label, n)| {
-                        if *n > 0 {
-                            format!("{} #{}", label, n)
+                        let disp = if label == "(no SNI)" || label == "(без SNI)" {
+                            msg.no_sni_label
                         } else {
-                            label.clone()
+                            label.as_str()
+                        };
+                        if *n > 0 {
+                            format!("{} #{}", disp, n)
+                        } else {
+                            disp.to_string()
                         }
                     })
                     .collect();

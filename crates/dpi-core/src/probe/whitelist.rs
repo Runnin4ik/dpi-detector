@@ -15,7 +15,8 @@ use tokio::sync::Semaphore;
 use crate::classify::DpiStatus;
 use crate::config::{AppConfig, Tcp16Target};
 use crate::PhaseProgress;
-use crate::probe::tcp16::check_tcp_16_20;
+use super::tcp16::check_tcp_16_20;
+pub const NO_SNI_TAG: &str = "(no SNI)";
 
 fn asn_key_of(item: &Tcp16Target) -> String {
     let raw = item.asn.trim();
@@ -31,9 +32,8 @@ fn asn_key_of(item: &Tcp16Target) -> String {
 fn asn_display_of(item: &Tcp16Target) -> String {
     let raw = item.asn.trim();
     if raw.is_empty() {
-        return "-".to_string();
-    }
-    if raw.to_uppercase().starts_with("AS") {
+        "-".to_string()
+    } else if raw.to_uppercase().starts_with("AS") {
         raw.to_uppercase()
     } else {
         format!("AS{}", raw)
@@ -94,7 +94,7 @@ pub async fn run_whitelist_sni(
     }
     let tick_base = phases
         .as_ref()
-        .map(|p| (p.on_phase)("Фаза 1/2: Базовая проверка...".to_string(), port443.len(), true));
+        .map(|p| (p.on_phase)(crate::PhaseId::SniBase, port443.len(), true));
 
     let sni_index: HashMap<&str, usize> =
         clean_sni.iter().map(|(s, n)| (s.as_str(), *n)).collect();
@@ -171,12 +171,11 @@ pub async fn run_whitelist_sni(
     let top_n = cfg.sni_top_n.max(1);
     let tick_as = phases.as_ref().map(|p| {
         (p.on_phase)(
-            format!(
-                "Фаза 2/2: Параллельный перебор SNI для {} AS (батч {}, топ-{})...",
-                detected.len(),
-                batch_size,
-                top_n
-            ),
+            crate::PhaseId::SniParallel {
+                detected_as: detected.len(),
+                batch: batch_size,
+                top_n,
+            },
             detected.len(),
             true,
         )
@@ -218,7 +217,7 @@ async fn probe_as(
         let (_alive, st0, d0, _rtt) =
             check_tcp_16_20(&cand.ip, 443, "", cfg, sem, cand.rtt).await;
         if is_ok(st0) {
-            found.push(("(без SNI)".to_string(), 0));
+            found.push((NO_SNI_TAG.to_string(), 0));
         } else if !is_detected(st0, &d0) && !d0.contains("at ") {
             ban_detected = true;
             ban_detail = format!("{:?}", st0);

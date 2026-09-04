@@ -4,6 +4,9 @@ pub const DET_RST_HELLO: &str = "TCP RST на ClientHello";
 pub const DET_STREAM_RST_HELLO: &str = "TCP RST on ClientHello";
 pub const DET_STREAM_EOF_HELLO: &str = "DPI closed connection immediately after TLS ClientHello";
 pub const DET_STREAM_RST_CONNECT: &str = "TCP RST received from DPI on connect";
+pub const DET_TLS_DROP_HANDSHAKE: &str = "TLS DROP (ТСПУ дропнул соединение при TLS handshake)";
+pub const DET_TIMEOUT_CONN: &str = "TIMEOUT (Таймаут соединения)";
+pub const DET_TLS_RST_HELLO: &str = "TLS RST (ТСПУ разорвал TLS после ClientHello)";
 
 pub const DET_WRONG_VERSION: &str = "Подмена ответа (Wrong Version)";
 pub const DET_GARBAGE_DATA: &str = "Подмена ответа (Garbage Data)";

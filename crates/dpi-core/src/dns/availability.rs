@@ -249,7 +249,7 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
     let total = udp_servers.len() + doh_servers.len() + dot_servers.len();
     let tick = phases
         .as_ref()
-        .map(|p| (p.on_phase)("Проверка серверов...".to_string(), total, false));
+        .map(|p| (p.on_phase)(crate::PhaseId::DnsAvailability, total, false));
 
     // Proxy: only SOCKS5 supports UDP relay
     let proxy_raw = cfg.effective_proxy().map(|s| s.to_string());

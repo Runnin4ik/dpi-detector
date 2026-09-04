@@ -135,7 +135,7 @@ async fn connect_fat_target(
 }
 
 /// Raw FAT probe. Returns (alive_label, status, detail, rtt_secs).
-/// `alive_label` is "Да"/"Нет"/"—" like the Python table column.
+/// `alive_label` is "Yes"/"No"/"—" indicating connection liveness.
 pub async fn probe_tcp_16_20(
     ip: &str,
     port: u16,
@@ -174,7 +174,7 @@ pub async fn probe_tcp_16_20(
 
     let mut sender = match connect_fat_target(addr, target_ip, sni, use_tls, cfg).await {
         Ok(s) => s,
-        Err((s, d)) => return ("[red]Нет[/red]".into(), s, d, measured_rtt),
+        Err((s, d)) => return ("[red]No[/red]".into(), s, d, measured_rtt),
     };
 
     let mut alive = "[dim]—[/dim]".to_string();
@@ -243,7 +243,7 @@ pub async fn probe_tcp_16_20(
                 let _ = resp.into_body().collect().await;
                 let elapsed = t0.elapsed().as_secs_f64();
                 if i == 0 {
-                    alive = "[green]Да[/green]".to_string();
+                    alive = "[green]Yes[/green]".to_string();
                     if measured_rtt.is_none() {
                         measured_rtt = Some(elapsed);
                     }
@@ -266,7 +266,7 @@ pub async fn probe_tcp_16_20(
                 if is_read_timeout {
                     let err_type = if lower.contains("write") { "Write Timeout" } else { "Read Timeout" };
                     if i == 0 {
-                        return ("[green]Да[/green]".into(), DpiStatus::ReadTimeout, err_type.into(), measured_rtt);
+                        return ("[green]Yes[/green]".into(), DpiStatus::ReadTimeout, err_type.into(), measured_rtt);
                     }
                     if i < min_detect_chunk {
                         return (alive, DpiStatus::Timeout, err_type.into(), measured_rtt);
@@ -280,7 +280,7 @@ pub async fn probe_tcp_16_20(
                 }
                 let (s, d) = classify_read_error(&msg, 0);
                 if i == 0 {
-                    return ("[green]Да[/green]".into(), s, d, measured_rtt);
+                    return ("[green]Yes[/green]".into(), s, d, measured_rtt);
                 }
                 if i < min_detect_chunk {
                     return (alive, DpiStatus::Timeout, d, measured_rtt);
@@ -294,7 +294,7 @@ pub async fn probe_tcp_16_20(
             }
             Err(_) => {
                 if i == 0 {
-                    return ("[green]Да[/green]".into(), DpiStatus::ReadTimeout, "Read Timeout".into(), measured_rtt);
+                    return ("[green]Yes[/green]".into(), DpiStatus::ReadTimeout, "Read Timeout".into(), measured_rtt);
                 }
                 if i < min_detect_chunk {
                     return (alive, DpiStatus::Timeout, "Read Timeout".into(), measured_rtt);

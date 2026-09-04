@@ -540,7 +540,7 @@ pub struct TelegramFullReport {
 pub async fn run_telegram_full(cfg: &AppConfig, phases: Option<PhaseProgress>) -> TelegramFullReport {
     let tick = phases
         .as_ref()
-        .map(|p| (p.on_phase)("Проверка доступности Telegram".to_string(), 3, true));
+        .map(|p| (p.on_phase)(crate::PhaseId::Telegram, 3, true));
     let tick_dl = tick.clone();
     let tick_ul = tick.clone();
     let tick_dc = tick.clone();

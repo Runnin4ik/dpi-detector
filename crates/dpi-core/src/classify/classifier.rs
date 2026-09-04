@@ -250,10 +250,10 @@ pub fn classify_tls_error(
         if stage == ConnectionStage::TlsClientHelloSent || (bytes_sent > 0 && bytes_recv == 0) {
             return (
                 DpiStatus::TlsDropped,
-                "TLS DROP (ТСПУ дропнул соединение при TLS handshake)".into(),
+                DET_TLS_DROP_HANDSHAKE.into(),
             );
         }
-        return (DpiStatus::Timeout, "TIMEOUT (Таймаут соединения)".into());
+        return (DpiStatus::Timeout, DET_TIMEOUT_CONN.into());
     }
 
     let stage_name = if is_tls_stage(stage) || stage == ConnectionStage::TcpConnected {
@@ -295,7 +295,7 @@ pub fn classify_tls_error(
         {
             return (
                 DpiStatus::TlsRst,
-                "TLS RST (ТСПУ разорвал TLS после ClientHello)".into(),
+                DET_TLS_RST_HELLO.into(),
             );
         }
     }

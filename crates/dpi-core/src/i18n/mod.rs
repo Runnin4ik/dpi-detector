@@ -164,6 +164,7 @@ fn detect_windows_language() -> Option<Language> {
     Language::from_code(prefix)
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Messages {
     pub banner_subtitle: &'static str,
     pub netinfo_title: &'static str,
@@ -332,8 +333,35 @@ pub struct Messages {
     pub checking_status: &'static str,
     pub phase_sni_base: &'static str,
     pub phase_sni_parallel: &'static str,
+    pub phase_telegram: &'static str,
+    pub config_load_error_label: &'static str,
+    pub config_warning_label: &'static str,
+    pub press_enter_to_exit: &'static str,
+    pub invalid_proxy_err: &'static str,
+    pub dns_servers_empty_skip: &'static str,
+    pub no_sni_label: &'static str,
 }
 
+impl Messages {
+    pub fn phase_text(&self, phase: crate::PhaseId) -> String {
+        match phase {
+            crate::PhaseId::DnsAvailability => self.checking_status.to_string(),
+            crate::PhaseId::DomainDns => self.phase_dns.to_string(),
+            crate::PhaseId::DomainTls13 => self.phase_tls13.to_string(),
+            crate::PhaseId::DomainTls12 => self.phase_tls12.to_string(),
+            crate::PhaseId::DomainHttp => self.phase_http.to_string(),
+            crate::PhaseId::Tcp16 => self.checking_status.to_string(),
+            crate::PhaseId::SniBase => self.phase_sni_base.to_string(),
+            crate::PhaseId::SniParallel { detected_as, batch, top_n } => {
+                self.phase_sni_parallel
+                    .replacen("{}", &detected_as.to_string(), 1)
+                    .replacen("{}", &batch.to_string(), 1)
+                    .replacen("{}", &top_n.to_string(), 1)
+            }
+            crate::PhaseId::Telegram => self.phase_telegram.to_string(),
+        }
+    }
+}
 impl Messages {
     /// Checkbox label for test digit '0'..='6' in the interactive menu
     /// (mirrors Python `_MENU_OPTIONS`).
@@ -512,6 +540,13 @@ pub fn get_messages(lang: Language) -> Messages {
             checking_status: "Checking...",
             phase_sni_base: "Phase 1/2: Base check...",
             phase_sni_parallel: "Phase 2/2: Parallel SNI discovery for {} AS (batch {}, top-{})...",
+            phase_telegram: "Telegram availability check",
+            config_load_error_label: "Warning loading config.yml:",
+            config_warning_label: "Notice config.yml:",
+            press_enter_to_exit: "Press Enter to exit...",
+            invalid_proxy_err: "Invalid proxy {}: {}\n",
+            dns_servers_empty_skip: "DNS_AVAILABILITY_SERVERS not set in config.yml — test skipped.\n",
+            no_sni_label: "(no SNI)",
         },
         Language::Ru => Messages {
             banner_subtitle: "Детектор блокировок DPI и цензуры (Rust Native)",
@@ -672,6 +707,13 @@ pub fn get_messages(lang: Language) -> Messages {
             checking_status: "Проверка...",
             phase_sni_base: "Фаза 1/2: Базовая проверка...",
             phase_sni_parallel: "Фаза 2/2: Параллельный перебор SNI для {} AS (батч {}, топ-{})...",
+            phase_telegram: "Проверка доступности Telegram",
+            config_load_error_label: "Внимание при загрузке config.yml:",
+            config_warning_label: "Предупреждение config.yml:",
+            press_enter_to_exit: "Нажмите Enter для выхода...",
+            invalid_proxy_err: "Некорректный прокси {}: {}\n",
+            dns_servers_empty_skip: "DNS_AVAILABILITY_SERVERS не задан в config.yml — тест пропущен.\n",
+            no_sni_label: "(без SNI)",
         },
         Language::Fa => Messages {
             banner_subtitle: "موتور بومی تشخیص فیلترینگ و بازرسی عمیق بسته‌ها (DPI)",
@@ -832,6 +874,13 @@ pub fn get_messages(lang: Language) -> Messages {
             checking_status: "در حال بررسی...",
             phase_sni_base: "مرحله 1/2: بررسی پایه...",
             phase_sni_parallel: "مرحله 2/2: جستجوی موازی SNI برای {} AS (دسته {}، برتر-{})...",
+            phase_telegram: "بررسی دسترسی تلگرام",
+            config_load_error_label: "هشدار در بارگذاری config.yml:",
+            config_warning_label: "اعلان config.yml:",
+            press_enter_to_exit: "برای خروج Enter را فشار دهید...",
+            invalid_proxy_err: "پروکسی نامعتبر {}: {}\n",
+            dns_servers_empty_skip: "DNS_AVAILABILITY_SERVERS در config.yml تنظیم نشده است — آزمون نادیده گرفته شد.\n",
+            no_sni_label: "(بدون SNI)",
         },
         Language::Zh => Messages {
             banner_subtitle: "Rust 原生 DPI 审查与网络阻断诊断引擎",
@@ -992,6 +1041,13 @@ pub fn get_messages(lang: Language) -> Messages {
             checking_status: "正在检查...",
             phase_sni_base: "阶段 1/2: 基础检查...",
             phase_sni_parallel: "阶段 2/2: 针对 {} 个 AS 并行探测 SNI (批次 {}, 前 {})...",
+            phase_telegram: "Telegram 可用性检查",
+            config_load_error_label: "加载 config.yml 时的警告:",
+            config_warning_label: "config.yml 提示:",
+            press_enter_to_exit: "按回车键退出...",
+            invalid_proxy_err: "无效代理 {}: {}\n",
+            dns_servers_empty_skip: "config.yml 中未设置 DNS_AVAILABILITY_SERVERS — 跳过测试。\n",
+            no_sni_label: "(无 SNI)",
         },
         Language::Es => Messages {
             banner_subtitle: "Motor Nativo en Rust para Diagnóstico de DPI y Censura",
@@ -1152,6 +1208,13 @@ pub fn get_messages(lang: Language) -> Messages {
             checking_status: "Comprobando...",
             phase_sni_base: "Fase 1/2: Comprobación básica...",
             phase_sni_parallel: "Fase 2/2: Búsqueda paralela de SNI para {} AS (lote {}, top-{})...",
+            phase_telegram: "Comprobación de disponibilidad de Telegram",
+            config_load_error_label: "Advertencia al cargar config.yml:",
+            config_warning_label: "Aviso de config.yml:",
+            press_enter_to_exit: "Presione Enter para salir...",
+            invalid_proxy_err: "Proxy inválido {}: {}\n",
+            dns_servers_empty_skip: "DNS_AVAILABILITY_SERVERS no configurado en config.yml — prueba omitida.\n",
+            no_sni_label: "(sin SNI)",
         },
         Language::Ar => Messages {
             banner_subtitle: "محرك رست الأصلي لتشخيص فحص الحزم العميق (DPI) والحجب",
@@ -1312,6 +1375,13 @@ pub fn get_messages(lang: Language) -> Messages {
             checking_status: "جارٍ الفحص...",
             phase_sni_base: "المرحلة 1/2: الفحص الأساسي...",
             phase_sni_parallel: "المرحلة 2/2: البحث المتوازي عن SNI لـ {} AS (دفعة {}، أفضل {})...",
+            phase_telegram: "التحقق من توفر Telegram",
+            config_load_error_label: "تحذير عند تحميل config.yml:",
+            config_warning_label: "إشعار config.yml:",
+            press_enter_to_exit: "اضغط على Enter للخروج...",
+            invalid_proxy_err: "وكيل غير صالح {}: {}\n",
+            dns_servers_empty_skip: "لم يتم تعيين DNS_AVAILABILITY_SERVERS في config.yml — تم تخطي الاختبار.\n",
+            no_sni_label: "(بدون SNI)",
         },
     }
 }
