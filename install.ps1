@@ -1,7 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $repo = "Runnin4ik/dpi-detector"
 $version = if ($env:DPI_VERSION) { $env:DPI_VERSION } else { "latest" }
-$target = "dpi-detector-windows-x86_64.exe"
+$isLegacyWin = [System.Environment]::OSVersion.Version.Major -lt 10
+$target = if ($isLegacyWin) { "dpi-detector-windows-7-x86_64.exe" } else { "dpi-detector-windows-x86_64.exe" }
 $out = "$env:TEMP\dpi-detector.exe"
 $tmp = "$env:TEMP\dpi-detector.tmp.$([System.Diagnostics.Process]::GetCurrentProcess().Id).exe"
 
