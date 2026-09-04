@@ -218,12 +218,7 @@ async fn main() {
     set_plain_mode(legacy_console);
     let profile = RegionProfile::from_code(&args.profile).unwrap_or_default();
     let mut lang = if args.lang == "auto" {
-        let detected = Language::autodetect();
-        if detected == Language::En && profile == RegionProfile::Ru {
-            Language::Ru
-        } else {
-            detected
-        }
+        Language::autodetect()
     } else {
         Language::from_code(&args.lang).unwrap_or(Language::En)
     };
