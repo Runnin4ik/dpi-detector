@@ -227,7 +227,7 @@ enum MenuAction {
     Quit,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     // Panic hook: write crash details to file and pause so console does not instantly vanish.
     std::panic::set_hook(Box::new(|info| {

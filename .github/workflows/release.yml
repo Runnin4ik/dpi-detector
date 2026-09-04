@@ -98,7 +98,7 @@ jobs:
       - name: Build with cross (MIPS & Cross targets)
         if: matrix.use_cross
         env:
-          RUSTFLAGS: "--cfg rustix_use_libc"
+          RUSTFLAGS: "--cfg rustix_use_libc -C force-unwind-tables=no"
         run: cross build --release --target ${{ matrix.target }}
 
       - name: Build with cargo (Windows 7 legacy)
@@ -115,6 +115,8 @@ jobs:
 
       - name: Build with cargo (Native Unix & macOS)
         if: "!matrix.use_cross && runner.os != 'Windows'"
+        env:
+          RUSTFLAGS: "${{ matrix.target == 'x86_64-unknown-linux-musl' && '-C force-unwind-tables=no' || '' }}"
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare binary artifact (Windows)
