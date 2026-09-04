@@ -22,52 +22,18 @@
 
 ## 🚀 Быстрый запуск в 1 строку (Без установки)
 
-### 🐧 Linux, macOS, роутеры Keenetic, OpenWrt & Entware (Terminal / SSH)
-
-Универсальный запуск одной командой (скрипт автоматически определит архитектуру процессора, скачает нужный бинарник через сеть зеркал и запустит):
+### 🐧 Linux, macOS, роутеры Keenetic, OpenWrt & Entware
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
-```
-
-*Если в системе установлен `wget` вместо `curl`:*
-```sh
-wget -qO- https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
-```
-
-*Запуск конкретных тестов без меню (например, тесты 1, 2 и 3):*
-```bash
-curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh -s -- -t 1,2,3
 ```
 
 ---
 
 ### 🪟 Windows (PowerShell)
 
-Скрипт автоматически распознает версию ОС (Windows 10/11 или устаревшую Windows 7/8) и скачает подходящую сборку со встроенной защитой от сбоев:
-
 ```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | iex"
-```
-
-*Запуск конкретных тестов без меню:*
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1))) -t 1,2,3
-```
-
----
-
-### 💻 Windows (Классический CMD / Командная строка)
-
-Запуск через встроенный в Windows `curl.exe` без вызова PowerShell:
-
-```cmd
-cmd /c "curl -fsSL -o %TEMP%\dpi-detector.exe https://github.com/Runnin4ik/dpi-detector/releases/latest/download/dpi-detector-windows-x86_64.exe && %TEMP%\dpi-detector.exe"
-```
-
-*Для Windows 7 в CMD:*
-```cmd
-cmd /c "curl -fsSL -o %TEMP%\dpi-detector.exe https://github.com/Runnin4ik/dpi-detector/releases/latest/download/dpi-detector-windows-7-x86_64.exe && %TEMP%\dpi-detector.exe"
+irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | iex
 ```
 
 ---

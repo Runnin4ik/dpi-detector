@@ -120,18 +120,20 @@ if [ -n "${DPI_MIRRORS:-}" ]; then
 fi
 
 if [ "$VERSION" = "latest" ]; then
-  _GH_URL="https://github.com/${REPO}/releases/latest/download/${TARGET}"
+  CANDIDATE_URLS="https://github.com/${REPO}/releases/latest/download/${TARGET} https://github.com/${REPO}/releases/download/v5.0.0-alpha.1/${TARGET}"
 else
-  _GH_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARGET}"
+  CANDIDATE_URLS="https://github.com/${REPO}/releases/download/${VERSION}/${TARGET}"
 fi
 
-URL_LIST="${URL_LIST} ${_GH_URL}"
-URL_LIST="${URL_LIST} https://ghfast.top/${_GH_URL}"
-URL_LIST="${URL_LIST} https://ghproxy.net/${_GH_URL}"
-URL_LIST="${URL_LIST} https://gh-proxy.com/${_GH_URL}"
-URL_LIST="${URL_LIST} https://ghproxy.vip/${_GH_URL}"
-URL_LIST="${URL_LIST} https://gh-proxy.org/${_GH_URL}"
-URL_LIST="${URL_LIST} https://github.boki.moe/${_GH_URL}"
+for _gh_url in $CANDIDATE_URLS; do
+  URL_LIST="${URL_LIST} ${_gh_url}"
+  URL_LIST="${URL_LIST} https://ghfast.top/${_gh_url}"
+  URL_LIST="${URL_LIST} https://ghproxy.net/${_gh_url}"
+  URL_LIST="${URL_LIST} https://gh-proxy.com/${_gh_url}"
+  URL_LIST="${URL_LIST} https://ghproxy.vip/${_gh_url}"
+  URL_LIST="${URL_LIST} https://gh-proxy.org/${_gh_url}"
+  URL_LIST="${URL_LIST} https://github.boki.moe/${_gh_url}"
+done
 download_file() {
   _url="$1"
   _dest="$2"
