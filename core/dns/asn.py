@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 """Запросы принадлежности AS / организации через Team Cymru (DoH RFC 8484)."""
 
-from typing import Optional
+from typing import Optional, List, Dict, Tuple
 import asyncio
 import os
 import re
@@ -51,7 +53,7 @@ def _save_asn_cache(fresh: dict, cache_file: Optional[str] = None) -> None:
         logger.debug("Failed to write ASN cache: %s", e)
 
 
-async def _lookup_asn_name(client: httpx.AsyncClient, ip: str, cymru_doh: Optional[tuple] = None) -> Optional[str]:
+async def _lookup_asn_name(client: httpx.AsyncClient, ip: str, cymru_doh: Optional[Tuple] = None) -> Optional[str]:
     """Имя организации по IP через Team Cymru (DoH RFC 8484, TXT-запрос)."""
     try:
         ip_obj = ipaddress.ip_address(ip)
@@ -117,7 +119,7 @@ async def _lookup_asn_name(client: httpx.AsyncClient, ip: str, cymru_doh: Option
     return None
 
 
-async def resolve_asn_names(egress_ips: list[str], proxy_url: Optional[str] = None) -> dict[str, str]:
+async def resolve_asn_names(egress_ips: List[str], proxy_url: Optional[str] = None) -> Dict[str, str]:
     """Резолвит имена ASN для списка egress-IP с кэшированием."""
     uniq = sorted({e for e in egress_ips if e and e != "0.0.0.0" and get_fake_ip_type(e) != "fakeip"})
     if not uniq:
@@ -129,7 +131,7 @@ async def resolve_asn_names(egress_ips: list[str], proxy_url: Optional[str] = No
         return out
     headers = {"Accept": "application/dns-json", "User-Agent": config.USER_AGENT}
     sem = asyncio.Semaphore(getattr(config, "DNS_ASN_CONCURRENCY", 8))
-    fresh: dict[str, str] = {}
+    fresh: Dict[str, str] = {}
     async with httpx.AsyncClient(
         timeout=4, headers=headers, http2=True,
         proxy=proxy_url, trust_env=False,
