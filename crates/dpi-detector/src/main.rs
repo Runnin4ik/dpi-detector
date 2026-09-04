@@ -94,6 +94,16 @@ enum PostTestAction {
     Export,
     Quit,
 }
+pub fn normalize_key_char(c: char) -> char {
+    // Fullwidth ASCII (Chinese, Japanese, Korean IME 全角: ｑ -> q, １ -> 1, etc.)
+    if ('\u{FF01}'..='\u{FF5E}').contains(&c) {
+        return char::from_u32(c as u32 - 0xFEE0).unwrap_or(c);
+    }
+    if c == '\u{3000}' {
+        return ' ';
+    }
+    c
+}
 
 fn read_post_test_action() -> PostTestAction {
     let _ = enable_raw_mode();
@@ -102,50 +112,69 @@ fn read_post_test_action() -> PostTestAction {
             if kind != KeyEventKind::Press {
                 continue;
             }
-            if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+            let code = match code {
+                KeyCode::Char(c) => KeyCode::Char(normalize_key_char(c)),
+                other => other,
+            };
+            if modifiers.contains(KeyModifiers::CONTROL) && (code == KeyCode::Char('c') || code == KeyCode::Char('C')) {
                 let _ = disable_raw_mode();
                 return PostTestAction::Quit;
             }
 
             match code {
+                // Repeat: Enter or 'r' / 'R' / 'к' / 'К' (RU) / 'ر' (AR/FA) / 'ㄐ' (Bopomofo)
                 KeyCode::Enter
                 | KeyCode::Char('r')
                 | KeyCode::Char('R')
                 | KeyCode::Char('к')
                 | KeyCode::Char('К')
-                | KeyCode::Char('ر') => {
+                | KeyCode::Char('ر')
+                | KeyCode::Char('ㄐ') => {
                     let _ = disable_raw_mode();
                     print!("\r\n");
                     let _ = stdout().flush();
                     return PostTestAction::Repeat;
                 }
+
+                // Menu: 'm' / 'M' / 'ь' / 'Ь' (RU) / 'پ' / 'م' / 'ة' (AR/FA) / 'ㄩ' (Bopomofo) / 'צ' (Hebrew)
                 KeyCode::Char('m')
                 | KeyCode::Char('M')
                 | KeyCode::Char('ь')
                 | KeyCode::Char('Ь')
                 | KeyCode::Char('پ')
                 | KeyCode::Char('م')
-                | KeyCode::Char('ة') => {
+                | KeyCode::Char('ة')
+                | KeyCode::Char('ㄩ')
+                | KeyCode::Char('צ') => {
                     let _ = disable_raw_mode();
                     print!("\r\n");
                     let _ = stdout().flush();
                     return PostTestAction::Menu;
                 }
+
+                // Export: 's' / 'S' / 'ы' / 'Ы' (RU) / 'і' / 'І' (UA) / 'س' (AR/FA) / 'ㄋ' (Bopomofo) / 'ד' (Hebrew)
                 KeyCode::Char('s')
                 | KeyCode::Char('S')
                 | KeyCode::Char('ы')
                 | KeyCode::Char('Ы')
-                | KeyCode::Char('س') => {
+                | KeyCode::Char('і')
+                | KeyCode::Char('І')
+                | KeyCode::Char('س')
+                | KeyCode::Char('ㄋ')
+                | KeyCode::Char('ד') => {
                     let _ = disable_raw_mode();
                     print!("\r\n");
                     let _ = stdout().flush();
                     return PostTestAction::Export;
                 }
+
+                // Quit: 'q' / 'Q' / 'й' / 'Й' (RU) / 'ض' (AR/FA) / 'ㄆ' (Bopomofo) or Esc
                 KeyCode::Char('q')
                 | KeyCode::Char('Q')
                 | KeyCode::Char('й')
                 | KeyCode::Char('Й')
                 | KeyCode::Char('ض')
+                | KeyCode::Char('ㄆ')
                 | KeyCode::Esc => {
                     let _ = disable_raw_mode();
                     print!("\r\n");
@@ -1196,5 +1225,32 @@ mod tests {
         assert!(run_dns);
         assert!(run_dom);
         assert!(run_tcp);
+    }
+
+    #[test]
+    fn test_normalize_key_char() {
+        // Fullwidth letters to ASCII (Chinese / Japanese / Korean IME)
+        assert_eq!(normalize_key_char('ｑ'), 'q');
+        assert_eq!(normalize_key_char('Ｑ'), 'Q');
+        assert_eq!(normalize_key_char('ｗ'), 'w');
+        assert_eq!(normalize_key_char('ｓ'), 's');
+        assert_eq!(normalize_key_char('ａ'), 'a');
+        assert_eq!(normalize_key_char('ｄ'), 'd');
+        assert_eq!(normalize_key_char('ｒ'), 'r');
+        assert_eq!(normalize_key_char('ｍ'), 'm');
+
+        // Fullwidth digits to ASCII
+        assert_eq!(normalize_key_char('０'), '0');
+        assert_eq!(normalize_key_char('１'), '1');
+        assert_eq!(normalize_key_char('２'), '2');
+        assert_eq!(normalize_key_char('６'), '6');
+
+        // Fullwidth space
+        assert_eq!(normalize_key_char('\u{3000}'), ' ');
+
+        // Standard characters preserved
+        assert_eq!(normalize_key_char('q'), 'q');
+        assert_eq!(normalize_key_char('й'), 'й');
+        assert_eq!(normalize_key_char('ض'), 'ض');
     }
 }

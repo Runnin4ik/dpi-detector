@@ -142,21 +142,26 @@ fn run_menu_loop(
                 continue;
             }
             dirty = true;
-            // A new keypress dismisses the empty-selection notice.
             notice = None;
-            if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+            let code = match code {
+                KeyCode::Char(c) => KeyCode::Char(crate::normalize_key_char(c)),
+                other => other,
+            };
+            if modifiers.contains(KeyModifiers::CONTROL) && (code == KeyCode::Char('c') || code == KeyCode::Char('C')) {
                 return MenuResult::Quit;
             }
-
             match code {
                 // Navigation: UP (Arrows, WASD, Vim, BackTab)
                 KeyCode::Up
                 | KeyCode::BackTab
                 | KeyCode::Char('w')
                 | KeyCode::Char('W')
+                | KeyCode::Char('z')
+                | KeyCode::Char('Z')
                 | KeyCode::Char('ц')
                 | KeyCode::Char('Ц')
                 | KeyCode::Char('ص')
+                | KeyCode::Char('ㄊ')
                 | KeyCode::Char('k')
                 | KeyCode::Char('K')
                 | KeyCode::Char('л')
@@ -171,7 +176,11 @@ fn run_menu_loop(
                 | KeyCode::Char('S')
                 | KeyCode::Char('ы')
                 | KeyCode::Char('Ы')
+                | KeyCode::Char('і')
+                | KeyCode::Char('І')
                 | KeyCode::Char('س')
+                | KeyCode::Char('ㄋ')
+                | KeyCode::Char('ד')
                 | KeyCode::Char('j')
                 | KeyCode::Char('J')
                 | KeyCode::Char('о')
@@ -186,6 +195,8 @@ fn run_menu_loop(
                 | KeyCode::Char('ф')
                 | KeyCode::Char('Ф')
                 | KeyCode::Char('ش')
+                | KeyCode::Char('ㄇ')
+                | KeyCode::Char('ש')
                 | KeyCode::Char('h')
                 | KeyCode::Char('H')
                 | KeyCode::Char('р')
@@ -220,6 +231,8 @@ fn run_menu_loop(
                 | KeyCode::Char('В')
                 | KeyCode::Char('ی')
                 | KeyCode::Char('ي')
+                | KeyCode::Char('ㄎ')
+                | KeyCode::Char('ג')
                 | KeyCode::Char('l')
                 | KeyCode::Char('L')
                 | KeyCode::Char('д')
@@ -283,6 +296,8 @@ fn run_menu_loop(
                 | KeyCode::Char('R')
                 | KeyCode::Char('к')
                 | KeyCode::Char('К')
+                | KeyCode::Char('ر')
+                | KeyCode::Char('ㄐ')
                 | KeyCode::Char('g')
                 | KeyCode::Char('G')
                 | KeyCode::Char('п')
@@ -300,12 +315,13 @@ fn run_menu_loop(
                     });
                 }
 
-                // Quit: 'q' / 'Q' / 'й' / 'Й' / 'ض' or Esc
+                // Quit: 'q' / 'Q' / 'й' / 'Й' / 'ض' / 'ㄆ' or Esc
                 KeyCode::Char('q')
                 | KeyCode::Char('Q')
                 | KeyCode::Char('й')
                 | KeyCode::Char('Й')
                 | KeyCode::Char('ض')
+                | KeyCode::Char('ㄆ')
                 | KeyCode::Esc => {
                     return MenuResult::Quit;
                 }
