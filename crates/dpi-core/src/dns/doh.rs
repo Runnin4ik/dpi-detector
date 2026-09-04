@@ -12,6 +12,7 @@ use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use url::Url;
 
+use super::resolve::resolve_host;
 use super::types::{DnsError, DnsRecord};
 use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
 use crate::config::AppConfig;
@@ -45,7 +46,7 @@ pub async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Result<(D
 
     // Per-stage timeouts (mirrors httpx per-operation timeout + trace stages):
     // a stall surfaces as its stage token (SYN DROP / TLS DROP), not a flat timeout.
-    let addrs_iter = timeout(timeout_dur, tokio::net::lookup_host(format!("{}:{}", host, port)))
+    let addrs: Vec<std::net::SocketAddr> = timeout(timeout_dur, resolve_host(&host, port, timeout_dur))
         .await
         .map_err(|_| DnsError::ConnectFault {
             stage: "resolve",
@@ -55,7 +56,6 @@ pub async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Result<(D
             stage: "resolve",
             detail: e.to_string(),
         })?;
-    let addrs: Vec<std::net::SocketAddr> = addrs_iter.collect();
     // Prefer IPv4 unless user specifically requested IPv6 (mirrors Python get_resolved_ip)
     let addr = addrs
         .iter()

@@ -26,6 +26,7 @@ use crate::classify::{
     classify_connect_error_full, classify_ssl_error, ConnectionStage, DpiStatus,
 };
 use crate::config::AppConfig;
+use crate::dns::resolve_host;
 use crate::PhaseProgress;
 use crate::probe::connector::RustlsConnector;
 use crate::probe::DpiTlsConnector;
@@ -51,12 +52,14 @@ impl IpFamily {
 /// Resolves a domain to one IP of the requested family (up to 2 attempts,
 /// mirrors `get_resolved_ip`).
 pub async fn resolve_ip(domain: &str, family: IpFamily) -> Option<IpAddr> {
+    // System resolver first, UDP bootstrap fallback (Android has no resolv.conf).
+    const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
     let want_v6 = family == IpFamily::V6;
     for attempt in 0..2 {
         if attempt == 1 {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        if let Ok(addrs) = tokio::net::lookup_host(format!("{}:443", domain)).await {
+        if let Ok(addrs) = resolve_host(domain, 443, RESOLVE_TIMEOUT).await {
             for addr in addrs {
                 let is_v6 = addr.ip().is_ipv6();
                 if is_v6 == want_v6 {

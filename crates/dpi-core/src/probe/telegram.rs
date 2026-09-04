@@ -22,6 +22,7 @@ use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
 use crate::config::AppConfig;
+use crate::dns::resolve_host;
 use crate::net::tls::create_insecure_dpi_tls_config;
 use crate::PhaseProgress;
 
@@ -206,7 +207,7 @@ fn split_url(url: &str) -> Option<(String, String)> {
 }
 
 async fn tls_get(host: &str, path: &str, user_agent: &str) -> Option<(impl Body<Data = Bytes, Error = hyper::Error> + Unpin, impl FnOnce() + Send)> {
-    let addr = tokio::net::lookup_host(format!("{}:443", host)).await.ok()?.next()?;
+    let addr = resolve_host(host, 443, Duration::from_secs(10)).await.ok()?.into_iter().next()?;
     let tcp = TcpStream::connect(addr).await.ok()?;
     let connector = TlsConnector::from(create_insecure_dpi_tls_config());
     let server_name = ServerName::try_from(host.to_string()).ok()?;

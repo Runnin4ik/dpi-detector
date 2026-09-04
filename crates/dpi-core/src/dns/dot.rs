@@ -12,6 +12,7 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
+use super::resolve::resolve_host;
 use super::types::{DnsError, DnsRecord};
 use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
 use crate::net::tls::create_verifying_tls_config;
@@ -62,17 +63,17 @@ impl DotSession {
         let connect_host = if is_ip_literal(host) {
             host.to_string()
         } else {
-            let addrs = timeout(timeout_dur, tokio::net::lookup_host(format!("{}:{}", host, port)))
-                .await
-                .map_err(|_| DnsError::ConnectFault {
-                    stage: "resolve",
-                    detail: "lookup timed out".to_string(),
-                })?
-                .map_err(|e| DnsError::ConnectFault {
-                    stage: "resolve",
-                    detail: e.to_string(),
-                })?;
-            let addrs_vec: Vec<std::net::SocketAddr> = addrs.collect();
+            let addrs_vec: Vec<std::net::SocketAddr> =
+                timeout(timeout_dur, resolve_host(host, port, timeout_dur))
+                    .await
+                    .map_err(|_| DnsError::ConnectFault {
+                        stage: "resolve",
+                        detail: "lookup timed out".to_string(),
+                    })?
+                    .map_err(|e| DnsError::ConnectFault {
+                        stage: "resolve",
+                        detail: e.to_string(),
+                    })?;
             let addr = addrs_vec
                 .iter()
                 .find(|a| a.is_ipv4())
