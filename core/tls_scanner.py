@@ -22,6 +22,15 @@ def _strip_www(host: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+class _AsyncNullContext:
+    """Асинхронный nullcontext для совместимости с Python 3.8 и 3.9 (в stdlib __aenter__ появился только в 3.10)."""
+    async def __aenter__(self):
+        return None
+    async def __aexit__(self, *args):
+        return None
+
+_ASYNC_NULLCONTEXT = _AsyncNullContext()
+
 def create_dpi_client(tls_version: str = None) -> httpx.AsyncClient:
     """
     Создаёт изолированного клиента для DPI-проверки.
@@ -155,7 +164,7 @@ async def _check_tls_single(
         elif "receive_response" in event_name:
             connection_state["stage"] = "reading_data"
 
-    sem_ctx = semaphore if semaphore is not None else contextlib.nullcontext()
+    sem_ctx = semaphore if semaphore is not None else _ASYNC_NULLCONTEXT
     async with sem_ctx:
         start = time.monotonic()
 

@@ -391,10 +391,14 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
             clean_sni_list.append(s)
 
     from collections import defaultdict
+    def _strip_as_prefix(s: str) -> str:
+        u = s.upper()
+        return u[2:] if u.startswith("AS") else u
+
     asn_to_items: dict = defaultdict(list)
     for item in port443_items:
         asn_raw = str(item.get("asn", "")).strip()
-        asn_key = asn_raw.upper().removeprefix("AS") if asn_raw else item["ip"]
+        asn_key = _strip_as_prefix(asn_raw) if asn_raw else item["ip"]
         asn_to_items[asn_key].append(item)
 
     batch_size_initial = getattr(config, "SNI_BATCH_SIZE", _DEFAULT_SNI_BATCH_SIZE)
@@ -414,7 +418,7 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
             if asn_raw and not asn_raw.upper().startswith("AS")
             else asn_raw.upper()
         ) or "-"
-        asn_key = asn_raw.upper().removeprefix("AS") if asn_raw else ip
+        asn_key = _strip_as_prefix(asn_raw) if asn_raw else ip
         alive_str, status, detail, rtt = await check_tcp_16_20_with_rtt(ip, 443, sni, semaphore)
         return {
             "item":     item,
