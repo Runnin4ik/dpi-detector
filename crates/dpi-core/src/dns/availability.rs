@@ -198,6 +198,18 @@ fn answer_of(res: Result<(Vec<IpAddr>, f64), DnsError>) -> (Option<f64>, Option<
     }
 }
 
+/// Downscales a configured concurrency gate to what the local CPU can
+/// sustain in parallel TLS handshakes (pure-Rust crypto, no acceleration
+/// on MIPS/weak ARM cores). Downscale-only: never raises explicit values,
+/// strong machines keep their configured limits.
+/// Proven: 20-wide gates starve a 2-core MIPS box into 5s tail timeouts
+/// (DoT TIMEOUTs that vanish at 6-wide); x86 is unaffected in verdicts.
+fn auto_gate(configured: usize) -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    configured.min((cpus * 2).max(4)).max(1)
+}
 pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgress>) -> DnsAvailReport {
     let servers = cfg.availability_servers();
     let allowed = if cfg.dns_availability_domains.is_empty() {
@@ -249,10 +261,11 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
         }
     }
 
-    let probe_gate = Arc::new(Semaphore::new(cfg.dns_probe_concurrency.max(1)));
-    let udp_sem = Arc::new(Semaphore::new(cfg.dns_udp_concurrency.max(1)));
-    let doh_sem = Arc::new(Semaphore::new(cfg.dns_doh_concurrency.max(1)));
-    let egress_sem = Arc::new(Semaphore::new(cfg.dns_egress_concurrency.max(1)));
+
+    let probe_gate = Arc::new(Semaphore::new(auto_gate(cfg.dns_probe_concurrency.max(1))));
+    let udp_sem = Arc::new(Semaphore::new(auto_gate(cfg.dns_udp_concurrency.max(1))));
+    let doh_sem = Arc::new(Semaphore::new(auto_gate(cfg.dns_doh_concurrency.max(1))));
+    let egress_sem = Arc::new(Semaphore::new(auto_gate(cfg.dns_egress_concurrency.max(1))));
 
     // ── UDP probes (phase A → phase B) ──
     {
@@ -500,7 +513,7 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
     // ── Org names for egress IPs (Team Cymru over DoH) ──
     {
         let unique: HashSet<IpAddr> = report.egress.values().filter_map(|v| *v).collect();
-        let asn_sem = Arc::new(Semaphore::new(cfg.dns_asn_concurrency.max(1)));
+        let asn_sem = Arc::new(Semaphore::new(auto_gate(cfg.dns_asn_concurrency.max(1))));
         let mut handles = Vec::new();
         for ip in unique {
             let asn_sem = Arc::clone(&asn_sem);
@@ -738,6 +751,22 @@ fn udp_by_name(report: &DnsAvailReport) -> HashMap<String, Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// auto_gate is downscale-only and portable: never exceeds the
+    /// configured value, never stalls to zero, regardless of CPU count.
+    #[test]
+    fn test_auto_gate_bounds() {
+        assert!(auto_gate(20) <= 20);
+        assert!(auto_gate(100) <= 100);
+        assert!(auto_gate(1) >= 1);
+        assert!(auto_gate(20) >= 1);
+        // Explicit low values pass through untouched.
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        assert_eq!(auto_gate(1), 1);
+        assert_eq!(auto_gate(2), 2.min((cpus * 2).max(4)).max(1));
+    }
 
     #[test]
     fn test_brand_sort() {
