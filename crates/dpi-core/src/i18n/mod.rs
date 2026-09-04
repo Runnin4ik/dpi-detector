@@ -156,6 +156,11 @@ pub struct Messages {
     pub menu_test_sni: &'static str,
     pub menu_test_telegram: &'static str,
     pub menu_test_legend: &'static str,
+    pub lang: Language,
+    pub replies_label: &'static str,
+    pub blocked_short: &'static str,
+    pub mixed_short: &'static str,
+    pub legend_title: &'static str,
 
     // Banner & Version
     pub latest_version: &'static str,
@@ -340,6 +345,11 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_test_sni: "Whitelist SNI discovery for ASN",
             menu_test_telegram: "Telegram check (throttling/blocking)",
             menu_test_legend: "Status legend (help)",
+            lang: Language::En,
+            replies_label: "replies",
+            blocked_short: "blocked",
+            mixed_short: "mixed",
+            legend_title: "\nStatus legend:\n",
 
             latest_version: "✓ Latest version",
             author: "Author:",
@@ -495,6 +505,11 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_test_sni: "Поиск белых SNI для ASN",
             menu_test_telegram: "Проверка Telegram (замедление/блокировка)",
             menu_test_legend: "Легенда статусов (справка)",
+            lang: Language::Ru,
+            replies_label: "ответов",
+            blocked_short: "блок.",
+            mixed_short: "смеш.",
+            legend_title: "\nЛегенда статусов:\n",
 
             latest_version: "✓ Актуальная версия",
             author: "Автор:",
@@ -650,6 +665,11 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_test_sni: "جست‌وجوی SNIهای مجاز برای ASN",
             menu_test_telegram: "بررسی تلگرام (کندی/انسداد)",
             menu_test_legend: "راهنمای وضعیت‌ها",
+            lang: Language::Fa,
+            replies_label: "پاسخ",
+            blocked_short: "مسدود",
+            mixed_short: "ترکیبی",
+            legend_title: "\nراهنمای وضعیت‌ها:\n",
 
             latest_version: "✓ آخرین نسخه",
             author: "نویسنده:",
@@ -805,6 +825,11 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_test_sni: "ASN 白名单 SNI 发现",
             menu_test_telegram: "Telegram 检查 (限速/阻断)",
             menu_test_legend: "状态图例 (帮助)",
+            lang: Language::Zh,
+            replies_label: "响应",
+            blocked_short: "阻断",
+            mixed_short: "混合",
+            legend_title: "\n状态图例说明:\n",
 
             latest_version: "✓ 最新版本",
             author: "作者:",
@@ -960,6 +985,11 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_test_sni: "Búsqueda de SNI permitidos para ASN",
             menu_test_telegram: "Comprobación de Telegram (ralentización/bloqueo)",
             menu_test_legend: "Leyenda de estados (ayuda)",
+            lang: Language::Es,
+            replies_label: "respuestas",
+            blocked_short: "bloq.",
+            mixed_short: "mixto",
+            legend_title: "\nLeyenda de estados:\n",
 
             latest_version: "✓ Versión actual",
             author: "Autor:",
@@ -1115,6 +1145,11 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_test_sni: "اكتشاف SNI المسموحة لرقم ASN",
             menu_test_telegram: "فحص تيليجرام (تقييد/حجب)",
             menu_test_legend: "دليل الحالات (مساعدة)",
+            lang: Language::Ar,
+            replies_label: "استجابات",
+            blocked_short: "محجوب",
+            mixed_short: "مختلط",
+            legend_title: "\nدليل الحالات:\n",
 
             latest_version: "✓ أحدث إصدار",
             author: "المؤلف:",
@@ -1225,18 +1260,14 @@ pub fn get_messages(lang: Language) -> Messages {
 /// Terms stay Latin; descriptions follow the selected language (en/ru full,
 /// other languages fall back to English descriptions).
 pub fn print_legend(lang: Language, msg: &Messages) {
-    let _ = msg;
-    let russian = lang == Language::Ru;
-    let title = if russian {
-        "\nЛегенда статусов:\n"
-    } else {
-        "\nStatus legend:\n"
-    };
-    println!("{}", title);
-    let sections = if russian {
-        legend_sections()
-    } else {
-        legend_sections_en()
+    println!("{}", msg.legend_title);
+    let sections = match lang {
+        Language::Ru => legend_sections(),
+        Language::Zh => legend_sections_zh(),
+        Language::Es => legend_sections_es(),
+        Language::Fa => legend_sections_fa(),
+        Language::Ar => legend_sections_ar(),
+        Language::En => legend_sections_en(),
     };
     for (section, items) in &sections {
         println!("  {}", section);
@@ -1245,6 +1276,194 @@ pub fn print_legend(lang: Language, msg: &Messages) {
         }
         println!();
     }
+}
+
+/// Full legend sections in Chinese.
+pub fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+    vec![
+        ("— TLS / DPI —", vec![
+            ("TLS DPI", "DPI 切断或篡改 TLS: EOF、错误记录、握手异常中断"),
+            ("TLS MITM", "中间人攻击: 证书被篡改 (未知 CA、证书过期、域名不匹配)"),
+            ("TLS BLOCK", "TLS 版本或整个协议被阻断 (protocol_version alert)"),
+            ("TLS RST", "发送 ClientHello 后收到主动 TCP RST (TLS 握手被重置)"),
+            ("TLS DROP", "TLS 握手超时 — 数据包被静默丢弃 (未收到 RST)"),
+            ("UNKNOWN", "未知错误 (括号内为异常类型)"),
+            ("NO TLS1.3", "服务器不支持 TLS 1.3 (对于老旧服务器属于正常现象)"),
+        ]),
+        ("— TCP / 连接 —", vec![
+            ("TCP RST", "连接被重置 (收到来自审查设备或服务器的 TCP RST 报文)"),
+            ("SYN DROP", "TCP 连接超时 — SYN 已发送但未收到回复"),
+            ("ABORT", "连接异常中断 (ConnectionAborted / BrokenPipe)"),
+            ("REFUSED", "TCP 连接被拒绝 (ECONNREFUSED)"),
+            ("TIMEOUT", "超时: SYN 丢弃、读取超时或系统网络超时"),
+            ("NET UNREACH", "网络不可达 (ICMP unreachable)"),
+            ("HOST UNREACH", "主机不可达"),
+            ("OS ERR", "其他系统级网络错误 (errno)"),
+        ]),
+        ("— DNS —", vec![
+            ("DNS FAIL", "域名无法通过系统解析器成功解析"),
+            ("DNS FAKE", "域名解析 IP 命中已知的运营商拦截页面"),
+            ("TIMEOUT", "DNS 服务器在规定时间内未响应"),
+            ("BLOCKED", "DoH 服务器被运营商阻断 (HTTP 请求失败)"),
+            ("NXDOMAIN", "该 DNS 服务器确认该域名不存在"),
+        ]),
+        ("— HTTP / 阻断 —", vec![
+            ("BLOCKED", "HTTP 451 — 因法律或监管原因不可访问"),
+            ("ISP PAGE", "解析到的 IP 为运营商拦截页面 (DNS 劫持篡改)"),
+            ("REDIR", "绿色 — 重定向至同一主域名/子域名 (正常)；红色 — 重定向至外部陌生域名 (可疑)"),
+        ]),
+        ("— TCP 16-20KB 测试 —", vec![
+            ("DETECTED", "传输达到 14–36 KB 后连接被切断 (特征性窗口阻断)"),
+            ("OK", "所有 10 次请求 (最高 40 KB) 均正常传输无阻断"),
+        ]),
+        ("— 其他 —", vec![
+            ("OK", "站点可正常访问 (状态码 200–4xx 无阻断特征)"),
+            ("UNKNOWN", "未知异常 (括号内为具体异常类型)"),
+            ("READ TIMEOUT", "服务器接受了连接但未及时返回数据: DPI 切断/限速、丢包或服务器过载"),
+            ("POOL TIMEOUT", "套接字连接池耗尽 — 请降低并发连接数"),
+        ]),
+    ]
+}
+
+/// Full legend sections in Spanish.
+pub fn legend_sections_es() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+    vec![
+        ("— TLS / DPI —", vec![
+            ("TLS DPI", "DPI interrumpe o manipula TLS: EOF, registro corrupto, fallo de handshake"),
+            ("TLS MITM", "Man-in-the-Middle: certificado sustituido (CA desconocida, expirado, nombre incorrecto)"),
+            ("TLS BLOCK", "Versión de TLS o protocolo bloqueado (alerta protocol_version)"),
+            ("TLS RST", "TCP RST activo tras ClientHello (reinicio del handshake TLS)"),
+            ("TLS DROP", "Tiempo de espera agotado en TLS — paquetes descartados silenciosamente"),
+            ("UNKNOWN", "Error desconocido (tipo de excepción entre paréntesis)"),
+            ("NO TLS1.3", "El servidor no admite TLS 1.3 (normal en servidores antiguos)"),
+        ]),
+        ("— TCP / Conexión —", vec![
+            ("TCP RST", "Conexión reiniciada (paquete TCP RST del DPI o del servidor)"),
+            ("SYN DROP", "Tiempo de espera agotado — SYN enviado sin respuesta"),
+            ("ABORT", "Conexión abortada (ConnectionAborted / BrokenPipe)"),
+            ("REFUSED", "Conexión TCP rechazada (ECONNREFUSED)"),
+            ("TIMEOUT", "Tiempo agotado: SYN drop, lectura o tiempo del sistema"),
+            ("NET UNREACH", "Sin ruta a la red (ICMP inalcanzable)"),
+            ("HOST UNREACH", "Sin ruta al host"),
+            ("OS ERR", "Otros errores del sistema operativo (errno)"),
+        ]),
+        ("— DNS —", vec![
+            ("DNS FAIL", "El dominio no se resolvió mediante el resolvedor del sistema"),
+            ("DNS FAKE", "La IP coincide con una página de bloqueo conocida del proveedor"),
+            ("TIMEOUT", "El servidor DNS no respondió a tiempo"),
+            ("BLOCKED", "Servidor DoH bloqueado por el proveedor (fallo HTTP)"),
+            ("NXDOMAIN", "El dominio no existe según este servidor"),
+        ]),
+        ("— HTTP / Bloqueos —", vec![
+            ("BLOCKED", "HTTP 451 — No disponible por razones legales"),
+            ("ISP PAGE", "La IP resuelta es una página de bloqueo del proveedor"),
+            ("REDIR", "Verde — redirección al mismo dominio (normal); Rojo — redirección a otro dominio (sospechoso)"),
+        ]),
+        ("— Prueba TCP 16-20KB —", vec![
+            ("DETECTED", "Corte de conexión tras transferir 14–36 KB"),
+            ("OK", "Las 10 solicitudes (hasta 40 KB) pasaron sin cortes"),
+        ]),
+        ("— Otros —", vec![
+            ("OK", "Sitio accesible (200–4xx sin indicios de censura)"),
+            ("UNKNOWN", "Error desconocido (tipo de excepción entre paréntesis)"),
+            ("READ TIMEOUT", "El servidor aceptó la petición pero la respuesta no llegó a tiempo: corte/limitación DPI o sobrecarga"),
+            ("POOL TIMEOUT", "Grupo de sockets agotado: reduzca la concurrencia"),
+        ]),
+    ]
+}
+
+/// Full legend sections in Farsi.
+pub fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+    vec![
+        ("— TLS / DPI —", vec![
+            ("TLS DPI", "تجهیزات DPI اتصال TLS را دستکاری یا قطع می‌کنند: EOF، رکورد خراب، لغو مصافحه"),
+            ("TLS MITM", "حمله مرد میانی: گواهی جعلی (مرجع ناشناخته، منقضی، عدم تطابق نام میزبان)"),
+            ("TLS BLOCK", "مسدودسازی نسخه یا کل پروتکل TLS (اخطار protocol_version)"),
+            ("TLS RST", "بسته فعال TCP RST پس از ارسال ClientHello (ریست مصافحه TLS)"),
+            ("TLS DROP", "اتمام مهلت مصافحه TLS — بسته‌ها بی سر و صدا دور انداخته شدند"),
+            ("UNKNOWN", "خطای ناشناخته (نوع خطا در پرانتز)"),
+            ("NO TLS1.3", "سرور از TLS 1.3 پشتیبانی نمی‌کند (طبیعی برای سرورهای قدیمی)"),
+        ]),
+        ("— TCP / اتصال —", vec![
+            ("TCP RST", "اتصال ریست شد (بسته TCP RST از طرف فیلترینگ یا سرور)"),
+            ("SYN DROP", "اتمام مهلت اتصال TCP — بسته SYN ارسال شد ولی پاسخی نیامد"),
+            ("ABORT", "اتصال لغو شد (ConnectionAborted / BrokenPipe)"),
+            ("REFUSED", "اتصال TCP رد شد (ECONNREFUSED)"),
+            ("TIMEOUT", "اتمام مهلت: دور انداختن SYN، مهلت خواندن یا خطای سیستم"),
+            ("NET UNREACH", "مسیر شبکه در دسترس نیست (ICMP unreachable)"),
+            ("HOST UNREACH", "میزبان در دسترس نیست"),
+            ("OS ERR", "سایر خطاهای سیستم‌عامل (errno)"),
+        ]),
+        ("— DNS —", vec![
+            ("DNS FAIL", "دامنه از طریق کارگزار سیستم حل نشد"),
+            ("DNS FAKE", "آدرس IP با صفحه فیلترینگ ارائه‌دهنده مطابقت دارد"),
+            ("TIMEOUT", "سرور DNS در زمان مقرر پاسخ نداد"),
+            ("BLOCKED", "سرور DoH توسط ارائه‌دهنده مسدود شده است"),
+            ("NXDOMAIN", "به گفته این سرور، دامنه وجود ندارد"),
+        ]),
+        ("— HTTP / مسدودسازی —", vec![
+            ("BLOCKED", "کد 451 HTTP — به دلایل قانونی در دسترس نیست"),
+            ("ISP PAGE", "آدرس IP حل شده صفحه مسدودسازی ارائه‌دهنده است"),
+            ("REDIR", "سبز — هدایت به همان دامنه (طبیعی)؛ قرمز — هدایت به دامنه بیگانه (مشکوک)"),
+        ]),
+        ("— آزمون TCP 16-20KB —", vec![
+            ("DETECTED", "قطع اتصال پس از ارسال 14 تا 36 کیلوبایت"),
+            ("OK", "هر 10 درخواست (تا 40 کیلوبایت) بدون قطعی انجام شدند"),
+        ]),
+        ("— سایر —", vec![
+            ("OK", "سایت در دسترس است (کد 200–4xx بدون علائم فیلترینگ)"),
+            ("UNKNOWN", "خطای ناشناخته (نوع خطا در پرانتز)"),
+            ("READ TIMEOUT", "پاسخی از سرور در زمان مقرر نرسید: اختلال/کندی DPI، افت بسته یا بار سرور"),
+            ("POOL TIMEOUT", "تکمیل ظرفیت سوکت‌ها — لطفاً هم‌زمانی را کاهش دهید"),
+        ]),
+    ]
+}
+
+/// Full legend sections in Arabic.
+pub fn legend_sections_ar() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+    vec![
+        ("— TLS / DPI —", vec![
+            ("TLS DPI", "نظام DPI يقطع أو يعبث بـ TLS: نهاية ملف غير متوقعة، سجل تالف، فشل المصافحة"),
+            ("TLS MITM", "هجوم رجل في المنتصف: شهادة مزورة (جهة غير موثوقة، منتهية، عدم تطابق الاسم)"),
+            ("TLS BLOCK", "حجب إصدار TLS أو البروتوكول بالكامل (تنبيه protocol_version)"),
+            ("TLS RST", "حزمة TCP RST نشطة بعد ClientHello (إعادة تعيين مصافحة TLS)"),
+            ("TLS DROP", "انتهاء مهلة مصافحة TLS — تم إسقاط الحزم بصمت"),
+            ("UNKNOWN", "خطأ غير معروف (نوع الخطأ بين قوسين)"),
+            ("NO TLS1.3", "الخادم لا يدعم TLS 1.3 (أمر طبيعي للخوادم القديمة)"),
+        ]),
+        ("— TCP / الاتصال —", vec![
+            ("TCP RST", "تمت إعادة تعيين الاتصال (حزمة TCP RST من نظام الحجب أو الخادم)"),
+            ("SYN DROP", "انتهاء مهلة اتصال TCP — تم إرسال SYN دون رد"),
+            ("ABORT", "تم إحباط الاتصال (ConnectionAborted / BrokenPipe)"),
+            ("REFUSED", "تم رفض اتصال TCP (ECONNREFUSED)"),
+            ("TIMEOUT", "انتهاء المهلة: إسقاط SYN، مهلة القراءة، أو مهلة النظام"),
+            ("NET UNREACH", "لا يوجد مسار إلى الشبكة (ICMP unreachable)"),
+            ("HOST UNREACH", "المضيف غير متاح"),
+            ("OS ERR", "أخطاء نظام التشغيل الأخرى (errno)"),
+        ]),
+        ("— DNS —", vec![
+            ("DNS FAIL", "فشل تحليل النطاق عبر محلل النظام"),
+            ("DNS FAKE", "يطابق عنوان IP صفحة حجب المزود المعروفة"),
+            ("TIMEOUT", "لم يستجب خادم DNS في الوقت المحدد"),
+            ("BLOCKED", "خادم DoH محجوب من قبل المزود"),
+            ("NXDOMAIN", "النطاق غير موجود وفقًا لهذا الخادم"),
+        ]),
+        ("— HTTP / الحجب —", vec![
+            ("BLOCKED", "رمز 451 HTTP — غير متاح لأسباب قانونية"),
+            ("ISP PAGE", "عنوان IP الذي تم حله هو صفحة حجب المزود"),
+            ("REDIR", "أخضر — إعادة توجيه لنفس النطاق (طبيعي)؛ أحمر — إعادة توجيه لنطاق خارجي (مريب)"),
+        ]),
+        ("— فحص TCP 16-20KB —", vec![
+            ("DETECTED", "انقطاع الاتصال بعد إرسال 14-36 كيلوبايت"),
+            ("OK", "اجتازت جميع الطلبات الـ 10 (حتى 40 كيلوبايت) دون انقطاع"),
+        ]),
+        ("— أخرى —", vec![
+            ("OK", "الموقع متاح (200-4xx دون مؤشرات حجب)"),
+            ("UNKNOWN", "خطأ غير معروف (نوع الاستثناء بين قوسين)"),
+            ("READ TIMEOUT", "قبل الخادم الطلب لكن الاستجابة لم تصل في الوقت المناسب: خنق/قطع DPI أو حمل زائد"),
+            ("POOL TIMEOUT", "استنفاد مجمع المقابس — يرجى تقليل التزامن"),
+        ]),
+    ]
 }
 
 /// Full legend sections in Russian (canonical, mirrors Python).

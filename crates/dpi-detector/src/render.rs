@@ -6,7 +6,7 @@ use dpi_core::dns::availability::{
     known_resolver, net24, org_label, subst_counts, DnsAvailReport, ProbeKind,
 };
 use dpi_core::dns::availability::DnsAnswer;
-use dpi_core::i18n::Messages;
+use dpi_core::i18n::{Language, Messages};
 use dpi_core::net::netinfo::{flag_emoji, is_tun_name, SystemDnsInfo};
 use dpi_core::probe::domains::{fake_ip_type, DomainEntry, DomainStats, FakeIpType};
 use dpi_core::probe::telegram::TelegramFullReport;
@@ -956,8 +956,8 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
         for p in &partial_endpoints {
             let bullet = asc("•");
             out.push_str(&format!(
-                "  \x1b[33m{}\x1b[0m \x1b[1m{}\x1b[0m [{}] \x1b[2m{}\x1b[0m — \x1b[1;33m{}/{}\x1b[0m ответов ({:.1}мс)\n",
-                bullet, p.provider, p.protocol, p.endpoint, p.ok, p.total, p.min_ms
+                "  \x1b[33m{}\x1b[0m \x1b[1m{}\x1b[0m [{}] \x1b[2m{}\x1b[0m — \x1b[1;33m{}/{}\x1b[0m {} ({:.1}{})\n",
+                bullet, p.provider, p.protocol, p.endpoint, p.ok, p.total, msg.replies_label, p.min_ms, msg.ms_unit
             ));
         }
     }
@@ -1000,16 +1000,71 @@ fn color_sev(c: Color) -> u8 {
 
 // ─── Test 2: domains ──────────────────────────────────────────────────────────
 
+pub fn localize_detail(d: &str, lang: Language) -> String {
+    if lang == Language::Ru {
+        return d.to_string();
+    }
+    match d {
+        "TCP RST на ClientHello" => "TCP RST on ClientHello".to_string(),
+        "TCP RST после handshake" => "TCP RST after handshake".to_string(),
+        "Подмена ответа (Wrong Version)" => "Response spoofing (Wrong Version)".to_string(),
+        "Подмена ответа (Garbage Data)" => "Response spoofing (Garbage Data)".to_string(),
+        "Поддельный TLS Alert" => "Fake TLS Alert".to_string(),
+        "Отсутствуют корневые сертификаты" => "Missing root certificates".to_string(),
+        "Подмена сертификата" => "Certificate spoofing".to_string(),
+        "Обрыв при передаче (EOF)" => "Transfer EOF".to_string(),
+        "Тихий обрыв (Handshake EOF)" => "Handshake EOF".to_string(),
+        "Нехватка сокетов, снизьте параллелизм" => "Socket pool exhausted".to_string(),
+        "Таймаут отправки данных" => "Send timeout".to_string(),
+        "Таймаут чтения данных" => "Read timeout".to_string(),
+        "Домен не найден" => "Domain not found".to_string(),
+        "DNS таймаут/недоступен" => "DNS timeout/unavailable".to_string(),
+        "Ошибка DNS" => "DNS error".to_string(),
+        "TCP соединение отклонено" => "TCP connection refused".to_string(),
+        "TCP соединение сброшено" => "TCP connection reset".to_string(),
+        "IPv6 не поддерживается/отключён" => "IPv6 not supported/disabled".to_string(),
+        "IPv6 не поддерживается" => "IPv6 not supported".to_string(),
+        other => {
+            if let Some(rest) = other.strip_prefix("Заглушка провайдера -> ") {
+                format!("ISP blockpage -> {}", rest)
+            } else if let Some(rest) = other.strip_prefix("Заглушка провайдера ") {
+                format!("ISP blockpage {}", rest)
+            } else if let Some(rest) = other.strip_prefix("Локальный IP -> ") {
+                format!("Local IP -> {}", rest)
+            } else {
+                other.to_string()
+            }
+        }
+    }
+}
+
+pub fn localize_domain_details(raw: &str, lang: Language) -> String {
+    if lang == Language::Ru {
+        return raw.to_string();
+    }
+    raw.lines()
+        .map(|line| {
+            if let Some((proto, rest)) = line.split_once(':') {
+                format!("{}:{}", proto, localize_detail(rest, lang))
+            } else {
+                localize_detail(line, lang)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
     let mut out = String::new();
     let mut table = Table::new();
     table
-            .load_preset(table_preset())
+        .load_preset(table_preset())
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec![msg.domain, msg.http, msg.tls12, msg.tls13, msg.detail]);
 
     for e in entries {
-        let (http_s, t12_s, t13_s, details) = dpi_core::probe::domains::build_domain_row(e);
+        let (http_s, t12_s, t13_s, raw_details) = dpi_core::probe::domains::build_domain_row(e);
+        let details = localize_domain_details(&raw_details, msg.lang);
         table.add_row(vec![
             Cell::new(&e.domain).fg(Color::Cyan),
             Cell::new(http_s.display_label()).fg(status_color(http_s)),
@@ -1155,7 +1210,7 @@ pub fn render_tcp_table(rows: &[TcpRow], msg: &Messages) -> String {
             Cell::new(&r.asn).fg(Color::Yellow),
             Cell::new(&r.provider).fg(Color::Cyan),
             Cell::new(label).fg(status_color(r.status)),
-            Cell::new(&r.detail),
+            Cell::new(localize_detail(&r.detail, msg.lang)),
         ]);
     }
     out.push_str(&format!("\n{}\n", msg.tcp16_check_title));
@@ -1237,7 +1292,7 @@ fn strip_brackets(s: &str) -> String {
 // ─── Test 5: Telegram ─────────────────────────────────────────────────────────
 
 pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
-    use dpi_core::probe::telegram::{fmt_size, fmt_speed};
+    use dpi_core::probe::telegram::{fmt_size_lang, fmt_speed_lang};
     let mut out = String::new();
     out.push_str(&format!("\n{}\n", msg.telegram_check_title));
 
@@ -1250,7 +1305,7 @@ pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
         let (label, color) = if dc.available {
             ("OK", Color::Green)
         } else {
-            ("НЕДОСТУПЕН", Color::Red)
+            (msg.unavailable, Color::Red)
         };
         let ping = match dc.latency_ms {
             Some(l) => format!("{}{}", l, msg.ms_unit),
@@ -1281,10 +1336,10 @@ pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
             label,
             st_text,
             msg.peak_label,
-            fmt_speed(t.peak_bps),
+            fmt_speed_lang(t.peak_bps, msg.lang),
             msg.avg_label,
-            fmt_speed(t.avg_bps),
-            fmt_size(t.bytes_total),
+            fmt_speed_lang(t.avg_bps, msg.lang),
+            fmt_size_lang(t.bytes_total, msg.lang),
             t.duration
         );
         if let Some(sec) = t.drop_at_sec {
@@ -1386,18 +1441,18 @@ pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
         let pct = ok.checked_mul(100).and_then(|v| v.checked_div(total)).unwrap_or(0);
         let mut value = format!("[green]√ {}/{} OK[/]", ok, total);
         if blocked > 0 {
-            value += &format!("  [red]× {} блок.[/]", blocked);
+            value += &format!("  [red]× {} {}[/]", blocked, msg.blocked_short);
         }
         if mixed > 0 {
-            value += &format!("  [yellow]≈ {} смеш.[/]", mixed);
+            value += &format!("  [yellow]≈ {} {}[/]", mixed, msg.mixed_short);
         }
-        value += &format!("  [dim]({}% ОК)[/]", pct);
+        value += &format!("  [dim]({}% OK)[/]", pct);
         items.push(("TCP 16-20KB".to_string(), value));
     }
 
     if data.run_telegram {
         if let Some(t) = data.telegram {
-            use dpi_core::probe::telegram::{fmt_size, fmt_speed};
+            use dpi_core::probe::telegram::{fmt_size_lang, fmt_speed_lang};
             let tg_row = |label: &str, st: &dpi_core::probe::telegram::TransferStats, speed: f64, size: u64| {
                 let (raw, color) = match st.status.as_str() {
                     "ok" => ("OK", "green"),
@@ -1406,9 +1461,9 @@ pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
                     "blocked" => ("BLOCKED", "red"),
                     _ => ("ERROR", "red"),
                 };
-                let mut metrics = format!("ср. {}, {}", fmt_speed(speed), fmt_size(size));
+                let mut metrics = format!("{} {}, {}", msg.avg_label, fmt_speed_lang(speed, msg.lang), fmt_size_lang(size, msg.lang));
                 if let Some(sec) = st.drop_at_sec {
-                    metrics += &format!(", обрыв на {}с", sec);
+                    metrics += &msg.stall_after.replace("{}", &sec.to_string());
                 }
                 (label.to_string(), format!("[{}]{:<16}[/] {}", color, raw, metrics))
             };
