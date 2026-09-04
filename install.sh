@@ -2,7 +2,7 @@
 set -e
 
 REPO="Runnin4ik/dpi-detector"
-VERSION="v4.0.0-rust"
+VERSION="${DPI_VERSION:-latest}"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -74,63 +74,105 @@ case "$OS" in
     ;;
 esac
 
-BIN_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARGET}"
-# Pick a writable directory: $TMPDIR may be unset, /tmp may not exist
-# (Android/Termux), $HOME is the last resort before cwd.
-pick_dir() {
-  for _d in "${TMPDIR:-}" "$HOME" /tmp .; do
+# Determine target installation directory:
+# 1. /opt/bin (Keenetic, OpenWrt, Entware routers - persists across reboots)
+# 2. /usr/local/bin (Standard Linux with root/sudo)
+# 3. $TMPDIR, /tmp, $HOME, or current directory
+pick_install_dir() {
+  if [ -d /opt/bin ] && [ -w /opt/bin ]; then
+    echo "/opt/bin"
+    return 0
+  fi
+  if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+    echo "/usr/local/bin"
+    return 0
+  fi
+  for _d in "${TMPDIR:-}" /tmp "$HOME" .; do
     [ -n "$_d" ] || continue
-    if [ -d "$_d" ] && touch "$_d/.dpi-wtest" 2>/dev/null; then
-      rm -f "$_d/.dpi-wtest"
+    if [ -d "$_d" ] && touch "$_d/.dpi-wtest.$$" 2>/dev/null; then
+      rm -f "$_d/.dpi-wtest.$$"
       echo "$_d"
       return 0
     fi
   done
   return 1
 }
-OUT_DIR=$(pick_dir) || {
-  echo "Error: no writable directory found (tried \$TMPDIR, \$HOME, /tmp, .)." >&2
+
+OUT_DIR=$(pick_install_dir) || {
+  echo "Error: no writable directory found (tried /opt/bin, /usr/local/bin, \$TMPDIR, /tmp, \$HOME, .)." >&2
   exit 1
 }
+
 OUT_FILE="${OUT_DIR}/dpi-detector"
+TMP_FILE="${OUT_DIR}/.dpi-detector.tmp.$$"
 
-echo "Downloading ${TARGET} (${VERSION})..."
-
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$BIN_URL" -o "$OUT_FILE"
-elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$OUT_FILE" "$BIN_URL"
-else
-  echo "Error: neither curl nor wget found in PATH." >&2
-  exit 1
+# Build prioritized list of download URLs (mirrors)
+URL_LIST=""
+if [ -n "${DPI_MIRRORS:-}" ]; then
+  for _m in $DPI_MIRRORS; do
+    URL_LIST="${URL_LIST} ${_m%/}/${TARGET}"
+  done
 fi
 
-chmod +x "$OUT_FILE"
-
-# Sanity check: a wrong-architecture binary fails here with a clear error
-# instead of a cryptic shell message later.
-if _ver=$("$OUT_FILE" --version 2>&1); then
-  echo "Detected: ${_ver}"
+if [ "$VERSION" = "latest" ]; then
+  _GH_URL="https://github.com/${REPO}/releases/latest/download/${TARGET}"
 else
-  echo "Error: ${TARGET} does not run on this system (wrong architecture?)." >&2
-  echo "Check ${BIN_URL} for a matching build." >&2
-  exit 1
+  _GH_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARGET}"
 fi
 
-# Put the binary on PATH when possible (Entware /opt/bin persists on USB,
-# unlike /tmp which lives in RAM and vanishes on reboot).
-RUN_FILE="$OUT_FILE"
-if [ "$OUT_FILE" != "/opt/bin/dpi-detector" ] && [ -d /opt/bin ] && [ -w /opt/bin ]; then
-  if cp "$OUT_FILE" /opt/bin/dpi-detector 2>/dev/null; then
-    chmod +x /opt/bin/dpi-detector
-    RUN_FILE="/opt/bin/dpi-detector"
-    echo "Installed to PATH: /opt/bin/dpi-detector"
+URL_LIST="${URL_LIST} ${_GH_URL}"
+URL_LIST="${URL_LIST} https://ghfast.top/${_GH_URL}"
+URL_LIST="${URL_LIST} https://ghproxy.net/${_GH_URL}"
+URL_LIST="${URL_LIST} https://gh-proxy.com/${_GH_URL}"
+URL_LIST="${URL_LIST} https://ghproxy.vip/${_GH_URL}"
+URL_LIST="${URL_LIST} https://gh-proxy.org/${_GH_URL}"
+URL_LIST="${URL_LIST} https://github.boki.moe/${_GH_URL}"
+download_file() {
+  _url="$1"
+  _dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --timeout=4 -O "$_dest" "$_url"
+  else
+    echo "Error: neither curl nor wget found in PATH." >&2
+    exit 1
   fi
+}
+
+echo "Downloading ${TARGET} (${VERSION}) to ${OUT_FILE}..."
+DOWNLOADED=0
+for _url in $URL_LIST; do
+  echo "Fetching from: ${_url} ..."
+  rm -f "$TMP_FILE" 2>/dev/null || true
+  if download_file "$_url" "$TMP_FILE" && [ -s "$TMP_FILE" ]; then
+    chmod +x "$TMP_FILE"
+    if _ver=$("$TMP_FILE" --version 2>&1); then
+      echo "Verified: ${_ver}"
+      DOWNLOADED=1
+      break
+    else
+      echo "Warning: binary failed architecture check, trying next mirror..." >&2
+      rm -f "$TMP_FILE" 2>/dev/null || true
+    fi
+  else
+    rm -f "$TMP_FILE" 2>/dev/null || true
+  fi
+done
+
+if [ "$DOWNLOADED" -ne 1 ]; then
+  echo "Error: failed to download working binary for ${TARGET} from all mirrors." >&2
+  exit 1
 fi
 
-echo "Binary: ${RUN_FILE}"
-echo "Run:    ${RUN_FILE} -t 1 --batch"
-echo "Help:   ${RUN_FILE} --help"
+# Atomic install: replace destination file with verified temp binary
+mv -f "$TMP_FILE" "$OUT_FILE"
+chmod +x "$OUT_FILE"
+RUN_FILE="$OUT_FILE"
+
+echo "Installed: ${RUN_FILE}"
+echo "Run:       ${RUN_FILE} -t 1 --batch"
+echo "Help:      ${RUN_FILE} --help"
 echo "Starting DPI Detector..."
 if [ -c /dev/tty ]; then
   exec "$RUN_FILE" "$@" </dev/tty

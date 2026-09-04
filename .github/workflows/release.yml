@@ -122,6 +122,9 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/') && !cancelled()
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -129,10 +132,14 @@ jobs:
           pattern: dpi-detector-*
           merge-multiple: true
 
+      - name: Copy installation scripts
+        run: |
+          cp install.sh release-files/
+          cp install.ps1 release-files/
+
       - name: List artifacts to publish
         run: |
           ls -lh release-files/
-
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
