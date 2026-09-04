@@ -9,12 +9,12 @@
 
 [![Language: Rust](https://img.shields.io/badge/Language-Rust_2021-DEA584.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v5.0.0--alpha.2-blue.svg)](https://github.com/Runnin4ik/dpi-detector/releases)
+[![Release](https://img.shields.io/badge/Release-v5.0.0--alpha.3-blue.svg)](https://github.com/Runnin4ik/dpi-detector/releases)
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0.svg?logo=telegram&logoColor=white)](https://t.me/DPI_detector)
 
 Полностью переписанный нативный инструмент для анализа цензуры и блокировок трафика на **чистом Rust**:
 * **0 зависимостей**: Никакого Python, C/C++ библиотек или системного OpenSSL. Собрано на `rustls`, `ring` и `RustCrypto`.
-* **Легковесный**: Размер бинарника всего **~4.4 МБ**, потребление оперативной памяти в работе — **3–6 МБ RAM**.
+* **Легковесный**: Размер бинарника всего **~3.2 МБ**, потребление оперативной памяти в работе — **3–6 МБ RAM**.
 * **Максимальная кросс-платформенность**: Нативная поддержка роутеров (MIPS, ARM), Windows (от Windows 7 до 11), Linux musl и macOS.
 * **Интерактивный TUI + Batch**: Полноценное стрелочное меню в терминале и быстрый тихий запуск при передаче аргументов командной строки.
 
