@@ -18,7 +18,7 @@ fn d_user_agent() -> String {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36".to_string()
 }
 fn d_dns_check_timeout() -> f64 { 5.0 }
-fn d_dns_availability_timeout() -> f64 { 5.0 }
+fn d_dns_availability_timeout() -> f64 { 10.0 }
 fn d_dns_probe_concurrency() -> usize { 20 }
 fn d_dns_udp_concurrency() -> usize { 15 }
 fn d_dns_doh_concurrency() -> usize { 20 }
