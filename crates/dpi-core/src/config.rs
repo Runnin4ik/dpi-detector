@@ -147,9 +147,18 @@ fn d_bypass_tools() -> Vec<Vec<serde_yaml::Value>> {
 
 fn d_dns_known_resolver_names() -> Vec<String> {
     vec![
+        // Egress-ASN tokens observed on real (non-hijacked) answers.
         "google", "cloudflarenet", "i3dnet", "cdn77", "alibaba-cn-net",
         "as-vultr", "cdnext", "xtom", "tencent-net-ap-cn", "misaka-cis-as",
         "as-anexia", "ru-jsciot", "yandex", "cisco", "woodynet",
+        // Resolver-brand tokens, parity with Python _KNOWN_RESOLVER_NAME_TOKENS:
+        // a whitelisted org is always green, even if a sibling endpoint
+        // of the same brand was hijacked elsewhere.
+        // NOTE: Python's "t2" token deliberately omitted (2-char substring
+        // matches too broadly and would whitelist hijacker ASNs).
+        "cloudflare", "quad9", "adguard", "opendns", "cleanbrowsing",
+        "nextdns", "controld", "mullvad", "dns0", "ahadns",
+        "comss", "geohide", "нсди",
     ]
     .into_iter()
     .map(|s| s.to_string())
@@ -972,7 +981,7 @@ mod tests {
         assert_eq!(cfg.concurrency_presets, vec![1, 5, 20, 50, 100]);
         assert_eq!(cfg.cymru_doh_servers.len(), 5);
         assert_eq!(cfg.ip6_lookup_urls.len(), 4);
-        assert_eq!(cfg.dns_known_resolver_names.len(), 15);
+        assert_eq!(cfg.dns_known_resolver_names.len(), 28);
         assert!(cfg.dns_known_resolver_names.contains(&"google".to_string()));
         assert!(cfg.dns_known_resolver_names.contains(&"yandex".to_string()));
     }
