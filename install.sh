@@ -176,6 +176,12 @@ fi
 mv -f "$TMP_FILE" "$OUT_FILE"
 chmod +x "$OUT_FILE"
 RUN_FILE="$OUT_FILE"
+CMD_RUN="${RUN_FILE}"
+case ":$PATH:" in
+  *":${OUT_DIR}:"*)
+    CMD_RUN="dpi-detector"
+    ;;
+esac
 
 echo ""
 echo "=============================================="
@@ -184,13 +190,13 @@ echo "  Location: ${RUN_FILE}"
 echo "=============================================="
 echo ""
 echo "To start the interactive menu:"
-echo "  ${RUN_FILE}"
+echo "  ${CMD_RUN}"
 echo ""
 echo "Quick test:"
-echo "  ${RUN_FILE} -t 1"
+echo "  ${CMD_RUN} -t 1"
 echo ""
 echo "All tests:"
-echo "  ${RUN_FILE} -t 12345"
+echo "  ${CMD_RUN} -t 12345"
 echo ""
 
 # Only run automatically if user explicitly passed arguments (e.g. sh -s -- -t 1)
