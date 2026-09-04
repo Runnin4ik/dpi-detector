@@ -22,6 +22,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 /// ASCII-only output for legacy consoles (see `--ascii`).
 static ASCII_MODE: OnceLock<bool> = OnceLock::new();
+static PLAIN_MODE: OnceLock<bool> = OnceLock::new();
 
 /// Enables ASCII-only output (font-safe glyphs, ASCII table borders).
 pub fn set_ascii_mode(v: bool) {
@@ -33,6 +34,44 @@ pub fn ascii_mode() -> bool {
     *ASCII_MODE.get().unwrap_or(&false)
 }
 
+/// Enables plain (ANSI-free) output for terminals without virtual terminal support.
+pub fn set_plain_mode(v: bool) {
+    let _ = PLAIN_MODE.set(v);
+}
+
+/// Whether plain (ANSI-free) output is enabled.
+pub fn plain_mode() -> bool {
+    *PLAIN_MODE.get().unwrap_or(&false)
+}
+
+/// Strips all ANSI SGR escape sequences (`\x1b[...m` and `\x1b[...K`) from a string.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_escape = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Formats a string for terminal display, respecting plain and ASCII modes.
+pub fn clean_output(s: &str) -> String {
+    if plain_mode() {
+        strip_ansi(&asc(s))
+    } else if ascii_mode() {
+        asc(s)
+    } else {
+        s.to_string()
+    }
+}
 /// Replaces font-risky glyphs when ASCII mode is on; passthrough otherwise.
 /// Apply to content BEFORE width measurement ([OK]/-> widen the text).
 pub fn asc_with(s: &str, ascii: bool) -> String {
@@ -216,7 +255,11 @@ impl LiveProgress {
     /// Clears the line (transient: nothing remains after the phase).
     pub fn finish(&self) {
         if self.tty {
-            eprint!("\x1b[2K\r");
+            if !plain_mode() {
+                eprint!("\x1b[2K\r");
+            } else {
+                eprint!("\r                                                                \r");
+            }
             let _ = std::io::stderr().flush();
         }
     }

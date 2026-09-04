@@ -37,12 +37,12 @@ mod render;
 use args::CliArgs;
 use menu::{run_interactive_menu, tui_available, MenuResult, VersionSlot};
 use render::{
-    asc, panel_to_string, render_banner, render_dns_availability, render_dns_endpoints,
-    render_dns_resolve_notes, render_domain_table, render_netinfo_panel, render_summary,
-    render_tcp_table, render_telegram, render_whitelist, set_ascii_mode, LiveProgress, NetFamilyInfo,
-    NetInfoData, NetTtlb, Spinner, SummaryData, TcpRow,
+    asc, clean_output, panel_to_string, plain_mode, render_banner, render_dns_availability,
+    render_dns_endpoints, render_dns_resolve_notes, render_domain_table, render_netinfo_panel,
+    render_summary, render_tcp_table, render_telegram, render_whitelist, set_ascii_mode,
+    set_plain_mode, strip_ansi, LiveProgress, NetFamilyInfo, NetInfoData, NetTtlb, Spinner,
+    SummaryData, TcpRow,
 };
-
 /// Splits a test selection string into per-test flags (mirrors `_selection_flags`).
 /// Tests: 0 netinfo, 1 DNS, 2 domains, 3 TCP, 4 white-SNI, 5 Telegram, 6 legend.
 fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool) {
@@ -58,21 +58,12 @@ fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool, bool, bool
     (net, dns, dom, tcp, sni, tg, legend, only_legend)
 }
 
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut in_escape = false;
-    for c in s.chars() {
-        if c == '\x1b' {
-            in_escape = true;
-        } else if in_escape {
-            if c == 'm' {
-                in_escape = false;
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
+fn print_out(s: &str) {
+    print!("{}", clean_output(s));
+}
+
+fn println_out(s: &str) {
+    println!("{}", clean_output(s));
 }
 
 struct Emitter {
@@ -83,7 +74,7 @@ struct Emitter {
 impl Emitter {
     fn emit(&mut self, s: &str) {
         if !self.json_mode {
-            print!("{}", s);
+            print!("{}", clean_output(s));
         }
         self.report.push_str(&strip_ansi(s));
     }
@@ -183,9 +174,37 @@ enum MenuAction {
 #[tokio::main]
 async fn main() {
     let args = CliArgs::parse();
-    // Glyph-safe output for legacy consoles; must precede any printing.
-    set_ascii_mode(args.ascii);
 
+    #[cfg(windows)]
+    let has_vt = {
+        extern "system" {
+            fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
+            fn SetConsoleCP(wCodePageID: u32) -> i32;
+            fn GetStdHandle(nStdHandle: u32) -> isize;
+            fn GetConsoleMode(hConsoleHandle: isize, lpMode: *mut u32) -> i32;
+            fn SetConsoleMode(hConsoleHandle: isize, dwMode: u32) -> i32;
+        }
+        unsafe {
+            SetConsoleOutputCP(65001);
+            SetConsoleCP(65001);
+        }
+        const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
+        const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
+
+        let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+        let mut mode: u32 = 0;
+        if unsafe { GetConsoleMode(handle, &mut mode) } != 0 {
+            unsafe { SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0 }
+        } else {
+            false
+        }
+    };
+    #[cfg(not(windows))]
+    let has_vt = true;
+
+    let legacy_console = !has_vt || args.ascii;
+    set_ascii_mode(legacy_console);
+    set_plain_mode(legacy_console);
     let mut lang = if args.lang == "auto" {
         Language::autodetect()
     } else {
@@ -387,19 +406,19 @@ async fn main() {
 
     // Banner first in non-interactive runs, then the config line (mirrors header order).
     if !args.json && !banner_done {
-        print!("{}", render_banner(&msg, profile, &badge));
+        print_out(&render_banner(&msg, profile, &badge));
         banner_done = true;
     }
 
     // Selection info line (mirrors dpi_detector.py)
     if !args.json {
-        println!(
+        println_out(&format!(
             "\x1b[2m{}: \x1b[36m{}\x1b[0m\x1b[2m | {}: \x1b[36m{}\x1b[0m",
             msg.menu_ip_version, ip_version, msg.menu_concurrency, concurrency
-        );
+        ));
         if let Some(p) = cfg.effective_proxy() {
             let proxy_label = if lang == Language::Ru { "Используется прокси" } else { "Proxy in use" };
-            println!("\x1b[2m{}: \x1b[33m{}\x1b[0m", proxy_label, mask_proxy(p));
+            println_out(&format!("\x1b[2m{}: \x1b[33m{}\x1b[0m", proxy_label, mask_proxy(p)));
         }
     }
     let (_, _, _, _, _, _, _, only_legend) = selection_flags(&tests_str);
@@ -474,12 +493,20 @@ async fn main() {
         println!();
         let cols = crossterm::terminal::size().map(|(c, _)| c as usize).unwrap_or(80);
         let rule = asc(&"─".repeat(cols.max(8)));
-        println!("\x1b[2m{}\x1b[0m", rule);
-        println!(
-            " \x1b[1;42;37m  Enter  \x1b[0m {}   \x1b[1;44;37m  M  \x1b[0m {}   \x1b[1;43;37m  S  \x1b[0m {}   \x1b[1;41;37m  Q  \x1b[0m {}",
-            msg.menu_control_repeat, msg.menu_control_menu, msg.menu_control_export, msg.menu_control_exit
-        );
-        println!("\x1b[2m{}\x1b[0m", rule);
+        let rule_str = format!("\x1b[2m{}\x1b[0m", rule);
+        println_out(&rule_str);
+        if plain_mode() {
+            println_out(&format!(
+                "  [Enter] {}   [M] {}   [S] {}   [Q] {}",
+                msg.menu_control_repeat, msg.menu_control_menu, msg.menu_control_export, msg.menu_control_exit
+            ));
+        } else {
+            println_out(&format!(
+                " \x1b[1;42;37m  Enter  \x1b[0m {}   \x1b[1;44;37m  M  \x1b[0m {}   \x1b[1;43;37m  S  \x1b[0m {}   \x1b[1;41;37m  Q  \x1b[0m {}",
+                msg.menu_control_repeat, msg.menu_control_menu, msg.menu_control_export, msg.menu_control_exit
+            ));
+        }
+        println_out(&rule_str);
         println!();
         let _ = stdout().flush();
 
