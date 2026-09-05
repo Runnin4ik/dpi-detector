@@ -338,6 +338,22 @@ fn run_menu_loop(
     }
 }
 
+fn radio_btn(selected: bool) -> &'static str {
+    if ascii_mode() {
+        if selected {
+            "\x1b[1;32m(x)\x1b[0m"
+        } else {
+            "\x1b[2m( )\x1b[0m"
+        }
+    } else {
+        if selected {
+            "\x1b[1;32m●\x1b[0m"
+        } else {
+            "\x1b[2m○\x1b[0m"
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_menu(
     cursor: usize,
@@ -364,11 +380,7 @@ fn draw_menu(
         .iter()
         .map(|&l| {
             let lbl = format_bidi(l.label(), l);
-            if l == current_lang {
-                format!("\x1b[1;32m(x)\x1b[0m {}", lbl)
-            } else {
-                format!("\x1b[2m( )\x1b[0m {}", lbl)
-            }
+            format!("{} {}", radio_btn(l == current_lang), lbl)
         })
         .collect::<Vec<_>>()
         .join(" ");
@@ -379,9 +391,9 @@ fn draw_menu(
     // IP version row
     let ip_opts = if v6_supported {
         if ip_version == "ipv4" {
-            "\x1b[1;32m(x)\x1b[0m IPv4   \x1b[2m( )\x1b[0m IPv6".to_string()
+            format!("{} IPv4   {} IPv6", radio_btn(true), radio_btn(false))
         } else {
-            "\x1b[2m( )\x1b[0m IPv4   \x1b[1;32m(x)\x1b[0m IPv6".to_string()
+            format!("{} IPv4   {} IPv6", radio_btn(false), radio_btn(true))
         }
     } else {
         let unavail = match current_lang {
@@ -390,7 +402,8 @@ fn draw_menu(
             Language::Es => "(no disponible)".to_string(),
             Language::En => "(unavailable)".to_string(),
         };
-        format!("\x1b[1;32m(x)\x1b[0m IPv4   \x1b[2m( ) IPv6 {}\x1b[0m", unavail)
+        let off_str = if ascii_mode() { "( )" } else { "○" };
+        format!("{} IPv4   \x1b[2m{} IPv6 {}\x1b[0m", radio_btn(true), off_str, unavail)
     };
     let ip_cursor = if cursor == 1 { "►" } else { " " };
     let ip_lbl = format!("{}:", msg.menu_ip_version.trim_end_matches(':'));
@@ -400,11 +413,7 @@ fn draw_menu(
     let conc_opts = presets
         .iter()
         .map(|&p| {
-            if p == concurrency {
-                format!("\x1b[1;32m(x)\x1b[0m {}", p)
-            } else {
-                format!("\x1b[2m( )\x1b[0m {}", p)
-            }
+            format!("{} {}", radio_btn(p == concurrency), p)
         })
         .collect::<Vec<_>>()
         .join("   ");
@@ -610,11 +619,7 @@ mod tests {
             .iter()
             .map(|&l| {
                 let lbl = format_bidi(l.label(), l);
-                if l == Language::Ru {
-                    format!("\x1b[1;32m(x)\x1b[0m {}", lbl)
-                } else {
-                    format!("\x1b[2m( )\x1b[0m {}", lbl)
-                }
+                format!("{} {}", radio_btn(l == Language::Ru), lbl)
             })
             .collect::<Vec<_>>()
             .join(" ");
@@ -625,7 +630,8 @@ mod tests {
         // IP row
         let ip_lbl = format!("{}:", msg.menu_ip_version.trim_end_matches(':'));
         let ip_unavail = format!("({})", format_bidi("недоступен", Language::Ru));
-        let ip_opts = format!("\x1b[1;32m(x)\x1b[0m IPv4   \x1b[2m( ) IPv6 {}\x1b[0m", ip_unavail);
+        let off_str = if ascii_mode() { "( )" } else { "○" };
+        let ip_opts = format!("{} IPv4   \x1b[2m{} IPv6 {}\x1b[0m", radio_btn(true), off_str, ip_unavail);
         let l2 = format!("    {} {}", pad_width(&ip_lbl, 16), ip_opts);
         let pad2 = BOX_WIDTH.saturating_sub(strip_ansi_len(&l2) + 3);
         println!("│ {}{} │", l2, " ".repeat(pad2));
@@ -635,11 +641,7 @@ mod tests {
         let conc_opts = [1, 5, 20, 50, 100]
             .iter()
             .map(|&p| {
-                if p == 20 {
-                    format!("\x1b[1;32m(x)\x1b[0m {}", p)
-                } else {
-                    format!("\x1b[2m( )\x1b[0m {}", p)
-                }
+                format!("{} {}", radio_btn(p == 20), p)
             })
             .collect::<Vec<_>>()
             .join("   ");

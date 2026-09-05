@@ -266,8 +266,8 @@ pub fn asc_with(s: &str, ascii: bool) -> String {
             '→' => out.push_str("->"),
             '►' => out.push('>'),
             '•' | '╌' | '–' | '—' => out.push('-'),
-            '◉' | '●' => out.push('*'),
-            '○' => out.push('o'),
+            '◉' | '●' => out.push_str("(x)"),
+            '○' => out.push_str("( )"),
             '√' => out.push('√'),
             '↑' => out.push('^'),
             '↓' => out.push('v'),
@@ -1797,7 +1797,7 @@ mod tests {
         // Passthrough when ASCII mode is off.
         assert_eq!(asc_with("✓ • ►", false), "✓ • ►");
         // Width-1 swaps stay exact; [OK]/-> widen and must precede padding.
-        assert_eq!(asc_with("[√] ● ○", true), "[√] * o");
+        assert_eq!(asc_with("[√] ● ○", true), "[√] (x) ( )");
         assert_eq!(asc_with("↑↓ ←→", true), "^v <->");
         assert_eq!(asc_with("✓ done", true), "[OK] done");
         assert_eq!(asc_with("⚠ ≈ × — –", true), "! ~ x - -");

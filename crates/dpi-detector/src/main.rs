@@ -244,19 +244,7 @@ async fn main() {
             fn SetConsoleCP(wCodePageID: u32) -> i32;
         }
         const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
-        const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6;
         const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
-        const ENABLE_QUICK_EDIT_MODE: u32 = 0x0040;
-        const ENABLE_EXTENDED_FLAGS: u32 = 0x0080;
-
-        // Disable QuickEdit on stdin to prevent mouse clicks from freezing execution on conhost (Win7+)
-        let in_handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-        let mut in_mode: u32 = 0;
-        if unsafe { GetConsoleMode(in_handle, &mut in_mode) } != 0 {
-            let safe_in_mode = (in_mode & !ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS;
-            unsafe { SetConsoleMode(in_handle, safe_in_mode) };
-        }
-
         // Probe Virtual Terminal Processing (VT100) on stdout.
         // On Windows 7 / 8 this returns 0 (fails), indicating legacy conhost.
         let out_handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
@@ -404,12 +392,20 @@ async fn main() {
     let version_slot: VersionSlot = Arc::new(Mutex::new(None));
     {
         let slot = Arc::clone(&version_slot);
-        tokio::spawn(async move {
-            let latest = fetch_latest_version().await;
-            if let Ok(mut g) = slot.lock() {
-                *g = Some(latest);
-            }
-        });
+        std::thread::Builder::new()
+            .name("version-checker".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build();
+                if let Ok(rt) = rt {
+                    let latest = rt.block_on(fetch_latest_version());
+                    if let Ok(mut g) = slot.lock() {
+                        *g = Some(latest);
+                    }
+                }
+            })
+            .ok();
     }
 
     let has_explicit_cmd = args.tests.is_some()
