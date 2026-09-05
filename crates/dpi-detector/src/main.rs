@@ -392,20 +392,12 @@ async fn main() {
     let version_slot: VersionSlot = Arc::new(Mutex::new(None));
     {
         let slot = Arc::clone(&version_slot);
-        std::thread::Builder::new()
-            .name("version-checker".into())
-            .spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build();
-                if let Ok(rt) = rt {
-                    let latest = rt.block_on(fetch_latest_version());
-                    if let Ok(mut g) = slot.lock() {
-                        *g = Some(latest);
-                    }
-                }
-            })
-            .ok();
+        tokio::spawn(async move {
+            let latest = fetch_latest_version().await;
+            if let Ok(mut g) = slot.lock() {
+                *g = Some(latest);
+            }
+        });
     }
 
     let has_explicit_cmd = args.tests.is_some()
@@ -501,7 +493,7 @@ async fn main() {
                 badge = version_badge_lang(latest.as_ref(), lang);
             }
         }
-        match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot) {
+        match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot).await {
             MenuResult::Run(sel) => {
                 tests_str = sel.selected_tests;
                 concurrency = sel.concurrency;
@@ -544,7 +536,7 @@ async fn main() {
             MenuAction::Menu => {
                 // Re-enter interactive menu once, then run
                 if is_interactive {
-                    match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot) {
+                    match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot).await {
                         MenuResult::Run(sel) => {
                             tests_str = sel.selected_tests;
                             concurrency = sel.concurrency;
@@ -638,7 +630,7 @@ async fn main() {
                             badge = version_badge_lang(latest.as_ref(), lang);
                         }
                     }
-                    match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot) {
+                    match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot).await {
                         MenuResult::Run(sel) => {
                             selection = sel.selected_tests;
                             concurrency = sel.concurrency;

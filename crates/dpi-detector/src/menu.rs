@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use crossterm::cursor::MoveTo;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use futures_util::StreamExt;
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use dpi_core::config::AppConfig;
@@ -39,7 +40,7 @@ pub fn tui_available() -> bool {
     true
 }
 
-pub fn run_interactive_menu(
+pub async fn run_interactive_menu(
     initial_lang: Language,
     profile: RegionProfile,
     cfg: &AppConfig,
@@ -52,7 +53,7 @@ pub fn run_interactive_menu(
     let mut out = std::io::stdout();
     let _ = execute!(out, crossterm::cursor::Hide, Clear(ClearType::All));
 
-    let result = run_menu_loop(initial_lang, profile, cfg, badge, latest_slot);
+    let result = run_menu_loop(initial_lang, profile, cfg, badge, latest_slot).await;
 
     let _ = execute!(out, crossterm::cursor::Show);
     let _ = disable_raw_mode();
@@ -74,7 +75,7 @@ fn current_badge(_initial: &str, latest_slot: &VersionSlot, lang: Language) -> S
     }
 }
 
-fn run_menu_loop(
+async fn run_menu_loop(
     initial_lang: Language,
     profile: RegionProfile,
     cfg: &AppConfig,
@@ -113,6 +114,7 @@ fn run_menu_loop(
     // Empty-selection warning (mirrors Python "Выберите хотя бы один тест"):
     // shown until the next keypress.
     let mut notice: Option<String> = None;
+    let mut reader = EventStream::new();
     loop {
         let offset = 3;
         let test_options = get_test_options(&msg);
@@ -138,16 +140,24 @@ fn run_menu_loop(
             last_badge = live_badge;
             dirty = false;
         }
+        let event = tokio::select! {
+            maybe_event = reader.next() => {
+                match maybe_event {
+                    Some(Ok(ev)) => Some(ev),
+                    _ => return MenuResult::Quit,
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {
+                None
+            }
+        };
 
-        // Poll instead of blocking so the badge above still goes live
-        // while no key is pressed.
-        if !event::poll(Duration::from_millis(300)).unwrap_or(false) {
+        let Some(Event::Key(KeyEvent { code, modifiers, kind, .. })) = event else {
+            continue;
+        };
+        if kind != KeyEventKind::Press {
             continue;
         }
-        if let Ok(Event::Key(KeyEvent { code, modifiers, kind, .. })) = event::read() {
-            if kind != KeyEventKind::Press {
-                continue;
-            }
             dirty = true;
             notice = None;
             let code = match code {
@@ -334,7 +344,6 @@ fn run_menu_loop(
                 }
                 _ => {}
             }
-        }
     }
 }
 
