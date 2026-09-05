@@ -367,23 +367,24 @@ fn draw_menu(
             })
             .collect::<Vec<_>>()
             .join("   ");
-        let lang_cursor = if cursor == 0 { "►" } else { " " };
-        let lang_lbl = format_bidi(msg.menu_language, current_lang);
-        lines.push(format!("  {} {}", lang_cursor, pad_left_width(&lang_lbl, 62)));
+        let lang_ind = if cursor == 0 { " \x1b[1;36m◄\x1b[0m" } else { "  " };
+        let lang_lbl = format!("{}{}", format_bidi(msg.menu_language, current_lang), lang_ind);
+        lines.push(format!("    {}", pad_left_width(&lang_lbl, 62)));
         lines.push(format!("    {}", pad_left_width(&lang_opts, 62)));
 
         // IP version row: clean identical structure ● IPv4   ○ IPv6
-        let ip_cursor = if cursor == 1 { "►" } else { " " };
+        let ip_ind = if cursor == 1 { " \x1b[1;36m◄\x1b[0m" } else { "  " };
         let ip_opts = if ip_version == "ipv4" {
             "\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○\x1b[0m IPv6".to_string()
         } else {
             "\x1b[2m○\x1b[0m IPv4   \x1b[1;32m●\x1b[0m IPv6".to_string()
         };
-        let ip_lbl = format_bidi(msg.menu_ip_version, current_lang);
-        lines.push(format!("  {} {}", ip_cursor, pad_left_width(&ip_lbl, 62)));
+        let ip_lbl = format!("{}{}", format_bidi(msg.menu_ip_version, current_lang), ip_ind);
+        lines.push(format!("    {}", pad_left_width(&ip_lbl, 62)));
         lines.push(format!("    {}", pad_left_width(&ip_opts, 62)));
 
         // Concurrency row: consistent ○ / ● bullet on the left of each preset
+        let conc_ind = if cursor == 2 { " \x1b[1;36m◄\x1b[0m" } else { "  " };
         let conc_opts = presets
             .iter()
             .map(|&p| {
@@ -395,9 +396,8 @@ fn draw_menu(
             })
             .collect::<Vec<_>>()
             .join("   ");
-        let conc_cursor = if cursor == 2 { "►" } else { " " };
-        let conc_lbl = format_bidi(msg.menu_concurrency, current_lang);
-        lines.push(format!("  {} {}", conc_cursor, pad_left_width(&conc_lbl, 62)));
+        let conc_lbl = format!("{}{}", format_bidi(msg.menu_concurrency, current_lang), conc_ind);
+        lines.push(format!("    {}", pad_left_width(&conc_lbl, 62)));
         lines.push(format!("    {}", pad_left_width(&conc_opts, 62)));
         lines.push(format!("  {}", "─".repeat(BOX_WIDTH - 8)));
     } else {
@@ -629,7 +629,8 @@ mod tests {
                     .collect::<Vec<_>>()
                     .join("   ");
                 let lang_lbl = format_bidi(msg.menu_language, lang);
-                let lang_line1 = format!("  ► {}", pad_left_width(&lang_lbl, 62));
+                let lang_lbl_ind = format!("{} ◄", lang_lbl);
+                let lang_line1 = format!("    {}", pad_left_width(&lang_lbl_ind, 62));
                 let lang_line2 = format!("    {}", pad_left_width(&lang_opts, 62));
                 assert!(strip_ansi_len(&lang_line1) + 3 <= BOX_WIDTH, "rtl lang line 1 overflows box: {}", lang_line1);
                 assert!(strip_ansi_len(&lang_line2) + 3 <= BOX_WIDTH, "rtl lang line 2 overflows box: {}", lang_line2);
@@ -727,7 +728,8 @@ mod tests {
             .collect::<Vec<_>>()
             .join("   ");
         let lang_lbl = format_bidi(msg.menu_language, Language::Fa);
-        println!("│   ► {}  │", pad_left_width(&lang_lbl, 62));
+        let lang_lbl_ind = format!("{} \x1b[1;36m◄\x1b[0m", lang_lbl);
+        println!("│     {}  │", pad_left_width(&lang_lbl_ind, 62));
         println!("│     {}  │", pad_left_width(&lang_opts, 62));
 
         // IP row
