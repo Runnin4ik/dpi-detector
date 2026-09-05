@@ -91,7 +91,14 @@ pub fn classify_ssl_error(
         return (DpiStatus::TlsEof, detail.into());
     }
 
-    if msg.contains("no tls 1.3") || msg.contains("no tls1.3") || msg.contains("server has no tls 1.3") {
+    if msg.contains("no tls 1.3")
+        || msg.contains("no tls1.3")
+        || msg.contains("server has no tls 1.3")
+        || msg.contains("servertlsversion")
+        || msg.contains("server_tls_version")
+        || msg.contains("tls_version_is_different")
+        || msg.contains("peer is incompatible")
+    {
         return (DpiStatus::NoTls13, DET_NO_TLS13.into());
     }
 
@@ -360,6 +367,14 @@ mod tests {
             ConnectionStage::TlsClientHelloSent,
         );
         assert_eq!(s, DpiStatus::NoCa);
+
+        let (s, d) = classify_ssl_error(
+            "peer is incompatible: ServerTlsVersionIsDifferent(Tls12)",
+            0,
+            ConnectionStage::TlsClientHelloSent,
+        );
+        assert_eq!(s, DpiStatus::NoTls13);
+        assert_eq!(d, DET_NO_TLS13);
 
         let (s, _) = classify_ssl_error(
             "unexpected EOF",
