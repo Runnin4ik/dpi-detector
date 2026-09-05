@@ -325,36 +325,21 @@ impl Spinner {
 }
 
 pub fn render_banner(msg: &Messages, _profile: RegionProfile, badge: &str) -> String {
-    let badge_display = if msg.lang.is_rtl() {
-        dpi_core::i18n::format_bidi(badge, msg.lang)
-    } else {
-        badge.to_string()
-    };
     let badge_colored = if badge.starts_with("✓") {
-        format!("\x1b[38;2;90;247;142m{}\x1b[0m", badge_display)
+        format!("\x1b[38;2;90;247;142m{}\x1b[0m", badge)
     } else if badge.starts_with("↑") {
-        format!("\x1b[33m{}\x1b[0m", badge_display)
+        format!("\x1b[33m{}\x1b[0m", badge)
     } else {
-        format!("\x1b[2m{}\x1b[0m", badge_display)
+        format!("\x1b[2m{}\x1b[0m", badge)
     };
     let version_line = format!("DPI Detector v{}", env!("CARGO_PKG_VERSION"));
-    let author_label = if msg.lang.is_rtl() {
-        format!("{}:", dpi_core::i18n::format_bidi(msg.author.trim_end_matches(':'), msg.lang))
-    } else {
-        msg.author.to_string()
-    };
-    let chat_label = if msg.lang.is_rtl() {
-        format!("{}:", dpi_core::i18n::format_bidi(msg.chat.trim_end_matches(':'), msg.lang))
-    } else {
-        msg.chat.to_string()
-    };
     let row1 = format!(
         "  \x1b[2m{}\x1b[0m \x1b[38;2;214;180;255mRunni\x1b[0m \x1b[36m•\x1b[0m \x1b[2mGitHub:\x1b[0m Runnin4ik/dpi-detector",
-        author_label
+        msg.author
     );
     let row2 = format!(
         "  \x1b[2m{}\x1b[0m t.me/DPI_detector \x1b[36m•\x1b[0m {}",
-        chat_label, badge_colored
+        msg.chat, badge_colored
     );
     panel_with(&version_line, &[row1, row2], BOX_WIDTH, false, "36")
 }
@@ -1830,17 +1815,4 @@ mod tests {
         assert_eq!(localize_detail(DET_STREAM_RST_HELLO, Language::En), "TCP RST on ClientHello");
     }
 
-    #[test]
-    fn test_farsi_banner_rendering_no_ansi_corruption() {
-        use dpi_core::i18n::{get_messages, Language};
-        use dpi_core::profile::RegionProfile;
-        let msg = get_messages(Language::Fa);
-        let banner = render_banner(&msg, RegionProfile::Ir, "v4.0.0-rust");
-        assert!(!banner.replace("\x1b[0m", "").contains("[0m"), "no raw [0m text leak");
-        let author_expected = format!("{}:", dpi_core::i18n::format_bidi(msg.author.trim_end_matches(':'), Language::Fa));
-        let chat_expected = format!("{}:", dpi_core::i18n::format_bidi(msg.chat.trim_end_matches(':'), Language::Fa));
-        assert!(banner.contains(&author_expected), "author label is present and formatted");
-        assert!(banner.contains(&chat_expected), "chat label is present and formatted");
-        assert!(banner.contains("v4.0.0-rust"), "version badge is present");
-    }
 }

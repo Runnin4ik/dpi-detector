@@ -7,40 +7,32 @@ pub enum Language {
     #[default]
     En,
     Ru,
-    Fa,
     Zh,
     Es,
-    Ar,
 }
 
 impl Language {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 4] = [
         Self::En,
         Self::Ru,
-        Self::Fa,
         Self::Zh,
         Self::Es,
-        Self::Ar,
     ];
 
     pub fn label(&self) -> &'static str {
         match self {
             Self::En => "English",
             Self::Ru => "Русский",
-            Self::Fa => "فارسی",
             Self::Zh => "中文",
             Self::Es => "Español",
-            Self::Ar => "العربية",
         }
     }
     pub fn from_code(code: &str) -> Option<Self> {
         match code.trim().to_lowercase().as_str() {
             "en" | "en_us" | "en_gb" | "english" => Some(Self::En),
             "ru" | "ru_ru" | "russian" => Some(Self::Ru),
-            "fa" | "fa_ir" | "farsi" | "persian" => Some(Self::Fa),
             "zh" | "zh_cn" | "zh_hans" | "chinese" => Some(Self::Zh),
             "es" | "es_es" | "es_cu" | "spanish" => Some(Self::Es),
-            "ar" | "ar_eg" | "ar_ae" | "arabic" => Some(Self::Ar),
             _ => None,
         }
     }
@@ -49,10 +41,8 @@ impl Language {
         match self {
             Self::En => "en",
             Self::Ru => "ru",
-            Self::Fa => "fa",
             Self::Zh => "zh",
             Self::Es => "es",
-            Self::Ar => "ar",
         }
     }
 
@@ -60,15 +50,13 @@ impl Language {
         match self {
             Self::En => "English",
             Self::Ru => "Русский",
-            Self::Fa => "فارسی",
             Self::Zh => "简体中文",
             Self::Es => "Español",
-            Self::Ar => "العربية",
         }
     }
 
     pub fn is_rtl(&self) -> bool {
-        matches!(self, Self::Fa | Self::Ar)
+        false
     }
 
     /// Autodetects system language from environment variables (LANG, LC_ALL, LC_MESSAGES).
@@ -92,81 +80,14 @@ impl Language {
     }
 }
 
-/// Shapes Arabic and Persian text into cursive presentation glyphs for terminal display.
-/// Preserves natural character order (no backwards flipping) and preserves ANSI escape sequences.
-/// For LTR languages (English, Russian, Chinese, Spanish), returns the text unchanged.
-pub fn format_bidi(text: &str, lang: Language) -> String {
-    if !lang.is_rtl() {
-        return text.to_string();
-    }
-    format_bidi_str(text)
+/// Returns the text as-is. Kept for backwards compatibility with UI rendering callsites.
+pub fn format_bidi(text: &str, _lang: Language) -> String {
+    text.to_string()
 }
 
-/// Shapes Arabic script characters into connected cursive ligatures/presentation forms
-/// without reversing character order.
-pub fn reshape_arabic(text: &str) -> String {
-    format_bidi_segment(text)
-}
-
-fn format_bidi_segment(text: &str) -> String {
-    let cleaned = text.replace('\u{200C}', "");
-    if !cleaned.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
-        return text.to_string();
-    }
-    let reshaped = arabic_reshaper::arabic_reshape(&cleaned)
-        .replace(['\u{FBFD}', '\u{FBFC}'], "\u{FEF0}")
-        .replace('\u{FBFE}', "\u{FEF3}")
-        .replace('\u{FBFF}', "\u{FEF4}");
-    let bidi_info = unicode_bidi::BidiInfo::new(&reshaped, Some(unicode_bidi::Level::ltr()));
-    if bidi_info.paragraphs.is_empty() {
-        return reshaped;
-    }
-    let mut out = String::with_capacity(reshaped.len());
-    for (i, para) in bidi_info.paragraphs.iter().enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        let line = bidi_info.reorder_line(para, para.range.clone());
-        out.push_str(&line);
-    }
-    out
-}
-
-/// Shapes Arabic script characters into connected ligatures/presentation forms
-/// and reorders lines for terminal display. Preserves ANSI escape sequences untouched.
+/// Returns the text as-is. Kept for backwards compatibility with UI rendering callsites.
 pub fn format_bidi_str(text: &str) -> String {
-    if !text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
-        return text.to_string();
-    }
-
-    if text.contains('\x1b') {
-        let mut out = String::with_capacity(text.len());
-        let mut i = 0;
-        let bytes = text.as_bytes();
-        let len = bytes.len();
-        while i < len {
-            if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-                let start = i;
-                i += 2;
-                while i < len && !bytes[i].is_ascii_alphabetic() {
-                    i += 1;
-                }
-                if i < len {
-                    i += 1;
-                }
-                out.push_str(&text[start..i]);
-            } else {
-                let start = i;
-                while i < len && !(bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[') {
-                    i += 1;
-                }
-                out.push_str(&format_bidi_segment(&text[start..i]));
-            }
-        }
-        return out;
-    }
-
-    format_bidi_segment(text)
+    text.to_string()
 }
 
 #[cfg(target_os = "windows")]
@@ -732,173 +653,6 @@ pub fn get_messages(lang: Language) -> Messages {
             dns_servers_empty_skip: "DNS_AVAILABILITY_SERVERS не задан в config.yml — тест пропущен.\n",
             no_sni_label: "(без SNI)",
         },
-        Language::Fa => Messages {
-            banner_subtitle: "موتور بومی تشخیص فیلترینگ و بازرسی عمیق بسته‌ها (DPI)",
-            netinfo_title: "اطلاعات شبکه و سیستم",
-            dns_title: "وضعیت دسترسی به کارگزارهای DNS:",
-            domain_title: "نتایج بررسی دامنه‌ها (TLS / SNI):",
-            tcp16_title: "نتایج بررسی محدودسازی پنجره TCP 16-20 KB:",
-            telegram_title: "وضعیت دسترسی به سرورهای تلگرام:",
-            summary_title: "خلاصه نتایج",
-            resolver: "کارگزار DNS",
-            status: "وضعیت",
-            ip_count: "تعداد IP",
-            latency: "تأخیر",
-            available: "AVAILABLE",
-            blocked: "BLOCKED",
-            domain: "دامنه",
-            stage: "مرحله",
-            bytes: "بایت‌ها (ارسال/دریافت)",
-            duration: "مدت زمان",
-            detail: "جزئیات",
-            target: "هدف",
-            provider: "ارائه‌دهنده",
-            region: "منطقه",
-            speed: "سرعت",
-            bypass_tools: "ابزارهای دور زدن فیلترینگ",
-            gateway: "دروازه پیش‌فرض",
-            syn_drop_desc: "SYN DROP (بسته SYN توسط فیلترینگ حذف شد)",
-            tcp_rst_desc: "TCP RST (اتصال TCP توسط فیلترینگ بازنشانی شد)",
-            tls_rst_desc: "TLS RST (قطع اتصال پس از ClientHello / مسدودسازی SNI)",
-            tls_drop_desc: "TLS DROP (حذف بسته‌ها در حین مصافحه TLS)",
-            tls_alert_desc: "TLS ALERT (خطای گواهی امنیتی یا هشدار فاجعه‌بار TLS)",
-            http_blocked_desc: "HTTP BLOCK (هدایت به صفحه پیوندها یا مسدودسازی)",
-            tcp16_drop_desc: "TCP16 DROP (محدودسازی پنجره بزرگ TCP یا قطع ارتباط)",
-            unreachable_desc: "UNREACHABLE (شبکه یا مقصد در دسترس نیست)",
-            menu_title: "تنظیمات و انتخاب تستها",
-            menu_language: "زبان:",
-            menu_ip_version: "نسخهٔ IP:",
-            menu_concurrency: "همزمانی:",
-            menu_hw_row: "پیمایش",
-            menu_hw_change: "تغییر",
-            menu_hw_tests: "تستها",
-            menu_hw_start: "شروع",
-            menu_hw_quit: "خروج",
-            menu_line_prompt: "انتخاب خود را وارد کنید [123]: ",
-            menu_invalid_line: "ورودی نامعتبر است؛ تست‌های 1، 2 و 3 اجرا می‌شوند.",
-            menu_need_one: "حداقل یک تست را انتخاب کنید",
-            menu_test_netinfo: "اطلاعات شبکه و سیستم",
-            menu_test_dns: "دسترسی به سرورهای DNS",
-            menu_test_domains: "دسترسی به سایتها",
-            menu_test_tcp: "دسترسی به CDN و هاستینگ (تست 16 KB)",
-            menu_test_sni: "جستجوی SNI سفید",
-            menu_test_telegram: "دسترسی به تلگرام",
-            menu_test_legend: "توضیح وضعیتها (راهنما)",
-            lang: Language::Fa,
-            replies_label: "پاسخ",
-            blocked_short: "مسدود",
-            mixed_short: "ترکیبی",
-            legend_title: "\nراهنمای وضعیت‌ها:\n",
-
-            latest_version: "✓ آخرین نسخه",
-            author: "نویسنده:",
-            chat: "گروه:",
-            checking_updates: "بررسی بروزرسانی",
-            os: "سیستم‌عامل:",
-            system_dns: "DNS سیستم:",
-            active_interface: "رابط فعال:",
-            inactive_dns: "DNS غیرفعال:",
-            router_resolver: "ریزولور روتر",
-            upstream_vpn: "Upstream VPN",
-            wsl_proxy: "پروکسی WSL",
-            wsl_network: "شبکه WSL:",
-            local_bypass: "دور زدن DPI محلی در دستگاه:",
-            not_detected: "یافت نشد",
-            unavailable: "در دسترس نیست",
-
-            dns_check_title: "بررسی در دسترس بودن سرورهای DNS",
-            doh_endpoints: "نقاط پایانی DoH",
-            dot_endpoints: "نقاط پایانی DoT",
-            udp_endpoints: "نقاط پایانی UDP",
-            doh_min: "حداقل DoH",
-            dot_min: "حداقل DoT",
-            udp_min: "حداقل UDP",
-            real_udp_resolver: "ریزولور واقعی UDP",
-            spoofing: "جعل",
-            timeout_label: "پایان مهلت",
-            egress_na: "خروج نامشخص",
-            partial_dns_warn: "سرورهای DNS با دسترسی ناقص (از دست رفتن بسته‌ها):",
-            dns_fakeip_warn: "[!] پاسخ‌های DNS شامل FakeIP هستند\nبرای ارزیابی دقیق، در طول تست پروکسی/FakeIP را خاموش کنید.",
-            dns_intercept_warn: "[!] ارائه‌دهنده اینترنت شما پرس‌وجوهای DNS را شنود و دستکاری می‌کند\nپاسخ‌های UDP با صفحات فیلترینگ یا پاسخ‌های جعلی جایگزین می‌شوند",
-            dns_stub_ip_label: "آدرس IP صفحه فیلترینگ ارائه‌دهنده: {}.",
-            doh_recommendation: "توصیه: در صورت امکان DoH را روی دستگاه یا مودم خود فعال کنید.",
-            non_socks_proxy_warn: "پروکسی از نوع SOCKS5 نیست — پروب‌های UDP مستقیم ارسال می‌شوند: انتقال UDP از طریق HTTP proxy ممکن نیست.\n",
-            blocked_domains_label: "دامنه‌های مسدودشده برای بررسی:",
-            unblocked_domains_label: "دامنه‌های مجاز برای بررسی:",
-            dns_independent_warn: "توجه: این یک تست مستقل است و از DNS تنظیم‌شده در سیستم شما استفاده نمی‌کند!\n",
-
-            http: "HTTP",
-            tls12: "TLS1.2",
-            tls13: "TLS1.3",
-            dns_info_title: "[i] اطلاعات تحلیل DNS:",
-            traffic_fakeip: "ترافیک توسط Fake-IP رهگیری می‌شود: برای {} دامنه",
-            dns_isp_stub: "DNS آدرس صفحه فیلترینگ را برگرداند ({}): برای {} دامنه",
-            dns_local_ip: "DNS آدرس‌های محلی برگرداند (AdGuard/hosts?): ({}): برای {} دامنه",
-            dns_fail_detected: "خطای DNS FAIL برای {} وب‌سایت مشاهده شد",
-            doh_flush_guide: "توصیه: DoH را روی دستگاه و روتر خود تنظیم کنید\n\nپس از تنظیم، کش DNS را پاک کنید:\nWindows: ipconfig /flushdns\nmacOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\nLinux: sudo resolvectl flush-caches\n",
-
-            tcp16_check_title: "بررسی مسدودسازی TCP 16-20KB",
-            tcp_mixed_warn: "نتایج ترکیبی نشان‌دهنده توزیع بار (Load Balancing) فیلترینگ DPI است",
-            no_port_443_targets: "هیچ هدفی با پورت ۴۴۳ برای تست SNI سفید وجود ندارد.\n",
-            no_as_blocked: "هیچ AS مسدود نشده است — نیازی به جستجوی SNI نیست.\n",
-            ban_after_label: "  ⚠ مسدود پس از",
-            ban_rate_limit: "مسدود/محدودیت نرخ",
-            sni_not_found: "× SNI یافت نشد (همه مسدود هستند)",
-            whitelist_found_summary: "SNI سفید پیدا شد: در {} از {} AS مسدودشده",
-            whitelist_none_summary: "هیچ SNI سفیدی برای هیچ‌یک از {} AS مسدودشده یافت نشد",
-            whitelist_skipped: "فایل whitelist_sni.txt خالی است یا یافت نشد — آزمون ۴ نادیده گرفته شد.\n",
-
-            telegram_check_title: "بررسی دسترسی به تلگرام",
-            dc_col: "DC",
-            ip_col: "IP",
-            ping_col: "پینگ",
-            download_label: "دانلود",
-            upload_label: "آپلود   ",
-            peak_label: "اوج",
-            avg_label: "میانگین",
-            stall_after: "، قطع پس از {} ثانیه",
-            ms_unit: "میلی‌ثانیه",
-
-            summary_dns_avail: "دسترسی به DNS",
-            summary_resolver_hijack: "جعل ریزولور",
-            summary_all: "همه",
-            summary_fakeip_resp: "پاسخ‌های FakeIP",
-            summary_ans_hijack: "جعل پاسخ",
-            summary_domains: "دامنه‌ها",
-            summary_tg_download: "دانلود تلگرام",
-            summary_tg_upload: "آپلود تلگرام",
-            summary_tg_datacenters: "مراکز داده تلگرام",
-
-            menu_control_repeat: "تکرار",
-            menu_control_menu: "منو",
-            menu_control_export: "خروجی",
-            menu_control_exit: "خروج",
-            report_saved: "✓ گزارش در {} ذخیره شد",
-            report_save_fail: "خطا در ذخیره فایل: {}",
-            invalid_tests_flag: "مقدار نامعتبر برای --tests: '{}'. فقط ارقام 0 تا 6 مجاز هستند.",
-            invalid_concurrency_flag: "پارامتر --concurrency باید یک عدد صحیح >= 1 باشد.",
-            tui_unavailable: "رابط TUI در این ترمینال پشتیبانی نمی‌شود. از پارامترهای خط فرمان استفاده کنید، مثلاً: dpi-detector -t 1,2,3.",
-            ipv6_not_configured: "خطا: حالت IPv6 انتخاب شده اما روی سیستم پیکربندی نشده است.",
-            ipv6_switch_hint: "تغییر به IPv4: مقدار IP_VERSION: ipv4 در config.yml یا با کلیدهای جهت‌نما در منو.",
-            fetching_net_info: "دریافت اطلاعات شبکه...",
-            net_info_unavailable: "اطلاعات شبکه در دسترس نیست.\n",
-            domains_check_header: "بررسی دسترسی به وب‌سایت‌ها",
-            targets_label: "اهداف",
-            phase_dns: "مرحله 0/3: تحلیل نام‌های DNS...",
-            phase_tls13: "مرحله 1/3: بررسی TLS 1.3...",
-            phase_tls12: "مرحله 2/3: بررسی TLS 1.2...",
-            phase_http: "مرحله 3/3: بررسی HTTP...",
-            checking_status: "در حال بررسی...",
-            phase_sni_base: "مرحله 1/2: بررسی پایه...",
-            phase_sni_parallel: "مرحله 2/2: جستجوی موازی SNI برای {} سامانه خودگردان (دسته {}، برتر-{})...",
-            phase_telegram: "بررسی دسترسی به تلگرام",
-            config_load_error_label: "هشدار در بارگذاری config.yml:",
-            config_warning_label: "اعلان config.yml:",
-            press_enter_to_exit: "برای خروج Enter را فشار دهید...",
-            invalid_proxy_err: "پروکسی نامعتبر {}: {}\n",
-            dns_servers_empty_skip: "مقدار DNS_AVAILABILITY_SERVERS در config.yml تعیین نشده است — آزمون نادیده گرفته شد.\n",
-            no_sni_label: "(بدون SNI)",
-        },
         Language::Zh => Messages {
             banner_subtitle: "Rust 原生 DPI 审查与网络阻断诊断引擎",
             netinfo_title: "网络与系统信息",
@@ -1233,173 +987,6 @@ pub fn get_messages(lang: Language) -> Messages {
             dns_servers_empty_skip: "DNS_AVAILABILITY_SERVERS no configurado en config.yml — prueba omitida.\n",
             no_sni_label: "(sin SNI)",
         },
-        Language::Ar => Messages {
-            banner_subtitle: "محرك رست الأصلي لتشخيص فحص الحزم العميق (DPI) والحجب",
-            netinfo_title: "معلومات الشبكة والنظام",
-            dns_title: "مدى توفر خوادم DNS:",
-            domain_title: "نتائج فحص النطاقات عبر (TLS / SNI):",
-            tcp16_title: "نتائج فحص خنق حزم TCP 16-20 KB:",
-            telegram_title: "مدى توفر مراكز بيانات تيليجرام:",
-            summary_title: "الملخص",
-            resolver: "خادم DNS",
-            status: "الحالة",
-            ip_count: "عدد العناوين",
-            latency: "التأخير",
-            available: "AVAILABLE",
-            blocked: "BLOCKED",
-            domain: "النطاق",
-            stage: "المرحلة",
-            bytes: "البيانات (إرسال/استقبال)",
-            duration: "المدة",
-            detail: "التفاصيل",
-            target: "الهدف",
-            provider: "المزود",
-            region: "المنطقة",
-            speed: "السرعة",
-            bypass_tools: "أدوات تجاوز الحجب",
-            gateway: "البوابة الافتراضية",
-            syn_drop_desc: "SYN DROP (تم إسقاط حزمة SYN بواسطة نظام الحجب)",
-            tcp_rst_desc: "TCP RST (تمت إعادة تعيين اتصال TCP بواسطة DPI)",
-            tls_rst_desc: "TLS RST (إعادة تعيين بعد إرسال ClientHello / حجب SNI)",
-            tls_drop_desc: "TLS DROP (تم إسقاط الاتصال أثناء مصافحة TLS)",
-            tls_alert_desc: "TLS ALERT (خطأ في الشهادة أو تنبيه TLS فادح)",
-            http_blocked_desc: "HTTP BLOCK (تم اكتشاف التوجيه إلى صفحة الحجب)",
-            tcp16_drop_desc: "TCP16 DROP (تم خنق نافذة الإرسال أو إسقاط الاتصال)",
-            unreachable_desc: "UNREACHABLE (الشبكة أو المضيف غير متاح)",
-            menu_title: "المعلمات واختيار الاختبارات",
-            menu_language: "اللغة:",
-            menu_ip_version: "إصدار IP:",
-            menu_concurrency: "التزامن:",
-            menu_hw_row: "سطر",
-            menu_hw_change: "تغيير",
-            menu_hw_tests: "اختبارات",
-            menu_hw_start: "بدء",
-            menu_hw_quit: "خروج",
-            menu_line_prompt: "أدخل الاختيار [123]: ",
-            menu_invalid_line: "إدخال غير صالح، سيتم تشغيل الاختبارات 1 و2 و3.",
-            menu_need_one: "اختر اختبارًا واحدًا على الأقل",
-            menu_test_netinfo: "معلومات الشبكة والنظام",
-            menu_test_dns: "توفر خوادم DNS",
-            menu_test_domains: "توفر المواقع الإلكترونية",
-            menu_test_tcp: "توفر CDN والاستضافة (اختبار 16 KB)",
-            menu_test_sni: "اكتشاف نطاقات SNI المسموحة",
-            menu_test_telegram: "توفر تيليجرام",
-            menu_test_legend: "دليل الحالات (مساعدة)",
-            lang: Language::Ar,
-            replies_label: "استجابات",
-            blocked_short: "محجوب",
-            mixed_short: "مختلط",
-            legend_title: "\nدليل الحالات:\n",
-
-            latest_version: "✓ أحدث إصدار",
-            author: "المؤلف:",
-            chat: "الدردشة:",
-            checking_updates: "جارٍ التحقق من التحديثات",
-            os: "نظام التشغيل:",
-            system_dns: "DNS النظام:",
-            active_interface: "الواجهة النشطة:",
-            inactive_dns: "DNS غير نشط:",
-            router_resolver: "محلل الراوتر",
-            upstream_vpn: "Upstream VPN",
-            wsl_proxy: "بروكسي WSL",
-            wsl_network: "شبكة WSL:",
-            local_bypass: "تجاوز DPI المحلي على الجهاز:",
-            not_detected: "لم يتم اكتشافه",
-            unavailable: "غير متوفر",
-
-            dns_check_title: "فحص توفر خوادم DNS",
-            doh_endpoints: "نقاط نهاية DoH",
-            dot_endpoints: "نقاط نهاية DoT",
-            udp_endpoints: "نقاط نهاية UDP",
-            doh_min: "DoH أدنى",
-            dot_min: "DoT أدنى",
-            udp_min: "UDP أدنى",
-            real_udp_resolver: "محلل UDP الحقيقي",
-            spoofing: "تزييف",
-            timeout_label: "مهلة",
-            egress_na: "خروج غير متاح",
-            partial_dns_warn: "خوادم DNS متاحة جزئيًا (فقدان الحزم):",
-            dns_fakeip_warn: "[!] تحتوي استجابات DNS على FakeIP\nقم بتعطيل الوكيل/FakeIP أثناء الفحص لإجراء تقييم دقيق.",
-            dns_intercept_warn: "[!] مزود خدمة الإنترنت الخاص بك يعترض استعلامات DNS\nيستبدل المزود استجابات UDP بصفحات الحجب أو استجابات وهمية",
-            dns_stub_ip_label: "عنوان IP لصفحة حجب المزود: {}.",
-            doh_recommendation: "توصية: قم بإعداد DoH على جهازك/الراوتر إذا لم تفعل ذلك بعد.",
-            non_socks_proxy_warn: "الوكيل ليس SOCKS5 — مجسات UDP مباشرة: لا يمكن ترحيل UDP عبر وكيل HTTP.\n",
-            blocked_domains_label: "النطاقات المحجوبة للفحص:",
-            unblocked_domains_label: "النطاقات غير المحجوبة للفحص:",
-            dns_independent_warn: "تنبيه: هذا فحص مستقل ولا يستخدم خوادم DNS التي قمت بتهيئتها!\n",
-
-            http: "HTTP",
-            tls12: "TLS1.2",
-            tls13: "TLS1.3",
-            dns_info_title: "[i] معلومات تحليل DNS:",
-            traffic_fakeip: "يتم اعتراض حركة المرور بواسطة Fake-IP: لـ {} نطاقات",
-            dns_isp_stub: "أعاد DNS عنوان IP لصفحة حجب المزود ({}): لـ {} نطاقات",
-            dns_local_ip: "أعاد DNS عناوين IP محلية (AdGuard/hosts؟): ({}): لـ {} نطاقات",
-            dns_fail_detected: "تم اكتشاف DNS FAIL لـ {} مواقع",
-            doh_flush_guide: "توصية: قم بإعداد DoH على جهازك والراوتر\n\nبعد الإعداد، امسح ذاكرة التخزين المؤقت لـ DNS:\nWindows: ipconfig /flushdns\nmacOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\nLinux: sudo resolvectl flush-caches\n",
-
-            tcp16_check_title: "فحص حجب TCP 16-20 كيلوبايت",
-            tcp_mixed_warn: "تشير النتائج المتباينة إلى موازنة حمل DPI لدى المزود",
-            no_port_443_targets: "لا توجد أهداف بالمنفذ 443 لاختبار SNI للقائمة البيضاء.\n",
-            no_as_blocked: "لم يتم حجب أي AS — لا داعي للبحث عن SNI.\n",
-            ban_after_label: "  ⚠ حظر بعد",
-            ban_rate_limit: "حظر/تقييد معدل",
-            sni_not_found: "× لم يتم العثور على SNI (الكل محجوب)",
-            whitelist_found_summary: "تم العثور على SNI أبيض: في {} من {} AS المحجوبة",
-            whitelist_none_summary: "لم يتم العثور على SNI أبيض لأي من {} AS المحجوبة",
-            whitelist_skipped: "الملف whitelist_sni.txt فارغ أو غير موجود — تم تخطي الاختبار 4.\n",
-
-            telegram_check_title: "فحص توفر Telegram",
-            dc_col: "DC",
-            ip_col: "IP",
-            ping_col: "بينغ",
-            download_label: "التنزيل",
-            upload_label: "الرفع   ",
-            peak_label: "الذروة",
-            avg_label: "متوسط",
-            stall_after: "، انقطاع بعد {}ث",
-            ms_unit: "مللي ثانية",
-
-            summary_dns_avail: "توفر DNS",
-            summary_resolver_hijack: "تزييف المحلل",
-            summary_all: "الكل",
-            summary_fakeip_resp: "استجابات FakeIP",
-            summary_ans_hijack: "تزييف الإجابات",
-            summary_domains: "النطاقات",
-            summary_tg_download: "تنزيل TG",
-            summary_tg_upload: "رفع TG",
-            summary_tg_datacenters: "مراكز بيانات TG",
-
-            menu_control_repeat: "إعادة",
-            menu_control_menu: "القائمة",
-            menu_control_export: "تصدير",
-            menu_control_exit: "خروج",
-            report_saved: "✓ تم حفظ التقرير في {}",
-            report_save_fail: "فشل حفظ الملف: {}",
-            invalid_tests_flag: "قيمة غير صالحة لـ --tests: '{}'. يُسمح فقط بالأرقام 0-6.",
-            invalid_concurrency_flag: "يجب أن تكون المعلمة --concurrency عددًا صحيحًا >= 1.",
-            tui_unavailable: "واجهة TUI غير متوفرة في هذا الطرفية. شغّل باستخدام المعلمات، مثل: dpi-detector -t 1,2,3 (راجع dpi-detector --help).",
-            ipv6_not_configured: "خطأ: تم تحديد وضع IPv6، لكن IPv6 غير مهيأ في النظام.",
-            ipv6_switch_hint: "قم بالتبديل إلى IPv4: IP_VERSION: ipv4 في config.yml أو الأسهم ← → في القائمة.",
-            fetching_net_info: "جارٍ جلب معلومات الشبكة...",
-            net_info_unavailable: "معلومات الشبكة غير متوفرة.\n",
-            domains_check_header: "فحص توفر النطاقات",
-            targets_label: "الأهداف",
-            phase_dns: "المرحلة 0/3: تحليل DNS...",
-            phase_tls13: "المرحلة 1/3: TLS 1.3...",
-            phase_tls12: "المرحلة 2/3: TLS 1.2...",
-            phase_http: "المرحلة 3/3: HTTP...",
-            checking_status: "جارٍ الفحص...",
-            phase_sni_base: "المرحلة 1/2: الفحص الأساسي...",
-            phase_sni_parallel: "المرحلة 2/2: البحث المتوازي عن SNI لـ {} AS (دفعة {}، أفضل {})...",
-            phase_telegram: "التحقق من توفر Telegram",
-            config_load_error_label: "تحذير عند تحميل config.yml:",
-            config_warning_label: "إشعار config.yml:",
-            press_enter_to_exit: "اضغط على Enter للخروج...",
-            invalid_proxy_err: "وكيل غير صالح {}: {}\n",
-            dns_servers_empty_skip: "لم يتم تعيين DNS_AVAILABILITY_SERVERS في config.yml — تم تخطي الاختبار.\n",
-            no_sni_label: "(بدون SNI)",
-        },
     }
 }
 
@@ -1412,8 +999,6 @@ pub fn print_legend(lang: Language, msg: &Messages) {
         Language::Ru => legend_sections(),
         Language::Zh => legend_sections_zh(),
         Language::Es => legend_sections_es(),
-        Language::Fa => legend_sections_fa(),
-        Language::Ar => legend_sections_ar(),
         Language::En => legend_sections_en(),
     };
     for (section, items) in &sections {
@@ -1515,100 +1100,6 @@ pub fn legend_sections_es() -> Vec<(&'static str, Vec<(&'static str, &'static st
             ("UNKNOWN", "Error desconocido (tipo de excepción entre paréntesis)"),
             ("TIMEOUT", "El servidor aceptó la petición pero la respuesta no llegó a tiempo: corte/limitación DPI o sobrecarga"),
             ("POOL TIMEOUT", "Grupo de sockets agotado: reduzca la concurrencia"),
-        ]),
-    ]
-}
-
-/// Full legend sections in Farsi.
-pub fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
-    vec![
-        ("— TLS / DPI —", vec![
-            ("TLS DPI", "تجهیزات DPI اتصال TLS را دستکاری یا قطع می‌کنند: EOF، رکورد خراب، لغو مصافحه"),
-            ("TLS MITM", "حمله مرد میانی: گواهی جعلی (مرجع ناشناخته، منقضی، عدم تطابق نام میزبان)"),
-            ("TLS BLOCK", "مسدودسازی نسخه یا کل پروتکل TLS (اخطار protocol_version)"),
-            ("TLS RST", "بسته فعال TCP RST پس از ارسال ClientHello (ریست مصافحه TLS)"),
-            ("TLS DROP", "اتمام مهلت مصافحه TLS — بسته‌ها بی سر و صدا دور انداخته شدند"),
-            ("UNKNOWN", "خطای ناشناخته (نوع خطا در پرانتز)"),
-            ("NO TLS1.3", "سرور از TLS 1.3 پشتیبانی نمی‌کند (طبیعی برای سرورهای قدیمی)"),
-        ]),
-        ("— TCP / اتصال —", vec![
-            ("TCP RST", "اتصال ریست شد (بسته TCP RST از طرف فیلترینگ یا سرور)"),
-            ("SYN DROP", "اتمام مهلت اتصال TCP — بسته SYN ارسال شد ولی پاسخی نیامد"),
-            ("ABORT", "اتصال لغو شد (ConnectionAborted / BrokenPipe)"),
-            ("REFUSED", "اتصال TCP رد شد (ECONNREFUSED)"),
-            ("TIMEOUT", "اتمام مهلت: دور انداختن SYN، مهلت خواندن یا خطای سیستم"),
-            ("NET UNREACH", "مسیر شبکه در دسترس نیست (ICMP unreachable)"),
-            ("HOST UNREACH", "میزبان در دسترس نیست"),
-            ("OS ERR", "سایر خطاهای سیستم‌عامل (errno)"),
-        ]),
-        ("— DNS —", vec![
-            ("DNS FAIL", "دامنه از طریق کارگزار سیستم حل نشد"),
-            ("DNS FAKE", "آدرس IP با صفحه فیلترینگ ارائه‌دهنده مطابقت دارد"),
-            ("TIMEOUT", "سرور DNS در زمان مقرر پاسخ نداد"),
-            ("BLOCKED", "سرور DoH توسط ارائه‌دهنده مسدود شده است"),
-            ("NXDOMAIN", "به گفته این سرور، دامنه وجود ندارد"),
-        ]),
-        ("— HTTP / مسدودسازی —", vec![
-            ("BLOCKED", "کد 451 HTTP — به دلایل قانونی در دسترس نیست"),
-            ("ISP PAGE", "آدرس IP حل شده صفحه مسدودسازی ارائه‌دهنده است"),
-            ("REDIR", "سبز — هدایت به همان دامنه (طبیعی)؛ قرمز — هدایت به دامنه بیگانه (مشکوک)"),
-        ]),
-        ("— آزمون TCP 16-20KB —", vec![
-            ("DETECTED", "قطع اتصال پس از ارسال 14 تا 36 کیلوبایت"),
-            ("OK", "هر 10 درخواست (تا 40 کیلوبایت) بدون قطعی انجام شدند"),
-        ]),
-        ("— سایر —", vec![
-            ("OK", "سایت در دسترس است (کد 200–4xx بدون علائم فیلترینگ)"),
-            ("UNKNOWN", "خطای ناشناخته (نوع خطا در پرانتز)"),
-            ("TIMEOUT", "پاسخی از سرور در زمان مقرر نرسید: اختلال/کندی DPI، افت بسته یا بار سرور"),
-            ("POOL TIMEOUT", "تکمیل ظرفیت سوکت‌ها — لطفاً هم‌زمانی را کاهش دهید"),
-        ]),
-    ]
-}
-
-/// Full legend sections in Arabic.
-pub fn legend_sections_ar() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
-    vec![
-        ("— TLS / DPI —", vec![
-            ("TLS DPI", "نظام DPI يقطع أو يعبث بـ TLS: نهاية ملف غير متوقعة، سجل تالف، فشل المصافحة"),
-            ("TLS MITM", "هجوم رجل في المنتصف: شهادة مزورة (جهة غير موثوقة، منتهية، عدم تطابق الاسم)"),
-            ("TLS BLOCK", "حجب إصدار TLS أو البروتوكول بالكامل (تنبيه protocol_version)"),
-            ("TLS RST", "حزمة TCP RST نشطة بعد ClientHello (إعادة تعيين مصافحة TLS)"),
-            ("TLS DROP", "انتهاء مهلة مصافحة TLS — تم إسقاط الحزم بصمت"),
-            ("UNKNOWN", "خطأ غير معروف (نوع الخطأ بين قوسين)"),
-            ("NO TLS1.3", "الخادم لا يدعم TLS 1.3 (أمر طبيعي للخوادم القديمة)"),
-        ]),
-        ("— TCP / الاتصال —", vec![
-            ("TCP RST", "تمت إعادة تعيين الاتصال (حزمة TCP RST من نظام الحجب أو الخادم)"),
-            ("SYN DROP", "انتهاء مهلة اتصال TCP — تم إرسال SYN دون رد"),
-            ("ABORT", "تم إحباط الاتصال (ConnectionAborted / BrokenPipe)"),
-            ("REFUSED", "تم رفض اتصال TCP (ECONNREFUSED)"),
-            ("TIMEOUT", "انتهاء المهلة: إسقاط SYN، مهلة القراءة، أو مهلة النظام"),
-            ("NET UNREACH", "لا يوجد مسار إلى الشبكة (ICMP unreachable)"),
-            ("HOST UNREACH", "المضيف غير متاح"),
-            ("OS ERR", "أخطاء نظام التشغيل الأخرى (errno)"),
-        ]),
-        ("— DNS —", vec![
-            ("DNS FAIL", "فشل تحليل النطاق عبر محلل النظام"),
-            ("DNS FAKE", "يطابق عنوان IP صفحة حجب المزود المعروفة"),
-            ("TIMEOUT", "لم يستجب خادم DNS في الوقت المحدد"),
-            ("BLOCKED", "خادم DoH محجوب من قبل المزود"),
-            ("NXDOMAIN", "النطاق غير موجود وفقًا لهذا الخادم"),
-        ]),
-        ("— HTTP / الحجب —", vec![
-            ("BLOCKED", "رمز 451 HTTP — غير متاح لأسباب قانونية"),
-            ("ISP PAGE", "عنوان IP الذي تم حله هو صفحة حجب المزود"),
-            ("REDIR", "أخضر — إعادة توجيه لنفس النطاق (طبيعي)؛ أحمر — إعادة توجيه لنطاق خارجي (مريب)"),
-        ]),
-        ("— فحص TCP 16-20KB —", vec![
-            ("DETECTED", "انقطاع الاتصال بعد إرسال 14-36 كيلوبايت"),
-            ("OK", "اجتازت جميع الطلبات الـ 10 (حتى 40 كيلوبايت) دون انقطاع"),
-        ]),
-        ("— أخرى —", vec![
-            ("OK", "الموقع متاح (200-4xx دون مؤشرات حجب)"),
-            ("UNKNOWN", "خطأ غير معروف (نوع الاستثناء بين قوسين)"),
-            ("TIMEOUT", "قبل الخادم الطلب لكن الاستجابة لم تصل في الوقت المناسب: خنق/قطع DPI أو حمل زائد"),
-            ("POOL TIMEOUT", "استنفاد مجمع المقابس — يرجى تقليل التزامن"),
         ]),
     ]
 }
@@ -1715,10 +1206,8 @@ mod tests {
     fn test_language_parsing() {
         assert_eq!(Language::from_code("ru"), Some(Language::Ru));
         assert_eq!(Language::from_code("en"), Some(Language::En));
-        assert_eq!(Language::from_code("fa"), Some(Language::Fa));
         assert_eq!(Language::from_code("zh"), Some(Language::Zh));
         assert_eq!(Language::from_code("es"), Some(Language::Es));
-        assert_eq!(Language::from_code("ar"), Some(Language::Ar));
         assert_eq!(Language::from_code("unknown"), None);
     }
 
@@ -1727,10 +1216,8 @@ mod tests {
         for lang in [
             Language::En,
             Language::Ru,
-            Language::Fa,
             Language::Zh,
             Language::Es,
-            Language::Ar,
         ] {
             let msg = get_messages(lang);
             assert!(!msg.banner_subtitle.is_empty());
@@ -1777,38 +1264,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_format_bidi_farsi_and_arabic() {
-        // LTR strings remain unchanged
-        assert_eq!(format_bidi("English text", Language::En), "English text");
-        assert_eq!(format_bidi("Русский текст", Language::Ru), "Русский текст");
-
-        // Farsi words are shaped and reversed for visual LTR terminal display
-        let shaped_exit = format_bidi("خروج", Language::Fa);
-        assert_eq!(shaped_exit, "ﺝﻭﺮﺧ"); // Visually ordered: Jeem first, Kha last (displays RTL as خروج)
-
-        let shaped_start = format_bidi("شروع", Language::Fa);
-        assert_eq!(shaped_start, "ﻉﻭﺮﺷ");
-
-        let shaped_change = format_bidi("تغییر", Language::Fa);
-        assert_eq!(shaped_change, "ﺮﻴﻴﻐﺗ");
-
-        let shaped_farsi = format_bidi("فارسی", Language::Fa);
-        assert_eq!(shaped_farsi, "ﻰﺳﺭﺎﻓ");
-        let author = format_bidi("نویسنده", Language::Fa);
-        assert_eq!(author, "ﻩﺪﻨﺴﻳﻮﻧ");
-        let items = [
-            "اطلاعات شبکه و سیستم",
-            "دسترسی به سرورهای DNS",
-            "دسترسی به سایتها",
-            "دسترسی به CDN و هاستینگ (تست 16 KB)",
-            "جستجوی SNI سفید",
-            "دسترسی به تلگرام",
-            "توضیح وضعیتها (راهنما)",
-        ];
-        for item in &items {
-            let shaped = format_bidi(item, Language::Fa);
-            assert!(!shaped.is_empty());
-        }
-    }
 }
