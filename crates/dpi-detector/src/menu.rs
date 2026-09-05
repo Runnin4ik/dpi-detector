@@ -60,9 +60,10 @@ pub fn run_interactive_menu(
 /// Resolves the banner badge against the background version-check slot:
 /// a pending fetch keeps the initial "checking..." text, a finished fetch
 /// renders the real badge (version or failure notice) instead of going stale.
-fn current_badge(initial: &str, latest_slot: &VersionSlot, lang: Language) -> String {
+fn current_badge(_initial: &str, latest_slot: &VersionSlot, lang: Language) -> String {
+    let msg = get_messages(lang);
     match latest_slot.lock().ok().and_then(|g| g.clone()) {
-        None => initial.to_string(),
+        None => msg.checking_updates.to_string(),
         Some(maybe) => version_badge_lang(maybe.as_ref(), lang),
     }
 }
@@ -368,7 +369,7 @@ fn draw_menu(
             .collect::<Vec<_>>()
             .join("   ");
         let lang_cursor = if cursor == 0 { "►" } else { " " };
-        let lang_lbl = format!("{}:", format_bidi(msg.menu_language.trim_end_matches(':'), current_lang));
+        let lang_lbl = format_bidi(msg.menu_language.trim_end_matches(':'), current_lang);
         lines.push(format!("  {} {}", lang_cursor, lang_lbl));
         lines.push(format!("    {}", lang_opts));
 
@@ -379,7 +380,7 @@ fn draw_menu(
         } else {
             "\x1b[2m○\x1b[0m IPv4   \x1b[1;32m●\x1b[0m IPv6".to_string()
         };
-        let ip_lbl = format!("{}:", format_bidi(msg.menu_ip_version.trim_end_matches(':'), current_lang));
+        let ip_lbl = format_bidi(msg.menu_ip_version.trim_end_matches(':'), current_lang);
         lines.push(format!("  {} {}", ip_cursor, ip_lbl));
         lines.push(format!("    {}", ip_opts));
 
@@ -396,7 +397,7 @@ fn draw_menu(
             })
             .collect::<Vec<_>>()
             .join("   ");
-        let conc_lbl = format!("{}:", format_bidi(msg.menu_concurrency.trim_end_matches(':'), current_lang));
+        let conc_lbl = format_bidi(msg.menu_concurrency.trim_end_matches(':'), current_lang);
         lines.push(format!("  {} {}", conc_cursor, conc_lbl));
         lines.push(format!("    {}", conc_opts));
         lines.push(format!("  {}", "─".repeat(BOX_WIDTH - 8)));
@@ -695,7 +696,7 @@ mod tests {
         println!("{}", banner);
 
         // Language row
-        let lang_lbl = format!("{}:", format_bidi(msg.menu_language.trim_end_matches(':'), Language::Fa));
+        let lang_lbl = format_bidi(msg.menu_language.trim_end_matches(':'), Language::Fa);
         let lang_opts = Language::ALL
             .iter()
             .map(|&l| {
@@ -716,7 +717,7 @@ mod tests {
         println!("│ {}{} │", l2, " ".repeat(pad2));
 
         // IP row
-        let ip_lbl = format!("{}:", format_bidi(msg.menu_ip_version.trim_end_matches(':'), Language::Fa));
+        let ip_lbl = format_bidi(msg.menu_ip_version.trim_end_matches(':'), Language::Fa);
         let ip_opts = "\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○\x1b[0m IPv6";
         let l3 = format!("    {}", ip_lbl);
         let pad3 = BOX_WIDTH.saturating_sub(strip_ansi_len(&l3) + 3);
@@ -726,7 +727,7 @@ mod tests {
         println!("│ {}{} │", l4, " ".repeat(pad4));
 
         // Concurrency row
-        let conc_lbl = format!("{}:", format_bidi(msg.menu_concurrency.trim_end_matches(':'), Language::Fa));
+        let conc_lbl = format_bidi(msg.menu_concurrency.trim_end_matches(':'), Language::Fa);
         let conc_opts = [1, 5, 20, 50, 100]
             .iter()
             .map(|&p| {

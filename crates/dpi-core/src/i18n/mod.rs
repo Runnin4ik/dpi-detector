@@ -112,7 +112,8 @@ fn format_bidi_segment(text: &str) -> String {
     if !text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
         return text.to_string();
     }
-    let reshaped = arabic_reshaper::arabic_reshape(text);
+    let reshaped = arabic_reshaper::arabic_reshape(text)
+        .replace(['\u{FBFD}', '\u{FBFC}'], "\u{FEF0}");
     let bidi_info = unicode_bidi::BidiInfo::new(&reshaped, Some(unicode_bidi::Level::ltr()));
     if bidi_info.paragraphs.is_empty() {
         return reshaped;
@@ -1790,8 +1791,7 @@ mod tests {
         assert_eq!(shaped_change, "ﺮﯿﯿﻐﺗ");
 
         let shaped_farsi = format_bidi("فارسی", Language::Fa);
-        assert_eq!(shaped_farsi, "ﯽﺳﺭﺎﻓ");
-
+        assert_eq!(shaped_farsi, "ﻰﺳﺭﺎﻓ");
         let title = format_bidi("پارامترها و انتخاب آزمون‌ها", Language::Fa);
         assert!(title.contains("ﺎﻫﺮﺘﻣﺍﺭﺎﭘ"));
 
