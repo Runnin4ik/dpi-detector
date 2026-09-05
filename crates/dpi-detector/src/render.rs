@@ -1,4 +1,4 @@
-use comfy_table::presets::{ASCII_FULL_CONDENSED, UTF8_FULL_CONDENSED};
+use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dpi_core::classify::*;
 use dpi_core::config::AppConfig;
@@ -85,20 +85,25 @@ pub fn asc_with(s: &str, ascii: bool) -> String {
             '✓' => out.push_str("[OK]"),
             '→' => out.push_str("->"),
             '►' => out.push('>'),
-            '•' | '─' | '╌' | '–' | '—' => out.push('-'),
+            '•' | '╌' | '–' | '—' => out.push('-'),
             '◉' | '●' => out.push('*'),
             '○' => out.push('o'),
-            '√' => out.push('x'),
+            '√' => out.push('√'),
             '↑' => out.push('^'),
             '↓' => out.push('v'),
             '←' => out.push('<'),
             '⚠' => out.push('!'),
             '≈' => out.push('~'),
             '×' => out.push('x'),
-            '╭' | '╮' | '╰' | '╯' | '┌' | '┬' | '┐' | '├' | '┼' | '┤' | '└' | '┴' | '┘' | '╞' | '╪' | '╡' => {
-                out.push('+');
-            }
-            '│' => out.push('|'),
+            // Map modern curved corners to standard CP866 single corners (0xDA, 0xBF, 0xC0, 0xD9)
+            '╭' => out.push('┌'),
+            '╮' => out.push('┐'),
+            '╰' => out.push('└'),
+            '╯' => out.push('┘'),
+            // Preserve hardware CP866 single-line box drawing:
+            // ─ (0xC4), │ (0xB3), ┌ (0xDA), ┐ (0xBF), └ (0xC0), ┘ (0xD9),
+            // ├ (0xC3), ┤ (0xB4), ┬ (0xC2), ┴ (0xC1), ┼ (0xC5)
+            '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' => out.push(c),
             _ => out.push(c),
         }
     }
@@ -110,13 +115,10 @@ pub fn asc(s: &str) -> String {
     asc_with(s, ascii_mode())
 }
 
-/// Table border preset for the current output mode.
+/// Table border preset: UTF8_FULL_CONDENSED uses single-line box drawing
+/// characters natively supported in CP866 (0xC4, 0xB3, 0xDA, 0xBF, etc.).
 fn table_preset() -> &'static str {
-    if ascii_mode() {
-        ASCII_FULL_CONDENSED
-    } else {
-        UTF8_FULL_CONDENSED
-    }
+    UTF8_FULL_CONDENSED
 }
 
 /// Country flag for the current mode (emoji needs a CJK/emoji font).
@@ -184,7 +186,7 @@ pub fn panel_with(title: &str, lines: &[String], width: usize, centered: bool, b
     let title_len = strip_ansi_len(&title_clean);
     let inner = width.saturating_sub(2);
     let (tl, tr, bl, br, hb, vb) = if ascii_mode() {
-        ("+", "+", "+", "+", "-", "|")
+        ("┌", "┐", "└", "┘", "─", "│")
     } else {
         ("╭", "╮", "╰", "╯", "─", "│")
     };
@@ -1615,11 +1617,11 @@ mod tests {
         // Passthrough when ASCII mode is off.
         assert_eq!(asc_with("✓ • ►", false), "✓ • ►");
         // Width-1 swaps stay exact; [OK]/-> widen and must precede padding.
-        assert_eq!(asc_with("[√] ● ○", true), "[x] * o");
+        assert_eq!(asc_with("[√] ● ○", true), "[√] * o");
         assert_eq!(asc_with("↑↓ ←→", true), "^v <->");
         assert_eq!(asc_with("✓ done", true), "[OK] done");
         assert_eq!(asc_with("⚠ ≈ × — –", true), "! ~ x - -");
-        assert_eq!(asc_with("╭─╮ │ └┘", true), "+-+ | ++");
+        assert_eq!(asc_with("╭─╮ │ └┘", true), "┌─┐ │ └┘");
         // ANSI escapes pass through untouched.
         assert_eq!(asc_with("\x1b[1;32m✓\x1b[0m", true), "\x1b[1;32m[OK]\x1b[0m");
         // Cyrillic passes through; arrows become ASCII in ascii mode.

@@ -429,7 +429,7 @@ fn draw_menu(
     let title_len = strip_ansi_len(&title_clean);
     let border_total = BOX_WIDTH.saturating_sub(title_len + 3);
     let (tl, tr, bl, br, hb, vb) = if ascii_mode() {
-        ("+", "+", "+", "+", "-", "|")
+        ("┌", "┐", "└", "┘", "─", "│")
     } else {
         ("╭", "╮", "╰", "╯", "─", "│")
     };
