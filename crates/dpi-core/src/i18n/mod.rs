@@ -27,10 +27,10 @@ impl Language {
         match self {
             Self::En => "English",
             Self::Ru => "Русский",
-            Self::Fa => "فارسی\u{200E}",
+            Self::Fa => "فارسی",
             Self::Zh => "中文",
             Self::Es => "Español",
-            Self::Ar => "العربية\u{200E}",
+            Self::Ar => "العربية",
         }
     }
     pub fn from_code(code: &str) -> Option<Self> {
