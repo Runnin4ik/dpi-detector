@@ -339,12 +339,12 @@ pub fn render_banner(msg: &Messages, _profile: RegionProfile, badge: &str) -> St
     };
     let version_line = format!("DPI Detector v{}", env!("CARGO_PKG_VERSION"));
     let author_label = if msg.lang.is_rtl() {
-        dpi_core::i18n::format_bidi(msg.author, msg.lang)
+        format!("{}:", dpi_core::i18n::format_bidi(msg.author.trim_end_matches(':'), msg.lang))
     } else {
         msg.author.to_string()
     };
     let chat_label = if msg.lang.is_rtl() {
-        dpi_core::i18n::format_bidi(msg.chat, msg.lang)
+        format!("{}:", dpi_core::i18n::format_bidi(msg.chat.trim_end_matches(':'), msg.lang))
     } else {
         msg.chat.to_string()
     };
@@ -1837,8 +1837,10 @@ mod tests {
         let msg = get_messages(Language::Fa);
         let banner = render_banner(&msg, RegionProfile::Ir, "v4.0.0-rust");
         assert!(!banner.replace("\x1b[0m", "").contains("[0m"), "no raw [0m text leak");
-        assert!(banner.contains(&dpi_core::i18n::format_bidi(msg.author, Language::Fa)), "author label is present and formatted");
-        assert!(banner.contains(&dpi_core::i18n::format_bidi(msg.chat, Language::Fa)), "chat label is present and formatted");
+        let author_expected = format!("{}:", dpi_core::i18n::format_bidi(msg.author.trim_end_matches(':'), Language::Fa));
+        let chat_expected = format!("{}:", dpi_core::i18n::format_bidi(msg.chat.trim_end_matches(':'), Language::Fa));
+        assert!(banner.contains(&author_expected), "author label is present and formatted");
+        assert!(banner.contains(&chat_expected), "chat label is present and formatted");
         assert!(banner.contains("v4.0.0-rust"), "version badge is present");
     }
 }
