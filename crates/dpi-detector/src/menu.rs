@@ -358,7 +358,7 @@ fn draw_menu(
         let lang_opts = Language::ALL
             .iter()
             .map(|&l| {
-                let lbl = l.label();
+                let lbl = format_bidi(l.label(), l);
                 if l == current_lang {
                     format!("\x1b[1;32m●\x1b[0m {}", lbl)
                 } else {
@@ -404,7 +404,7 @@ fn draw_menu(
         let lang_opts = Language::ALL
             .iter()
             .map(|&l| {
-                let lbl = l.label();
+                let lbl = format_bidi(l.label(), l);
                 if l == current_lang {
                     format!("\x1b[1;32m●\x1b[0m {}", lbl)
                 } else {
@@ -463,7 +463,11 @@ fn draw_menu(
             "\x1b[2m[ ]\x1b[0m"
         };
         let row_cursor = if cursor == i + offset { "►" } else { " " };
-        let prefix = format!("  {} {} {}. ", row_cursor, check_box, digit);
+        let prefix = if current_lang.is_rtl() {
+            format!("  {} {} {}. \u{200E}", row_cursor, check_box, digit)
+        } else {
+            format!("  {} {} {}. ", row_cursor, check_box, digit)
+        };
         let content = format_bidi(label, current_lang);
         lines.push(format!("{}{}", prefix, content));
     }

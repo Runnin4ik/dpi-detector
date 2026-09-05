@@ -113,7 +113,7 @@ fn format_bidi_segment(text: &str) -> String {
         return text.to_string();
     }
     let reshaped = arabic_reshaper::arabic_reshape(text);
-    let bidi_info = unicode_bidi::BidiInfo::new(&reshaped, Some(unicode_bidi::Level::rtl()));
+    let bidi_info = unicode_bidi::BidiInfo::new(&reshaped, Some(unicode_bidi::Level::ltr()));
     if bidi_info.paragraphs.is_empty() {
         return reshaped;
     }
@@ -1795,7 +1795,13 @@ mod tests {
         let title = format_bidi("زبان و تنظیمات اسکن", Language::Fa);
         assert_eq!(title, "ﻦﮑﺳﺍ ﺕﺎﻤﯿﻈﻨﺗ ﻭ ﻥﺎﺑﺯ");
 
-        let cdn_row = format_bidi("تست CDN [16 KB] و تخمین محدودیت", Language::Fa);
-        assert!(cdn_row.contains("CDN [16 KB]"), "CDN [16 KB] token is preserved as atomic LTR span");
+        let s_dns = format_bidi("تست سرورهای DNS", Language::Fa);
+        assert_eq!(s_dns, "ﯼﺎﻫﺭﻭﺮﺳ ﺖﺴﺗ DNS");
+
+        let s_cloud = format_bidi("تست سرورهای ابری", Language::Fa);
+        assert_eq!(s_cloud, "ﯼﺮﺑﺍ ﯼﺎﻫﺭﻭﺮﺳ ﺖﺴﺗ");
+
+        let s_cdn = format_bidi("تست CDN [16 KB] و تخمین محدودیت", Language::Fa);
+        assert!(s_cdn.contains("CDN [16 KB]"), "atomic LTR span without flipped brackets");
     }
 }
