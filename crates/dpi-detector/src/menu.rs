@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::{stdout, Write};
+use std::io::Write;
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use crossterm::cursor::MoveTo;
@@ -50,8 +50,12 @@ pub fn run_interactive_menu(
     if enable_raw_mode().is_err() {
         return MenuResult::Quit;
     }
+    let mut out = std::io::stdout();
+    let _ = execute!(out, crossterm::cursor::Hide, Clear(ClearType::All));
 
     let result = run_menu_loop(initial_lang, profile, cfg, badge, latest_slot);
+
+    let _ = execute!(out, crossterm::cursor::Show);
     let _ = disable_raw_mode();
     result
 }
@@ -347,10 +351,9 @@ fn draw_menu(
     badge: &str,
     notice: Option<&str>,
 ) {
-    let _ = execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0));
+    let mut screen = String::with_capacity(4096);
     let banner = render_banner(msg, profile, badge).replace("\r\n", "\n").replace('\n', "\r\n");
-    let mut out = std::io::stdout();
-    let _ = out.write_all(clean_output(&banner).as_bytes());
+    screen.push_str(&clean_output(&banner));
     let mut lines = Vec::new();
     let offset = 3;
 
@@ -435,17 +438,17 @@ fn draw_menu(
         "\x1b[1;36m{}{}\x1b[1;36m{}\x1b[1;36m{}\x1b[1;36m{}\x1b[0m\r\n",
         tl, hb, title_clean, hb.repeat(border_total), tr
     );
-    let _ = out.write_all(clean_output(&top_border).as_bytes());
+    screen.push_str(&clean_output(&top_border));
 
     for line in &lines {
         let plain_len = strip_ansi_len(line);
         let pad = BOX_WIDTH.saturating_sub(plain_len + 3);
         let row = format!("\x1b[1;36m{}\x1b[0m {}{}\x1b[1;36m{}\x1b[0m\r\n", vb, line, " ".repeat(pad), vb);
-        let _ = out.write_all(clean_output(&row).as_bytes());
+        screen.push_str(&clean_output(&row));
     }
 
     let bot_border = format!("\x1b[1;36m{}{}{}\x1b[0m\r\n", bl, hb.repeat(BOX_WIDTH - 2), br);
-    let _ = out.write_all(clean_output(&bot_border).as_bytes());
+    screen.push_str(&clean_output(&bot_border));
 
     let hotkey_row = if plain_mode() {
         format!(
@@ -466,11 +469,15 @@ fn draw_menu(
             format_bidi(msg.menu_hw_quit, current_lang)
         )
     };
-    let _ = out.write_all(clean_output(&asc(&hotkey_row)).as_bytes());
+    screen.push_str(&clean_output(&asc(&hotkey_row)));
     if let Some(n) = notice {
         let n_str = format!("  \x1b[1;33m{}\x1b[0m\r\n", format_bidi(n, current_lang));
-        let _ = out.write_all(clean_output(&n_str).as_bytes());
+        screen.push_str(&clean_output(&n_str));
     }
+
+    let mut out = std::io::stdout();
+    let _ = execute!(out, MoveTo(0, 0));
+    let _ = out.write_all(screen.as_bytes());
     let _ = out.flush();
 }
 fn pad_width(s: &str, target_width: usize) -> String {

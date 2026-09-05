@@ -248,23 +248,51 @@ async fn main() {
             fn GetStdHandle(nStdHandle: u32) -> isize;
             fn GetConsoleMode(hConsoleHandle: isize, lpMode: *mut u32) -> i32;
             fn SetConsoleMode(hConsoleHandle: isize, dwMode: u32) -> i32;
+            fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
+            fn SetConsoleCP(wCodePageID: u32) -> i32;
         }
         const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
+        const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6;
         const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
+        const ENABLE_QUICK_EDIT_MODE: u32 = 0x0040;
+        const ENABLE_EXTENDED_FLAGS: u32 = 0x0080;
 
-        let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-        let mut mode: u32 = 0;
-        if unsafe { GetConsoleMode(handle, &mut mode) } != 0 {
-            unsafe { SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0 }
+        // Disable QuickEdit on stdin to prevent mouse clicks from freezing execution on conhost (Win7+)
+        let in_handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        let mut in_mode: u32 = 0;
+        if unsafe { GetConsoleMode(in_handle, &mut in_mode) } != 0 {
+            let safe_in_mode = (in_mode & !ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS;
+            unsafe { SetConsoleMode(in_handle, safe_in_mode) };
+        }
+
+        // Probe Virtual Terminal Processing (VT100) on stdout.
+        // On Windows 7 / 8 this returns 0 (fails), indicating legacy conhost.
+        let out_handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+        let mut out_mode: u32 = 0;
+        let vt_ok = if unsafe { GetConsoleMode(out_handle, &mut out_mode) } != 0 {
+            unsafe { SetConsoleMode(out_handle, out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0 }
         } else {
             false
+        };
+
+        // Only switch to UTF-8 code page if VT is supported; on Win7 raster fonts require OEM codepage
+        if vt_ok {
+            unsafe {
+                SetConsoleOutputCP(65001);
+                SetConsoleCP(65001);
+            }
         }
+        vt_ok
     };
     #[cfg(not(windows))]
-    let has_vt = true;
+    let has_vt = {
+        let term = std::env::var("TERM").unwrap_or_default();
+        term != "dumb" && term != "linux"
+    };
+    let no_color = std::env::var_os("NO_COLOR").is_some();
     let legacy_console = !has_vt || args.ascii;
     set_ascii_mode(legacy_console);
-    set_plain_mode(legacy_console);
+    set_plain_mode(legacy_console || no_color);
     let profile = RegionProfile::from_code(&args.profile).unwrap_or_default();
     let mut lang = if args.lang == "auto" {
         Language::autodetect()
