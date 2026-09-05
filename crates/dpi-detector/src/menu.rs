@@ -374,20 +374,18 @@ fn draw_menu(
         lines.push(format!("    {}", pad_left_width(&lang_opts, 61)));
 
         // IP version row
+        let ip_cursor = if cursor == 1 { "►" } else { " " };
         let ip_opts = if v6_supported {
             if ip_version == "ipv4" {
-                "IPv4 \x1b[1;32m●\x1b[0m            IPv6 \x1b[2m○\x1b[0m".to_string()
+                "IPv6 \x1b[2m○\x1b[0m            IPv4 \x1b[1;32m●\x1b[0m".to_string()
             } else {
-                "IPv4 \x1b[2m○\x1b[0m            IPv6 \x1b[1;32m●\x1b[0m".to_string()
+                "IPv6 \x1b[1;32m●\x1b[0m            IPv4 \x1b[2m○\x1b[0m".to_string()
             }
         } else {
-            let unavail = match current_lang {
-                Language::Fa => format_bidi("[در آینده]", current_lang),
-                _ => format_bidi(msg.unavailable, current_lang),
-            };
-            format!("{} IPv4 \x1b[1;32m●\x1b[0m            IPv6 \x1b[2m○\x1b[0m", unavail)
+            let unavail_str = format!("({})", msg.unavailable);
+            let unavail = format_bidi(&unavail_str, current_lang);
+            format!("{} IPv6 \x1b[2m○\x1b[0m            IPv4 \x1b[1;32m●\x1b[0m", unavail)
         };
-        let ip_cursor = if cursor == 1 { "►" } else { " " };
         let ip_lbl = format_bidi(msg.menu_ip_version, current_lang);
         lines.push(format!("  {} {}", ip_cursor, pad_left_width(&ip_lbl, 60)));
         lines.push(format!("    {}", pad_left_width(&ip_opts, 61)));
@@ -473,7 +471,13 @@ fn draw_menu(
             "\x1b[2m[ ]\x1b[0m"
         };
         let row_cursor = if cursor == i + offset { "►" } else { " " };
-        lines.push(format!("  {} {} {}. {}", row_cursor, check_box, digit, format_bidi(label, current_lang)));
+        if current_lang.is_rtl() {
+            let desc = format_bidi(label, current_lang);
+            let prefix = format!("  {} {} {}.    ", row_cursor, check_box, digit);
+            lines.push(format!("{}{}", prefix, pad_left_width(&desc, 50)));
+        } else {
+            lines.push(format!("  {} {} {}. {}", row_cursor, check_box, digit, format_bidi(label, current_lang)));
+        }
     }
     // Glyph-safe content first: widths are measured after replacement.
     let lines: Vec<String> = lines.into_iter().map(|l| asc(&l)).collect();
@@ -505,8 +509,28 @@ fn draw_menu(
     let _ = out.write_all(clean_output(&bot_border).as_bytes());
 
     let hotkey_row = if plain_mode() {
+        if current_lang.is_rtl() {
+            format!(
+                "  [↑↓/WS]  {} | [←→/AD]  {} | [0-6]  {} | [Enter]  {} | [Q]  {}\r\n",
+                format_bidi(msg.menu_hw_row, current_lang),
+                format_bidi(msg.menu_hw_change, current_lang),
+                format_bidi(msg.menu_hw_tests, current_lang),
+                format_bidi(msg.menu_hw_start, current_lang),
+                format_bidi(msg.menu_hw_quit, current_lang)
+            )
+        } else {
+            format!(
+                "  [↑↓/WS] {} | [←→/AD] {} | [0-6] {} | [Enter] {} | [Q] {}\r\n",
+                format_bidi(msg.menu_hw_row, current_lang),
+                format_bidi(msg.menu_hw_change, current_lang),
+                format_bidi(msg.menu_hw_tests, current_lang),
+                format_bidi(msg.menu_hw_start, current_lang),
+                format_bidi(msg.menu_hw_quit, current_lang)
+            )
+        }
+    } else if current_lang.is_rtl() {
         format!(
-            "  [↑↓/WS] {} | [←→/AD] {} | [0-6] {} | [Enter] {} | [Q] {}\r\n",
+            "  \x1b[1;46;37m ↑↓/WS \x1b[0m  {} │ \x1b[1;46;37m ←→/AD \x1b[0m  {} │ \x1b[1;46;37m 0-6 \x1b[0m  {} │ \x1b[1;42;37m Enter \x1b[0m  {} │ \x1b[1;41;37m Q \x1b[0m  {}\r\n",
             format_bidi(msg.menu_hw_row, current_lang),
             format_bidi(msg.menu_hw_change, current_lang),
             format_bidi(msg.menu_hw_tests, current_lang),
@@ -648,7 +672,13 @@ mod tests {
             }
             // Test options
             for (digit, label) in test_options {
-                let test_line = format!("    [ ] {}. {}", digit, format_bidi(label, lang));
+                let test_line = if lang.is_rtl() {
+                    let desc = format_bidi(label, lang);
+                    let prefix = format!("  ► [ ] {}.    ", digit);
+                    format!("{}{}", prefix, pad_left_width(&desc, 50))
+                } else {
+                    format!("    [ ] {}. {}", digit, format_bidi(label, lang))
+                };
                 let w = strip_ansi_len(&test_line);
                 assert!(w + 3 <= BOX_WIDTH, "test row {} for {:?} overflows box: w={}", digit, lang, w);
             }
@@ -692,8 +722,16 @@ mod tests {
         let banner = render_banner(&msg, RegionProfile::Ir, "✓ وضعیت: متصل به اینترنت");
         println!("{}", banner);
 
+        for (digit, label) in get_test_options(&msg) {
+            let desc = format_bidi(label, Language::Fa);
+            let prefix = format!("  [ ] {}.    ", digit);
+            println!("│ {}{} │", prefix, pad_left_width(&desc, 50));
+        }
+        let bot_border = format!("╰{}╯", "─".repeat(BOX_WIDTH - 2));
+        println!("{}", bot_border);
+
         let hotkey_row = format!(
-            "  [↑↓/WS] {} │ [←→/AD] {} │ [0-6] {} │ [Enter] {} │ [Q] {}",
+            "  [↑↓/WS]  {} │ [←→/AD]  {} │ [0-6]  {} │ [Enter]  {} │ [Q]  {}",
             format_bidi(msg.menu_hw_row, Language::Fa),
             format_bidi(msg.menu_hw_change, Language::Fa),
             format_bidi(msg.menu_hw_tests, Language::Fa),

@@ -767,7 +767,7 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_concurrency: "تعداد رشته‌ها:",
             menu_hw_row: "حرکت",
             menu_hw_change: "تغییر تنظیم",
-            menu_hw_tests: "شروع/انتخاب",
+            menu_hw_tests: "انتخاب/شروع",
             menu_hw_start: "تغییر گزینه",
             menu_hw_quit: "خروج",
             menu_line_prompt: "انتخاب را وارد کنید [123]: ",
@@ -776,7 +776,7 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_test_netinfo: "تشخیص و اصلاح مشکلات اتصال",
             menu_test_dns: "تست سرورهای DNS",
             menu_test_domains: "تست سرورهای ابری",
-            menu_test_tcp: "CDN (KB) و تخمین محدودیت (حداکثر حجم: 16)",
+            menu_test_tcp: "تست CDN [16 KB] و تخمین محدودیت",
             menu_test_sni: "اسکن عمق بسته با واقعی",
             menu_test_telegram: "تست تکه‌تکه کردن بسته",
             menu_test_legend: "جمع‌بندی و پیشنهاد تنظیمات",
@@ -1794,6 +1794,8 @@ mod tests {
 
         let title = format_bidi("زبان و تنظیمات اسکن", Language::Fa);
         assert_eq!(title, "ﻦﮑﺳﺍ ﺕﺎﻤﯿﻈﻨﺗ ﻭ ﻥﺎﺑﺯ");
-    }
 
+        let cdn_row = format_bidi("تست CDN [16 KB] و تخمین محدودیت", Language::Fa);
+        assert!(cdn_row.contains("CDN [16 KB]"), "CDN [16 KB] token is preserved as atomic LTR span");
+    }
 }
