@@ -112,7 +112,20 @@ fn format_bidi_segment(text: &str) -> String {
     if !text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
         return text.to_string();
     }
-    arabic_reshaper::arabic_reshape(text)
+    let reshaped = arabic_reshaper::arabic_reshape(text);
+    let bidi_info = unicode_bidi::BidiInfo::new(&reshaped, Some(unicode_bidi::Level::rtl()));
+    if bidi_info.paragraphs.is_empty() {
+        return reshaped;
+    }
+    let mut out = String::with_capacity(reshaped.len());
+    for (i, para) in bidi_info.paragraphs.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let line = bidi_info.reorder_line(para, para.range.clone());
+        out.push_str(&line);
+    }
+    out
 }
 
 /// Shapes Arabic script characters into connected ligatures/presentation forms
@@ -748,34 +761,34 @@ pub fn get_messages(lang: Language) -> Messages {
             http_blocked_desc: "HTTP BLOCK (هدایت به صفحه پیوندها یا فیلترینگ)",
             tcp16_drop_desc: "TCP16 DROP (محدودسازی پهنای باند پنجره TCP)",
             unreachable_desc: "UNREACHABLE (شبکه یا میزبان در دسترس نیست)",
-            menu_title: "پارامترها و انتخاب آزمون‌ها",
-            menu_language: "Language",
-            menu_ip_version: "نسخه IP",
-            menu_concurrency: "هم‌زمانی",
-            menu_hw_row: "سطر",
-            menu_hw_change: "تغییر",
-            menu_hw_tests: "آزمون‌ها",
-            menu_hw_start: "شروع",
+            menu_title: "زبان و تنظیمات اسکن",
+            menu_language: "زبان:",
+            menu_ip_version: "نسخه IP:",
+            menu_concurrency: "تعداد رشته‌ها:",
+            menu_hw_row: "حرکت",
+            menu_hw_change: "تغییر تنظیم",
+            menu_hw_tests: "شروع/انتخاب",
+            menu_hw_start: "تغییر گزینه",
             menu_hw_quit: "خروج",
             menu_line_prompt: "انتخاب را وارد کنید [123]: ",
             menu_invalid_line: "ورودی نامعتبر است؛ آزمون‌های 1، 2 و 3 اجرا می‌شوند.",
             menu_need_one: "دست‌کم یک آزمون را انتخاب کنید",
-            menu_test_netinfo: "اطلاعات شبکه و سیستم",
-            menu_test_dns: "دسترسی به سرورهای DNS",
-            menu_test_domains: "دسترسی به وب‌سایت‌ها",
-            menu_test_tcp: "دسترسی به CDN و هاستینگ (آزمون 16 KB)",
-            menu_test_sni: "جست‌وجوی SNIهای مجاز",
-            menu_test_telegram: "دسترسی به تلگرام",
-            menu_test_legend: "راهنمای وضعیت‌ها (راهنما)",
+            menu_test_netinfo: "تشخیص و اصلاح مشکلات اتصال",
+            menu_test_dns: "تست سرورهای DNS",
+            menu_test_domains: "تست سرورهای ابری",
+            menu_test_tcp: "CDN (KB) و تخمین محدودیت (حداکثر حجم: 16)",
+            menu_test_sni: "اسکن عمق بسته با واقعی",
+            menu_test_telegram: "تست تکه‌تکه کردن بسته",
+            menu_test_legend: "جمع‌بندی و پیشنهاد تنظیمات",
             lang: Language::Fa,
             replies_label: "پاسخ",
             blocked_short: "مسدود",
             mixed_short: "ترکیبی",
             legend_title: "\nراهنمای وضعیت‌ها:\n",
 
-            latest_version: "✓ آخرین نسخه",
+            latest_version: "✓ وضعیت: متصل به اینترنت",
             author: "نویسنده:",
-            chat: "چت:",
+            chat: "کانال:",
             checking_updates: "بررسی به‌روزرسانی‌ها...",
             os: "سیستم‌عامل:",
             system_dns: "DNS سیستم:",
@@ -1766,26 +1779,21 @@ mod tests {
         assert_eq!(format_bidi("English text", Language::En), "English text");
         assert_eq!(format_bidi("Русский текст", Language::Ru), "Русский текст");
 
-        // Farsi words are shaped into connected cursive forms without reversing character order
+        // Farsi words are shaped and reversed for visual LTR terminal display
         let shaped_exit = format_bidi("خروج", Language::Fa);
-        assert_eq!(shaped_exit, "ﺧﺮﻭﺝ"); // Starts with initial KHA (ﺧ), ends with JEEM (ﺝ)
+        assert_eq!(shaped_exit, "ﺝﻭﺮﺧ"); // Visually ordered: Jeem first, Kha last (displays RTL as خروج)
 
         let shaped_start = format_bidi("شروع", Language::Fa);
-        assert_eq!(shaped_start, "ﺷﺮﻭﻉ"); // Starts with initial SHEEN (ﺷ), ends with AIN (ﻉ)
+        assert_eq!(shaped_start, "ﻉﻭﺮﺷ");
 
         let shaped_change = format_bidi("تغییر", Language::Fa);
-        assert_eq!(shaped_change, "ﺗﻐﯿﯿﺮ"); // Starts with initial TEH (ﺗ)
+        assert_eq!(shaped_change, "ﺮﯿﯿﻐﺗ");
 
-        // Complex Farsi title
-        let menu_title = "پارامترها و انتخاب آزمون‌ها";
-        let shaped_title = format_bidi(menu_title, Language::Fa);
-        assert!(shaped_title.starts_with('ﭘ')); // Starts with initial PEH (ﭘ), NOT reversed
-        assert!(shaped_title.chars().any(|c| matches!(c, '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')));
+        let shaped_farsi = format_bidi("فارسی", Language::Fa);
+        assert_eq!(shaped_farsi, "ﯽﺳﺭﺎﻓ");
 
-        // Arabic string
-        let ar_text = "المعلمات واختيار الاختبارات";
-        let shaped_ar = format_bidi(ar_text, Language::Ar);
-        assert!(shaped_ar.starts_with('ﺍ')); // Starts with ALEF, NOT reversed
+        let title = format_bidi("زبان و تنظیمات اسکن", Language::Fa);
+        assert_eq!(title, "ﻦﮑﺳﺍ ﺕﺎﻤﯿﻈﻨﺗ ﻭ ﻥﺎﺑﺯ");
     }
 
 }

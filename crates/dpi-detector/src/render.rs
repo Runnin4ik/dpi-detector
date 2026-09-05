@@ -325,21 +325,26 @@ impl Spinner {
 }
 
 pub fn render_banner(msg: &Messages, _profile: RegionProfile, badge: &str) -> String {
-    let badge_colored = if badge.starts_with("✓") {
-        format!("\x1b[38;2;90;247;142m{}\x1b[0m", badge)
-    } else if badge.starts_with("↑") {
-        format!("\x1b[33m{}\x1b[0m", badge)
+    let badge_display = if msg.lang.is_rtl() {
+        dpi_core::i18n::format_bidi(badge, msg.lang)
     } else {
-        format!("\x1b[2m{}\x1b[0m", badge)
+        badge.to_string()
+    };
+    let badge_colored = if badge.starts_with("✓") {
+        format!("\x1b[38;2;90;247;142m{}\x1b[0m", badge_display)
+    } else if badge.starts_with("↑") {
+        format!("\x1b[33m{}\x1b[0m", badge_display)
+    } else {
+        format!("\x1b[2m{}\x1b[0m", badge_display)
     };
     let version_line = format!("DPI Detector v{}", env!("CARGO_PKG_VERSION"));
     let author_label = if msg.lang.is_rtl() {
-        dpi_core::i18n::reshape_arabic(msg.author)
+        dpi_core::i18n::format_bidi(msg.author, msg.lang)
     } else {
         msg.author.to_string()
     };
     let chat_label = if msg.lang.is_rtl() {
-        dpi_core::i18n::reshape_arabic(msg.chat)
+        dpi_core::i18n::format_bidi(msg.chat, msg.lang)
     } else {
         msg.chat.to_string()
     };
@@ -1832,8 +1837,8 @@ mod tests {
         let msg = get_messages(Language::Fa);
         let banner = render_banner(&msg, RegionProfile::Ir, "v4.0.0-rust");
         assert!(!banner.replace("\x1b[0m", "").contains("[0m"), "no raw [0m text leak");
-        assert!(banner.contains("ﻧﻮﯾﺴﻨﺪﻩ:"), "author label is present and connected");
-        assert!(banner.contains("ﭼﺖ:"), "chat label is present and connected");
+        assert!(banner.contains(&dpi_core::i18n::format_bidi(msg.author, Language::Fa)), "author label is present and formatted");
+        assert!(banner.contains(&dpi_core::i18n::format_bidi(msg.chat, Language::Fa)), "chat label is present and formatted");
         assert!(banner.contains("v4.0.0-rust"), "version badge is present");
     }
 }
