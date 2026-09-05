@@ -411,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "dpi-core"
-version = "5.0.0-alpha.5"
+version = "5.0.0-alpha.6"
 dependencies = [
  "base64",
  "bytes",
@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "dpi-detector"
-version = "5.0.0-alpha.5"
+version = "5.0.0-alpha.6"
 dependencies = [
  "clap",
  "comfy-table",

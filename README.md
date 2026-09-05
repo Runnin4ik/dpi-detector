@@ -9,7 +9,7 @@
 
 [![Language: Rust](https://img.shields.io/badge/Language-Rust_2021-DEA584.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v5.0.0--alpha.5-blue.svg)](https://github.com/Runnin4ik/dpi-detector/releases)
+[![Release](https://img.shields.io/badge/Release-v5.0.0--alpha.6-blue.svg)](https://github.com/Runnin4ik/dpi-detector/releases)
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0.svg?logo=telegram&logoColor=white)](https://t.me/DPI_detector)
 
 Полностью переписанный нативный инструмент для анализа цензуры и блокировок трафика на **чистом Rust**:
