@@ -451,7 +451,7 @@ fn draw_menu(
 
     let hotkey_row = if plain_mode() {
         format!(
-            "  [↑↓/WS] {} | [←→/AD] {} | [0-6] {} | [Enter] {} | [Q] {}\r\n",
+            "  [↑↓/WS] {} | [←→/AD] {} | [0-6] {} | [Enter] {} | [Q] {}",
             format_bidi(msg.menu_hw_row, current_lang),
             format_bidi(msg.menu_hw_change, current_lang),
             format_bidi(msg.menu_hw_tests, current_lang),
@@ -460,7 +460,7 @@ fn draw_menu(
         )
     } else {
         format!(
-            "  \x1b[1;46;37m ↑↓/WS \x1b[0m {} │ \x1b[1;46;37m ←→/AD \x1b[0m {} │ \x1b[1;46;37m 0-6 \x1b[0m {} │ \x1b[1;42;37m Enter \x1b[0m {} │ \x1b[1;41;37m Q \x1b[0m {}\r\n",
+            "  \x1b[1;46;37m ↑↓/WS \x1b[0m {} │ \x1b[1;46;37m ←→/AD \x1b[0m {} │ \x1b[1;46;37m 0-6 \x1b[0m {} │ \x1b[1;42;37m Enter \x1b[0m {} │ \x1b[1;41;37m Q \x1b[0m {}",
             format_bidi(msg.menu_hw_row, current_lang),
             format_bidi(msg.menu_hw_change, current_lang),
             format_bidi(msg.menu_hw_tests, current_lang),
@@ -468,11 +468,23 @@ fn draw_menu(
             format_bidi(msg.menu_hw_quit, current_lang)
         )
     };
-    screen.push_str(&clean_output(&asc(&hotkey_row)));
-    if let Some(n) = notice {
-        let n_str = format!("  \x1b[1;33m{}\x1b[0m\r\n", format_bidi(n, current_lang));
-        screen.push_str(&clean_output(&n_str));
-    }
+    let clean_hotkeys = clean_output(&asc(&hotkey_row));
+    let hk_w = strip_ansi_len(&clean_hotkeys);
+    let hk_pad = (BOX_WIDTH + 8).saturating_sub(hk_w);
+    screen.push_str(&clean_hotkeys);
+    screen.push_str(&" ".repeat(hk_pad));
+    screen.push_str("\r\n");
+
+    let notice_str = if let Some(n) = notice {
+        clean_output(&format!("  \x1b[1;33m{}\x1b[0m", format_bidi(n, current_lang)))
+    } else {
+        String::new()
+    };
+    let n_w = strip_ansi_len(&notice_str);
+    let n_pad = (BOX_WIDTH + 8).saturating_sub(n_w);
+    screen.push_str(&notice_str);
+    screen.push_str(&" ".repeat(n_pad));
+    screen.push_str("\r\n");
 
     let mut out = std::io::stdout();
     let _ = execute!(out, MoveTo(0, 0));
