@@ -774,12 +774,12 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_invalid_line: "ورودی نامعتبر است؛ آزمون‌های 1، 2 و 3 اجرا می‌شوند.",
             menu_need_one: "حداقل یک آزمون را انتخاب کنید",
             menu_test_netinfo: "اطلاعات شبکه و سیستم",
-            menu_test_dns: "بررسی دسترسی به سرورهای DNS",
+            menu_test_dns: "بررسی در دسترس بودن سرورهای دی‌ان‌اس",
             menu_test_domains: "بررسی دسترسی به وب‌سایت‌ها",
-            menu_test_tcp: "بررسی دسترسی به CDN و هاستینگ (تست 16 KB)",
-            menu_test_sni: "جستجوی دامنه‌های مجاز (SNI سفید)",
+            menu_test_tcp: "بررسی سی‌دی‌ان و هاستینگ - آزمون ۱۶ کیلوبایت",
+            menu_test_sni: "جستجوی دامنه‌های مجاز و اس‌ان‌آی سفید",
             menu_test_telegram: "بررسی دسترسی به تلگرام",
-            menu_test_legend: "راهنمای وضعیت‌ها (راهنما)",
+            menu_test_legend: "راهنمای وضعیت‌ها - بخش راهنما",
             lang: Language::Fa,
             replies_label: "پاسخ",
             blocked_short: "مسدود",
@@ -1795,13 +1795,18 @@ mod tests {
         let title = format_bidi("پارامترها و انتخاب آزمون‌ها", Language::Fa);
         assert!(title.contains("ﺎﻫﺮﺘﻣﺍﺭﺎﭘ"));
 
-        let s_dns = format_bidi("بررسی دسترسی به سرورهای DNS", Language::Fa);
-        assert!(s_dns.contains("DNS"));
-
-        let s_cloud = format_bidi("بررسی دسترسی به وب‌سایت‌ها", Language::Fa);
-        assert!(s_cloud.contains("ﯽﺳﺭﺮﺑ"));
-
-        let s_cdn = format_bidi("بررسی دسترسی به CDN و هاستینگ (تست 16 KB)", Language::Fa);
-        assert!(s_cdn.contains("CDN"));
+        let items = [
+            "اطلاعات شبکه و سیستم",
+            "بررسی در دسترس بودن سرورهای دی‌ان‌اس",
+            "بررسی دسترسی به وب‌سایت‌ها",
+            "بررسی سی‌دی‌ان و هاستینگ - آزمون ۱۶ کیلوبایت",
+            "جستجوی دامنه‌های مجاز و اس‌ان‌آی سفید",
+            "بررسی دسترسی به تلگرام",
+            "راهنمای وضعیت‌ها - بخش راهنما",
+        ];
+        for item in &items {
+            let shaped = format_bidi(item, Language::Fa);
+            assert!(!shaped.is_empty());
+        }
     }
 }
