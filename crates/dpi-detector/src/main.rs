@@ -37,10 +37,10 @@ mod render;
 use args::CliArgs;
 use menu::{run_interactive_menu, tui_available, MenuResult, VersionSlot};
 use render::{
-    asc, clean_output, panel_to_string, plain_mode, render_banner, render_dns_availability,
+    asc, clean_output, output_str, panel_to_string, plain_mode, render_banner, render_dns_availability,
     render_dns_endpoints, render_dns_resolve_notes, render_domain_table, render_netinfo_panel,
     render_summary, render_tcp_table, render_telegram, render_whitelist, set_ascii_mode,
-    set_plain_mode, strip_ansi, LiveProgress, NetFamilyInfo, NetInfoData, NetTtlb, Spinner,
+    set_has_vt, set_plain_mode, strip_ansi, LiveProgress, NetFamilyInfo, NetInfoData, NetTtlb, Spinner,
     SummaryData, TcpRow,
 };
 /// Splits a test selection string into per-test flags (mirrors `_selection_flags`).
@@ -58,18 +58,13 @@ fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool, bool, bool
     (net, dns, dom, tcp, sni, tg, legend, only_legend)
 }
 fn print_out(s: &str) {
-    let text = clean_output(s);
-    let mut out = std::io::stdout();
-    let _ = out.write_all(text.as_bytes());
-    let _ = out.flush();
+    output_str(&clean_output(s));
 }
 
 fn println_out(s: &str) {
-    let text = clean_output(s);
-    let mut out = std::io::stdout();
-    let _ = out.write_all(text.as_bytes());
-    let _ = out.write_all(b"\r\n");
-    let _ = out.flush();
+    let mut text = clean_output(s);
+    text.push_str("\r\n");
+    output_str(&text);
 }
 struct Emitter {
     report: String,
@@ -78,10 +73,7 @@ struct Emitter {
 impl Emitter {
     fn emit(&mut self, s: &str) {
         if !self.json_mode {
-            let text = clean_output(s);
-            let mut out = std::io::stdout();
-            let _ = out.write_all(text.as_bytes());
-            let _ = out.flush();
+            output_str(&clean_output(s));
         }
         self.report.push_str(&strip_ansi(s));
     }
@@ -289,10 +281,15 @@ async fn main() {
         let term = std::env::var("TERM").unwrap_or_default();
         term != "dumb" && term != "linux"
     };
+    set_has_vt(has_vt);
     let no_color = std::env::var_os("NO_COLOR").is_some();
     let legacy_console = !has_vt || args.ascii;
     set_ascii_mode(legacy_console);
-    set_plain_mode(legacy_console || no_color);
+    #[cfg(windows)]
+    let plain = no_color || !std::io::stdout().is_terminal();
+    #[cfg(not(windows))]
+    let plain = legacy_console || no_color;
+    set_plain_mode(plain);
     let profile = RegionProfile::from_code(&args.profile).unwrap_or_default();
     let mut lang = if args.lang == "auto" {
         Language::autodetect()

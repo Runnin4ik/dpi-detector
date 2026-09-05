@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::io::Write;
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use crossterm::cursor::MoveTo;
@@ -12,7 +11,7 @@ use dpi_core::net::netinfo::ipv6_supported;
 use dpi_core::net::version::{version_badge_lang, ReleaseInfo};
 use dpi_core::profile::RegionProfile;
 
-use crate::render::{asc, ascii_mode, clean_output, plain_mode, render_banner, strip_ansi_len, BOX_WIDTH};
+use crate::render::{asc, ascii_mode, clean_output, output_str, plain_mode, render_banner, strip_ansi_len, BOX_WIDTH};
 
 #[derive(Debug, Clone)]
 pub struct MenuSelection {
@@ -477,8 +476,7 @@ fn draw_menu(
 
     let mut out = std::io::stdout();
     let _ = execute!(out, MoveTo(0, 0));
-    let _ = out.write_all(screen.as_bytes());
-    let _ = out.flush();
+    output_str(&screen);
 }
 fn pad_width(s: &str, target_width: usize) -> String {
     let w = strip_ansi_len(s);

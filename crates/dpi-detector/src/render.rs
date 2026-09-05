@@ -23,6 +23,7 @@ use std::time::Duration;
 /// ASCII-only output for legacy consoles (see `--ascii`).
 static ASCII_MODE: OnceLock<bool> = OnceLock::new();
 static PLAIN_MODE: OnceLock<bool> = OnceLock::new();
+static HAS_VT: OnceLock<bool> = OnceLock::new();
 
 /// Enables ASCII-only output (font-safe glyphs, ASCII table borders).
 pub fn set_ascii_mode(v: bool) {
@@ -34,7 +35,7 @@ pub fn ascii_mode() -> bool {
     *ASCII_MODE.get().unwrap_or(&false)
 }
 
-/// Enables plain (ANSI-free) output for terminals without virtual terminal support.
+/// Enables plain (ANSI-free) output for terminals without color support.
 pub fn set_plain_mode(v: bool) {
     let _ = PLAIN_MODE.set(v);
 }
@@ -44,6 +45,15 @@ pub fn plain_mode() -> bool {
     *PLAIN_MODE.get().unwrap_or(&false)
 }
 
+/// Sets whether the terminal supports native virtual terminal processing (VT100/ANSI).
+pub fn set_has_vt(v: bool) {
+    let _ = HAS_VT.set(v);
+}
+
+/// Whether native virtual terminal processing is supported.
+pub fn has_vt() -> bool {
+    *HAS_VT.get().unwrap_or(&true)
+}
 /// Strips all ANSI SGR escape sequences (`\x1b[...m` and `\x1b[...K`) from a string.
 pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -71,6 +81,176 @@ pub fn clean_output(s: &str) -> String {
     } else {
         s.to_string()
     }
+}
+/// Writes a string to stdout, transparently translating ANSI color codes to
+/// Win32 Console API calls (SetConsoleTextAttribute) on legacy consoles (Windows 7 / 8).
+pub fn output_str(s: &str) {
+    #[cfg(windows)]
+    {
+        use std::io::IsTerminal;
+        if !has_vt() && !plain_mode() && std::io::stdout().is_terminal() {
+            write_win32_ansi(s);
+            return;
+        }
+    }
+    let mut out = std::io::stdout();
+    let _ = out.write_all(s.as_bytes());
+    let _ = out.flush();
+}
+
+#[cfg(windows)]
+fn write_win32_ansi(s: &str) {
+    extern "system" {
+        fn GetStdHandle(nStdHandle: u32) -> isize;
+        fn SetConsoleTextAttribute(hConsoleOutput: isize, wAttributes: u16) -> i32;
+        fn WriteConsoleW(
+            hConsoleOutput: isize,
+            lpBuffer: *const u16,
+            nNumberOfCharsToWrite: u32,
+            lpNumberOfCharsWritten: *mut u32,
+            lpReserved: *mut std::ffi::c_void,
+        ) -> i32;
+        fn GetConsoleScreenBufferInfo(
+            hConsoleOutput: isize,
+            lpConsoleScreenBufferInfo: *mut CONSOLE_SCREEN_BUFFER_INFO,
+        ) -> i32;
+    }
+    #[allow(clippy::upper_case_acronyms)]
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct COORD { x: i16, y: i16 }
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct SMALL_RECT { left: i16, top: i16, right: i16, bottom: i16 }
+    #[allow(clippy::upper_case_acronyms)]
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct CONSOLE_SCREEN_BUFFER_INFO {
+        size: COORD,
+        cursor_pos: COORD,
+        attributes: u16,
+        window: SMALL_RECT,
+        max_size: COORD,
+    }
+
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
+    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    if handle == 0 || handle == -1 {
+        let _ = std::io::stdout().write_all(s.as_bytes());
+        return;
+    }
+
+    static DEFAULT_ATTR: OnceLock<u16> = OnceLock::new();
+    let default_attr = *DEFAULT_ATTR.get_or_init(|| {
+        let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+        if unsafe { GetConsoleScreenBufferInfo(handle, &mut info) } != 0 {
+            info.attributes
+        } else {
+            0x0007
+        }
+    });
+
+    let mut cur_attr = default_attr;
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
+            let start = i;
+            i += 2;
+            while i < len && !bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            if i < len && bytes[i] == b'm' {
+                let code_str = std::str::from_utf8(&bytes[start + 2..i]).unwrap_or("");
+                cur_attr = apply_ansi_code(code_str, cur_attr, default_attr);
+                unsafe { SetConsoleTextAttribute(handle, cur_attr) };
+                i += 1;
+                continue;
+            } else if i < len {
+                i += 1;
+                continue;
+            }
+        }
+
+        let start = i;
+        while i < len && !(bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[') {
+            i += 1;
+        }
+        let chunk = &s[start..i];
+        let utf16: Vec<u16> = chunk.encode_utf16().collect();
+        let mut written = 0;
+        unsafe {
+            WriteConsoleW(
+                handle,
+                utf16.as_ptr(),
+                utf16.len() as u32,
+                &mut written,
+                std::ptr::null_mut(),
+            );
+        }
+    }
+}
+
+#[cfg(windows)]
+fn apply_ansi_code(code: &str, mut cur: u16, default_attr: u16) -> u16 {
+    const FOREGROUND_BLUE: u16 = 0x0001;
+    const FOREGROUND_GREEN: u16 = 0x0002;
+    const FOREGROUND_RED: u16 = 0x0004;
+    const FOREGROUND_INTENSITY: u16 = 0x0008;
+    const BACKGROUND_BLUE: u16 = 0x0010;
+    const BACKGROUND_GREEN: u16 = 0x0020;
+    const BACKGROUND_RED: u16 = 0x0040;
+    const BACKGROUND_INTENSITY: u16 = 0x0080;
+    const FG_MASK: u16 = 0x000F;
+    const BG_MASK: u16 = 0x00F0;
+
+    if code == "0" || code.is_empty() {
+        return default_attr;
+    }
+
+    for part in code.split(';') {
+        match part {
+            "0" => cur = default_attr,
+            "1" => cur |= FOREGROUND_INTENSITY,
+            "2" => cur &= !FOREGROUND_INTENSITY,
+            "30" => cur &= !FG_MASK,
+            "31" => cur = (cur & !FG_MASK) | FOREGROUND_RED,
+            "32" => cur = (cur & !FG_MASK) | FOREGROUND_GREEN,
+            "33" => cur = (cur & !FG_MASK) | FOREGROUND_RED | FOREGROUND_GREEN,
+            "34" => cur = (cur & !FG_MASK) | FOREGROUND_BLUE,
+            "35" => cur = (cur & !FG_MASK) | FOREGROUND_RED | FOREGROUND_BLUE,
+            "36" => cur = (cur & !FG_MASK) | FOREGROUND_GREEN | FOREGROUND_BLUE,
+            "37" => cur = (cur & !FG_MASK) | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
+            "90" => cur = (cur & !FG_MASK) | FOREGROUND_INTENSITY,
+            "91" => cur = (cur & !FG_MASK) | FOREGROUND_RED | FOREGROUND_INTENSITY,
+            "92" => cur = (cur & !FG_MASK) | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+            "93" => cur = (cur & !FG_MASK) | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+            "94" => cur = (cur & !FG_MASK) | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+            "95" => cur = (cur & !FG_MASK) | FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+            "96" => cur = (cur & !FG_MASK) | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+            "97" => cur = (cur & !FG_MASK) | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+            "40" => cur &= !BG_MASK,
+            "41" => cur = (cur & !BG_MASK) | BACKGROUND_RED,
+            "42" => cur = (cur & !BG_MASK) | BACKGROUND_GREEN,
+            "43" => cur = (cur & !BG_MASK) | BACKGROUND_RED | BACKGROUND_GREEN,
+            "44" => cur = (cur & !BG_MASK) | BACKGROUND_BLUE,
+            "45" => cur = (cur & !BG_MASK) | BACKGROUND_RED | BACKGROUND_BLUE,
+            "46" => cur = (cur & !BG_MASK) | BACKGROUND_GREEN | BACKGROUND_BLUE,
+            "47" => cur = (cur & !BG_MASK) | BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE,
+            "100" => cur = (cur & !BG_MASK) | BACKGROUND_INTENSITY,
+            "101" => cur = (cur & !BG_MASK) | BACKGROUND_RED | BACKGROUND_INTENSITY,
+            "102" => cur = (cur & !BG_MASK) | BACKGROUND_GREEN | BACKGROUND_INTENSITY,
+            "103" => cur = (cur & !BG_MASK) | BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_INTENSITY,
+            "104" => cur = (cur & !BG_MASK) | BACKGROUND_BLUE | BACKGROUND_INTENSITY,
+            "105" => cur = (cur & !BG_MASK) | BACKGROUND_RED | BACKGROUND_BLUE | BACKGROUND_INTENSITY,
+            "106" => cur = (cur & !BG_MASK) | BACKGROUND_GREEN | BACKGROUND_BLUE | BACKGROUND_INTENSITY,
+            "107" => cur = (cur & !BG_MASK) | BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE | BACKGROUND_INTENSITY,
+            _ => {}
+        }
+    }
+    cur
 }
 /// Replaces font-risky glyphs when ASCII mode is on; passthrough otherwise.
 /// Apply to content BEFORE width measurement ([OK]/-> widen the text).
