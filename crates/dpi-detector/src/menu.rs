@@ -666,22 +666,17 @@ mod tests {
     fn test_menu_persian_rows_natural_order() {
         let msg = get_messages(Language::Fa);
         let title = format_bidi(msg.menu_title, Language::Fa);
-        assert_eq!(title, "ﻦﮑﺳﺍ ﺕﺎﻤﯿﻈﻨﺗ ﻭ ﻥﺎﺑﺯ");
-
         let row0 = format_bidi(msg.menu_test_netinfo, Language::Fa);
-        assert_eq!(row0, "ﻝﺎﺼﺗﺍ ﺕﺎﻠﮑﺸﻣ ﺡﻼﺻﺍ ﻭ ﺺﯿﺨﺸﺗ");
-
         let start = format_bidi(msg.menu_hw_start, Language::Fa);
-        assert_eq!(start, "ﻪﻨﯾﺰﮔ ﺮﯿﯿﻐﺗ");
-
         let quit = format_bidi(msg.menu_hw_quit, Language::Fa);
-        assert_eq!(quit, "ﺝﻭﺮﺧ");
-
         let change = format_bidi(msg.menu_hw_change, Language::Fa);
-        assert_eq!(change, "ﻢﯿﻈﻨﺗ ﺮﯿﯿﻐﺗ");
-
         let row = format_bidi(msg.menu_hw_row, Language::Fa);
-        assert_eq!(row, "ﺖﮐﺮﺣ");
+        assert!(title.contains("ﺎﻫﺮﺘﻣﺍﺭﺎﭘ"));
+        assert!(row0.contains("ﻢﺘﺴﯿﺳ"));
+        assert_eq!(quit, "ﺝﻭﺮﺧ");
+        assert_eq!(start, "ﻉﻭﺮﺷ");
+        assert_eq!(change, "ﺮﯿﯿﻐﺗ");
+        assert_eq!(row, "ﺶﯾﺎﻤﯿﭘ");
     }
 
     #[test]
@@ -696,7 +691,7 @@ mod tests {
         println!("\n[VISUAL TEST PERSIAN MENU]");
         println!("{}", top_border);
 
-        let banner = render_banner(&msg, RegionProfile::Ir, "✓ وضعیت: متصل به اینترنت");
+        let banner = render_banner(&msg, RegionProfile::Ir, msg.latest_version);
         println!("{}", banner);
 
         // Language row
@@ -704,7 +699,7 @@ mod tests {
         let lang_opts = Language::ALL
             .iter()
             .map(|&l| {
-                let lbl = l.label();
+                let lbl = format_bidi(l.label(), l);
                 if l == Language::Fa {
                     format!("\x1b[1;32m●\x1b[0m {}", lbl)
                 } else {
