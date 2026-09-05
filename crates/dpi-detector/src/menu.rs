@@ -354,61 +354,53 @@ fn draw_menu(
     let offset = 3;
 
     if current_lang.is_rtl() {
-        // Language row
-        let languages = [Language::Ar, Language::Es, Language::Zh, Language::Ru, Language::En, Language::Fa];
-        let lang_opts = languages
+        // Language row: consistent ○ / ● bullet on the left of each language name
+        let lang_opts = Language::ALL
             .iter()
             .map(|&l| {
                 let lbl = l.label();
                 if l == current_lang {
-                    format!("{} \x1b[1;32m●\x1b[0m", lbl)
+                    format!("\x1b[1;32m●\x1b[0m {}", lbl)
                 } else {
-                    format!("{} \x1b[2m○\x1b[0m", lbl)
+                    format!("\x1b[2m○\x1b[0m {}", lbl)
                 }
             })
             .collect::<Vec<_>>()
             .join("   ");
         let lang_cursor = if cursor == 0 { "►" } else { " " };
         let lang_lbl = format_bidi(msg.menu_language, current_lang);
-        lines.push(format!("  {} {}", lang_cursor, pad_left_width(&lang_lbl, 60)));
-        lines.push(format!("    {}", pad_left_width(&lang_opts, 61)));
+        lines.push(format!("  {} {}", lang_cursor, pad_left_width(&lang_lbl, 62)));
+        lines.push(format!("    {}", pad_left_width(&lang_opts, 62)));
 
-        // IP version row
+        // IP version row: clean identical structure ● IPv4   ○ IPv6
         let ip_cursor = if cursor == 1 { "►" } else { " " };
-        let ip_opts = if v6_supported {
-            if ip_version == "ipv4" {
-                "IPv6 \x1b[2m○\x1b[0m            IPv4 \x1b[1;32m●\x1b[0m".to_string()
-            } else {
-                "IPv6 \x1b[1;32m●\x1b[0m            IPv4 \x1b[2m○\x1b[0m".to_string()
-            }
+        let ip_opts = if ip_version == "ipv4" {
+            "\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○\x1b[0m IPv6".to_string()
         } else {
-            let unavail_str = format!("({})", msg.unavailable);
-            let unavail = format_bidi(&unavail_str, current_lang);
-            format!("{} IPv6 \x1b[2m○\x1b[0m            IPv4 \x1b[1;32m●\x1b[0m", unavail)
+            "\x1b[2m○\x1b[0m IPv4   \x1b[1;32m●\x1b[0m IPv6".to_string()
         };
         let ip_lbl = format_bidi(msg.menu_ip_version, current_lang);
-        lines.push(format!("  {} {}", ip_cursor, pad_left_width(&ip_lbl, 60)));
-        lines.push(format!("    {}", pad_left_width(&ip_opts, 61)));
+        lines.push(format!("  {} {}", ip_cursor, pad_left_width(&ip_lbl, 62)));
+        lines.push(format!("    {}", pad_left_width(&ip_opts, 62)));
 
-        // Concurrency row
+        // Concurrency row: consistent ○ / ● bullet on the left of each preset
         let conc_opts = presets
             .iter()
             .map(|&p| {
                 if p == concurrency {
-                    format!("{} \x1b[1;32m●\x1b[0m", p)
+                    format!("\x1b[1;32m●\x1b[0m {}", p)
                 } else {
-                    format!("{} \x1b[2m○\x1b[0m", p)
+                    format!("\x1b[2m○\x1b[0m {}", p)
                 }
             })
             .collect::<Vec<_>>()
-            .join("      ");
+            .join("   ");
         let conc_cursor = if cursor == 2 { "►" } else { " " };
         let conc_lbl = format_bidi(msg.menu_concurrency, current_lang);
-        lines.push(format!("  {} {}", conc_cursor, pad_left_width(&conc_lbl, 60)));
-        lines.push(format!("    {}", pad_left_width(&conc_opts, 61)));
+        lines.push(format!("  {} {}", conc_cursor, pad_left_width(&conc_lbl, 62)));
+        lines.push(format!("    {}", pad_left_width(&conc_opts, 62)));
         lines.push(format!("  {}", "─".repeat(BOX_WIDTH - 8)));
     } else {
-        // Language row: 1 space separator so all 6 native names fit within BOX_WIDTH (71).
         let lang_opts = Language::ALL
             .iter()
             .map(|&l| {
@@ -473,8 +465,8 @@ fn draw_menu(
         let row_cursor = if cursor == i + offset { "►" } else { " " };
         if current_lang.is_rtl() {
             let desc = format_bidi(label, current_lang);
-            let prefix = format!("  {} {} {}.    ", row_cursor, check_box, digit);
-            lines.push(format!("{}{}", prefix, pad_left_width(&desc, 50)));
+            let prefix = format!("  {} {} {}.  ", row_cursor, check_box, digit);
+            lines.push(format!("{}{}", prefix, pad_left_width(&desc, 54)));
         } else {
             lines.push(format!("  {} {} {}. {}", row_cursor, check_box, digit, format_bidi(label, current_lang)));
         }
@@ -626,20 +618,19 @@ mod tests {
             if lang.is_rtl() {
                 let lang_opts = Language::ALL
                     .iter()
-                    .rev()
                     .map(|&l| {
                         let lbl = l.label();
                         if l == lang {
-                            format!("{} \x1b[1;32m●\x1b[0m", lbl)
+                            format!("\x1b[1;32m●\x1b[0m {}", lbl)
                         } else {
-                            format!("{} \x1b[2m○\x1b[0m", lbl)
+                            format!("\x1b[2m○\x1b[0m {}", lbl)
                         }
                     })
                     .collect::<Vec<_>>()
                     .join("   ");
                 let lang_lbl = format_bidi(msg.menu_language, lang);
-                let lang_line1 = format!("  ► {}", pad_left_width(&lang_lbl, 60));
-                let lang_line2 = format!("    {}", pad_left_width(&lang_opts, 61));
+                let lang_line1 = format!("  ► {}", pad_left_width(&lang_lbl, 62));
+                let lang_line2 = format!("    {}", pad_left_width(&lang_opts, 62));
                 assert!(strip_ansi_len(&lang_line1) + 3 <= BOX_WIDTH, "rtl lang line 1 overflows box: {}", lang_line1);
                 assert!(strip_ansi_len(&lang_line2) + 3 <= BOX_WIDTH, "rtl lang line 2 overflows box: {}", lang_line2);
             } else {
@@ -674,8 +665,8 @@ mod tests {
             for (digit, label) in test_options {
                 let test_line = if lang.is_rtl() {
                     let desc = format_bidi(label, lang);
-                    let prefix = format!("  ► [ ] {}.    ", digit);
-                    format!("{}{}", prefix, pad_left_width(&desc, 50))
+                    let prefix = format!("  ► [ ] {}.  ", digit);
+                    format!("{}{}", prefix, pad_left_width(&desc, 54))
                 } else {
                     format!("    [ ] {}. {}", digit, format_bidi(label, lang))
                 };
@@ -722,10 +713,51 @@ mod tests {
         let banner = render_banner(&msg, RegionProfile::Ir, "✓ وضعیت: متصل به اینترنت");
         println!("{}", banner);
 
+        // Language row
+        let lang_opts = Language::ALL
+            .iter()
+            .map(|&l| {
+                let lbl = l.label();
+                if l == Language::Fa {
+                    format!("\x1b[1;32m●\x1b[0m {}", lbl)
+                } else {
+                    format!("\x1b[2m○\x1b[0m {}", lbl)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("   ");
+        let lang_lbl = format_bidi(msg.menu_language, Language::Fa);
+        println!("│   ► {}  │", pad_left_width(&lang_lbl, 62));
+        println!("│     {}  │", pad_left_width(&lang_opts, 62));
+
+        // IP row
+        let ip_opts = "\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○\x1b[0m IPv6";
+        let ip_lbl = format_bidi(msg.menu_ip_version, Language::Fa);
+        println!("│     {}  │", pad_left_width(&ip_lbl, 62));
+        println!("│     {}  │", pad_left_width(ip_opts, 62));
+
+        // Concurrency row
+        let presets = [1, 5, 20, 50, 100];
+        let conc_opts = presets
+            .iter()
+            .map(|&p| {
+                if p == 20 {
+                    format!("\x1b[1;32m●\x1b[0m {}", p)
+                } else {
+                    format!("\x1b[2m○\x1b[0m {}", p)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("   ");
+        let conc_lbl = format_bidi(msg.menu_concurrency, Language::Fa);
+        println!("│     {}  │", pad_left_width(&conc_lbl, 62));
+        println!("│     {}  │", pad_left_width(&conc_opts, 62));
+        println!("│   {}  │", "─".repeat(BOX_WIDTH - 8));
+
         for (digit, label) in get_test_options(&msg) {
             let desc = format_bidi(label, Language::Fa);
-            let prefix = format!("  [ ] {}.    ", digit);
-            println!("│ {}{} │", prefix, pad_left_width(&desc, 50));
+            let prefix = format!("  [ ] {}.  ", digit);
+            println!("│ {}{}  │", prefix, pad_left_width(&desc, 54));
         }
         let bot_border = format!("╰{}╯", "─".repeat(BOX_WIDTH - 2));
         println!("{}", bot_border);
