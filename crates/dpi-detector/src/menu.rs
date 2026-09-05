@@ -65,9 +65,12 @@ pub fn run_interactive_menu(
 /// renders the real badge (version or failure notice) instead of going stale.
 fn current_badge(_initial: &str, latest_slot: &VersionSlot, lang: Language) -> String {
     let msg = get_messages(lang);
-    match latest_slot.lock().ok().and_then(|g| g.clone()) {
-        None => msg.checking_updates.to_string(),
-        Some(maybe) => version_badge_lang(maybe.as_ref(), lang),
+    match latest_slot.lock() {
+        Ok(guard) => match &*guard {
+            None => msg.checking_updates.to_string(),
+            Some(maybe) => version_badge_lang(maybe.as_ref(), lang),
+        },
+        Err(_) => msg.checking_updates.to_string(),
     }
 }
 
@@ -362,9 +365,9 @@ fn draw_menu(
         .map(|&l| {
             let lbl = format_bidi(l.label(), l);
             if l == current_lang {
-                format!("\x1b[1;32m●\x1b[0m {}", lbl)
+                format!("\x1b[1;32m(x)\x1b[0m {}", lbl)
             } else {
-                format!("\x1b[2m○\x1b[0m {}", lbl)
+                format!("\x1b[2m( )\x1b[0m {}", lbl)
             }
         })
         .collect::<Vec<_>>()
@@ -376,9 +379,9 @@ fn draw_menu(
     // IP version row
     let ip_opts = if v6_supported {
         if ip_version == "ipv4" {
-            "\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○\x1b[0m IPv6".to_string()
+            "\x1b[1;32m(x)\x1b[0m IPv4   \x1b[2m( )\x1b[0m IPv6".to_string()
         } else {
-            "\x1b[2m○\x1b[0m IPv4   \x1b[1;32m●\x1b[0m IPv6".to_string()
+            "\x1b[2m( )\x1b[0m IPv4   \x1b[1;32m(x)\x1b[0m IPv6".to_string()
         }
     } else {
         let unavail = match current_lang {
@@ -387,7 +390,7 @@ fn draw_menu(
             Language::Es => "(no disponible)".to_string(),
             Language::En => "(unavailable)".to_string(),
         };
-        format!("\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○ IPv6 {}\x1b[0m", unavail)
+        format!("\x1b[1;32m(x)\x1b[0m IPv4   \x1b[2m( ) IPv6 {}\x1b[0m", unavail)
     };
     let ip_cursor = if cursor == 1 { "►" } else { " " };
     let ip_lbl = format!("{}:", msg.menu_ip_version.trim_end_matches(':'));
@@ -398,9 +401,9 @@ fn draw_menu(
         .iter()
         .map(|&p| {
             if p == concurrency {
-                format!("\x1b[1;32m●\x1b[0m {}", p)
+                format!("\x1b[1;32m(x)\x1b[0m {}", p)
             } else {
-                format!("\x1b[2m○\x1b[0m {}", p)
+                format!("\x1b[2m( )\x1b[0m {}", p)
             }
         })
         .collect::<Vec<_>>()
@@ -556,9 +559,9 @@ mod tests {
                 .map(|&l| {
                     let lbl = l.label();
                     if l == lang {
-                        format!("\x1b[1;32m●\x1b[0m {}", lbl)
+                        format!("\x1b[1;32m(x)\x1b[0m {}", lbl)
                     } else {
-                        format!("\x1b[2m○ {}\x1b[0m", lbl)
+                        format!("\x1b[2m( )\x1b[0m {}", lbl)
                     }
                 })
                 .collect::<Vec<_>>()
@@ -569,15 +572,14 @@ mod tests {
             assert!(w + 3 <= BOX_WIDTH, "language row for {:?} overflows box: w={}", lang, w);
 
             let ip_lbl = format_bidi(msg.menu_ip_version, lang);
-            let ip_line = format!("    {} ● IPv4   ○ IPv6", pad_width(&ip_lbl, 15));
+            let ip_line = format!("    {} (x) IPv4   ( ) IPv6", pad_width(&ip_lbl, 15));
             let w = strip_ansi_len(&ip_line);
             assert!(w + 3 <= BOX_WIDTH, "ip row for {:?} overflows box: w={}", lang, w);
 
             let conc_lbl = format_bidi(msg.menu_concurrency, lang);
-            let conc_line = format!("    {} ● 50   ○ 100", pad_width(&conc_lbl, 15));
+            let conc_line = format!("    {} (x) 50   ( ) 100", pad_width(&conc_lbl, 15));
             let w = strip_ansi_len(&conc_line);
             assert!(w + 3 <= BOX_WIDTH, "conc row for {:?} overflows box: w={}", lang, w);
-            // Test options
             for (digit, label) in test_options {
                 let test_line = format!("  ► [ ] {}. {}", digit, format_bidi(label, lang));
                 let w = strip_ansi_len(&test_line);
@@ -609,9 +611,9 @@ mod tests {
             .map(|&l| {
                 let lbl = format_bidi(l.label(), l);
                 if l == Language::Ru {
-                    format!("\x1b[1;32m●\x1b[0m {}", lbl)
+                    format!("\x1b[1;32m(x)\x1b[0m {}", lbl)
                 } else {
-                    format!("\x1b[2m○\x1b[0m {}", lbl)
+                    format!("\x1b[2m( )\x1b[0m {}", lbl)
                 }
             })
             .collect::<Vec<_>>()
@@ -623,7 +625,7 @@ mod tests {
         // IP row
         let ip_lbl = format!("{}:", msg.menu_ip_version.trim_end_matches(':'));
         let ip_unavail = format!("({})", format_bidi("недоступен", Language::Ru));
-        let ip_opts = format!("\x1b[1;32m●\x1b[0m IPv4   \x1b[2m○ IPv6 {}\x1b[0m", ip_unavail);
+        let ip_opts = format!("\x1b[1;32m(x)\x1b[0m IPv4   \x1b[2m( ) IPv6 {}\x1b[0m", ip_unavail);
         let l2 = format!("    {} {}", pad_width(&ip_lbl, 16), ip_opts);
         let pad2 = BOX_WIDTH.saturating_sub(strip_ansi_len(&l2) + 3);
         println!("│ {}{} │", l2, " ".repeat(pad2));
@@ -634,9 +636,9 @@ mod tests {
             .iter()
             .map(|&p| {
                 if p == 20 {
-                    format!("\x1b[1;32m●\x1b[0m {}", p)
+                    format!("\x1b[1;32m(x)\x1b[0m {}", p)
                 } else {
-                    format!("\x1b[2m○\x1b[0m {}", p)
+                    format!("\x1b[2m( )\x1b[0m {}", p)
                 }
             })
             .collect::<Vec<_>>()
