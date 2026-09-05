@@ -109,11 +109,14 @@ pub fn reshape_arabic(text: &str) -> String {
 }
 
 fn format_bidi_segment(text: &str) -> String {
-    if !text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
+    let cleaned = text.replace('\u{200C}', "");
+    if !cleaned.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')) {
         return text.to_string();
     }
-    let reshaped = arabic_reshaper::arabic_reshape(text)
-        .replace(['\u{FBFD}', '\u{FBFC}'], "\u{FEF0}");
+    let reshaped = arabic_reshaper::arabic_reshape(&cleaned)
+        .replace(['\u{FBFD}', '\u{FBFC}'], "\u{FEF0}")
+        .replace('\u{FBFE}', "\u{FEF3}")
+        .replace('\u{FBFF}', "\u{FEF4}");
     let bidi_info = unicode_bidi::BidiInfo::new(&reshaped, Some(unicode_bidi::Level::ltr()));
     if bidi_info.paragraphs.is_empty() {
         return reshaped;
@@ -762,25 +765,25 @@ pub fn get_messages(lang: Language) -> Messages {
             http_blocked_desc: "HTTP BLOCK (هدایت به صفحه پیوندها یا مسدودسازی)",
             tcp16_drop_desc: "TCP16 DROP (محدودسازی پنجره بزرگ TCP یا قطع ارتباط)",
             unreachable_desc: "UNREACHABLE (شبکه یا مقصد در دسترس نیست)",
-            menu_title: "پارامترها و انتخاب آزمون‌ها",
-            menu_language: "زبان",
-            menu_ip_version: "نسخه IP",
-            menu_concurrency: "هم‌زمانی",
+            menu_title: "تنظیمات و انتخاب تستها",
+            menu_language: "زبان:",
+            menu_ip_version: "نسخهٔ IP:",
+            menu_concurrency: "همزمانی:",
             menu_hw_row: "پیمایش",
             menu_hw_change: "تغییر",
-            menu_hw_tests: "آزمون‌ها",
+            menu_hw_tests: "تستها",
             menu_hw_start: "شروع",
             menu_hw_quit: "خروج",
             menu_line_prompt: "انتخاب خود را وارد کنید [123]: ",
-            menu_invalid_line: "ورودی نامعتبر است؛ آزمون‌های 1، 2 و 3 اجرا می‌شوند.",
-            menu_need_one: "حداقل یک آزمون را انتخاب کنید",
+            menu_invalid_line: "ورودی نامعتبر است؛ تست‌های 1، 2 و 3 اجرا می‌شوند.",
+            menu_need_one: "حداقل یک تست را انتخاب کنید",
             menu_test_netinfo: "اطلاعات شبکه و سیستم",
-            menu_test_dns: "بررسی در دسترس بودن سرورهای دی‌ان‌اس",
-            menu_test_domains: "بررسی دسترسی به وب‌سایت‌ها",
-            menu_test_tcp: "بررسی سی‌دی‌ان و هاستینگ - آزمون ۱۶ کیلوبایت",
-            menu_test_sni: "جستجوی دامنه‌های مجاز و اس‌ان‌آی سفید",
-            menu_test_telegram: "بررسی دسترسی به تلگرام",
-            menu_test_legend: "راهنمای وضعیت‌ها - بخش راهنما",
+            menu_test_dns: "دسترسی به سرورهای DNS",
+            menu_test_domains: "دسترسی به سایتها",
+            menu_test_tcp: "دسترسی به CDN و هاستینگ (تست 16 KB)",
+            menu_test_sni: "جستجوی SNI سفید",
+            menu_test_telegram: "دسترسی به تلگرام",
+            menu_test_legend: "توضیح وضعیتها (راهنما)",
             lang: Language::Fa,
             replies_label: "پاسخ",
             blocked_short: "مسدود",
@@ -789,8 +792,8 @@ pub fn get_messages(lang: Language) -> Messages {
 
             latest_version: "✓ آخرین نسخه",
             author: "نویسنده:",
-            chat: "کانال:",
-            checking_updates: "بررسی به‌روزرسانی‌ها...",
+            chat: "گروه:",
+            checking_updates: "بررسی بروزرسانی",
             os: "سیستم‌عامل:",
             system_dns: "DNS سیستم:",
             active_interface: "رابط فعال:",
@@ -1264,9 +1267,9 @@ pub fn get_messages(lang: Language) -> Messages {
             tcp16_drop_desc: "TCP16 DROP (تم خنق نافذة الإرسال أو إسقاط الاتصال)",
             unreachable_desc: "UNREACHABLE (الشبكة أو المضيف غير متاح)",
             menu_title: "المعلمات واختيار الاختبارات",
-            menu_language: "Language",
-            menu_ip_version: "إصدار IP",
-            menu_concurrency: "التزامن",
+            menu_language: "اللغة:",
+            menu_ip_version: "إصدار IP:",
+            menu_concurrency: "التزامن:",
             menu_hw_row: "سطر",
             menu_hw_change: "تغيير",
             menu_hw_tests: "اختبارات",
@@ -1291,7 +1294,7 @@ pub fn get_messages(lang: Language) -> Messages {
             latest_version: "✓ أحدث إصدار",
             author: "المؤلف:",
             chat: "الدردشة:",
-            checking_updates: "جارٍ التحقق من التحديثات...",
+            checking_updates: "جارٍ التحقق من التحديثات",
             os: "نظام التشغيل:",
             system_dns: "DNS النظام:",
             active_interface: "الواجهة النشطة:",
@@ -1788,21 +1791,20 @@ mod tests {
         assert_eq!(shaped_start, "ﻉﻭﺮﺷ");
 
         let shaped_change = format_bidi("تغییر", Language::Fa);
-        assert_eq!(shaped_change, "ﺮﯿﯿﻐﺗ");
+        assert_eq!(shaped_change, "ﺮﻴﻴﻐﺗ");
 
         let shaped_farsi = format_bidi("فارسی", Language::Fa);
         assert_eq!(shaped_farsi, "ﻰﺳﺭﺎﻓ");
-        let title = format_bidi("پارامترها و انتخاب آزمون‌ها", Language::Fa);
-        assert!(title.contains("ﺎﻫﺮﺘﻣﺍﺭﺎﭘ"));
-
+        let author = format_bidi("نویسنده", Language::Fa);
+        assert_eq!(author, "ﻩﺪﻨﺴﻳﻮﻧ");
         let items = [
             "اطلاعات شبکه و سیستم",
-            "بررسی در دسترس بودن سرورهای دی‌ان‌اس",
-            "بررسی دسترسی به وب‌سایت‌ها",
-            "بررسی سی‌دی‌ان و هاستینگ - آزمون ۱۶ کیلوبایت",
-            "جستجوی دامنه‌های مجاز و اس‌ان‌آی سفید",
-            "بررسی دسترسی به تلگرام",
-            "راهنمای وضعیت‌ها - بخش راهنما",
+            "دسترسی به سرورهای DNS",
+            "دسترسی به سایتها",
+            "دسترسی به CDN و هاستینگ (تست 16 KB)",
+            "جستجوی SNI سفید",
+            "دسترسی به تلگرام",
+            "توضیح وضعیتها (راهنما)",
         ];
         for item in &items {
             let shaped = format_bidi(item, Language::Fa);
