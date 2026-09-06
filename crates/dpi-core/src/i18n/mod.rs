@@ -27,6 +27,14 @@ impl Language {
             Self::Es => "Español",
         }
     }
+    pub fn label_ascii(&self) -> &'static str {
+        match self {
+            Self::En => "English",
+            Self::Ru => "Русский",
+            Self::Zh => "Chinese",
+            Self::Es => "Espanol",
+        }
+    }
     pub fn from_code(code: &str) -> Option<Self> {
         match code.trim().to_lowercase().as_str() {
             "en" | "en_us" | "en_gb" | "english" => Some(Self::En),

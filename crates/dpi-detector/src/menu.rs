@@ -388,7 +388,11 @@ fn draw_menu(
     let lang_opts = Language::ALL
         .iter()
         .map(|&l| {
-            let lbl = format_bidi(l.label(), l);
+            let lbl = if ascii_mode() {
+                l.label_ascii().to_string()
+            } else {
+                format_bidi(l.label(), l)
+            };
             format!("{} {}", radio_btn(l == current_lang), lbl)
         })
         .collect::<Vec<_>>()
@@ -407,7 +411,7 @@ fn draw_menu(
     } else {
         let unavail = match current_lang {
             Language::Ru => "(недоступен)".to_string(),
-            Language::Zh => "(不可用)".to_string(),
+            Language::Zh => if ascii_mode() { "(unavailable)".to_string() } else { "(不可用)".to_string() },
             Language::Es => "(no disponible)".to_string(),
             Language::En => "(unavailable)".to_string(),
         };

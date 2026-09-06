@@ -181,8 +181,8 @@ fn read_post_test_action() -> PostTestAction {
 
 fn export_report(path: &str, content: &str, msg: &Messages) {
     match std::fs::write(path, content) {
-        Ok(()) => println!("{}", asc(&format!("\x1b[1;32m{}\x1b[0m\n", msg.report_saved.replace("{}", path)))),
-        Err(e) => println!("\x1b[1;33m{}\x1b[0m\n", msg.report_save_fail.replace("{}", &e.to_string())),
+        Ok(()) => println_out(&format!("\x1b[1;32m{}\x1b[0m", msg.report_saved.replace("{}", path))),
+        Err(e) => println_out(&format!("\x1b[1;33m{}\x1b[0m", msg.report_save_fail.replace("{}", &e.to_string()))),
     }
 }
 
@@ -194,16 +194,13 @@ fn legend_loop(lang: Language, msg: &Messages) -> MenuAction {
         if !std::io::stdin().is_terminal() {
             return MenuAction::Quit;
         }
-        println!(
-            "{}",
-            panel_to_string(
-                msg.menu_control_menu,
-                &[format!(
-                    "  \x1b[1;42;37m Enter \x1b[0m {}   \x1b[1;44;37m M \x1b[0m {}   \x1b[1;41;37m Q \x1b[0m {}",
-                    msg.menu_control_repeat, msg.menu_control_menu, msg.menu_control_exit
-                )],
-            )
-        );
+        println_out(&panel_to_string(
+            msg.menu_control_menu,
+            &[format!(
+                "  \x1b[1;42;37m Enter \x1b[0m {}   \x1b[1;44;37m M \x1b[0m {}   \x1b[1;41;37m Q \x1b[0m {}",
+                msg.menu_control_repeat, msg.menu_control_menu, msg.menu_control_exit
+            )],
+        ));
         let _ = stdout().flush();
         match read_post_test_action() {
             PostTestAction::Repeat => continue,
@@ -371,15 +368,14 @@ async fn main() {
     };
     // Mirrors Python: test 4 is unavailable without any SNI list.
     if whitelist_sni.is_empty() && !args.json {
-        print!("\x1b[33m{}\x1b[0m", msg.whitelist_skipped);
+        print_out(&format!("\x1b[33m{}\x1b[0m", msg.whitelist_skipped));
     }
-
 
     if let Some(ref e) = cfg.config_load_error {
-        println!("\x1b[1;33m{}\x1b[0m {}", msg.config_load_error_label, e);
+        println_out(&format!("\x1b[1;33m{}\x1b[0m {}", msg.config_load_error_label, e));
     }
     for w in &cfg.config_warnings {
-        println!("\x1b[33m{}\x1b[0m {}", msg.config_warning_label, w);
+        println_out(&format!("\x1b[33m{}\x1b[0m {}", msg.config_warning_label, w));
     }
 
     if args.legend {
@@ -556,8 +552,8 @@ async fn main() {
     }
 
     if ip_version == "ipv6" && !dpi_core::net::netinfo::ipv6_supported() {
-        println!("\x1b[31m{}\x1b[0m", msg.ipv6_not_configured);
-        println!("{}", asc(&format!("\x1b[2m{}\x1b[0m", msg.ipv6_switch_hint)));
+        println_out(&format!("\x1b[31m{}\x1b[0m", msg.ipv6_not_configured));
+        println_out(&format!("\x1b[2m{}\x1b[0m", msg.ipv6_switch_hint));
         return;
     }
     cfg.ip_version = ip_version.clone();

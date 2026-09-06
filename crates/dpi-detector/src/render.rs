@@ -1,4 +1,3 @@
-use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dpi_core::classify::*;
 use dpi_core::config::AppConfig;
@@ -210,7 +209,10 @@ fn apply_ansi_code(code: &str, mut cur: u16, default_attr: u16) -> u16 {
         return default_attr;
     }
 
-    for part in code.split(';') {
+    let parts: Vec<&str> = code.split(';').collect();
+    let mut idx = 0;
+    while idx < parts.len() {
+        let part = parts[idx];
         match part {
             "0" => cur = default_attr,
             "1" => cur |= FOREGROUND_INTENSITY,
@@ -223,6 +225,42 @@ fn apply_ansi_code(code: &str, mut cur: u16, default_attr: u16) -> u16 {
             "35" => cur = (cur & !FG_MASK) | FOREGROUND_RED | FOREGROUND_BLUE,
             "36" => cur = (cur & !FG_MASK) | FOREGROUND_GREEN | FOREGROUND_BLUE,
             "37" => cur = (cur & !FG_MASK) | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
+            "38" if idx + 4 < parts.len() && parts[idx + 1] == "2" => {
+                let r: u8 = parts[idx + 2].parse().unwrap_or(0);
+                let g: u8 = parts[idx + 3].parse().unwrap_or(0);
+                let b: u8 = parts[idx + 4].parse().unwrap_or(0);
+                let mut fg = 0;
+                if r > 64 { fg |= FOREGROUND_RED; }
+                if g > 64 { fg |= FOREGROUND_GREEN; }
+                if b > 64 { fg |= FOREGROUND_BLUE; }
+                if r > 160 || g > 160 || b > 160 { fg |= FOREGROUND_INTENSITY; }
+                cur = (cur & !FG_MASK) | fg;
+                idx += 4;
+            }
+            "38" if idx + 2 < parts.len() && parts[idx + 1] == "5" => {
+                let col: u8 = parts[idx + 2].parse().unwrap_or(0);
+                let fg = match col {
+                    0 => 0,
+                    1 => FOREGROUND_RED,
+                    2 => FOREGROUND_GREEN,
+                    3 => FOREGROUND_RED | FOREGROUND_GREEN,
+                    4 => FOREGROUND_BLUE,
+                    5 => FOREGROUND_RED | FOREGROUND_BLUE,
+                    6 => FOREGROUND_GREEN | FOREGROUND_BLUE,
+                    7 => FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
+                    8 => FOREGROUND_INTENSITY,
+                    9 => FOREGROUND_RED | FOREGROUND_INTENSITY,
+                    10 => FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+                    11 => FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+                    12 => FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+                    13 => FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+                    14 => FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+                    15 => FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+                    _ => FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
+                };
+                cur = (cur & !FG_MASK) | fg;
+                idx += 2;
+            }
             "90" => cur = (cur & !FG_MASK) | FOREGROUND_INTENSITY,
             "91" => cur = (cur & !FG_MASK) | FOREGROUND_RED | FOREGROUND_INTENSITY,
             "92" => cur = (cur & !FG_MASK) | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
@@ -249,6 +287,7 @@ fn apply_ansi_code(code: &str, mut cur: u16, default_attr: u16) -> u16 {
             "107" => cur = (cur & !BG_MASK) | BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE | BACKGROUND_INTENSITY,
             _ => {}
         }
+        idx += 1;
     }
     cur
 }
@@ -283,7 +322,12 @@ pub fn asc_with(s: &str, ascii: bool) -> String {
             // Preserve hardware CP866 single-line box drawing:
             // ─ (0xC4), │ (0xB3), ┌ (0xDA), ┐ (0xBF), └ (0xC0), ┘ (0xD9),
             // ├ (0xC3), ┤ (0xB4), ┬ (0xC2), ┴ (0xC1), ┼ (0xC5)
-            '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' => out.push(c),
+            // Preserve hardware CP866 single and double-line box drawing:
+            // ─ (0xC4), │ (0xB3), ┌ (0xDA), ┐ (0xBF), └ (0xC0), ┘ (0xD9),
+            // ├ (0xC3), ┤ (0xB4), ┬ (0xC2), ┴ (0xC1), ┼ (0xC5),
+            // ╞ (0xC6), ═ (0xCD), ╪ (0xD8), ╡ (0xB5)
+            '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼'
+            | '╞' | '═' | '╪' | '╡' => out.push(c),
             _ => out.push(c),
         }
     }
@@ -295,10 +339,49 @@ pub fn asc(s: &str) -> String {
     asc_with(s, ascii_mode())
 }
 
-/// Table border preset: UTF8_FULL_CONDENSED uses single-line box drawing
-/// characters natively supported in CP866 (0xC4, 0xB3, 0xDA, 0xBF, etc.).
+/// Single-line box drawing table preset fully compatible with hardware CP866:
+/// uses `│` (0xB3) instead of `┆` (U+2506) for column borders, eliminating
+/// `?` character corruption on Windows legacy consoles and raster fonts.
+pub const CP866_TABLE_PRESET: &str = "││──╞═╪╡│    ┬┴┌┐└┘";
+
 fn table_preset() -> &'static str {
-    UTF8_FULL_CONDENSED
+    CP866_TABLE_PRESET
+}
+
+/// Formats text with inline ANSI SGR color codes.
+/// Using inline ANSI escapes inside comfy-table cells instead of `Cell.fg(...)`
+/// avoids a crossterm bug on Windows without VT (Windows 7), where crossterm's
+/// `StyledContent` drops all text on non-VT consoles during string formatting.
+pub fn cell_color(text: &str, color: Color) -> String {
+    let sgr = match color {
+        Color::Reset => "\x1b[0m",
+        Color::Black => "\x1b[30m",
+        Color::DarkGrey => "\x1b[90m",
+        Color::Red | Color::DarkRed => "\x1b[31m",
+        Color::Green | Color::DarkGreen => "\x1b[32m",
+        Color::Yellow | Color::DarkYellow => "\x1b[33m",
+        Color::Blue | Color::DarkBlue => "\x1b[34m",
+        Color::Magenta | Color::DarkMagenta => "\x1b[35m",
+        Color::Cyan | Color::DarkCyan => "\x1b[36m",
+        Color::White | Color::Grey => "\x1b[37m",
+        _ => "\x1b[0m",
+    };
+    text.lines()
+        .map(|l| format!("{}{}\x1b[0m", sgr, l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Joins multi-line cell parts, each line carrying its own inline ANSI color.
+fn join_cell_colored(mut lines: Vec<(String, Color)>) -> String {
+    if lines.is_empty() {
+        lines.push(("—".to_string(), Color::DarkGrey));
+    }
+    lines
+        .into_iter()
+        .map(|(t, c)| cell_color(&t, c))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Country flag for the current mode (emoji needs a CJK/emoji font).
@@ -437,10 +520,10 @@ impl LiveProgress {
     /// Clears the line (transient: nothing remains after the phase).
     pub fn finish(&self) {
         if self.tty {
-            if !plain_mode() {
+            if has_vt() {
                 eprint!("\x1b[2K\r");
             } else {
-                eprint!("\r                                                                \r");
+                eprint!("\r                                                                               \r");
             }
             let _ = std::io::stderr().flush();
         }
@@ -500,7 +583,11 @@ impl Spinner {
             let _ = h.join();
         }
         if self.tty {
-            eprint!("\x1b[2K\r");
+            if has_vt() {
+                eprint!("\x1b[2K\r");
+            } else {
+                eprint!("\r                                                                               \r");
+            }
             let _ = std::io::stderr().flush();
         }
     }
@@ -917,7 +1004,7 @@ pub fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> String {
             } else {
                 eps[0].clone()
             };
-            table.add_row(vec![Cell::new(&name).fg(Color::Cyan), Cell::new(cell)]);
+            table.add_row(vec![Cell::new(cell_color(&name, Color::Cyan)), Cell::new(cell)]);
         }
         out.push_str(&format!("\n{}\n\n", table));
     }
@@ -1007,19 +1094,6 @@ fn dns_latency_lines(
     lines
 }
 
-/// Joins multi-line cell parts, worst color wins (single fg per cell).
-fn join_cell(mut lines: Vec<(String, Color)>) -> (String, Color) {
-    if lines.is_empty() {
-        lines.push(("—".to_string(), Color::DarkGrey));
-    }
-    let color = lines
-        .iter()
-        .map(|(_, c)| *c)
-        .max_by_key(|c| color_sev(*c))
-        .unwrap_or(Color::DarkGrey);
-    let text = lines.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>().join("\n");
-    (text, color)
-}
 
 pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &Messages) -> String {
     let mut out = String::new();
@@ -1112,9 +1186,14 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
                 }
             }
         }
-        let egress_text = egress_lines.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>().join("\n");
-        let egress_color: Option<Color> =
-            egress_lines.iter().filter_map(|(_, c)| *c).max_by_key(|c| color_sev(*c));
+        let egress_text = egress_lines
+            .iter()
+            .map(|(t, c)| match c {
+                Some(col) => cell_color(t, *col),
+                None => t.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
 
         // Substitution cell
         let mut subst_lines: Vec<(String, Color)> = Vec::new();
@@ -1157,27 +1236,24 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
             .max(egress_lines.len())
             .max(subst_lines.len())
             .max(1);
-        let (doh_text, doh_color) = join_cell(doh_lines);
-        let (dot_text, dot_color) = join_cell(dot_lines);
-        let (udp_text, udp_color) = join_cell(udp_lines);
-        let (subst_text, subst_color) = join_cell(subst_lines);
+        let doh_text = join_cell_colored(doh_lines);
+        let dot_text = join_cell_colored(dot_lines);
+        let udp_text = join_cell_colored(udp_lines);
+        let subst_text = join_cell_colored(subst_lines);
         let name_text = (0..n_rows)
             .map(|i| if i == 0 { name.clone() } else { format!("{} #{}", name, i + 1) })
             .collect::<Vec<_>>()
             .join("\n");
         let mut row = vec![
-            Cell::new(name_text).fg(Color::Cyan),
-            Cell::new(doh_text).fg(doh_color),
+            Cell::new(cell_color(&name_text, Color::Cyan)),
+            Cell::new(doh_text),
         ];
         if has_dot {
-            row.push(Cell::new(dot_text).fg(dot_color));
+            row.push(Cell::new(dot_text));
         }
-        row.push(Cell::new(udp_text).fg(udp_color));
-        row.push(match egress_color {
-            Some(c) => Cell::new(egress_text).fg(c),
-            None => Cell::new(egress_text),
-        });
-        row.push(Cell::new(subst_text).fg(subst_color));
+        row.push(Cell::new(udp_text));
+        row.push(Cell::new(egress_text));
+        row.push(Cell::new(subst_text));
         table.add_row(row);
     }
 
@@ -1224,16 +1300,6 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
     out
 }
 
-fn color_sev(c: Color) -> u8 {
-    match c {
-        Color::Red => 5,
-        Color::Magenta => 4,
-        Color::Yellow => 3,
-        Color::Green => 2,
-        Color::White => 1,
-        _ => 0,
-    }
-}
 
 // ─── Test 2: domains ──────────────────────────────────────────────────────────
 
@@ -1315,10 +1381,10 @@ pub fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
         let (http_s, t12_s, t13_s, raw_details) = dpi_core::probe::domains::build_domain_row(e);
         let details = localize_domain_details(&raw_details, msg.lang);
         table.add_row(vec![
-            Cell::new(&e.domain).fg(Color::Cyan),
-            Cell::new(http_s.display_label()).fg(status_color(http_s)),
-            Cell::new(t12_s.display_label()).fg(status_color(t12_s)),
-            Cell::new(t13_s.display_label()).fg(status_color(t13_s)),
+            Cell::new(cell_color(&e.domain, Color::Cyan)),
+            Cell::new(cell_color(http_s.display_label(), status_color(http_s))),
+            Cell::new(cell_color(t12_s.display_label(), status_color(t12_s))),
+            Cell::new(cell_color(t13_s.display_label(), status_color(t13_s))),
             Cell::new(details),
         ]);
     }
@@ -1462,9 +1528,9 @@ pub fn render_tcp_table(rows: &[TcpRow], msg: &Messages) -> String {
         }
         table.add_row(vec![
             Cell::new(&r.id),
-            Cell::new(&r.asn).fg(Color::Yellow),
-            Cell::new(&r.provider).fg(Color::Cyan),
-            Cell::new(label).fg(status_color(r.status)),
+            Cell::new(cell_color(&r.asn, Color::Yellow)),
+            Cell::new(cell_color(&r.provider, Color::Cyan)),
+            Cell::new(cell_color(label, status_color(r.status))),
             Cell::new(localize_detail(&r.detail, msg.lang)),
         ]);
     }
@@ -1579,10 +1645,10 @@ pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
         };
         // Region from telegram_dc_list order is not carried; show stored region
         table.add_row(vec![
-            Cell::new(&dc.name).fg(Color::Cyan),
+            Cell::new(cell_color(&dc.name, Color::Cyan)),
             Cell::new(&dc.ip),
             Cell::new(&dc.region),
-            Cell::new(label).fg(color),
+            Cell::new(cell_color(label, color)),
             Cell::new(ping),
         ]);
     }
@@ -1997,4 +2063,28 @@ mod tests {
         assert_eq!(localize_detail(DET_STREAM_RST_HELLO, Language::En), "TCP RST on ClientHello");
     }
 
+    #[test]
+    fn test_cp866_table_preset_and_cell_color() {
+        use comfy_table::*;
+        let mut table = Table::new();
+        table.load_preset(table_preset()).set_content_arrangement(ContentArrangement::Dynamic);
+        table.set_header(vec![
+            Cell::new("ID"),
+            Cell::new("ASN"),
+            Cell::new("Status"),
+            Cell::new("Detail"),
+        ]);
+        table.add_row(vec![
+            Cell::new("AK-01"),
+            Cell::new(cell_color("AS12345", Color::Yellow)),
+            Cell::new(cell_color("OK", Color::Green)),
+            Cell::new("8.8s"),
+        ]);
+        let ts = table.to_string();
+        assert!(ts.contains('│'), "CP866 single vertical line present");
+        assert!(!ts.contains('┆'), "no U+2506 non-CP866 separators");
+        assert!(ts.contains("AS12345"), "cell content preserved");
+        assert!(ts.contains("OK"), "cell content preserved");
+        assert!(ts.contains("\x1b[33mAS12345\x1b[0m"), "inline ANSI color preserved");
+    }
 }
