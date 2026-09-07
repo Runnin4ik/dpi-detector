@@ -52,11 +52,11 @@ irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | 
 | :--- | :--- | :--- |
 | **Windows 10, 11, Server** | x86_64 | `dpi-detector-windows-x86_64.exe` |
 | **Windows 7, 8, Server 2008/2012** | x86_64 | `dpi-detector-windows-7-x86_64.exe` |
-| **Linux (PC, Серверы, VPS)** | x86_64 musl | `dpi-detector-linux-x86_64` |
-| **Роутеры ARM64** (Keenetic Hopper/Titan 2, RPi, OpenWrt) | aarch64 musl | `dpi-detector-linux-arm64` |
-| **Роутеры ARMv7** (Keenetic Titan 1/Hero, Asus RT-AX58U) | armv7hf musl | `dpi-detector-linux-armv7` |
-| **Роутеры MIPS LE** (Keenetic Viva/Giga, MT7621, OpenWrt) | mipsel musl | `dpi-detector-linux-mipsel` |
-| **Роутеры MIPS BE** (Atheros, Qualcomm, OpenWrt) | mips musl | `dpi-detector-linux-mips` |
+| **Linux (PC, Серверы, VPS)** | x86_64 musl | `dpi-detector-linux-x86_64` (и `-upx`) |
+| **Роутеры ARM64** (Keenetic Hopper/Titan 2, RPi, OpenWrt) | aarch64 musl | `dpi-detector-linux-arm64` (и `-upx`) |
+| **Роутеры ARMv7** (Keenetic Titan 1/Hero, Asus RT-AX58U) | armv7hf musl | `dpi-detector-linux-armv7` (и `-upx`) |
+| **Роутеры MIPS LE** (Keenetic Viva/Giga, MT7621, OpenWrt) | mipsel musl | `dpi-detector-linux-mipsel` (и `-upx`) |
+| **Роутеры MIPS BE** (Atheros, Qualcomm, OpenWrt) | mips musl | `dpi-detector-linux-mips` (и `-upx`) |
 | **macOS Apple Silicon** (M1, M2, M3, M4) | aarch64 | `dpi-detector-macos-arm64` |
 | **macOS Intel** | x86_64 | `dpi-detector-macos-intel` |
 | **Android ARM64** (Смартфоны, планшеты, Termux, ADB) | aarch64 bionic | `dpi-detector-android-arm64` |
@@ -68,8 +68,10 @@ irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | 
 
 При запуске на роутере скрипт `install.sh`:
 1. Автоматически находит директорию `/opt/bin` (Entware) и устанавливает бинарник туда (сохраняется после перезагрузки).
-2. Заменяет файл атомарно (`.tmp.$$` -> `dpi-detector`) с проверкой архитектуры через `--version`.
-3. Поддерживает запуск напрямую через SSH:
+2. **Контролирует свободное место**: если на накопителе осталось `< 7 МБ`, скрипт автоматически скачивает компактную версию со сжатием UPX (~1.4 МБ вместо ~3.9 МБ), защищая роутер от переполнения Flash или `tmpfs`.
+3. Заменяет файл атомарно (`.tmp.$$` -> `dpi-detector`) с проверкой архитектуры через `--version` (при сбое UPX автоматически переключается на стандартный бинарник).
+4. Поддерживает принудительный выбор версии: `DPI_UPX=1` (компактная) или `DPI_UPX=0` (стандартная).
+5. Поддерживает запуск напрямую через SSH:
 
 ```bash
 # Установка и запуск меню
