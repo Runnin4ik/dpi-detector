@@ -3,7 +3,7 @@ set -e
 
 main() {
   REPO="Runnin4ik/dpi-detector"
-  VERSION="${DPI_VERSION:-v5.0.0-alpha.7}"
+  VERSION="${DPI_VERSION:-v5.0.0-alpha.8}"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -142,8 +142,6 @@ TMP_FILE="${OUT_DIR}/.dpi-detector.tmp.$$"
 # Helper: check if target has a UPX-compressed build available in releases
 target_supports_upx() {
   case "$1" in
-    dpi-detector-linux-x86_64|\
-    dpi-detector-linux-arm64|\
     dpi-detector-linux-armv7|\
     dpi-detector-linux-mipsel|\
     dpi-detector-linux-mips)

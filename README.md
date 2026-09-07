@@ -9,7 +9,7 @@
 
 [![Language: Rust](https://img.shields.io/badge/Language-Rust_2021-DEA584.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v5.0.0--alpha.7-blue.svg)](https://github.com/Runnin4ik/dpi-detector/releases)
+[![Release](https://img.shields.io/badge/Release-v5.0.0--alpha.8-blue.svg)](https://github.com/Runnin4ik/dpi-detector/releases)
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0.svg?logo=telegram&logoColor=white)](https://t.me/DPI_detector)
 
 Полностью переписанный нативный инструмент для анализа цензуры и блокировок трафика на **чистом Rust**:
@@ -52,8 +52,8 @@ irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | 
 | :--- | :--- | :--- |
 | **Windows 10, 11, Server** | x86_64 | `dpi-detector-windows-x86_64.exe` |
 | **Windows 7, 8, Server 2008/2012** | x86_64 | `dpi-detector-windows-7-x86_64.exe` |
-| **Linux (PC, Серверы, VPS)** | x86_64 musl | `dpi-detector-linux-x86_64` (и `-upx`) |
-| **Роутеры ARM64** (Keenetic Hopper/Titan 2, RPi, OpenWrt) | aarch64 musl | `dpi-detector-linux-arm64` (и `-upx`) |
+| **Linux (PC, Серверы, VPS)** | x86_64 musl | `dpi-detector-linux-x86_64` |
+| **Роутеры ARM64** (Keenetic Hopper/Titan 2, RPi, OpenWrt) | aarch64 musl | `dpi-detector-linux-arm64` |
 | **Роутеры ARMv7** (Keenetic Titan 1/Hero, Asus RT-AX58U) | armv7hf musl | `dpi-detector-linux-armv7` (и `-upx`) |
 | **Роутеры MIPS LE** (Keenetic Viva/Giga, MT7621, OpenWrt) | mipsel musl | `dpi-detector-linux-mipsel` (и `-upx`) |
 | **Роутеры MIPS BE** (Atheros, Qualcomm, OpenWrt) | mips musl | `dpi-detector-linux-mips` (и `-upx`) |
