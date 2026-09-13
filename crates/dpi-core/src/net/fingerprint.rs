@@ -884,6 +884,62 @@ mod tests {
         assert!(ja4_tls12.starts_with("t12d"), "{ja4_tls12}");
     }
 
+    /// Browser hellos open `supported_versions` with a GREASE code point, and
+    /// JA3/JA4 both ignore it — but a middlebox may read the list, so the hello
+    /// has to carry it and the two fingerprint hashes have to be unmoved by it.
+    ///
+    /// Firefox greases nothing, so its list must stay plain: adding the value
+    /// there would deviate from `curl_firefox133` rather than approach it.
+    #[test]
+    fn grease_version_leads_supported_versions() {
+        // The `supported_versions` body of a hello, and the `maybe_grease`-th
+        // entry of it (0 = first).
+        let versions = |fp: TlsFingerprint, tls12_only: bool| {
+            let config = crate::net::tls::create_insecure_dpi_tls_config_versioned_with(
+                fp, tls12_only, None,
+            );
+            let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
+            let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
+            let mut buf = Vec::new();
+            conn.write_tls(&mut buf).expect("write ClientHello");
+            let body = crate::net::ja3::extensions(&buf[crate::net::ja3::RECORD_HEADER..])
+                .into_iter()
+                .find(|(ext_type, _)| *ext_type == 43)
+                .map(|(_, body)| body.to_vec())
+                .expect("supported_versions extension");
+            let entries = body[0] as usize / 2;
+            let list = (0..entries)
+                .map(|i| u16::from_be_bytes([body[1 + 2 * i], body[2 + 2 * i]]))
+                .collect::<Vec<u16>>();
+            (list, buf.len())
+        };
+
+        for fp in [TlsFingerprint::Chrome, TlsFingerprint::Safari] {
+            let (list, record) = versions(fp, false);
+            assert_eq!(list.len(), 2, "{fp:?}: {list:04x?}");
+            let (grease, tls13) = (list[0], list[1]);
+            assert!(is_grease_version(grease), "{fp:?} must open with GREASE: {list:04x?}");
+            assert_eq!(tls13, 0x0304, "{fp:?}");
+            assert_eq!(record, 512 + 5, "{fp:?}: the padded hello must stay 512 bytes");
+
+            // TLS 1.2 alone: the pinned version replaces 1.3, the GREASE stays.
+            let (list12, _) = versions(fp, true);
+            assert!(is_grease_version(list12[0]), "{fp:?}: {list12:04x?}");
+            assert_eq!(list12[1], 0x0303, "{fp:?}");
+        }
+
+        let (firefox, _) = versions(TlsFingerprint::Custom, false);
+        assert_eq!(firefox, vec![0x0304], "Firefox does not grease");
+        let (rustls_list, _) = versions(TlsFingerprint::Rustls, false);
+        assert_eq!(rustls_list, vec![0x0304], "the baseline hello is untouched");
+    }
+
+    /// RFC 8701: `0x?a?a` with both bytes equal.
+    fn is_grease_version(value: u16) -> bool {
+        let (hi, lo) = (value >> 8, value & 0xff);
+        hi == lo && lo & 0x0f == 0x0a
+    }
+
     /// The curl shapes predate post-quantum key exchange, so they must not be
     /// given the hybrid group — a group the original does not offer would change
     /// the fingerprint being reproduced.

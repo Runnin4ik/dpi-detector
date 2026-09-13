@@ -698,6 +698,11 @@ impl TlsListElement for KeyShareEntry {
 pub(crate) struct SupportedProtocolVersions {
     pub(crate) tls13: bool,
     pub(crate) tls12: bool,
+    /// dpi-detector patch: an RFC 8701 GREASE code point written ahead of the
+    /// real versions, which is where browsers put one (`curl_chrome107` sends
+    /// `GREASE, 0x0304, 0x0303`). Version *selection* reads `tls13`/`tls12`, so
+    /// this is display state only and cannot change the handshake.
+    pub(crate) grease: Option<u16>,
 }
 
 impl SupportedProtocolVersions {
@@ -720,6 +725,11 @@ impl SupportedProtocolVersions {
 impl Codec<'_> for SupportedProtocolVersions {
     fn encode(&self, bytes: &mut Vec<u8>) {
         let inner = LengthPrefixedBuffer::new(Self::LIST_LENGTH, bytes);
+        // dpi-detector patch: browsers open this list with a GREASE value; it is
+        // a plain u16 on the wire, not one of the named protocol versions.
+        if let Some(grease) = self.grease {
+            grease.encode(inner.buf);
+        }
         if self.tls13 {
             ProtocolVersion::TLSv1_3.encode(inner.buf);
         }
@@ -740,7 +750,7 @@ impl Codec<'_> for SupportedProtocolVersions {
             };
         }
 
-        Ok(Self { tls13, tls12 })
+        Ok(Self { tls13, tls12, grease: None })
     }
 }
 

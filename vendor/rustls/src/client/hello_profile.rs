@@ -119,6 +119,24 @@ impl ClientHelloProfile {
     pub(crate) fn grease_group(&self, seed: u16) -> Option<NamedGroup> {
         self.grease.then(|| NamedGroup::from(grease_value(seed, 1)))
     }
+
+    /// The GREASE value this profile writes at the head of `supported_versions`,
+    /// if it greases at all.
+    ///
+    /// The slot sits after the GREASE extensions (`2 + one per marker`), so no
+    /// two positions of one hello share a value — as in a browser, whose
+    /// `supported_versions` GREASE differs from the one in its key share.
+    pub(crate) fn grease_supported_versions(&self, seed: u16) -> Option<u16> {
+        if !self.grease {
+            return None;
+        }
+        let markers = self
+            .extension_order
+            .as_ref()
+            .map(|order| order.iter().filter(|t| **t == GREASE_EXTENSION_MARKER).count() as u8)
+            .unwrap_or(0);
+        Some(grease_value(seed, 2 + markers))
+    }
 }
 
 impl ClientHelloProfile {

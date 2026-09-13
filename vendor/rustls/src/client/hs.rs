@@ -207,6 +207,8 @@ fn emit_client_hello_for_retry(
         tls12: config.supports_version(ProtocolVersion::TLSv1_2, cx.common.protocol)
             && !forbids_tls12,
         tls13: config.supports_version(ProtocolVersion::TLSv1_3, cx.common.protocol),
+        // Set below, from the hello profile's GREASE seed.
+        grease: None,
     };
 
     // should be unreachable thanks to config builder
@@ -402,6 +404,14 @@ fn emit_client_hello_for_retry(
         if let Some(group) = profile.grease_group(grease_seed) {
             if let Some(shares) = exts.key_shares.as_mut() {
                 shares.insert(0, KeyShareEntry::new(group, vec![0u8]));
+            }
+        }
+        // dpi-detector patch: the same browser puts a GREASE code point at the
+        // head of `supported_versions` (ahead of 1.3). JA3 and JA4 ignore it; a
+        // middlebox reading the hello does not have to.
+        if let Some(grease_version) = profile.grease_supported_versions(grease_seed) {
+            if let Some(versions) = exts.supported_versions.as_mut() {
+                versions.grease = Some(grease_version);
             }
         }
     }

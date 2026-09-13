@@ -55,8 +55,8 @@ real servers; they are described under "findings" below.
 | `src/client/hello_profile.rs` | **new**: public `ClientHelloProfile` (cipher list, groups, signature schemes, ALPN, extension order with `GREASE_EXTENSION_MARKER` placeholders, verbatim extra extensions, suppressed extensions, GREASE, certificate compression, `padding_to`) and its `apply` |
 | `src/client/client_conn.rs` | `ClientConfig::hello_profile: Option<Arc<ClientHelloProfile>>` |
 | `src/client/builder.rs` | initializes it to `None` |
-| `src/client/hs.rs` | applies the profile while building the ClientHello, with a per-connection GREASE seed from the provider's CSPRNG; records the *encoded* extension set as `sent_extensions`; gates `compress_certificate` on the hello offering TLS 1.3 |
-| `src/msgs/handshake.rs` | `ClientExtensions` gains `profile_order`, `raw_extensions`, `suppress_extensions`, `padding_to`; the encoder honours them, computes RFC 7685 padding to the profile's target size, and still keeps ECH/PSK last; a certificate entry carrying SCTs (type 18) is accepted and ignored |
+| `src/client/hs.rs` | applies the profile while building the ClientHello, with a per-connection GREASE seed from the provider's CSPRNG; adds the GREASE key share and the GREASE `supported_versions` entry for a greasing profile; records the *encoded* extension set as `sent_extensions`; gates `compress_certificate` on the hello offering TLS 1.3 |
+| `src/msgs/handshake.rs` | `SupportedProtocolVersions` gains `grease: Option<u16>`, written ahead of the real versions; `ClientExtensions` gains `profile_order`, `raw_extensions`, `suppress_extensions`, `padding_to`; the encoder honours them, computes RFC 7685 padding to the profile's target size, and still keeps ECH/PSK last; a certificate entry carrying SCTs (type 18) is accepted and ignored |
 | `src/lib.rs` | exports the module and `ClientHelloProfile` |
 
 With `hello_profile` unset the ClientHello is byte-for-byte upstream rustls, so
@@ -140,18 +140,28 @@ failing handshake or a real mismatched fingerprint, not a theoretical concern:
   and registers a verbatim body. Listing GREASE only in `raw_extensions` — as the
   first version did — silently drops it, because the encoder iterates the order.
 
-* **The GREASE key share is load-bearing on a censored link — but it is not the
-  whole shape.** A greasing profile also offers a key share for its GREASE group
-  (one dummy byte, Chrome's placement at the head of the list), which is what
-  `curl_chrome107`/`curl_safari155` send. Measured against `standby-rezka.tv`
-  over TLS 1.3: with the share our chrome/safari hellos get a fatal alert every
-  time (12/12 across three interleaved rounds), without it they complete, while
-  the bundle's own `curl_chrome107` — which also carries a GREASE share —
-  completes. So the peer reads more than the share: the hello we still do not
-  reproduce exactly is `supported_versions` (`[0x0304]` here against
-  `[GREASE, 0x0304, 0x0303]` in the bundle), and until that matches, a
-  chrome/safari block on such a host is *our* hello being refused, not evidence
-  that the pinned browser shape is.
+* **The GREASE key share is load-bearing on a censored link, and the GREASE
+  version is not.** A greasing profile also offers a key share for its GREASE
+  group (one dummy byte, Chrome's placement at the head of the list) and puts a
+  GREASE code point at the head of `supported_versions`, both of which
+  `curl_chrome107`/`curl_safari155` do.
+  Measured against `standby-rezka.tv` over TLS 1.3: with the share our
+  chrome/safari hellos get a fatal alert every time (12/12 across three
+  interleaved rounds), without it they complete, while the bundle's own
+  `curl_chrome107` — which also carries a GREASE share — completes. Adding the
+  GREASE version does not move that verdict (A/B on the same host, same minute:
+  `[GREASE, 0x0304]` and `[0x0304]` both 0/4 with the alert; the live harness
+  still reports the pinned JA3 and JA4 and all six hosts complete).
+  So the peer reads something else that the bundle has and we still do not: the
+  TLS 1.2 fallback in `supported_versions` (`0x0303`, which the bundle sends and
+  this build cannot honestly advertise because its TLS 1.3 builder cannot speak
+  1.2) and, coupled to it by `padding_to`, a padding extension two bytes longer
+  than the bundle's. Until that is settled, a chrome/safari block on such a host
+  is *our* hello being refused, not evidence that the pinned browser shape is.
+  A run of the whole shipped list before/after the GREASE version found no
+  regression (140 profile-runs; the only verdict changes were one host's
+  transient TCP SYN timeouts and three flips between two failure modes on hosts
+  that were blocked in both runs).
 * **`sent_extensions` must be the set that reaches the wire.** rustls builds
   `ClientHelloDetails::sent_extensions` from its typed fields, but a profile can
   add extensions rustls has no typed field for (`ec_point_formats`,
