@@ -1,5 +1,5 @@
 use std::io;
-use super::constants::*;
+use super::detail::Detail;
 use super::types::{ConnectionStage, DpiStatus};
 
 fn short_detail(msg: &str) -> String {
@@ -23,44 +23,44 @@ pub fn classify_ssl_error(
     err_msg: &str,
     bytes_read: usize,
     stage: ConnectionStage,
-) -> (DpiStatus, String) {
+) -> (DpiStatus, Detail) {
     let msg = err_msg.to_ascii_lowercase();
 
     if msg.contains("pop from an empty deque") || msg.contains("brokenresourceerror") {
-        return (DpiStatus::TlsRst, DET_RST_HELLO.into());
+        return (DpiStatus::TlsRst, Detail::RstHello);
     }
 
     if msg.contains("wrong version number") || msg.contains("wrong_version_number") {
-        return (DpiStatus::TlsSpoof, DET_WRONG_VERSION.into());
+        return (DpiStatus::TlsSpoof, Detail::WrongVersion);
     }
     if ["record overflow", "oversized", "record layer failure", "decode error", "decoding error", "illegal parameter", "bad record", "invalid record"]
         .iter()
         .any(|m| msg.contains(m))
     {
-        return (DpiStatus::TlsSpoof, DET_GARBAGE_DATA.into());
+        return (DpiStatus::TlsSpoof, Detail::GarbageData);
     }
 
     if msg.contains("unrecognized_name") || msg.contains("unrecognized name") {
-        return (DpiStatus::TlsAlert, DET_SNI_BLOCK_UNREC.into());
+        return (DpiStatus::TlsAlert, Detail::SniBlockUnrecognizedName);
     }
     if msg.contains("alert(") || msg.contains("fatal alert") || msg.contains("received alert") {
         if msg.contains("handshakefailure") || msg.contains("handshake failure") {
-            return (DpiStatus::TlsAlert, DET_DPI_ALERT_HS_FAIL.into());
+            return (DpiStatus::TlsAlert, Detail::DpiAlertHandshakeFailure);
         }
         if msg.contains("unrecognized_name") || msg.contains("unrecognized name") {
-            return (DpiStatus::TlsAlert, DET_SNI_BLOCK_UNREC.into());
+            return (DpiStatus::TlsAlert, Detail::SniBlockUnrecognizedName);
         }
         if msg.contains("protocol_version") || msg.contains("protocol version") {
-            return (DpiStatus::TlsBlock, DET_PROTOCOL_VERSION_ALERT.into());
+            return (DpiStatus::TlsBlock, Detail::ProtocolVersionAlert);
         }
-        return (DpiStatus::TlsAlert, DET_FAKE_TLS_ALERT.into());
+        return (DpiStatus::TlsAlert, Detail::FakeTlsAlert);
     }
 
     if msg.contains("protocol_version") || msg.contains("protocol version") {
-        return (DpiStatus::TlsBlock, DET_PROTOCOL_VERSION_ALERT.into());
+        return (DpiStatus::TlsBlock, Detail::ProtocolVersionAlert);
     }
     if msg.contains("alert") && (msg.contains("handshake") || msg.contains("ssl") || msg.contains("tls") || msg.contains("certificate")) {
-        return (DpiStatus::TlsAlert, DET_FAKE_TLS_ALERT.into());
+        return (DpiStatus::TlsAlert, Detail::FakeTlsAlert);
     }
     // A message about a protocol element our own TLS stack does not implement is
     // not evidence about the network. rustls words these with "certificate"
@@ -79,23 +79,23 @@ pub fn classify_ssl_error(
     .iter()
     .any(|m| msg.contains(m))
     {
-        return (DpiStatus::Unknown, short_detail(err_msg));
+        return (DpiStatus::Unknown, Detail::Other(short_detail(err_msg)));
     }
 
     if msg.contains("certificate") || msg.contains("unknown ca") || msg.contains("self-signed") || msg.contains("self signed") {
         if msg.contains("unable to get local issuer certificate") || msg.contains("unknownissuer") {
-            return (DpiStatus::NoCa, DET_NO_ROOT_CA.into());
+            return (DpiStatus::NoCa, Detail::NoRootCa);
         }
         if msg.contains("expired") {
-            return (DpiStatus::TlsMitm, DET_CERT_EXPIRED.into());
+            return (DpiStatus::TlsMitm, Detail::CertExpired);
         }
         if msg.contains("self-signed") || msg.contains("self signed") {
-            return (DpiStatus::TlsMitm, DET_SELF_SIGNED.into());
+            return (DpiStatus::TlsMitm, Detail::SelfSigned);
         }
         if msg.contains("hostname") || msg.contains("not valid for") || msg.contains("name mismatch") {
-            return (DpiStatus::TlsMitm, DET_HOSTNAME_MISMATCH.into());
+            return (DpiStatus::TlsMitm, Detail::HostnameMismatch);
         }
-        return (DpiStatus::TlsMitm, DET_FAKE_CERT.into());
+        return (DpiStatus::TlsMitm, Detail::FakeCert);
     }
 
     if ["eof", "unexpected eof", "eof occurred", "operation did not complete", "want_read", "want read", "connection closed", "closed connection", "incomplete"]
@@ -104,14 +104,14 @@ pub fn classify_ssl_error(
     {
         // RST masked by OS as EOF during handshake in 99% of cases
         if bytes_read == 0 || stage == ConnectionStage::TlsClientHelloSent {
-            return (DpiStatus::TlsRst, DET_RST_HELLO.into());
+            return (DpiStatus::TlsRst, Detail::RstHello);
         }
         let detail = if bytes_read > 0 {
-            DET_TRANSFER_EOF
+            Detail::TransferEof
         } else {
-            DET_HANDSHAKE_EOF
+            Detail::HandshakeEof
         };
-        return (DpiStatus::TlsEof, detail.into());
+        return (DpiStatus::TlsEof, detail);
     }
 
     if msg.contains("no tls 1.3")
@@ -122,10 +122,10 @@ pub fn classify_ssl_error(
         || msg.contains("tls_version_is_different")
         || msg.contains("peer is incompatible")
     {
-        return (DpiStatus::NoTls13, DET_NO_TLS13.into());
+        return (DpiStatus::NoTls13, Detail::NoTls13);
     }
 
-    (DpiStatus::Unknown, short_detail(err_msg))
+    (DpiStatus::Unknown, Detail::Other(short_detail(err_msg)))
 }
 
 fn dns_failure_text(msg: &str) -> bool {
@@ -145,13 +145,13 @@ fn dns_failure_text(msg: &str) -> bool {
 /// lost the `sending_data` / `reading_data` arms, so the same condition was
 /// reported as a bare `Timeout` on one path and as `SendTimeout`/`ReadTimeout`
 /// on the other.
-fn timeout_at_stage(stage: &str) -> (DpiStatus, String) {
+fn timeout_at_stage(stage: &str) -> (DpiStatus, Detail) {
     match stage {
-        "tls_handshake" => (DpiStatus::TlsDropped, DET_TLS_HANDSHAKE_TIMEOUT.into()),
-        "tcp_connect" => (DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT.into()),
-        "sending_data" => (DpiStatus::SendTimeout, DET_SEND_TIMEOUT.into()),
-        "reading_data" => (DpiStatus::ReadTimeout, DET_READ_TIMEOUT.into()),
-        _ => (DpiStatus::Timeout, format!("{} ({})", DET_TIMEOUT_WORD, stage)),
+        "tls_handshake" => (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout),
+        "tcp_connect" => (DpiStatus::SynDropped, Detail::TcpSynTimeout),
+        "sending_data" => (DpiStatus::SendTimeout, Detail::SendTimeout),
+        "reading_data" => (DpiStatus::ReadTimeout, Detail::ReadTimeout),
+        _ => (DpiStatus::Timeout, Detail::TimeoutStage { stage: stage.to_string() }),
     }
 }
 
@@ -166,11 +166,11 @@ pub fn classify_connect_error_full(
     kind: Option<io::ErrorKind>,
     bytes_read: usize,
     stage: &str,
-) -> (DpiStatus, String) {
+) -> (DpiStatus, Detail) {
     let full = err_msg.to_ascii_lowercase();
 
     if full.contains("pool timeout") || full.contains("pool exhausted") || full.contains("connection pool") {
-        return (DpiStatus::PoolTimeout, DET_POOL_TIMEOUT.into());
+        return (DpiStatus::PoolTimeout, Detail::PoolTimeout);
     }
 
     if full.contains("connect timeout") || full.contains("connection timed out") || full.contains("timed out") || full.contains("timeout") {
@@ -180,26 +180,26 @@ pub fn classify_connect_error_full(
     // DNS resolution failures (socket.gaierror equivalent)
     if dns_failure_text(&full) {
         if full.contains("no such host") || full.contains("not found") || full.contains("noname") || full.contains("nxdomain") {
-            return (DpiStatus::DnsFail, DET_DOMAIN_NOT_FOUND.into());
+            return (DpiStatus::DnsFail, Detail::DomainNotFound);
         }
         if full.contains("again") || full.contains("timeout") || full.contains("unavailable") {
-            return (DpiStatus::DnsFail, DET_DNS_TIMEOUT_UNAVAIL.into());
+            return (DpiStatus::DnsFail, Detail::DnsTimeoutUnavailable);
         }
-        return (DpiStatus::DnsFail, DET_DNS_ERROR.into());
+        return (DpiStatus::DnsFail, Detail::DnsError);
     }
 
     // TLS alerts surfacing inside connect errors (DPI)
     if full.contains("sslv3_alert") || full.contains("ssl alert") || (full.contains("alert") && full.contains("handshake")) {
         if full.contains("handshake_failure") || full.contains("handshake failure") {
-            return (DpiStatus::TlsAlert, DET_ALERT_HANDSHAKE.into());
+            return (DpiStatus::TlsAlert, Detail::AlertHandshake);
         }
         if full.contains("unrecognized_name") {
-            return (DpiStatus::TlsAlert, DET_ALERT_SNI.into());
+            return (DpiStatus::TlsAlert, Detail::AlertSni);
         }
         if full.contains("protocol_version") {
-            return (DpiStatus::TlsAlert, DET_ALERT_VERSION.into());
+            return (DpiStatus::TlsAlert, Detail::AlertVersion);
         }
-        return (DpiStatus::TlsAlert, DET_ALERT_TLS.into());
+        return (DpiStatus::TlsAlert, Detail::AlertTls);
     }
     if full.contains("certificate") || full.contains("unknown ca") {
         let (s, d) = classify_ssl_error(err_msg, bytes_read, ConnectionStage::TlsClientHelloSent);
@@ -213,7 +213,7 @@ pub fn classify_connect_error_full(
         || full.contains("refused")
         || full.contains("all connection attempts failed");
     if refused {
-        return (DpiStatus::Refused, DET_CONN_REFUSED.into());
+        return (DpiStatus::Refused, Detail::ConnRefused);
     }
 
     let reset = kind == Some(io::ErrorKind::ConnectionReset)
@@ -224,9 +224,9 @@ pub fn classify_connect_error_full(
         || full.contains("brokenpipe");
     if reset {
         return match stage {
-            "tls_handshake" => (DpiStatus::TlsRst, DET_RST_HELLO.into()),
-            "tls_connected" => (DpiStatus::TlsRst, DET_RST_AFTER_HANDSHAKE.into()),
-            _ => (DpiStatus::TcpRst, DET_CONN_RESET.into()),
+            "tls_handshake" => (DpiStatus::TlsRst, Detail::RstHello),
+            "tls_connected" => (DpiStatus::TlsRst, Detail::RstAfterHandshake),
+            _ => (DpiStatus::TcpRst, Detail::ConnReset),
         };
     }
 
@@ -237,9 +237,9 @@ pub fn classify_connect_error_full(
     if aborted {
         return match stage {
             "tls_handshake" | "tls_connected" => {
-                (DpiStatus::TlsAbort, DET_ABORTED.into())
+                (DpiStatus::TlsAbort, Detail::Aborted)
             }
-            _ => (DpiStatus::TcpAbort, DET_TCP_ABORTED.into()),
+            _ => (DpiStatus::TcpAbort, Detail::TcpAborted),
         };
     }
 
@@ -251,30 +251,30 @@ pub fn classify_connect_error_full(
     }
 
     if matches!(raw_os_error, Some(101) | Some(10051)) || full.contains("network is unreachable") {
-        return (DpiStatus::NetUnreach, DET_NET_UNREACH.into());
+        return (DpiStatus::NetUnreach, Detail::NetUnreach);
     }
     if matches!(raw_os_error, Some(113) | Some(10065)) || full.contains("no route to host") {
-        return (DpiStatus::HostUnreach, DET_HOST_UNREACH.into());
+        return (DpiStatus::HostUnreach, Detail::HostUnreach);
     }
 
     if let Some(code) = raw_os_error {
-        return (DpiStatus::OsErr, format!("OS errno {}", code));
+        return (DpiStatus::OsErr, Detail::Other(format!("OS errno {}", code)));
     }
 
-    (DpiStatus::Unknown, short_detail(err_msg))
+    (DpiStatus::Unknown, Detail::Other(short_detail(err_msg)))
 }
 
 /// Legacy io::Error-based entry point (stage unknown → tcp_connect).
-pub fn classify_connect_error(err: Option<&io::Error>, is_timeout: bool) -> (DpiStatus, String) {
+pub fn classify_connect_error(err: Option<&io::Error>, is_timeout: bool) -> (DpiStatus, Detail) {
     if is_timeout {
-        return (DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT.into());
+        return (DpiStatus::SynDropped, Detail::TcpSynTimeout);
     }
     match err {
         Some(e) => {
             let msg = e.to_string();
             classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tcp_connect")
         }
-        None => (DpiStatus::Unknown, DET_UNKNOWN_CONN_FAILURE.into()),
+        None => (DpiStatus::Unknown, Detail::UnknownConnectionFailure),
     }
 }
 
@@ -285,15 +285,15 @@ pub fn classify_tls_error(
     bytes_recv: usize,
     err_msg: &str,
     is_timeout: bool,
-) -> (DpiStatus, String) {
+) -> (DpiStatus, Detail) {
     if is_timeout {
         if stage == ConnectionStage::TlsClientHelloSent || (bytes_sent > 0 && bytes_recv == 0) {
             return (
                 DpiStatus::TlsDropped,
-                DET_TLS_DROP_HANDSHAKE.into(),
+                Detail::TlsDropHandshake,
             );
         }
-        return (DpiStatus::Timeout, DET_TIMEOUT_CONN.into());
+        return (DpiStatus::Timeout, Detail::TimeoutConn);
     }
 
     let stage_name = if is_tls_stage(stage) || stage == ConnectionStage::TcpConnected {
@@ -335,13 +335,13 @@ pub fn classify_tls_error(
         {
             return (
                 DpiStatus::TlsRst,
-                DET_TLS_RST_HELLO.into(),
+                Detail::TlsRstHello,
             );
         }
     }
 
     if status == DpiStatus::Unknown {
-        return (DpiStatus::Unknown, format!("TLS error: {}", short_detail(err_msg)));
+        return (DpiStatus::Unknown, Detail::Other(format!("TLS error: {}", short_detail(err_msg))));
     }
     (status, detail)
 }
@@ -356,11 +356,11 @@ pub fn classify_read_error(
     raw_os_error: Option<i32>,
     kind: Option<io::ErrorKind>,
     bytes_read: usize,
-) -> (DpiStatus, String) {
+) -> (DpiStatus, Detail) {
     let (status, detail) =
         classify_connect_error_full(err_msg, raw_os_error, kind, bytes_read, "reading_data");
     if status == DpiStatus::Unknown {
-        return (DpiStatus::Unknown, short_detail(err_msg));
+        return (DpiStatus::Unknown, Detail::Other(short_detail(err_msg)));
     }
     (status, detail)
 }
@@ -381,7 +381,7 @@ mod tests {
         let (s, d) =
             classify_read_error(localized, Some(10054), Some(io::ErrorKind::ConnectionReset), 0);
         assert_eq!(s, DpiStatus::TcpRst);
-        assert_eq!(d, DET_CONN_RESET);
+        assert_eq!(d, Detail::ConnReset);
 
         let (s, _) = classify_read_error(localized, None, None, 0);
         assert_eq!(s, DpiStatus::Unknown, "the localized text alone is unrecognisable");
@@ -433,7 +433,7 @@ mod tests {
             ConnectionStage::TlsClientHelloSent,
         );
         assert_eq!(s, DpiStatus::NoTls13);
-        assert_eq!(d, DET_NO_TLS13);
+        assert_eq!(d, Detail::NoTls13);
 
         let (s, _) = classify_ssl_error(
             "unexpected EOF",
@@ -456,7 +456,7 @@ mod tests {
             "peer misbehaved: UnsolicitedServerHelloExtension",
         ] {
             let (s, d) = classify_ssl_error(msg, 0, ConnectionStage::TlsClientHelloSent);
-            assert_eq!(s, DpiStatus::Unknown, "{msg} -> {d}");
+            assert_eq!(s, DpiStatus::Unknown, "{msg} -> {}", d.code());
         }
     }
 

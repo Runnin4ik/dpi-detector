@@ -6,11 +6,11 @@ use dpi_core::probe::dns_avail::{
 };
 use dpi_core::probe::dns_avail::DnsAnswer;
 use dpi_core::i18n::{
-    detail_lines, detail_text, fingerprint_label, fmt_size, fmt_speed, format_bidi, Messages,
+    detail_text, fingerprint_label, fmt_size, fmt_speed, format_bidi, Language, Messages,
 };
 use dpi_core::net::netinfo::{flag_emoji, is_tun_name, SystemDnsInfo};
 use dpi_core::net::fingerprint::TlsFingerprint;
-use dpi_core::probe::domains::{fake_ip_type, DomainEntry, DomainStats, FakeIpType};
+use dpi_core::probe::domains::{fake_ip_type, DetailLine, DomainEntry, DomainStats, FakeIpType};
 use dpi_core::probe::burst::{BurstReport, BurstSettings};
 use dpi_core::probe::telegram::TelegramFullReport;
 use dpi_core::probe::whitelist::{AsVerdict, WhitelistReport, NO_SNI_TAG};
@@ -1872,7 +1872,7 @@ pub fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
 
     for e in entries {
         let (http_s, t12_s, t13_s, raw_details) = dpi_core::probe::domains::build_domain_row(e);
-        let details = detail_lines(&raw_details, msg.lang);
+        let details = row_details(&raw_details, msg.lang);
         table.add_row(vec![
             Cell::new(cell_color(&e.domain, Color::Cyan)),
             Cell::new(cell_color(http_s.display_label(), status_color(http_s))),
@@ -1886,6 +1886,20 @@ pub fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
     out.push('\n');
     out.push_str(&format!("{}\n", table));
     out
+}
+
+/// Detail cell of the domain table: one `<proto>:<detail>` line per failing
+/// protocol, or a single line when the failure is shared. Protocol tags are
+/// canonical Latin tokens (Rule 4) and stay untranslated.
+fn row_details(lines: &[DetailLine], lang: Language) -> String {
+    lines
+        .iter()
+        .map(|(tag, detail)| match tag {
+            Some(tag) => format!("{}:{}", tag, detail_text(detail, lang)),
+            None => detail_text(detail, lang),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Post-table DNS resolve notes (stubs, fake-ip, DoH recommendation).
@@ -1902,7 +1916,7 @@ pub fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) -> Stri
     for e in entries {
         if e.t13.status == DpiStatus::DnsFail || e.t12.status == DpiStatus::DnsFail || e.http.status == DpiStatus::DnsFail {
             dns_fail += 1;
-            if e.t13.detail == DET_IPV6_UNSUPPORTED || e.t13.detail == DET_IPV6_NOT_SUPPORTED_SHORT {
+            if e.t13.detail == Detail::Ipv6Unsupported || e.t13.detail == Detail::Ipv6NotSupportedShort {
                 no_ipv6 += 1;
             }
         }
@@ -1970,7 +1984,7 @@ pub struct TcpRow {
     pub asn: String,
     pub provider: String,
     pub status: DpiStatus,
-    pub detail: String,
+    pub detail: Detail,
 }
 
 fn provider_group(provider: &str) -> String {
@@ -2154,7 +2168,10 @@ pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
         };
         let ping = match dc.latency_ms {
             Some(l) => format!("{}{}", l, msg.ms_unit),
-            None => detail_text(dc.error.as_deref().unwrap_or("—"), msg.lang),
+            None => match &dc.error {
+                Some(err) => detail_text(err, msg.lang),
+                None => "—".to_string(),
+            },
         };
         // Region from telegram_dc_list order is not carried; show stored region
         table.add_row(vec![

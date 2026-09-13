@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 use parking_lot::Mutex;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use super::constants::*;
+use super::detail::Detail;
 use super::types::{ConnectionStage, DpiStatus, ProbeMetrics};
 
 #[derive(Debug, Clone, Default)]
@@ -14,7 +14,7 @@ pub struct ProbeState {
     pub bytes_sent: usize,
     pub bytes_recv: usize,
     pub last_status: Option<DpiStatus>,
-    pub last_error_msg: Option<String>,
+    pub last_error_msg: Option<Detail>,
 }
 
 /// A handle to observe the progress and classify the outcome of a probe connection.
@@ -54,10 +54,10 @@ impl DpiProbeTracker {
         }
     }
 
-    pub fn record_error(&self, status: DpiStatus, detail: impl Into<String>) {
+    pub fn record_error(&self, status: DpiStatus, detail: Detail) {
         let mut lock = self.state.lock();
         lock.last_status = Some(status);
-        lock.last_error_msg = Some(detail.into());
+        lock.last_error_msg = Some(detail);
     }
 }
 
@@ -94,7 +94,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for DpiProbeStream<S> {
                         // Premature EOF after sending ClientHello
                         if state.stage == ConnectionStage::TlsClientHelloSent {
                             state.last_status = Some(DpiStatus::TlsRst);
-                            state.last_error_msg = Some(DET_STREAM_EOF_HELLO.into());
+                            state.last_error_msg = Some(Detail::StreamEofHello);
                         }
                     } else if n > 0 && state.stage == ConnectionStage::TlsClientHelloSent {
                         // Received ServerHello
@@ -106,10 +106,10 @@ impl<S: AsyncRead + Unpin> AsyncRead for DpiProbeStream<S> {
                     if kind == io::ErrorKind::ConnectionReset || kind == io::ErrorKind::ConnectionAborted {
                         if state.stage == ConnectionStage::TlsClientHelloSent && state.bytes_recv == 0 {
                             state.last_status = Some(DpiStatus::TlsRst);
-                            state.last_error_msg = Some(DET_STREAM_RST_HELLO.into());
+                            state.last_error_msg = Some(Detail::RstHello);
                         } else if state.stage <= ConnectionStage::TcpConnected {
                             state.last_status = Some(DpiStatus::TcpRst);
-                            state.last_error_msg = Some(DET_STREAM_RST_CONNECT.into());
+                            state.last_error_msg = Some(Detail::StreamRstConnect);
                         }
                     }
                 }

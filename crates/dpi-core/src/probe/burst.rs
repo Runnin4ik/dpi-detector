@@ -30,7 +30,7 @@ use tokio::time::timeout;
 
 use crate::classify::{
     classify_connect_error_full, classify_ssl_error, ConnectionStage, DpiProbeStream, DpiProbeTracker,
-    DpiStatus, DET_RST_HELLO, DET_TCP_SYN_TIMEOUT, DET_TLS_HANDSHAKE_TIMEOUT,
+    Detail, DpiStatus,
 };
 use crate::config::AppConfig;
 use crate::net::fingerprint::TlsFingerprint;
@@ -201,7 +201,7 @@ impl BurstSettings {
 #[derive(Debug, Clone)]
 pub struct BurstAttempt {
     pub status: DpiStatus,
-    pub detail: String,
+    pub detail: Detail,
     pub ms: u64,
 }
 
@@ -225,18 +225,18 @@ impl BurstProfileReport {
 
     /// The failure a reader needs: the most frequent one, `None` when nothing
     /// failed. Ties resolve to the first seen, so the row is stable.
-    pub fn dominant_failure(&self) -> Option<(DpiStatus, &str, usize)> {
-        let mut counts: Vec<(DpiStatus, &str, usize)> = Vec::new();
+    pub fn dominant_failure(&self) -> Option<(DpiStatus, &Detail, usize)> {
+        let mut counts: Vec<(DpiStatus, &Detail, usize)> = Vec::new();
         for attempt in self.attempts.iter().filter(|a| !a.status.is_ok_status()) {
             match counts
                 .iter_mut()
-                .find(|(status, detail, _)| *status == attempt.status && *detail == attempt.detail.as_str())
+                .find(|(status, detail, _)| *status == attempt.status && *detail == &attempt.detail)
             {
                 Some(entry) => entry.2 += 1,
-                None => counts.push((attempt.status, attempt.detail.as_str(), 1)),
+                None => counts.push((attempt.status, &attempt.detail, 1)),
             }
         }
-        let mut best: Option<(DpiStatus, &str, usize)> = None;
+        let mut best: Option<(DpiStatus, &Detail, usize)> = None;
         for entry in counts {
             if best.map(|(_, _, count)| entry.2 > count).unwrap_or(true) {
                 best = Some(entry);
@@ -275,20 +275,20 @@ impl BurstReport {
 
     /// The failure to show in one row per host: the most frequent one across
     /// every profile, `None` when every attempt was answered.
-    pub fn dominant_failure(&self) -> Option<(DpiStatus, String, usize)> {
-        let mut counts: Vec<(DpiStatus, String, usize)> = Vec::new();
+    pub fn dominant_failure(&self) -> Option<(DpiStatus, &Detail, usize)> {
+        let mut counts: Vec<(DpiStatus, &Detail, usize)> = Vec::new();
         for profile in &self.profiles {
             for attempt in profile.attempts.iter().filter(|a| !a.status.is_ok_status()) {
                 match counts
                     .iter_mut()
-                    .find(|(status, detail, _)| *status == attempt.status && *detail == attempt.detail)
+                    .find(|(status, detail, _)| *status == attempt.status && **detail == attempt.detail)
                 {
                     Some(entry) => entry.2 += 1,
-                    None => counts.push((attempt.status, attempt.detail.clone(), 1)),
+                    None => counts.push((attempt.status, &attempt.detail, 1)),
                 }
             }
         }
-        let mut best: Option<(DpiStatus, String, usize)> = None;
+        let mut best: Option<(DpiStatus, &Detail, usize)> = None;
         for entry in counts {
             if best.as_ref().map(|(_, _, count)| entry.2 > *count).unwrap_or(true) {
                 best = Some(entry);
@@ -465,7 +465,7 @@ pub async fn burst_profile(
         .map(|slot| {
             slot.unwrap_or(BurstAttempt {
                 status: DpiStatus::Err,
-                detail: "attempt aborted".to_string(),
+                detail: Detail::Other("attempt aborted".to_string()),
                 ms: 0,
             })
         })
@@ -492,7 +492,7 @@ async fn connect_attempt(
         }
         Err(DialError::Timeout) => Err(BurstAttempt {
             status: DpiStatus::SynDropped,
-            detail: DET_TCP_SYN_TIMEOUT.to_string(),
+            detail: Detail::TcpSynTimeout,
             ms: ms(started),
         }),
     }
@@ -516,7 +516,7 @@ async fn handshake_attempt(
         Err(e) => {
             return BurstAttempt {
                 status: DpiStatus::Err,
-                detail: format!("bad SNI: {}", e),
+                detail: Detail::Other(format!("bad SNI: {}", e)),
                 ms: elapsed(started),
             }
         }
@@ -524,7 +524,7 @@ async fn handshake_attempt(
     match timeout(limit, connector.connect(server_name, stream)).await {
         Ok(Ok(_)) => BurstAttempt {
             status: DpiStatus::Ok,
-            detail: String::new(),
+            detail: Detail::None,
             ms: elapsed(started),
         },
         Ok(Err(e)) => {
@@ -532,7 +532,7 @@ async fn handshake_attempt(
             // or a premature EOF that the error alone would not name.
             let st = tracker.state.lock();
             if let Some(status) = st.last_status {
-                let detail = st.last_error_msg.clone().unwrap_or_else(|| DET_RST_HELLO.to_string());
+                let detail = st.last_error_msg.clone().unwrap_or(Detail::RstHello);
                 return BurstAttempt { status, detail, ms: elapsed(started) };
             }
             drop(st);
@@ -546,7 +546,7 @@ async fn handshake_attempt(
         }
         Err(_) => BurstAttempt {
             status: DpiStatus::TlsDropped,
-            detail: DET_TLS_HANDSHAKE_TIMEOUT.to_string(),
+            detail: Detail::TlsHandshakeTimeout,
             ms: elapsed(started),
         },
     }
@@ -592,7 +592,7 @@ mod tests {
         assert_eq!(report.lost(), 3);
         for attempt in &report.attempts {
             assert_ne!(attempt.status, DpiStatus::Unknown, "{:?}", attempt);
-            assert!(!attempt.detail.is_empty());
+            assert!(!attempt.detail.is_none());
         }
     }
 
@@ -613,7 +613,7 @@ mod tests {
         assert_eq!(report.attempts.len(), 2);
         for attempt in &report.attempts {
             assert_eq!(attempt.status, DpiStatus::TlsDropped, "{:?}", attempt);
-            assert_eq!(attempt.detail, DET_TLS_HANDSHAKE_TIMEOUT);
+            assert_eq!(attempt.detail, Detail::TlsHandshakeTimeout);
         }
         // Both attempts spend their 400 ms at the same time: serialized, the
         // round would need 800 ms, and that difference is the whole point.
@@ -643,7 +643,7 @@ mod tests {
                 "{:?}",
                 attempt
             );
-            assert!(!attempt.detail.is_empty());
+            assert!(!attempt.detail.is_none());
             // One local condition, one verdict: the attempts do not disagree.
             assert_eq!(attempt.status, first, "{:?}", report.attempts);
         }
@@ -873,20 +873,20 @@ mod tests {
         let report = BurstProfileReport {
             fingerprint: TlsFingerprint::Chrome,
             attempts: vec![
-                BurstAttempt { status: DpiStatus::Ok, detail: String::new(), ms: 10 },
-                BurstAttempt { status: DpiStatus::TlsRst, detail: "TCP RST on ClientHello".into(), ms: 11 },
-                BurstAttempt { status: DpiStatus::TlsRst, detail: "TCP RST on ClientHello".into(), ms: 12 },
-                BurstAttempt { status: DpiStatus::TlsDropped, detail: "TLS Handshake timeout".into(), ms: 900 },
+                BurstAttempt { status: DpiStatus::Ok, detail: Detail::None, ms: 10 },
+                BurstAttempt { status: DpiStatus::TlsRst, detail: Detail::RstHello, ms: 11 },
+                BurstAttempt { status: DpiStatus::TlsRst, detail: Detail::RstHello, ms: 12 },
+                BurstAttempt { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, ms: 900 },
             ],
         };
         assert_eq!(report.answered(), 1);
         assert_eq!(report.lost(), 3);
         let (status, detail, count) = report.dominant_failure().expect("failures");
-        assert_eq!((status, detail, count), (DpiStatus::TlsRst, "TCP RST on ClientHello", 2));
+        assert_eq!((status, detail, count), (DpiStatus::TlsRst, &Detail::RstHello, 2));
 
         let clean = BurstProfileReport {
             fingerprint: TlsFingerprint::Custom,
-            attempts: vec![BurstAttempt { status: DpiStatus::Ok, detail: String::new(), ms: 10 }],
+            attempts: vec![BurstAttempt { status: DpiStatus::Ok, detail: Detail::None, ms: 10 }],
         };
         assert!(clean.dominant_failure().is_none());
         let report = BurstReport {
@@ -907,7 +907,7 @@ mod tests {
                 .into_iter()
                 .map(|status| BurstAttempt {
                     status,
-                    detail: status.display_label().to_string(),
+                    detail: Detail::Other(status.display_label().to_string()),
                     ms: 1,
                 })
                 .collect(),
@@ -927,6 +927,6 @@ mod tests {
         assert_eq!(report.answered(), 1);
         assert_eq!(report.total(), 5);
         let (status, detail, count) = report.dominant_failure().expect("failures");
-        assert_eq!((status, detail.as_str(), count), (DpiStatus::TlsDropped, "TLS DROP", 3));
+        assert_eq!((status, detail, count), (DpiStatus::TlsDropped, &Detail::Other("TLS DROP".to_string()), 3));
     }
 }

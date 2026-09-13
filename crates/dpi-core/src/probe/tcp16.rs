@@ -17,8 +17,7 @@ use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
 use crate::classify::{
-    classify_connect_error_full, classify_read_error, DpiStatus, ProbeMetrics, DET_AT_KB_MARKER,
-    DET_KB_SUFFIX, DET_READ_TIMEOUT_WORD_CAPS, DET_WRITE_TIMEOUT_WORD,
+    classify_connect_error_full, classify_read_error, Detail, DpiStatus, ProbeMetrics,
 };
 use crate::config::AppConfig;
 use crate::probe::http::{hyper_err_info, negotiated_h2, HttpRequest, HttpSender};
@@ -49,7 +48,7 @@ async fn connect_fat_target(
     sni: &str,
     use_tls: bool,
     cfg: &AppConfig,
-) -> Result<HttpSender, (DpiStatus, String)> {
+) -> Result<HttpSender, (DpiStatus, Detail)> {
     let connect_stage = "tcp_connect";
     let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.fat_connect_timeout)).await {
         Ok(s) => s,
@@ -59,7 +58,7 @@ async fn connect_fat_target(
             return Err((s, d));
         }
         Err(DialError::Timeout) => {
-            return Err((DpiStatus::SynDropped, "TCP SYN timeout".into()));
+            return Err((DpiStatus::SynDropped, Detail::TcpSynTimeout));
         }
     };
 
@@ -85,7 +84,7 @@ async fn connect_fat_target(
                 return Err((s, d));
             }
             Err(_) => {
-                return Err((DpiStatus::TlsDropped, "TLS Handshake timeout".into()));
+                return Err((DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout));
             }
         };
         let alpn_h2 = negotiated_h2(&tls_stream);
@@ -127,11 +126,11 @@ pub async fn probe_tcp_16_20(
     sni: &str,
     cfg: &AppConfig,
     hint_rtt: Option<f64>,
-) -> (DpiStatus, String, Option<f64>) {
+) -> (DpiStatus, Detail, Option<f64>) {
     let target_ip: IpAddr = match ip.parse() {
         Ok(a) => a,
         Err(_) => {
-            return (DpiStatus::Err, format!("bad IP: {}", ip), None);
+            return (DpiStatus::Err, Detail::Other(format!("bad IP: {}", ip)), None);
         }
     };
     let addr = SocketAddr::new(target_ip, port);
@@ -175,7 +174,7 @@ pub async fn probe_tcp_16_20(
                     } else {
                         return (
                             DpiStatus::Tcp16Detected,
-                            format!("{}{}{}{}", d, DET_AT_KB_MARKER, kb_sent(i, chunk_size), DET_KB_SUFFIX),
+                            Detail::at_kb(d, kb_sent(i, chunk_size) as f64),
                             measured_rtt,
                         );
                     }
@@ -249,16 +248,16 @@ pub async fn probe_tcp_16_20(
                 let lower = msg.to_ascii_lowercase();
                 let is_read_timeout = e.is_timeout() || lower.contains("timed out");
                 if is_read_timeout {
-                    let err_type = if lower.contains("write") { DET_WRITE_TIMEOUT_WORD } else { DET_READ_TIMEOUT_WORD_CAPS };
+                    let err_type = if lower.contains("write") { Detail::WriteTimeoutWord } else { Detail::ReadTimeoutWordCaps };
                     if i == 0 {
-                        return (DpiStatus::ReadTimeout, err_type.into(), measured_rtt);
+                        return (DpiStatus::ReadTimeout, err_type, measured_rtt);
                     }
                     if i < min_detect_chunk {
-                        return (DpiStatus::Timeout, err_type.into(), measured_rtt);
+                        return (DpiStatus::Timeout, err_type, measured_rtt);
                     }
                     return (
                         DpiStatus::Tcp16Detected,
-                        format!("{}{}{}{}", err_type, DET_AT_KB_MARKER, kb_sent(i, chunk_size), DET_KB_SUFFIX),
+                        Detail::at_kb(err_type, kb_sent(i, chunk_size) as f64),
                         measured_rtt,
                     );
                 }
@@ -271,27 +270,27 @@ pub async fn probe_tcp_16_20(
                 }
                 return (
                     DpiStatus::Tcp16Detected,
-                    format!("{}{}{}{}", d, DET_AT_KB_MARKER, kb_sent(i, chunk_size), DET_KB_SUFFIX),
+                    Detail::at_kb(d, kb_sent(i, chunk_size) as f64),
                     measured_rtt,
                 );
             }
             Err(_) => {
                 if i == 0 {
-                    return (DpiStatus::ReadTimeout, DET_READ_TIMEOUT_WORD_CAPS.into(), measured_rtt);
+                    return (DpiStatus::ReadTimeout, Detail::ReadTimeoutWordCaps, measured_rtt);
                 }
                 if i < min_detect_chunk {
-                    return (DpiStatus::Timeout, DET_READ_TIMEOUT_WORD_CAPS.into(), measured_rtt);
+                    return (DpiStatus::Timeout, Detail::ReadTimeoutWordCaps, measured_rtt);
                 }
                 return (
                     DpiStatus::Tcp16Detected,
-                    format!("{}{}{}{}", DET_READ_TIMEOUT_WORD_CAPS, DET_AT_KB_MARKER, kb_sent(i, chunk_size), DET_KB_SUFFIX),
+                    Detail::at_kb(Detail::ReadTimeoutWordCaps, kb_sent(i, chunk_size) as f64),
                     measured_rtt,
                 );
             }
         }
     }
 
-    (DpiStatus::Ok, String::new(), measured_rtt)
+    (DpiStatus::Ok, Detail::None, measured_rtt)
 }
 
 fn create_tls_config(
@@ -308,7 +307,7 @@ pub async fn check_tcp_16_20(
     cfg: &AppConfig,
     sem: &Semaphore,
     hint_rtt: Option<f64>,
-) -> (DpiStatus, String, Option<f64>) {
+) -> (DpiStatus, Detail, Option<f64>) {
     let _permit = sem.acquire().await.unwrap();
     probe_tcp_16_20(ip, port, sni, cfg, hint_rtt).await
 }

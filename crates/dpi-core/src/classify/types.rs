@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::detail::Detail;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionStage {
@@ -202,7 +204,7 @@ pub struct ProbeMetrics {
     pub bytes_sent: usize,
     pub bytes_recv: usize,
     pub duration_ms: u64,
-    pub detail: String,
+    pub detail: Detail,
 }
 
 impl Default for ProbeMetrics {
@@ -213,7 +215,7 @@ impl Default for ProbeMetrics {
             bytes_sent: 0,
             bytes_recv: 0,
             duration_ms: 0,
-            detail: String::new(),
+            detail: Detail::None,
         }
     }
 }

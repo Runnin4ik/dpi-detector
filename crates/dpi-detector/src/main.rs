@@ -16,6 +16,7 @@ mod runner;
 mod terminal;
 mod update;
 
+use dpi_core::classify::Detail;
 use menu::{
     burst_settings_menu, export_report, legend_loop, menu_until_something_to_run,
     read_post_test_action, run_interactive_menu, tui_available, MenuAction, MenuResult,
@@ -50,9 +51,9 @@ pub(crate) fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool,
 /// clean 20 KB pass, so the row carries only its duration; every other detail is
 /// a drop/RST/timeout diagnosis and stands alone — a duration glued to an error
 /// reads as if the timing were part of the verdict.
-pub(crate) fn tcp16_detail(detail: String, elapsed: f64) -> String {
-    if detail.is_empty() {
-        format!("{:.1}s", elapsed)
+pub(crate) fn tcp16_detail(detail: Detail, elapsed: f64) -> Detail {
+    if detail.is_none() {
+        Detail::Elapsed(elapsed)
     } else {
         detail
     }
@@ -569,19 +570,17 @@ mod tests {
 
     #[test]
     fn test_cdn_detail_keeps_the_time_only_when_there_is_no_error() {
-        use dpi_core::classify::{
-            DET_AT_KB_MARKER, DET_KB_SUFFIX, DET_TCP_ABORTED, DET_TCP_SYN_TIMEOUT, DET_TLS_HANDSHAKE_TIMEOUT,
-        };
+        use dpi_core::classify::Detail;
         // Clean pass: the row is the duration.
-        assert_eq!(tcp16_detail(String::new(), 3.25), "3.2s");
+        assert_eq!(tcp16_detail(Detail::None, 3.25), Detail::Elapsed(3.25));
         // Drop/RST/timeout: the classifier detail stands alone, the KB offset it
         // carries included, and no `| 12.5s` is glued to it.
-        let killed = format!("{DET_TCP_ABORTED}{DET_AT_KB_MARKER}16{DET_KB_SUFFIX}");
+        let killed = Detail::at_kb(Detail::TcpAborted, 16.0);
         assert_eq!(tcp16_detail(killed.clone(), 12.5), killed);
-        assert_eq!(tcp16_detail(DET_TCP_SYN_TIMEOUT.to_string(), 5.0), DET_TCP_SYN_TIMEOUT);
+        assert_eq!(tcp16_detail(Detail::TcpSynTimeout, 5.0), Detail::TcpSynTimeout);
         assert_eq!(
-            tcp16_detail(DET_TLS_HANDSHAKE_TIMEOUT.to_string(), 8.4),
-            DET_TLS_HANDSHAKE_TIMEOUT
+            tcp16_detail(Detail::TlsHandshakeTimeout, 8.4),
+            Detail::TlsHandshakeTimeout
         );
     }
 

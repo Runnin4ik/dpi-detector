@@ -2,7 +2,7 @@ use std::env;
 use serde::{Deserialize, Serialize};
 
 mod details;
-pub use details::{detail_lines, detail_text};
+pub use details::detail_text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -305,7 +305,6 @@ pub struct Messages {
     pub invalid_proxy_err: &'static str,
     pub dns_servers_empty_skip: &'static str,
     pub no_sni_label: &'static str,
-    pub detail_timeout_word: &'static str,
     pub detail_read_timeout: &'static str,
     pub detail_write_timeout: &'static str,
     pub detail_at: &'static str,
@@ -585,7 +584,6 @@ pub fn get_messages(lang: Language) -> Messages {
             invalid_proxy_err: "Invalid proxy {}: {}\n",
             dns_servers_empty_skip: "DNS_AVAILABILITY_SERVERS not set in config.yml — test skipped.\n",
             no_sni_label: "(no SNI)",
-            detail_timeout_word: "Timeout",
             detail_read_timeout: "Read timeout",
             detail_write_timeout: "Write timeout",
             detail_at: "at",
@@ -819,7 +817,6 @@ pub fn get_messages(lang: Language) -> Messages {
             invalid_proxy_err: "Некорректный прокси {}: {}\n",
             dns_servers_empty_skip: "DNS_AVAILABILITY_SERVERS не задан в config.yml — тест пропущен.\n",
             no_sni_label: "(без SNI)",
-            detail_timeout_word: "Таймаут",
             detail_read_timeout: "Таймаут чтения",
             detail_write_timeout: "Таймаут записи",
             detail_at: "на",
@@ -1053,7 +1050,6 @@ pub fn get_messages(lang: Language) -> Messages {
             invalid_proxy_err: "无效代理 {}: {}\n",
             dns_servers_empty_skip: "config.yml 中未设置 DNS_AVAILABILITY_SERVERS — 跳过测试。\n",
             no_sni_label: "(无 SNI)",
-            detail_timeout_word: "超时",
             detail_read_timeout: "读取超时",
             detail_write_timeout: "写入超时",
             detail_at: "在",
@@ -1280,7 +1276,6 @@ pub fn get_messages(lang: Language) -> Messages {
             invalid_proxy_err: "Proxy-e na-motabar {}: {}\n",
             dns_servers_empty_skip: "Meghdar-e DNS_AVAILABILITY_SERVERS dar config.yml taeen nashode ast - test nadide gerefte shod.\n",
             no_sni_label: "(bedoone SNI)",
-            detail_timeout_word: "Mohlat",
             detail_read_timeout: "Mohlat-e khandan",
             detail_write_timeout: "Mohlat-e neveshtan",
             detail_at: "dar",

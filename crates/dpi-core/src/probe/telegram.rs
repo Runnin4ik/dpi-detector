@@ -20,7 +20,7 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
-use crate::classify::DET_SYN_TIMEOUT_SHORT;
+use crate::classify::Detail;
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
 use crate::net::tcp::set_no_delay;
@@ -50,7 +50,7 @@ pub struct TelegramDcResult {
     pub region: String,
     pub available: bool,
     pub latency_ms: Option<u64>,
-    pub error: Option<String>,
+    pub error: Option<Detail>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -88,7 +88,7 @@ pub async fn probe_telegram_dc(dc: &TelegramDc, timeout_dur: Duration) -> Telegr
                     region: dc.region.to_string(),
                     available: false,
                     latency_ms: None,
-                    error: Some(e.to_string()),
+                    error: Some(Detail::Other(e.to_string())),
                 },
                 Err(_) => TelegramDcResult {
                     name: dc.name.to_string(),
@@ -96,7 +96,7 @@ pub async fn probe_telegram_dc(dc: &TelegramDc, timeout_dur: Duration) -> Telegr
                     region: dc.region.to_string(),
                     available: false,
                     latency_ms: None,
-                    error: Some(DET_SYN_TIMEOUT_SHORT.to_string()),
+                    error: Some(Detail::SynTimeoutShort),
                 },
             }
         }
@@ -106,7 +106,7 @@ pub async fn probe_telegram_dc(dc: &TelegramDc, timeout_dur: Duration) -> Telegr
             region: dc.region.to_string(),
             available: false,
             latency_ms: None,
-            error: Some(e.to_string()),
+            error: Some(Detail::Other(e.to_string())),
         },
     }
 }

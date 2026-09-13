@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-use crate::classify::{DpiStatus, DET_AT_KB_MARKER};
+use crate::classify::{Detail, DpiStatus};
 use crate::config::{AppConfig, Tcp16Target};
 use crate::PhaseProgress;
 use super::tcp16::check_tcp_16_20;
@@ -73,7 +73,7 @@ fn is_ok(status: DpiStatus) -> bool {
 /// on Windows). Plain connectivity failures (SYN timeout, refused,
 /// unreachable) stay out: those are the ban/rate-limit signal the batch loop
 /// aborts on.
-fn is_detected(status: DpiStatus, detail: &str) -> bool {
+fn is_detected(status: DpiStatus, detail: &Detail) -> bool {
     matches!(
         status,
         DpiStatus::Tcp16Detected
@@ -82,7 +82,7 @@ fn is_detected(status: DpiStatus, detail: &str) -> bool {
             | DpiStatus::TlsDropped
             | DpiStatus::TlsAbort
     ) || ((status == DpiStatus::Timeout || status == DpiStatus::ReadTimeout)
-        && detail.contains(DET_AT_KB_MARKER))
+        && matches!(detail, Detail::AtKb { .. }))
 }
 
 pub async fn run_whitelist_sni(
@@ -221,7 +221,7 @@ async fn probe_as(
             check_tcp_16_20(&cand.ip, 443, "", cfg, sem, cand.rtt).await;
         if is_ok(st0) {
             found.push((NO_SNI_TAG.to_string(), 0));
-        } else if !is_detected(st0, &d0) && !d0.contains(DET_AT_KB_MARKER) {
+        } else if !is_detected(st0, &d0) && !matches!(d0, Detail::AtKb { .. }) {
             ban_detected = true;
             ban_detail = st0.display_label().to_string();
         }
@@ -245,18 +245,18 @@ async fn probe_as(
                     (sni, s, d)
                 }));
             }
-            let mut results: Vec<(String, DpiStatus, String)> = Vec::new();
+            let mut results: Vec<(String, DpiStatus, Detail)> = Vec::new();
             for h in handles {
                 match h.await {
                     Ok(r) => results.push(r),
-                    Err(_) => results.push((String::new(), DpiStatus::Err, String::new())),
+                    Err(_) => results.push((String::new(), DpiStatus::Err, Detail::None)),
                 }
             }
 
             // Whole batch connect-level → ban/rate-limit
             let connect_fails = results
                 .iter()
-                .filter(|(_, s, d)| !is_ok(*s) && !is_detected(*s, d) && !d.contains("at "))
+                .filter(|(_, s, d)| !is_ok(*s) && !is_detected(*s, d) && !matches!(d, Detail::AtKb { .. }))
                 .count();
             if connect_fails == results.len() && !results.is_empty() {
                 ban_detected = true;
@@ -293,25 +293,28 @@ async fn probe_as(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::classify::{
-        DET_ABORTED, DET_CONN_REFUSED, DET_NET_UNREACH, DET_RST_HELLO, DET_TCP_SYN_TIMEOUT,
-        DET_TLS_HANDSHAKE_TIMEOUT,
-    };
+    use crate::classify::Detail;
 
     /// Which baseline verdicts make an AS worth an SNI search: the transfer
     /// window blocks and the TLS-stage kills; connectivity failures stay out.
     #[test]
     fn test_detected_predicate_covers_tls_kills() {
-        assert!(is_detected(DpiStatus::Tcp16Detected, "Read Timeout at 16KB"));
-        assert!(is_detected(DpiStatus::Tcp16Range, "Timeout 20.0KB"));
-        assert!(is_detected(DpiStatus::TlsRst, DET_RST_HELLO));
-        assert!(is_detected(DpiStatus::TlsDropped, DET_TLS_HANDSHAKE_TIMEOUT));
-        assert!(is_detected(DpiStatus::TlsAbort, DET_ABORTED));
+        assert!(is_detected(
+            DpiStatus::Tcp16Detected,
+            &Detail::at_kb(Detail::ReadTimeoutWordCaps, 16.0)
+        ));
+        assert!(is_detected(
+            DpiStatus::Tcp16Range,
+            &Detail::Kb { head: Box::new(Detail::TimeoutWord), kb: 20.0 }
+        ));
+        assert!(is_detected(DpiStatus::TlsRst, &Detail::RstHello));
+        assert!(is_detected(DpiStatus::TlsDropped, &Detail::TlsHandshakeTimeout));
+        assert!(is_detected(DpiStatus::TlsAbort, &Detail::Aborted));
 
-        assert!(!is_detected(DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT));
-        assert!(!is_detected(DpiStatus::Refused, DET_CONN_REFUSED));
-        assert!(!is_detected(DpiStatus::NetUnreach, DET_NET_UNREACH));
-        assert!(!is_detected(DpiStatus::Ok, ""));
+        assert!(!is_detected(DpiStatus::SynDropped, &Detail::TcpSynTimeout));
+        assert!(!is_detected(DpiStatus::Refused, &Detail::ConnRefused));
+        assert!(!is_detected(DpiStatus::NetUnreach, &Detail::NetUnreach));
+        assert!(!is_detected(DpiStatus::Ok, &Detail::None));
     }
 
     #[test]
