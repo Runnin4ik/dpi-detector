@@ -46,6 +46,7 @@ ml-kem = "0.3"
 x25519-dalek = "2"
 thiserror = "1.0"
 base64 = "0.22"
+sha2 = "0.10"
 rustix = { version = "0.38", default-features = false, features = ["use-libc", "termios", "stdio"] }
 
 [profile.release]

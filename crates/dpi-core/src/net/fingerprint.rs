@@ -523,6 +523,8 @@ fn safari_like() -> ClientHelloProfile {
             0x0804, // RSA-PSS SHA-256
             0x0401, // RSA-PKCS1 SHA-256
             0x0503, // ECDSA P-384 SHA-384
+            0x0203, // ECDSA SHA-1 — Safari 15.5 sends it; JA3 ignores the list,
+                    // JA4 hashes it, which is how its absence was caught
             0x0805, // RSA-PSS SHA-384
             0x0805, // duplicated by Safari itself
             0x0501, // RSA-PKCS1 SHA-384
@@ -590,6 +592,12 @@ const EXT_APPLICATION_SETTINGS: u16 = 17513;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pinned from the `curl-impersonate v2.2.2` bundle (see
+    /// [`tests::bundle_versions_match_their_ja4`]).
+    const CHROME_107_JA4: &str = "t13d1516h2_8daaf6152771_e5627efa2ab1";
+    const SAFARI_155_JA4: &str = "t13d2014h2_a09f3c656075_14788d8d241b";
+    const FIREFOX_133_JA4_LESS_ECH: &str = "t13d1715h2_5b57614c22b0_8fb63dbc839a";
 
     #[test]
     fn fingerprint_tokens_are_stable() {
@@ -705,6 +713,13 @@ mod tests {
     /// caller asks for: `tls13_only` is what the probes and test 7 use, the
     /// general one is what the tools and the earlier measurements used.
     fn client_hello_of(fingerprint: TlsFingerprint, tls13_only: bool) -> (String, usize) {
+        let (ja3, length, _) = client_hello_full(fingerprint, tls13_only);
+        (ja3, length)
+    }
+
+    /// The three fingerprints of the hello a profile writes on `tls13_only`:
+    /// JA3, the hello size, and JA4.
+    fn client_hello_full(fingerprint: TlsFingerprint, tls13_only: bool) -> (String, usize, String) {
         let config = if tls13_only {
             crate::net::tls::create_insecure_dpi_tls_config_tls13_with(fingerprint)
         } else {
@@ -714,7 +729,11 @@ mod tests {
         let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
         let mut buf = Vec::new();
         conn.write_tls(&mut buf).expect("write ClientHello");
-        (crate::net::ja3::client_hello_ja3(&buf), buf.len() - 5)
+        (
+            crate::net::ja3::client_hello_ja3(&buf),
+            buf.len() - 5,
+            crate::net::ja4::client_hello_ja4(&buf),
+        )
     }
 
     /// The three profiles must send exactly the JA3 their pinned
@@ -765,6 +784,27 @@ mod tests {
         for fingerprint in [TlsFingerprint::Chrome, TlsFingerprint::Safari] {
             let (_, length) = client_hello_of(fingerprint, true);
             assert!((512..768).contains(&length), "{fingerprint} hello: {length} bytes");
+        }
+    }
+
+    /// JA4 hashes what JA3 cannot: the signature-algorithms list and the ALPN
+    /// value. These are the values of the pinned bundle versions, computed from
+    /// the ClientHellos the same sniffer captured (`curl_chrome107`,
+    /// `curl_safari155`, `curl_firefox133`) and cross-checked against what
+    /// `tls.peet.ws` reports for our own probes.
+    ///
+    /// Firefox's differs in the extension count and hash only, and only because
+    /// of the omitted `encrypted_client_hello` (see [`firefox_like`]); the
+    /// cipher hash is the bundle's.
+    #[test]
+    fn bundle_versions_match_their_ja4() {
+        for tls13_only in [true, false] {
+            let (_, _, chrome) = client_hello_full(TlsFingerprint::Chrome, tls13_only);
+            assert_eq!(chrome, CHROME_107_JA4, "chrome (tls13_only={tls13_only})");
+            let (_, _, safari) = client_hello_full(TlsFingerprint::Safari, tls13_only);
+            assert_eq!(safari, SAFARI_155_JA4, "safari (tls13_only={tls13_only})");
+            let (_, _, firefox) = client_hello_full(TlsFingerprint::Custom, tls13_only);
+            assert_eq!(firefox, FIREFOX_133_JA4_LESS_ECH, "firefox (tls13_only={tls13_only})");
         }
     }
 

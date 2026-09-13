@@ -10,23 +10,23 @@
 //! fingerprinting service reports.
 
 /// Length of the TLS record header that precedes the handshake message.
-const RECORD_HEADER: usize = 5;
+pub(crate) const RECORD_HEADER: usize = 5;
 /// Extensions the JA3 string carries values from.
 const EXT_SUPPORTED_GROUPS: u16 = 10;
 const EXT_EC_POINT_FORMATS: u16 = 11;
 const EXT_KEY_SHARE: u16 = 51;
 
-fn u16_at(bytes: &[u8], at: usize) -> u16 {
+pub(crate) fn u16_at(bytes: &[u8], at: usize) -> u16 {
     u16::from_be_bytes([bytes[at], bytes[at + 1]])
 }
 
 /// GREASE: `0x0a0a`, `0x1a1a`, … `0xfafa`.
-fn is_grease(value: u16) -> bool {
+pub(crate) fn is_grease(value: u16) -> bool {
     value & 0x0f0f == 0x0a0a
 }
 
 /// Walks a ClientHello handshake message and yields its extensions in order.
-fn extensions(message: &[u8]) -> Vec<(u16, &[u8])> {
+pub(crate) fn extensions(message: &[u8]) -> Vec<(u16, &[u8])> {
     if message.len() < 4 + 2 + 32 + 1 {
         return Vec::new();
     }
@@ -65,7 +65,7 @@ fn extensions(message: &[u8]) -> Vec<(u16, &[u8])> {
 }
 
 /// Cipher suites of a ClientHello, in wire order, GREASE stripped.
-fn cipher_suites(message: &[u8]) -> Vec<u16> {
+pub(crate) fn cipher_suites(message: &[u8]) -> Vec<u16> {
     let session_id_at = 4 + 2 + 32;
     if session_id_at + 1 > message.len() {
         return Vec::new();

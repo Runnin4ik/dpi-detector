@@ -24,6 +24,7 @@ ml-kem = { workspace = true }
 x25519-dalek = { workspace = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
+sha2 = { workspace = true }
 tracing = { workspace = true }
 url = "2.5"
 [target.'cfg(windows)'.dependencies]

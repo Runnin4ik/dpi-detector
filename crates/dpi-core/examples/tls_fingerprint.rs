@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use dpi_core::net::fingerprint::TlsFingerprint;
-use dpi_core::net::ja3;
+use dpi_core::net::{ja3, ja4};
 use dpi_core::net::tls::{
     create_insecure_dpi_tls_config_tls12_with, create_insecure_dpi_tls_config_tls13_with,
     create_insecure_dpi_tls_config_with,
@@ -82,6 +82,7 @@ fn dump(fingerprint: TlsFingerprint) {
     println!("profile   = {}", fingerprint.code());
     println!("record    = {} bytes", buf.len() - 5);
     println!("ja3       = {}", ja3::client_hello_ja3(&buf));
+    println!("ja4       = {}", ja4::client_hello_ja4(&buf));
     println!(
         "exts      = {}",
         ja3::extension_types(&buf)

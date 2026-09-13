@@ -83,16 +83,20 @@ patch -p1 -d vendor/rustls < PATCH.diff      # expect hunks only in the 6 files 
 ## How the patch is verified
 
 * `cargo test --workspace` — the profile unit tests cover the extension order,
-  the suppressed set, the GREASE-free Firefox shape and the PQ group round trip.
-* `cargo run --release --example tls_fingerprint dump <rustls|custom>` prints the
-  JA3 and extension list straight from the wire bytes — no network needed, so
-  the output can be diffed against a known-good capture.
-* `dump chrome` and `dump safari` must equal the JA3s of the `curl-impersonate`
-  profiles they reproduce — taken from that project's own fixtures
-  (`tests/signatures/chrome_116.0.5845.180_win10.yaml`,
-  `safari_18.4_macOS.yaml`). `cargo test -p dpi-core fingerprint` pins both
-  strings, so a regression is caught without network access; the fixtures are the
-  authority because they are what the TSPU-reported fingerprint list names.
+  the suppressed set, the Firefox 133 shape and the PQ group round trip.
+* `cargo run --release --example tls_fingerprint dump <profile>` prints the JA3,
+  the JA4 and the extension list straight from the wire bytes — no network
+  needed, so the output can be diffed against a known-good capture.
+* `dump chrome`, `dump safari` and `dump custom` must equal the JA3 **and JA4** of
+  the pinned `curl-impersonate v2.2.2` versions they reproduce
+  (`curl_chrome107`, `curl_safari155`, `curl_firefox133`), measured with a local
+  ClientHello sniffer. `cargo test -p dpi-core fingerprint` pins both strings for
+  both TLS config builders, so a regression is caught without network access.
+  JA4 is the stricter of the two: it hashes the signature-algorithms list, which
+  is how Safari's missing `ecdsa_sha1` was found while its JA3 matched.
+* The one JA4 difference from the bundle is Firefox's extension count and hash:
+  `curl_firefox133` sends `encrypted_client_hello` and this profile cannot (see
+  the ECH bullet above).
 * `cargo run --release --example tls_fingerprint live custom` completes real TLS
   1.3 handshakes against `tls.peet.ws`, `cloudflare.com`, `www.google.com`,
   `www.wikipedia.org`, `www.microsoft.com` and `dns.google`; all six must
