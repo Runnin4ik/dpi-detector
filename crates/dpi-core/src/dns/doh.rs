@@ -226,6 +226,24 @@ pub struct DohSession {
 }
 
 impl DohSession {
+    /// Whether the endpoint negotiated HTTP/2. Multiplexed streams are
+    /// independent, so a request may be abandoned without harming the ones
+    /// after it; on HTTP/1.1 an abandoned request poisons the whole connection,
+    /// which is why callers must not cut a request short on h1.
+    pub fn is_h2(&self) -> bool {
+        matches!(self.sender, DohSender::H2(_))
+    }
+
+    /// Whether the connection can no longer carry a request. A dropped HTTP/1.1
+    /// response future leaves hyper unable to resynchronise the stream, so the
+    /// connection is closed and every further request fails immediately.
+    pub fn is_closed(&self) -> bool {
+        match &self.sender {
+            DohSender::H1(s) => s.is_closed(),
+            DohSender::H2(s) => s.is_closed(),
+        }
+    }
+
     pub async fn connect(endpoint_url: &str, timeout_dur: Duration) -> Result<Self, DnsError> {
         let cfg = AppConfig::default();
         let (sender, host, path) = doh_connect(endpoint_url, timeout_dur).await?;

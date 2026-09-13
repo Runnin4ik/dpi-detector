@@ -22,10 +22,12 @@
 //! Limitation: the fallback resolves A records only; IPv6-mode verdicts on
 //! such systems report "no IPv6" even when AAAA records exist.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::sync::{LazyLock, OnceLock};
+use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -37,6 +39,45 @@ const BOOTSTRAP_RESOLVERS: &[&str] = &["8.8.8.8:53", "1.1.1.1:53", "9.9.9.9:53"]
 
 /// OS-configured DNS servers, process-lifetime cache (empty off-Android).
 static OS_DNS_CACHE: OnceLock<Vec<IpAddr>> = OnceLock::new();
+
+/// How long a resolved host stays pinned, and how many hosts are kept.
+const PIN_CACHE_TTL: Duration = Duration::from_secs(3600);
+const PIN_CACHE_MAX: usize = 256;
+
+/// `host -> (resolved at, addresses)` pin cache. The same name appears in both
+/// the DoH and the DoT endpoint list and is re-resolved for every retry; on a
+/// system without a working resolver each miss costs a system-resolver timeout
+/// plus the bootstrap chain, so a hit is the difference between a fast and a
+/// stalled probe. Failures are never cached.
+type PinCache = Mutex<HashMap<String, (Instant, Vec<IpAddr>)>>;
+
+static PIN_CACHE: LazyLock<PinCache> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Fresh entry for `host`, or `None` (an expired entry is dropped).
+fn cache_get(host: &str, now: Instant) -> Option<Vec<IpAddr>> {
+    let mut cache = PIN_CACHE.lock();
+    match cache.get(host) {
+        Some((stored, ips)) if now.saturating_duration_since(*stored) < PIN_CACHE_TTL => {
+            Some(ips.clone())
+        }
+        Some(_) => {
+            cache.remove(host);
+            None
+        }
+        None => None,
+    }
+}
+
+/// Pins `host`; at capacity the oldest-inserted entry is dropped.
+fn cache_put(host: &str, ips: &[IpAddr], now: Instant) {
+    let mut cache = PIN_CACHE.lock();
+    if cache.len() >= PIN_CACHE_MAX && !cache.contains_key(host) {
+        if let Some(evict) = cache.keys().next().cloned() {
+            cache.remove(&evict);
+        }
+    }
+    cache.insert(host.to_string(), (now, ips.to_vec()));
+}
 
 /// Parse `getprop` output (`[net.dns1]: [192.168.1.1]`) into server IPs.
 fn parse_getprop_dns(output: &str) -> Vec<IpAddr> {
@@ -94,6 +135,12 @@ pub async fn resolve_host(
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         return Ok(vec![SocketAddr::new(ip, port)]);
     }
+    // Pinned hosts answer without touching the network: one host serves both
+    // its DoH (443) and DoT (853) endpoints, hence the port is re-applied here
+    // instead of being part of the key.
+    if let Some(ips) = cache_get(host, Instant::now()) {
+        return Ok(ips.into_iter().map(|ip| SocketAddr::new(ip, port)).collect());
+    }
     let system = timeout(
         timeout_dur,
         tokio::net::lookup_host(format!("{}:{}", host, port)),
@@ -102,6 +149,8 @@ pub async fn resolve_host(
     if let Ok(Ok(addrs)) = system {
         let found: Vec<SocketAddr> = addrs.collect();
         if !found.is_empty() {
+            let ips: Vec<IpAddr> = found.iter().map(|a| a.ip()).collect();
+            cache_put(host, &ips, Instant::now());
             return Ok(found);
         }
     }
@@ -134,6 +183,7 @@ pub async fn resolve_host(
                         detail: "no address".to_string(),
                     });
                 }
+                cache_put(host, &ips, Instant::now());
                 return Ok(ips
                     .into_iter()
                     .map(|ip| SocketAddr::new(ip, port))
@@ -195,5 +245,33 @@ mod tests {
             parse_getprop_dns(sample),
             vec![IpAddr::from([0xfe80, 0, 0, 0, 0, 0, 0, 1])]
         );
+    }
+
+    /// A pinned host answers within the TTL, misses after it, and never grows
+    /// the map past its bound. Both halves share one test because the cache is
+    /// process-global: filling it to capacity in a parallel test would evict
+    /// the entry the TTL half is checking.
+    #[test]
+    fn pin_cache_ttl_and_capacity() {
+        let host = "pin-cache-ttl.invalid";
+        let ip = IpAddr::from([192, 0, 2, 55]);
+        let t0 = Instant::now();
+        cache_put(host, &[ip], t0);
+        assert_eq!(cache_get(host, t0 + Duration::from_secs(1)), Some(vec![ip]));
+        assert_eq!(cache_get(host, t0 + PIN_CACHE_TTL + Duration::from_secs(1)), None);
+        assert!(
+            !PIN_CACHE.lock().contains_key(host),
+            "an expired entry must be dropped, not kept"
+        );
+
+        let now = Instant::now();
+        for i in 0..(PIN_CACHE_MAX + 10) {
+            cache_put(
+                &format!("pin-cache-cap-{}.invalid", i),
+                &[IpAddr::from([192, 0, 2, 1])],
+                now,
+            );
+        }
+        assert!(PIN_CACHE.lock().len() <= PIN_CACHE_MAX);
     }
 }

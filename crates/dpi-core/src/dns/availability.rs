@@ -10,19 +10,32 @@
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::Semaphore;
+use std::time::{Duration, Instant};
+use tokio::sync::{mpsc, Semaphore};
 
 use super::doh::DohSession;
 use super::dot::DotSession;
 use super::socks::SocksProxyConfig;
 use super::types::DnsError;
 use crate::config::AppConfig;
-use crate::PhaseProgress;
+use crate::{PhaseProgress, ProgressBlock};
 use crate::net::netinfo::fetch_ip_cymru;
 use crate::probe::domains::fake_ip_type;
 
 // ─── Helpers (mirror core/dns/stubs.py + render.py) ──────────────────────────
+
+/// Window for the DoH warmup query. Its result is thrown away — it only opens
+/// the HTTP/2 stream — while on a server that answers nothing a full-budget
+/// warmup would spend half the probe cap before the first real query.
+const DOH_WARMUP: Duration = Duration::from_millis(1500);
+
+/// Whether a query that starts now, with a full `window` ahead of it, still
+/// fits in the probe's `budget` (seconds). When it does not, the probe stops
+/// starting new work: the outer cap cancels the whole future and takes every
+/// answer collected so far with it, so a partial result beats a cancelled one.
+fn fits_in_budget(elapsed: Duration, window: Duration, budget_secs: f64) -> bool {
+    elapsed.as_secs_f64() + window.as_secs_f64() <= budget_secs
+}
 
 pub fn brand(name: &str) -> String {
     name.split(" (").next().unwrap_or(name).trim().to_string()
@@ -182,6 +195,12 @@ pub struct DnsAvailReport {
     pub egress: HashMap<(String, String), Option<IpAddr>>,
     /// egress IP string → org label
     pub org_names: HashMap<String, String>,
+    /// Configured truth IPs (`DNS_TRUTH_FALLBACK`), used only for domains the
+    /// live DoH/DoT probes could not answer.
+    pub truth_fallback: HashMap<String, Vec<IpAddr>>,
+    /// True when at least one domain fell back to the configured IPs, so the
+    /// rendered report can say the reference was not measured here.
+    pub truth_fallback_used: bool,
     pub all_names: Vec<String>,
     pub non_socks_proxy_warn: bool,
     pub stats: DnsAvailStats,
@@ -198,6 +217,71 @@ fn answer_of(res: Result<(Vec<IpAddr>, f64), DnsError>) -> (Option<f64>, Option<
     }
 }
 
+/// Outcome of one UDP query task: the domain and its probe result.
+type UdpQueryResult = (String, Result<(Vec<IpAddr>, f64), DnsError>);
+
+/// Spawns one UDP query task per domain, bounded by the server's query gate.
+/// With `tx` (phase A) each result is streamed to the caller, which reacts to
+/// the first answer; without it (phase B) the result comes back through the
+/// handle. Either way the result is moved, never copied.
+fn spawn_udp_queries(
+    server: SocketAddr,
+    domains: &[String],
+    timeout_dur: Duration,
+    gate: &Arc<Semaphore>,
+    socks_proxy: Option<&SocksProxyConfig>,
+    tx: Option<mpsc::Sender<UdpQueryResult>>,
+) -> Vec<tokio::task::JoinHandle<Option<UdpQueryResult>>> {
+    let mut handles = Vec::with_capacity(domains.len());
+    for d in domains {
+        let d = d.clone();
+        let gate = Arc::clone(gate);
+        let socks_proxy = socks_proxy.cloned();
+        let tx = tx.clone();
+        handles.push(tokio::spawn(async move {
+            let _p = gate.acquire().await.unwrap();
+            let r = super::udp::probe_udp_dns(server, &d, timeout_dur, socks_proxy.as_ref()).await;
+            match tx {
+                Some(tx) => {
+                    let _ = tx.send((d, r)).await;
+                    None
+                }
+                None => Some((d, r)),
+            }
+        }));
+    }
+    handles
+}
+
+/// Resolver egress fingerprint (`whoami.akamai.net`), one retry (mirrors
+/// Python `_probe_egress`). The first attempt uses a short window — the retry
+/// exists for a single lost packet, not for slow resolvers — while the retry
+/// keeps the full budget, so no answer that would have been captured is lost.
+/// A silent resolver therefore costs `2s + 0.2s + timeout` instead of `2*timeout`.
+async fn probe_egress(
+    server: SocketAddr,
+    timeout_dur: Duration,
+    socks_proxy: Option<&SocksProxyConfig>,
+) -> Option<IpAddr> {
+    const FIRST_ATTEMPT: Duration = Duration::from_secs(2);
+    let mut egress_ip = None;
+    for attempt in 0..2 {
+        let window = if attempt == 0 { timeout_dur.min(FIRST_ATTEMPT) } else { timeout_dur };
+        match super::udp::probe_udp_dns(server, "whoami.akamai.net", window, socks_proxy).await {
+            Ok((ips, _)) => {
+                if let Some(ip) = ips.first() {
+                    egress_ip = Some(*ip);
+                    break;
+                }
+            }
+            Err(_) => {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        }
+    }
+    egress_ip
+}
+
 /// Downscales a configured concurrency gate to what the local CPU can
 /// sustain in parallel TLS handshakes (pure-Rust crypto, no acceleration
 /// on MIPS/weak ARM cores). Downscale-only: never raises explicit values,
@@ -208,9 +292,40 @@ fn auto_gate(configured: usize) -> usize {
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    configured.min((cpus * 2).max(4)).max(1)
+    gate_for(configured, cpus)
 }
-pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgress>) -> DnsAvailReport {
+
+/// Hardware threads from which the CPU stops being the bottleneck: at or above
+/// this the configured value is honored exactly, so a desktop is never silently
+/// cut down. Below it one weak core starves on many concurrent handshakes and
+/// reports its own starvation as censorship, so the value is capped at
+/// `cores × 2` (floor 4, the measured MIPS-safe width). Weak-hardware
+/// protection stays where it was proven to matter — routers, phones, old
+/// laptops — without second-guessing a desktop.
+///
+/// The threshold is deliberately not tuned on a desktop: interleaved runs on a
+/// 12-thread box (24 vs 50 vs 100) could not separate the settings from the
+/// network's own flakiness (DoT swung 7/34..33/34 at every width), so the CPU
+/// term stays a weak-device protection rather than a measured x86 gain.
+const AUTO_GATE_MIN_CPUS: usize = 8;
+
+fn gate_for(configured: usize, cpus: usize) -> usize {
+    if cpus >= AUTO_GATE_MIN_CPUS {
+        configured.max(1)
+    } else {
+        configured.min((cpus * 2).max(4)).max(1)
+    }
+}
+
+/// `concurrency` is the run-wide limit (TUI "Concurrency" / `--concurrency` /
+/// `MAX_CONCURRENT`) shared with the other tests: every probe in flight holds
+/// one slot of it, so at no point do more requests — TLS handshakes included —
+/// run in parallel than that value allows.
+pub async fn check_dns_availability(
+    cfg: &AppConfig,
+    phases: Option<PhaseProgress>,
+    concurrency: usize,
+) -> DnsAvailReport {
     let servers = cfg.availability_servers();
     let allowed = if cfg.dns_availability_domains.is_empty() {
         vec!["vk.ru".to_string(), "gosuslugi.ru".to_string()]
@@ -246,10 +361,23 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
         report.skipped_no_servers = true;
         return report;
     }
-    let total = udp_servers.len() + doh_servers.len() + dot_servers.len();
-    let tick = phases
-        .as_ref()
-        .map(|p| (p.on_phase)(crate::PhaseId::DnsAvailability, total, false));
+    // Test 1 runs its four blocks concurrently (they share one gate), so the
+    // live line reports all of them at once — a single sequential counter would
+    // misrepresent the run and freeze whenever one unit is slow.
+    let block_tick = phases.as_ref().map(|p| {
+        let mut blocks: Vec<(ProgressBlock, usize)> = Vec::new();
+        if !udp_servers.is_empty() {
+            blocks.push((ProgressBlock::Udp, udp_servers.len()));
+            blocks.push((ProgressBlock::Egress, udp_servers.len()));
+        }
+        if !doh_servers.is_empty() {
+            blocks.push((ProgressBlock::Doh, doh_servers.len()));
+        }
+        if !dot_servers.is_empty() {
+            blocks.push((ProgressBlock::Dot, dot_servers.len()));
+        }
+        (p.on_blocks)(crate::PhaseId::DnsAvailability, &blocks)
+    });
 
     // Proxy: only SOCKS5 supports UDP relay
     let proxy_raw = cfg.effective_proxy().map(|s| s.to_string());
@@ -262,47 +390,78 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
     }
 
 
-    let probe_gate = Arc::new(Semaphore::new(auto_gate(cfg.dns_probe_concurrency.max(1))));
-    let udp_sem = Arc::new(Semaphore::new(auto_gate(cfg.dns_udp_concurrency.max(1))));
-    let doh_sem = Arc::new(Semaphore::new(auto_gate(cfg.dns_doh_concurrency.max(1))));
+    // One budget for every probe in flight: UDP, DoH, DoT and the Cymru ASN
+    // lookups all spend it, so the run never has more requests (and therefore
+    // TLS handshakes) in flight than the user's concurrency setting allows.
+    // `auto_gate` still downscales it on weak CPUs, never raises it.
+    let dns_gate = auto_gate(concurrency.max(1));
+    let probe_gate = Arc::new(Semaphore::new(dns_gate));
     let egress_sem = Arc::new(Semaphore::new(auto_gate(cfg.dns_egress_concurrency.max(1))));
 
-    // ── UDP probes (phase A → phase B) ──
-    {
+    // ── Spawn all three probe blocks before the first await ──
+    // UDP, DoH and DoT are mutually independent — they fill disjoint maps and
+    // are compared only later, in `truth_ips` — so spawning them together
+    // keeps the shared gate busy on block tails instead of idling them.
+    let udp_handles = {
         let mut handles = Vec::new();
         for (addr, name, port) in &udp_servers {
             let (addr, name, port) = (addr.clone(), name.clone(), *port);
             let allowed = allowed.clone();
             let forbidden = forbidden.clone();
             let gate = Arc::clone(&probe_gate);
-            let udp_sem = Arc::clone(&udp_sem);
             let egress_sem = Arc::clone(&egress_sem);
             let socks_proxy = socks_proxy.clone();
+            // Per-server query gate (mirrors `_probe_udp` in core/dns_scanner.py):
+            // one server's queries never queue behind another server's probes.
+            let udp_gate = Arc::new(Semaphore::new(dns_gate));
+            let block_tick = block_tick.clone();
             handles.push(tokio::spawn(async move {
-                let _g = gate.acquire().await.unwrap();
                 let server: SocketAddr = format!("{}:{}", addr, port)
                     .parse()
                     .unwrap_or(SocketAddr::from(([0, 0, 0, 0], port)));
                 let key = ProbeKey { kind: ProbeKind::Udp, addr: addr.clone(), name: name.clone() };
 
+                // Egress fingerprint runs concurrently with phases A/B under its
+                // own gate (mirrors Python `_probe_egress_gated`): a silent
+                // resolver must not hold a probe slot for its whoami retries.
+                let egress_task = {
+                    let socks_proxy = socks_proxy.clone();
+                    let egress_sem = Arc::clone(&egress_sem);
+                    let tick = block_tick.clone();
+                    tokio::spawn(async move {
+                        let _e = egress_sem.acquire().await.unwrap();
+                        let ip = probe_egress(server, timeout_dur, socks_proxy.as_ref()).await;
+                        if let Some(t) = &tick {
+                            t(ProgressBlock::Egress);
+                        }
+                        ip
+                    })
+                };
+
                 let mut lat: HashMap<String, Option<f64>> = HashMap::new();
                 let mut answers: Vec<((ProbeKey, String), DnsAnswer)> = Vec::new();
+                {
+                    let _g = gate.acquire().await.unwrap();
 
-                // Phase A: trusted domains
-                let mut a_handles = Vec::new();
-                for d in &allowed {
-                    let d = d.clone();
-                    let udp_sem = Arc::clone(&udp_sem);
-                    let socks_proxy = socks_proxy.clone();
-                    a_handles.push(tokio::spawn(async move {
-                        let _p = udp_sem.acquire().await.unwrap();
-                        let r = super::udp::probe_udp_dns(server, &d, timeout_dur, socks_proxy.as_ref()).await;
-                        (d, r)
-                    }));
-                }
-                let mut alive = false;
-                for h in a_handles {
-                    if let Ok((d, r)) = h.await {
+                    // Phase A: trusted domains, fanned out per server. Phase B
+                    // fires as soon as ANY trusted domain answers — liveness is
+                    // `any(l.is_some())`, so waiting for a silent sibling only
+                    // delays the substitution phase. Late phase-A results are
+                    // still collected for the latency table.
+                    let (a_tx, mut a_rx) = mpsc::channel::<UdpQueryResult>(allowed.len().max(1));
+                    let _ = spawn_udp_queries(
+                        server,
+                        &allowed,
+                        timeout_dur,
+                        &udp_gate,
+                        socks_proxy.as_ref(),
+                        Some(a_tx),
+                    );
+
+                    let mut alive = false;
+                    let mut b_handles = Vec::new();
+                    for _ in 0..allowed.len() {
+                        let Some((d, r)) = a_rx.recv().await else { break };
                         let (l, a) = answer_of(r);
                         if l.is_some() {
                             alive = true;
@@ -311,23 +470,20 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
                             answers.push(((key.clone(), d.clone()), ans));
                         }
                         lat.insert(d, l);
-                    }
-                }
-                // Phase B: forbidden domains on live servers only
-                if alive {
-                    let mut b_handles = Vec::new();
-                    for d in &forbidden {
-                        let d = d.clone();
-                        let udp_sem = Arc::clone(&udp_sem);
-                        let socks_proxy = socks_proxy.clone();
-                        b_handles.push(tokio::spawn(async move {
-                            let _p = udp_sem.acquire().await.unwrap();
-                            let r = super::udp::probe_udp_dns(server, &d, timeout_dur, socks_proxy.as_ref()).await;
-                            (d, r)
-                        }));
+                        // Phase B: forbidden domains on live servers only.
+                        if alive && b_handles.is_empty() && !forbidden.is_empty() {
+                            b_handles = spawn_udp_queries(
+                                server,
+                                &forbidden,
+                                timeout_dur,
+                                &udp_gate,
+                                socks_proxy.as_ref(),
+                                None,
+                            );
+                        }
                     }
                     for h in b_handles {
-                        if let Ok((d, r)) = h.await {
+                        if let Ok(Some((d, r))) = h.await {
                             let (l, a) = answer_of(r);
                             if let Some(ans) = a {
                                 answers.push(((key.clone(), d.clone()), ans));
@@ -337,71 +493,86 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
                     }
                 }
 
-                // Egress: whoami.akamai.net with one retry
-                let _e = egress_sem.acquire().await.unwrap();
-                let mut egress_ip = None;
-                for _ in 0..2 {
-                    match super::udp::probe_udp_dns(server, "whoami.akamai.net", timeout_dur, socks_proxy.as_ref()).await {
-                        Ok((ips, _)) => {
-                            if let Some(ip) = ips.first() {
-                                egress_ip = Some(*ip);
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            tokio::time::sleep(Duration::from_millis(200)).await;
-                        }
-                    }
+                // The server's own probes are done here (and its gate slot is
+                // released); the egress fingerprint keeps running on its own
+                // budget and advances the EGRESS counter by itself.
+                if let Some(t) = &block_tick {
+                    t(ProgressBlock::Udp);
                 }
+
+                let egress_ip = egress_task.await.unwrap_or(None);
                 (key, lat, answers, egress_ip)
             }));
         }
-        for h in handles {
-            if let Some(t) = tick.as_ref() {
-                t();
-            }
-            if let Ok((key, lat, answers, egress_ip)) = h.await {
-                report.egress.insert((key.addr.clone(), key.name.clone()), egress_ip);
-                for (k, a) in answers {
-                    report.udp_answers.insert(k, a);
-                }
-                report.raw.insert(key, lat);
-            }
-        }
-    }
+        handles
+    };
 
     // ── DoH wire probes (truth), one connection per server, sequential ──
-    {
+    let doh_handles = {
         let mut handles = Vec::new();
         for (addr, name, port) in &doh_servers {
             let (addr, name, _port) = (addr.clone(), name.clone(), *port);
             let forbidden = forbidden.clone();
             let gate = Arc::clone(&probe_gate);
-            let doh_sem = Arc::clone(&doh_sem);
+            // Per-server query gate: queries are sequential on this server's
+            // single connection, so bounding them per server (instead of
+            // globally) keeps one server's retries from stalling the others.
+            // Its width is the run-wide concurrency, like every other gate here.
+            let doh_sem = Arc::new(Semaphore::new(dns_gate));
+            let block_tick = block_tick.clone();
             handles.push(tokio::spawn(async move {
                 let _g = gate.acquire().await.unwrap();
                 let key = ProbeKey { kind: ProbeKind::DohWire, addr: addr.clone(), name: name.clone() };
                 // Outer cap (mirrors `wait_for(_do_probe(), timeout * 2 + 3.0)`).
                 let cap = Duration::from_secs_f64(timeout_dur.as_secs_f64() * 2.0 + 3.0);
+                let cap_secs = cap.as_secs_f64();
                 let probe = async {
+                    // The cap is only a backstop: reaching it cancels the probe
+                    // and discards everything it already answered, so the loop
+                    // below stops starting work that no longer fits the budget.
+                    let started = Instant::now();
                     let mut session = match DohSession::connect(&addr, timeout_dur).await {
                         Ok(s) => s,
                         Err(e) => {
                             return (HashMap::new(), Vec::new(), Some(connect_fail_label(&e).to_string()));
                         }
                     };
-                    // Warmup is non-critical for DoH (mirrors Python: warms up HTTP/2 stream).
+                    // Warmup is non-critical for DoH (mirrors Python: warms up HTTP/2
+                    // stream) and its answer is discarded, so on HTTP/2 it gets a
+                    // short window of its own. On HTTP/1.1 the full window stays:
+                    // dropping a request there kills the whole connection, so a
+                    // cut-short warmup would take every answer after it down.
                     let warmup = forbidden.first().cloned().unwrap_or_else(|| "google.com".to_string());
-                    let _ = session.query(&warmup, timeout_dur).await;
+                    let warmup_window = if session.is_h2() { timeout_dur.min(DOH_WARMUP) } else { timeout_dur };
+                    let _ = session.query(&warmup, warmup_window).await;
 
                     let mut lat = HashMap::new();
                     let mut answers = Vec::new();
                     let mut first_fail: Option<String> = None;
+                    // Once the transport is gone, no further request can be
+                    // answered: hyper tears down an HTTP/1.1 connection whose
+                    // response future was dropped, and reports it through
+                    // `is_closed`. Retrying there only burns the jitter sleep,
+                    // so the remaining domains are recorded as failures.
+                    let mut dead = false;
                     for d in &forbidden {
+                        if dead {
+                            lat.insert(d.clone(), None);
+                            continue;
+                        }
+                        // A query whose window cannot fit would be cancelled with
+                        // the answers collected so far; keep them instead.
+                        if !fits_in_budget(started.elapsed(), timeout_dur, cap_secs) {
+                            lat.insert(d.clone(), None);
+                            continue;
+                        }
                         let _p = doh_sem.acquire().await.unwrap();
                         // One retry with jitter (mirrors Python attempt loop)
                         let mut res = session.query(d, timeout_dur).await;
-                        if res.is_err() {
+                        if res.is_err()
+                            && !session.is_closed()
+                            && fits_in_budget(started.elapsed(), timeout_dur, cap_secs)
+                        {
                             let jitter = (rand::random::<u8>() as f64) / 255.0 * 0.7;
                             tokio::time::sleep(Duration::from_secs_f64(0.3 + jitter)).await;
                             res = session.query(d, timeout_dur).await;
@@ -419,44 +590,41 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
                             answers.push(((key.clone(), d.clone()), ans));
                         }
                         lat.insert(d.clone(), l);
+                        dead = session.is_closed();
                     }
                     (lat, answers, first_fail)
                 };
-                match tokio::time::timeout(cap, probe).await {
+                let out = match tokio::time::timeout(cap, probe).await {
                     Ok((lat, answers, fail)) => (key, lat, answers, fail),
                     Err(_) => (key, lat_none(&forbidden), Vec::new(), Some("TIMEOUT".to_string())),
+                };
+                if let Some(t) = &block_tick {
+                    t(ProgressBlock::Doh);
                 }
+                out
             }));
         }
-        for h in handles {
-            if let Some(t) = tick.as_ref() {
-                t();
-            }
-            if let Ok((key, lat, answers, fail)) = h.await {
-                if let Some(f) = fail {
-                    record_fail(&mut report, &key, &f);
-                }
-                for (k, a) in answers {
-                    report.doh_answers.insert(k, a);
-                }
-                report.raw.insert(key, lat);
-            }
-        }
-    }
+        handles
+    };
 
     // ── DoT probes ──
-    {
+    let dot_handles = {
         let mut handles = Vec::new();
         for (addr, name, port) in &dot_servers {
             let (addr, name, port) = (addr.clone(), name.clone(), *port);
             let forbidden = forbidden.clone();
             let gate = Arc::clone(&probe_gate);
+            let block_tick = block_tick.clone();
             handles.push(tokio::spawn(async move {
                 let _g = gate.acquire().await.unwrap();
                 let key = ProbeKey { kind: ProbeKind::Dot, addr: addr.clone(), name: name.clone() };
                 // Outer cap (mirrors `wait_for(_do_probe(), timeout * 2 + 3.0)`).
                 let cap = Duration::from_secs_f64(timeout_dur.as_secs_f64() * 2.0 + 3.0);
+                let cap_secs = cap.as_secs_f64();
                 let probe = async {
+                    // Same backstop as the DoH probe: stop before the cap so the
+                    // answers already collected survive.
+                    let started = Instant::now();
                     let (host, mut ep_port) = super::dot::split_dot_endpoint(&addr);
                     if port != 853 {
                         ep_port = port;
@@ -468,7 +636,9 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
                         }
                     };
                     // Warmup is fatal (mirrors Python: warmup + queries abort
-                    // the whole server with the first error recorded).
+                    // the whole server with the first error recorded), so it
+                    // keeps the full window — shortening it would turn a slow
+                    // server into a dead one.
                     let warmup = forbidden.first().cloned().unwrap_or_else(|| "google.com".to_string());
                     if let Err(e) = session.query(&warmup).await {
                         return (HashMap::new(), Vec::new(), Some(connect_fail_label(&e).to_string()));
@@ -476,9 +646,21 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
 
                     let mut lat = HashMap::new();
                     let mut answers = Vec::new();
-                    // Per-query errors stay silent (mirrors Python `_one`).
+                    // Per-query errors stay silent (mirrors Python `_one`), but a
+                    // stream-level I/O error is terminal: the peer is gone, so
+                    // the remaining domains can only fail.
+                    let mut dead = false;
                     for d in &forbidden {
+                        if dead {
+                            lat.insert(d.clone(), None);
+                            continue;
+                        }
+                        if !fits_in_budget(started.elapsed(), timeout_dur, cap_secs) {
+                            lat.insert(d.clone(), None);
+                            continue;
+                        }
                         let res = session.query(d).await;
+                        dead = matches!(&res, Err(DnsError::Io(_)));
                         let (l, a) = answer_of(res);
                         if let Some(ans) = a {
                             answers.push(((key.clone(), d.clone()), ans));
@@ -488,47 +670,85 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
                     let none: Option<String> = None;
                     (lat, answers, none)
                 };
-                match tokio::time::timeout(cap, probe).await {
+                let out = match tokio::time::timeout(cap, probe).await {
                     Ok((lat, answers, fail)) => (key, lat, answers, fail),
                     Err(_) => (key, lat_none(&forbidden), Vec::new(), Some("TIMEOUT".to_string())),
+                };
+                if let Some(t) = &block_tick {
+                    t(ProgressBlock::Dot);
                 }
+                out
             }));
         }
-        for h in handles {
-            if let Some(t) = tick.as_ref() {
-                t();
+        handles
+    };
+
+    // ── UDP results (phase A/B finished) ──
+    for h in udp_handles {
+        if let Ok((key, lat, answers, egress_ip)) = h.await {
+            report.egress.insert((key.addr.clone(), key.name.clone()), egress_ip);
+            for (k, a) in answers {
+                report.udp_answers.insert(k, a);
             }
-            if let Ok((key, lat, answers, fail)) = h.await {
-                if let Some(f) = fail {
-                    record_fail(&mut report, &key, &f);
-                }
-                for (k, a) in answers {
-                    report.dot_answers.insert(k, a);
-                }
-                report.raw.insert(key, lat);
-            }
+            report.raw.insert(key, lat);
         }
     }
 
     // ── Org names for egress IPs (Team Cymru over DoH) ──
-    {
+    // Spawned as soon as the UDP block knows the egress IPs, so the lookups
+    // overlap with the DoH/DoT probes. They are TLS requests like the probes,
+    // so they spend the same gate; `DNS_ASN_CONCURRENCY` only tightens them.
+    let org_handles: Vec<_> = {
         let unique: HashSet<IpAddr> = report.egress.values().filter_map(|v| *v).collect();
         let asn_sem = Arc::new(Semaphore::new(auto_gate(cfg.dns_asn_concurrency.max(1))));
-        let mut handles = Vec::new();
-        for ip in unique {
-            let asn_sem = Arc::clone(&asn_sem);
-            let cymru = cfg.cymru_doh_servers.clone();
-            handles.push(tokio::spawn(async move {
-                let _p = asn_sem.acquire().await.unwrap();
-                let info = fetch_ip_cymru(&ip, &cymru, Duration::from_secs(5)).await;
-                (ip, info.and_then(|i| i.org).unwrap_or_default())
-            }));
+        unique
+            .into_iter()
+            .map(|ip| {
+                let asn_sem = Arc::clone(&asn_sem);
+                let budget = Arc::clone(&probe_gate);
+                let cymru = cfg.cymru_doh_servers.clone();
+                tokio::spawn(async move {
+                    let _p = asn_sem.acquire().await.unwrap();
+                    let _b = budget.acquire().await.unwrap();
+                    let info = fetch_ip_cymru(&ip, &cymru, Duration::from_secs(5)).await;
+                    (ip, info.and_then(|i| i.org).unwrap_or_default())
+                })
+            })
+            .collect()
+    };
+
+    // ── DoH results ──
+    for h in doh_handles {
+        if let Ok((key, lat, answers, fail)) = h.await {
+            if let Some(f) = fail {
+                record_fail(&mut report, &key, &f);
+            }
+            for (k, a) in answers {
+                report.doh_answers.insert(k, a);
+            }
+            report.raw.insert(key, lat);
         }
-        for h in handles {
-            if let Ok((ip, org)) = h.await {
-                if !org.is_empty() {
-                    report.org_names.insert(ip.to_string(), org);
-                }
+    }
+
+    // ── DoT results ──
+    for h in dot_handles {
+        if let Ok((key, lat, answers, fail)) = h.await {
+            if let Some(f) = fail {
+                record_fail(&mut report, &key, &f);
+            }
+            for (k, a) in answers {
+                report.dot_answers.insert(k, a);
+            }
+            report.raw.insert(key, lat);
+        }
+    }
+
+    // ── Org names for egress IPs (Team Cymru over DoH): lookups already ran
+    // in the background during the DoH/DoT probes. ──
+    for h in org_handles {
+        if let Ok((ip, org)) = h.await {
+            if !org.is_empty() {
+                report.org_names.insert(ip.to_string(), org);
             }
         }
     }
@@ -548,11 +768,30 @@ pub async fn check_dns_availability(cfg: &AppConfig, phases: Option<PhaseProgres
     names.sort_by_key(|a| dns_name_sort_key(a));
     report.all_names = names;
 
+    // Configured reference, used only where the network could not provide one:
+    // on a fully blocked path (no encrypted DNS at all) the comparison would
+    // otherwise have nothing to compare against.
+    report.truth_fallback = cfg
+        .dns_truth_fallback
+        .iter()
+        .map(|(domain, ips)| {
+            let parsed: Vec<IpAddr> = ips.iter().filter_map(|s| s.parse().ok()).collect();
+            (domain.clone(), parsed)
+        })
+        .filter(|(_, ips): &(String, Vec<IpAddr>)| !ips.is_empty())
+        .collect();
+    let live = live_truth(&report);
+    report.truth_fallback_used = report
+        .truth_fallback
+        .keys()
+        .any(|d| live.get(d).is_none_or(|s| s.is_empty()));
+
     report.stats = compute_stats(&report, cfg);
     report
 }
 
-fn truth_ips(report: &DnsAvailReport) -> HashMap<String, HashSet<IpAddr>> {
+/// Truth measured on this network: what the DoH/DoT probes answered.
+fn live_truth(report: &DnsAvailReport) -> HashMap<String, HashSet<IpAddr>> {
     let mut truth: HashMap<String, HashSet<IpAddr>> = HashMap::new();
     for ((key, domain), ans) in report.doh_answers.iter().chain(report.dot_answers.iter()) {
         if key.kind != ProbeKind::DohWire && key.kind != ProbeKind::Dot {
@@ -563,6 +802,21 @@ fn truth_ips(report: &DnsAvailReport) -> HashMap<String, HashSet<IpAddr>> {
             if !real.is_empty() {
                 truth.entry(domain.clone()).or_default().extend(real);
             }
+        }
+    }
+    truth
+}
+
+/// Reference used for the substitution comparison: the measured truth, plus
+/// the configured fallback for domains that nothing measured. The fallback
+/// never extends a measured set — mixing a stale IP into a live one would
+/// weaken the comparison instead of filling a gap.
+fn truth_ips(report: &DnsAvailReport) -> HashMap<String, HashSet<IpAddr>> {
+    let mut truth = live_truth(report);
+    for (domain, ips) in &report.truth_fallback {
+        let slot = truth.entry(domain.clone()).or_default();
+        if slot.is_empty() {
+            slot.extend(ips.iter().copied());
         }
     }
     truth
@@ -584,12 +838,23 @@ fn udp_ips(report: &DnsAvailReport, addr: &str, name: &str, domain: &str) -> Has
     }
 }
 
-/// (judged, substituted) per UDP server.
+/// (judged, substituted) per UDP server. Public entry point for renderers:
+/// rebuilds the truth map on every call.
 pub fn subst_counts(report: &DnsAvailReport, addr: &str, name: &str) -> (usize, usize) {
+    subst_counts_with(report, &truth_ips(report), addr, name)
+}
+
+/// Same, against an already-built truth map, so the stats pass can compute
+/// the truth once instead of once per server.
+fn subst_counts_with(
+    report: &DnsAvailReport,
+    truth: &HashMap<String, HashSet<IpAddr>>,
+    addr: &str,
+    name: &str,
+) -> (usize, usize) {
     if !udp_alive(report, addr, name) {
         return (0, 0);
     }
-    let truth = truth_ips(report);
     let mut judged = 0;
     let mut sub = 0;
     for d in &report.forbidden {
@@ -665,26 +930,28 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
         .collect::<HashSet<_>>()
         .len();
 
+    // One walk over the live UDP servers fills the substitution, fake-IP and
+    // stub-IP tallies; the truth map is built once instead of per server.
+    let truth = truth_ips(report);
     let mut subst_sub = 0;
     let mut subst_total = 0;
-    for (name, addrs) in udp_by_name(report) {
-        for a in addrs {
-            let (j, s) = subst_counts(report, &a, &name);
-            if j > 0 {
-                subst_total += 1;
-                if s > 0 {
-                    subst_sub += 1;
-                }
-            }
-        }
-    }
-
+    let mut fakeip_count = 0;
     let mut stub_counts: HashMap<IpAddr, usize> = HashMap::new();
-    let truth = truth_ips(report);
     for (name, addrs) in udp_by_name(report) {
         for a in addrs {
             if !udp_alive(report, &a, &name) {
                 continue;
+            }
+            let (judged, sub) = subst_counts_with(report, &truth, &a, &name);
+            if judged == 0 {
+                continue;
+            }
+            subst_total += 1;
+            if sub > 0 {
+                subst_sub += 1;
+            }
+            if fakeip_sub(report, &a, &name) > 0 {
+                fakeip_count += 1;
             }
             for d in &report.forbidden {
                 let t = match truth.get(d) {
@@ -708,16 +975,6 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
         .filter(|(_, c)| *c >= stub_min)
         .max_by_key(|(_, c)| *c)
         .map(|(ip, _)| ip.to_string());
-
-    let mut fakeip_count = 0;
-    for (name, addrs) in udp_by_name(report) {
-        for a in addrs {
-            let (j, _) = subst_counts(report, &a, &name);
-            if j > 0 && fakeip_sub(report, &a, &name) > 0 {
-                fakeip_count += 1;
-            }
-        }
-    }
 
     DnsAvailStats {
         doh_ok,
@@ -760,19 +1017,58 @@ mod tests {
         assert!(auto_gate(100) <= 100);
         assert!(auto_gate(1) >= 1);
         assert!(auto_gate(20) >= 1);
-        // Explicit low values pass through untouched.
-        let cpus = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
+        // Explicit low values pass through untouched: `auto_gate` only ever
+        // shrinks, and its CPU term never drops below 4.
         assert_eq!(auto_gate(1), 1);
-        assert_eq!(auto_gate(2), 2.min((cpus * 2).max(4)).max(1));
+        assert_eq!(auto_gate(2), 2);
+    }
+
+    /// The gate protects weak CPUs only. A desktop must get exactly what the
+    /// user asked for, or a configured 50 would silently become 24.
+    #[test]
+    fn test_gate_honors_configured_on_strong_cpus() {
+        assert_eq!(gate_for(50, 12), 50);
+        assert_eq!(gate_for(100, 8), 100);
+        assert_eq!(gate_for(1, 16), 1);
+        // Below the threshold the proven formula stays: `cores × 2`, floor 4.
+        assert_eq!(gate_for(100, 4), 8);
+        assert_eq!(gate_for(100, 2), 4);
+        assert_eq!(gate_for(100, 1), 4);
+        assert_eq!(gate_for(3, 2), 3);
+        assert_eq!(gate_for(0, 12), 1);
+        assert_eq!(gate_for(0, 2), 1);
+    }
+
+    /// The configured fallback exists for networks where every encrypted
+    /// resolver is blocked. It fills a missing measurement and never extends a
+    /// measured one: a stale configured IP inside a live set would weaken the
+    /// comparison instead of helping it.
+    #[test]
+    fn test_fallback_truth_only_fills_gaps() {
+        let key = |addr: &str| ProbeKey {
+            kind: ProbeKind::DohWire,
+            addr: addr.to_string(),
+            name: "Server".to_string(),
+        };
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let mut report = DnsAvailReport::default();
+        report.doh_answers.insert(
+            (key("https://a/dns-query"), "measured.example".to_string()),
+            DnsAnswer::Ips(vec![ip("203.0.113.5")]),
+        );
+        report.truth_fallback.insert("measured.example".to_string(), vec![ip("198.51.100.9")]);
+        report.truth_fallback.insert("blind.example".to_string(), vec![ip("198.51.100.7")]);
+
+        let truth = truth_ips(&report);
+        assert_eq!(truth["measured.example"], HashSet::from([ip("203.0.113.5")]));
+        assert_eq!(truth["blind.example"], HashSet::from([ip("198.51.100.7")]));
     }
 
     #[test]
     fn test_brand_sort() {
         assert_eq!(brand("AdGuard (F)"), "AdGuard");
-        let mut v = vec!["Yandex".to_string(), "Google".to_string(), "Other".to_string()];
-        v.sort_by(|a, b| dns_name_sort_key(a).cmp(&dns_name_sort_key(b)));
+        let mut v = ["Yandex".to_string(), "Google".to_string(), "Other".to_string()];
+        v.sort_by_key(|a| dns_name_sort_key(a));
         assert_eq!(v[0], "Google");
         assert_eq!(v[2], "Yandex");
     }
@@ -780,6 +1076,25 @@ mod tests {
     #[test]
     fn test_net24() {
         assert_eq!(net24(&"1.2.3.4".parse().unwrap()), "1.2.3");
+    }
+
+    /// The probe cap cancels the future instead of truncating it, so everything
+    /// collected up to that moment is lost. This check is what keeps it, and its
+    /// boundary decides whether the last query is allowed to start.
+    #[test]
+    fn test_fits_in_budget_boundary() {
+        let budget = 23.0; // 2×10 + 3, the DoH/DoT cap
+        let window = Duration::from_secs(10);
+        // Exactly one more full window fits.
+        assert!(fits_in_budget(Duration::from_secs(13), window, budget));
+        // One millisecond less does not: starting would be cancelled mid-flight.
+        assert!(!fits_in_budget(
+            Duration::from_secs(13) + Duration::from_millis(1),
+            window,
+            budget
+        ));
+        assert!(!fits_in_budget(Duration::from_secs(23), window, budget));
+        assert!(fits_in_budget(Duration::ZERO, window, budget));
     }
 
     /// Display tokens mirror Python `classify_connect_error` stages.
