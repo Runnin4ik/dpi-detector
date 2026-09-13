@@ -36,6 +36,7 @@ use crate::config::AppConfig;
 use crate::net::fingerprint::TlsFingerprint;
 use crate::probe::connector::{DpiTlsConnector, RustlsConnector};
 use crate::probe::domains::{resolve_ip, IpFamily};
+use crate::net::tcp::{dial_tcp, DialError};
 
 /// Port every attempt dials (the probes' TLS column uses the same one).
 pub const BURST_PORT: u16 = 443;
@@ -479,18 +480,17 @@ async fn connect_attempt(
 ) -> Result<(DpiProbeStream<TcpStream>, DpiProbeTracker), BurstAttempt> {
     let started = Instant::now();
     let ms = |started: Instant| started.elapsed().as_millis() as u64;
-    match timeout(limit, TcpStream::connect(addr)).await {
-        Ok(Ok(stream)) => {
-            let _ = stream.set_nodelay(true);
+    match dial_tcp(&addr, limit).await {
+        Ok(stream) => {
             let tracker = DpiProbeTracker::new();
             Ok((DpiProbeStream::new(stream, tracker.clone()), tracker))
         }
-        Ok(Err(e)) => {
+        Err(DialError::Io(e)) => {
             let msg = e.to_string();
             let (status, detail) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tcp_connect");
             Err(BurstAttempt { status, detail, ms: ms(started) })
         }
-        Err(_) => Err(BurstAttempt {
+        Err(DialError::Timeout) => Err(BurstAttempt {
             status: DpiStatus::SynDropped,
             detail: DET_TCP_SYN_TIMEOUT.to_string(),
             ms: ms(started),

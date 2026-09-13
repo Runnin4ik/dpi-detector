@@ -2,9 +2,7 @@ use std::io::{stdout, IsTerminal, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use dpi_core::config::{
-    base_dir, clean_domain, default_tcp16_targets, embedded_domains, embedded_tcp16_targets,
-    embedded_whitelist_sni, load_config, load_domains_from_file, load_tcp16_targets_from_file,
-    load_whitelist_sni, resource_path,
+    base_dir, load_config,
 };
 use dpi_core::i18n::{get_messages, legend_text, Language};
 use dpi_core::net::fingerprint::TlsFingerprint;
@@ -22,7 +20,10 @@ use menu::{
     read_post_test_action, run_interactive_menu, tui_available, MenuAction, MenuResult,
     PostTestAction, VersionSlot,
 };
-use runner::{burst_plan_from_cli, burst_targets_after_screen, mask_proxy, run_test_suite};
+use runner::{
+    burst_plan_from_cli, burst_targets_after_screen, load_domains, load_tcp16_targets,
+    load_whitelist_sni_list, mask_proxy, run_test_suite,
+};
 use render::{
     asc, clean_output, output_str, plain_mode, render_banner, render_fingerprint_header, set_ascii_mode,
     set_has_vt, set_plain_mode, strip_ansi,
@@ -211,55 +212,9 @@ async fn main() {
     let _ = tracing_subscriber::fmt().with_max_level(level).try_init();
 
     // Domains / TCP targets / whitelist (mirror dpi_detector.py loading)
-    let domains: Vec<String> = if !args.domain.is_empty() {
-        args.domain.iter().filter_map(|d| clean_domain(d)).collect()
-    } else if let Some(ref path) = args.domains {
-        load_domains_from_file(path).unwrap_or_default()
-    } else {
-        let p = resource_path(&cfg.domains_file);
-        let from_file = load_domains_from_file(&p).unwrap_or_default();
-        if !from_file.is_empty() {
-            from_file
-        } else {
-            // No external file: use the domains shipped inside the binary.
-            let embedded = embedded_domains();
-            if !embedded.is_empty() {
-                embedded
-            } else {
-                profile.default_domains().iter().map(|s| s.to_string()).collect()
-            }
-        }
-    };
-    let tcp_items = if let Some(ref path) = args.tcp16 {
-        let from_file = load_tcp16_targets_from_file(path).unwrap_or_default();
-        if !from_file.is_empty() {
-            from_file
-        } else {
-            embedded_tcp16_targets()
-        }
-    } else {
-        let p = resource_path(&cfg.tcp16_file);
-        let from_file = load_tcp16_targets_from_file(&p).unwrap_or_default();
-        if !from_file.is_empty() {
-            from_file
-        } else {
-            let embedded = embedded_tcp16_targets();
-            if !embedded.is_empty() {
-                embedded
-            } else {
-                default_tcp16_targets()
-            }
-        }
-    };
-    let whitelist_sni = {
-        let p = resource_path(&cfg.whitelist_sni_file);
-        let from_file = load_whitelist_sni(&p);
-        if !from_file.is_empty() {
-            from_file
-        } else {
-            embedded_whitelist_sni()
-        }
-    };
+    let domains = load_domains(&args, &cfg, profile);
+    let tcp_items = load_tcp16_targets(&args, &cfg);
+    let whitelist_sni = load_whitelist_sni_list(&cfg);
     // Mirrors Python: test 4 is unavailable without any SNI list.
     if whitelist_sni.is_empty() && !args.json {
         print_out(&format!("\x1b[33m{}\x1b[0m", msg.whitelist_skipped));

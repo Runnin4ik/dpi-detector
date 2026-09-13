@@ -12,7 +12,6 @@ use http_body_util::BodyExt;
 use hyper::Method;
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
-use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
@@ -23,6 +22,7 @@ use crate::classify::{
 };
 use crate::config::AppConfig;
 use crate::probe::http::{hyper_err_info, negotiated_h2, HttpRequest, HttpSender};
+use crate::net::tcp::{dial_tcp, DialError};
 
 fn random_pool(size: usize) -> Vec<u8> {
     // xorshift64* — deterministic PRNG, no extra deps, ASCII alphanumerics
@@ -51,17 +51,14 @@ async fn connect_fat_target(
     cfg: &AppConfig,
 ) -> Result<HttpSender, (DpiStatus, String)> {
     let connect_stage = "tcp_connect";
-    let tcp = match timeout(Duration::from_secs_f64(cfg.fat_connect_timeout), TcpStream::connect(&addr)).await {
-        Ok(Ok(s)) => {
-            let _ = s.set_nodelay(true);
-            s
-        }
-        Ok(Err(e)) => {
+    let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.fat_connect_timeout)).await {
+        Ok(s) => s,
+        Err(DialError::Io(e)) => {
             let msg = e.to_string();
             let (s, d) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, connect_stage);
             return Err((s, d));
         }
-        Err(_) => {
+        Err(DialError::Timeout) => {
             return Err((DpiStatus::SynDropped, "TCP SYN timeout".into()));
         }
     };

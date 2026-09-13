@@ -18,7 +18,6 @@ use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
 use parking_lot::Mutex;
 use rustls::pki_types::ServerName;
-use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
@@ -34,6 +33,7 @@ use crate::PhaseProgress;
 use crate::probe::connector::RustlsConnector;
 use crate::probe::http::{hyper_err_info, negotiated_h2, HttpRequest, HttpSender};
 use crate::probe::DpiTlsConnector;
+use crate::net::tcp::{dial_tcp, DialError};
 
 const BODY_CAP: usize = 64 * 1024;
 
@@ -264,17 +264,14 @@ pub async fn check_domain_tls(
     let addr = SocketAddr::new(target, 443);
 
     let fut = async {
-        let tcp = match timeout(Duration::from_secs_f64(cfg.connect_timeout), TcpStream::connect(&addr)).await {
-            Ok(Ok(s)) => {
-                let _ = s.set_nodelay(true);
-                s
-            }
-            Ok(Err(e)) => {
+        let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.connect_timeout)).await {
+            Ok(s) => s,
+            Err(DialError::Io(e)) => {
                 let msg = e.to_string();
                 let (s, d) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tcp_connect");
                 return (s, d, 0usize);
             }
-            Err(_) => {
+            Err(DialError::Timeout) => {
                 return (DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT.to_string(), 0usize);
             }
         };
@@ -463,17 +460,14 @@ pub async fn check_http_injection(
             },
         };
         let addr = SocketAddr::new(host_ip, 80);
-        let tcp = match timeout(Duration::from_secs_f64(cfg.connect_timeout), TcpStream::connect(&addr)).await {
-            Ok(Ok(s)) => {
-                let _ = s.set_nodelay(true);
-                s
-            }
-            Ok(Err(e)) => {
+        let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.connect_timeout)).await {
+            Ok(s) => s,
+            Err(DialError::Io(e)) => {
                 let msg = e.to_string();
                 let (s, d) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tcp_connect");
                 return HttpCheck { status: s, detail: d };
             }
-            Err(_) => {
+            Err(DialError::Timeout) => {
                 return HttpCheck { status: DpiStatus::SynDropped, detail: DET_TCP_SYN_TIMEOUT.to_string() };
             }
         };

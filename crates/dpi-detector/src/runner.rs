@@ -9,7 +9,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use dpi_core::config::{
-    clean_domain, AppConfig,
+    clean_domain, default_tcp16_targets, embedded_domains, embedded_tcp16_targets,
+    embedded_whitelist_sni, load_domains_from_file, load_tcp16_targets_from_file, load_whitelist_sni,
+    resource_path, AppConfig, Tcp16Target,
 };
 use dpi_core::dns::availability::check_dns_availability;
 use dpi_core::dns::parse_socks_proxy;
@@ -42,6 +44,57 @@ use crate::render::{
     NetFamilyInfo, NetInfoData, NetTtlb, Spinner, SummaryData, TcpRow,
 };
 use crate::{print_out, selection_flags, tcp16_detail, Emitter};
+
+/// The domains to probe: `-d` names first, then `--domains`/the configured file,
+/// then the embedded list, then the profile's own. A file that parses to nothing
+/// falls through rather than shrinking the run to zero.
+pub(crate) fn load_domains(args: &CliArgs, cfg: &AppConfig, profile: RegionProfile) -> Vec<String> {
+    if !args.domain.is_empty() {
+        return args.domain.iter().filter_map(|d| clean_domain(d)).collect();
+    }
+    if let Some(path) = &args.domains {
+        return load_domains_from_file(path).unwrap_or_default();
+    }
+    let from_file = load_domains_from_file(resource_path(&cfg.domains_file)).unwrap_or_default();
+    if !from_file.is_empty() {
+        return from_file;
+    }
+    let embedded = embedded_domains();
+    if !embedded.is_empty() {
+        return embedded;
+    }
+    profile.default_domains().iter().map(|s| s.to_string()).collect()
+}
+
+/// The 16 KB-test targets: `--tcp16`, then the configured file, then the
+/// embedded list, then the shipped defaults.
+pub(crate) fn load_tcp16_targets(args: &CliArgs, cfg: &AppConfig) -> Vec<Tcp16Target> {
+    if let Some(path) = &args.tcp16 {
+        let from_file = load_tcp16_targets_from_file(path).unwrap_or_default();
+        return if from_file.is_empty() { embedded_tcp16_targets() } else { from_file };
+    }
+    let from_file = load_tcp16_targets_from_file(resource_path(&cfg.tcp16_file)).unwrap_or_default();
+    if !from_file.is_empty() {
+        return from_file;
+    }
+    let embedded = embedded_tcp16_targets();
+    if embedded.is_empty() {
+        default_tcp16_targets()
+    } else {
+        embedded
+    }
+}
+
+/// The white-SNI list: the configured file, else the embedded one. There is no
+/// flag for it, and test 4 reports itself unavailable when this is empty.
+pub(crate) fn load_whitelist_sni_list(cfg: &AppConfig) -> Vec<(String, usize)> {
+    let from_file = load_whitelist_sni(resource_path(&cfg.whitelist_sni_file));
+    if from_file.is_empty() {
+        embedded_whitelist_sni()
+    } else {
+        from_file
+    }
+}
 
 pub(crate) fn mask_proxy(url: &str) -> String {
     // socks5://user:pass@host → socks5://user:***@host
@@ -332,8 +385,19 @@ pub(crate) async fn run_test_suite(
             s.finish();
         }
 
-        let mut dns_info = get_system_dns();
-        let bypass = detect_bypass_tools(&cfg.bypass_tools());
+        // Both of these shell out on Windows (`route print`, `tasklist`, 5 s
+        // caps) and read the registry, so on the single-threaded runtime they
+        // would block the worker — and the badge poll with it. They are
+        // independent, so they run on the blocking pool together; a join error
+        // only happens when the runtime is shutting down, and a default value
+        // then says "unknown" rather than failing the run.
+        let (mut dns_info, bypass) = {
+            let signatures = cfg.bypass_tools();
+            let dns = tokio::task::spawn_blocking(get_system_dns);
+            let tools = tokio::task::spawn_blocking(move || detect_bypass_tools(&signatures));
+            let (dns, tools) = tokio::join!(dns, tools);
+            (dns.unwrap_or_default(), tools.unwrap_or_default())
+        };
 
         if let Ok((ips, v4_extra, v6_extra)) = net_data {
             // Upstream router / VPN relay: whoami.akamai.net via local candidates
