@@ -931,12 +931,19 @@ fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Messages) -> Bu
         alpn,
         profiles,
     );
-    // `-d` picks the targets, exactly as it does for test 2; without it the
-    // configured list is used.
+    // `-d` picks the targets, exactly as it does for test 2 — and goes through
+    // the same cleaner, so `-d https://host/path` probes `host` instead of a name
+    // no resolver knows. An input that cleans to nothing falls back to the
+    // configured list rather than firing at no target at all.
     let targets = if args.domain.is_empty() {
         domains.to_vec()
     } else {
-        args.domain.clone()
+        let cleaned: Vec<String> = args.domain.iter().filter_map(|d| clean_domain(d)).collect();
+        if cleaned.is_empty() {
+            domains.to_vec()
+        } else {
+            cleaned
+        }
     };
     BurstPlan { settings, targets }
 }
@@ -1555,6 +1562,26 @@ mod tests {
             tcp16_detail(DET_TLS_HANDSHAKE_TIMEOUT.to_string(), 8.4),
             DET_TLS_HANDSHAKE_TIMEOUT
         );
+    }
+
+    /// `-d` reaches test 6 through the same cleaner as everything else: a pasted
+    /// URL probes its host, and an input that cleans to nothing keeps the
+    /// configured list instead of firing at no target.
+    #[test]
+    fn cli_targets_are_cleaned_like_every_other_domain() {
+        let msg = get_messages(Language::En);
+        let configured = vec!["www.google.com".to_string()];
+        let plan = |domain: Vec<&str>| {
+            let args = CliArgs {
+                domain: domain.into_iter().map(str::to_string).collect(),
+                ..CliArgs::default()
+            };
+            burst_plan_from_cli(&args, &configured, &msg).targets
+        };
+        assert_eq!(plan(vec!["https://info.paymaster.ru/x?y=1"]), vec!["info.paymaster.ru"]);
+        assert_eq!(plan(vec!["ELY.BY"]), vec!["ely.by"]);
+        assert_eq!(plan(vec!["  "]), configured);
+        assert_eq!(plan(vec![]), configured);
     }
 
     /// An empty domain box means the configured list. It used to keep the host a
