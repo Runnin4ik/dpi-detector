@@ -5,7 +5,7 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyM
 use futures_util::StreamExt;
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use dpi_core::config::AppConfig;
+use dpi_core::config::{clean_domain, AppConfig};
 use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::probe::burst::{
     BurstAlpn, BurstSettings, BurstTlsVersion, BURST_MAX_ATTEMPTS, BURST_MAX_TIMEOUT_SECS,
@@ -624,6 +624,8 @@ const BURST_ROW_PROFILES: usize = 5;
 const BURST_LABEL_WIDTH: usize = 24;
 /// Inner cells of the domain input box (`[ ` … ` ]` is drawn around them).
 const BURST_INPUT_WIDTH: usize = 34;
+/// Longest domain box content: a pasted list would otherwise become the SNI.
+const DOMAIN_MAX_CHARS: usize = 120;
 /// Background of the domain input box while its row is selected but not being
 /// typed into, and while it is: grey reads as "a field you can open", the blue
 /// as "the keyboard goes here". The text colors keep the two states apart on a
@@ -654,10 +656,15 @@ fn tail_of(text: &str, width: usize) -> String {
 /// Returns `None` when the user cancels (Q/Esc/Ctrl-C): the caller then skips
 /// test 6 instead of running it with guesses. The screen is only shown for an
 /// interactive run; a piped `-t 6` takes the values from the CLI.
+///
+/// `domain_count` is the size of the *configured* list — what an empty box means
+/// — not the size of the current selection, and `current_domain` is the host the
+/// caller probed last, drawn in the box.
 pub async fn burst_settings_menu(
     lang: Language,
     initial: &BurstSettings,
     domain_count: usize,
+    current_domain: Option<&str>,
 ) -> Option<BurstChoice> {
     if enable_raw_mode().is_err() {
         return None;
@@ -665,7 +672,7 @@ pub async fn burst_settings_menu(
     let msg = get_messages(lang);
     let mut out = std::io::stdout();
     let _ = execute!(out, crossterm::cursor::Hide);
-    let result = burst_settings_loop(&msg, lang, initial, domain_count).await;
+    let result = burst_settings_loop(&msg, lang, initial, domain_count, current_domain).await;
     let _ = execute!(out, crossterm::cursor::Show);
     let _ = disable_raw_mode();
     result
@@ -676,13 +683,20 @@ async fn burst_settings_loop(
     lang: Language,
     initial: &BurstSettings,
     domain_count: usize,
+    current_domain: Option<&str>,
 ) -> Option<BurstChoice> {
     let mut cursor = BURST_ROW_ATTEMPTS;
     let mut attempts = initial.attempts;
     let mut timeout_secs = initial.timeout.as_secs();
     let mut tls = initial.tls;
     let mut alpn = initial.alpn;
-    let mut text = String::new();
+    // The box opens holding the host the caller probed last, so a repeated run
+    // shows what it is about to probe, and the first typed character replaces it
+    // — with the caret at the end, typing into a prefilled box read as an append
+    // to a domain the user meant to replace. Emptying the box means the
+    // configured list again.
+    let mut text = current_domain.unwrap_or_default().to_string();
+    let mut edited = current_domain.is_none();
     let mut editing = false;
     let mut profiles = initial.profiles.clone();
     let mut profile_index = profile_index_of(&profiles);
@@ -733,14 +747,9 @@ async fn burst_settings_loop(
                 editing = false;
             }
             KeyCode::Enter => {
-                let domain = {
-                    let trimmed = text.trim();
-                    if trimmed.is_empty() {
-                        None
-                    } else {
-                        Some(trimmed.to_string())
-                    }
-                };
+                // The same cleaner the configured list goes through, so a pasted
+                // URL probes its host and an empty box means that list.
+                let domain = clean_domain(&text);
                 return Some(BurstChoice {
                     settings: BurstSettings::clamped(attempts, timeout_secs, tls, alpn, profiles),
                     domain,
@@ -777,18 +786,14 @@ async fn burst_settings_loop(
             },
             KeyCode::Backspace if editing => {
                 text.pop();
+                edited = true;
             }
             KeyCode::Delete if editing => {
                 text.clear();
+                edited = true;
             }
             KeyCode::Char(c) if editing => {
-                // Host characters only: a pasted URL or a stray space would
-                // become part of the SNI and fail the handshake for the wrong
-                // reason.
-                let host_char = c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '[' | ']');
-                if host_char && text.chars().count() < 120 {
-                    text.push(c);
-                }
+                domain_push(&mut text, c, &mut edited);
             }
             _ => {}
         }
@@ -946,6 +951,24 @@ fn burst_settings_rows(
     rows
 }
 
+/// Applies one typed character to the domain box.
+///
+/// Everything printable is accepted, because pasting a URL is normal and the
+/// host is what [`clean_domain`] extracts when the screen is submitted — keeping
+/// only host characters here turned `https://info.paymaster.ru` into
+/// `https:info.paymaster.ru`, a name that resolves to nothing. The first
+/// character after the box opened replaces the host the caller showed, so typing
+/// over a prefilled box is an edit rather than an append.
+fn domain_push(text: &mut String, c: char, edited: &mut bool) {
+    if !*edited {
+        text.clear();
+        *edited = true;
+    }
+    if c.is_ascii_graphic() && text.chars().count() < DOMAIN_MAX_CHARS {
+        text.push(c);
+    }
+}
+
 /// Either direction flips a two-valued axis.
 fn flip_tls(tls: BurstTlsVersion) -> BurstTlsVersion {
     match tls {
@@ -1058,6 +1081,39 @@ mod tests {
             &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12, BurstAlpn::Http2, "", false, &chrome, profile_index_of(&chrome), 35,
         );
         assert!(strip_ansi(&single.join("\n")).contains("CHROME 107 [4/5]"));
+    }
+
+    /// A pasted URL must survive in the box and come out as its host, not as the
+    /// scheme plus a colon: dropping the slashes as they arrived produced
+    /// `https:info.paymaster.ru`, which is not a name any resolver knows.
+    #[test]
+    fn domain_box_accepts_a_pasted_url_and_hands_back_its_host() {
+        let mut text = String::new();
+        let mut edited = true;
+        for c in "https://info.paymaster.ru/path?q=1".chars() {
+            domain_push(&mut text, c, &mut edited);
+        }
+        assert_eq!(text, "https://info.paymaster.ru/path?q=1");
+        assert_eq!(clean_domain(&text), Some("info.paymaster.ru".to_string()));
+
+        // The first character replaces a prefilled host instead of appending to
+        // it; typing over the box is how a domain gets corrected.
+        let mut text = "ely.by".to_string();
+        let mut edited = false;
+        domain_push(&mut text, 'e', &mut edited);
+        assert_eq!(text, "e");
+
+        // A stray space or a control character never reaches the box, and a
+        // pasted blob cannot grow past the cap.
+        let mut text = String::new();
+        let mut edited = true;
+        domain_push(&mut text, ' ', &mut edited);
+        domain_push(&mut text, '\u{1b}', &mut edited);
+        assert!(text.is_empty(), "{text:?}");
+        for _ in 0..(DOMAIN_MAX_CHARS + 10) {
+            domain_push(&mut text, 'a', &mut edited);
+        }
+        assert_eq!(text.chars().count(), DOMAIN_MAX_CHARS);
     }
 
     /// The domain box announces its state with its own background — grey while

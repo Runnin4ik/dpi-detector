@@ -647,6 +647,12 @@ async fn main() {
     }
 
     let mut burst_plan = burst_plan_from_cli(&args, &domains, &msg);
+    // The configured list, kept apart from what a run actually probes: the
+    // settings screen shows its size as the meaning of an empty box, and an
+    // empty box has to go back to it instead of reusing the host typed into a
+    // previous screen session.
+    let burst_defaults = burst_plan.targets.clone();
+    let mut burst_domain: Option<String> = None;
     let mut result_path = args.output.clone();
     let mut selection = tests_str.clone();
 
@@ -667,12 +673,19 @@ async fn main() {
             // target made a fresh run append to it, so an edited domain looked
             // ignored. Empty means "the CLI/config list", and the count of that
             // list is printed under the field.
-            match burst_settings_menu(lang, &burst_plan.settings, burst_plan.targets.len()).await {
+            match burst_settings_menu(
+                lang,
+                &burst_plan.settings,
+                burst_defaults.len(),
+                burst_domain.as_deref(),
+            )
+            .await
+            {
                 Some(choice) => {
                     burst_plan.settings = choice.settings;
-                    if let Some(domain) = choice.domain {
-                        burst_plan.targets = vec![domain];
-                    }
+                    burst_domain = choice.domain;
+                    burst_plan.targets =
+                        burst_targets_after_screen(&burst_defaults, burst_domain.as_deref());
                 }
                 None => {
                     selection = selection.replace('6', "");
@@ -841,6 +854,19 @@ fn timeout_family() -> NetFamilyInfo {
         org: "timeout".to_string(),
         asn: "timeout".to_string(),
         cc: "timeout".to_string(),
+    }
+}
+
+/// The hosts a run probes once the settings screen has answered: the typed host
+/// replaces the configured list for that run, and an empty box goes back to it.
+///
+/// The screen opens with the last answer already in its box, so an empty box is
+/// the user having cleared it. Treating empty as "reuse the previous answer"
+/// ran the host typed twenty minutes earlier while the box looked empty.
+fn burst_targets_after_screen(defaults: &[String], choice: Option<&str>) -> Vec<String> {
+    match choice {
+        Some(domain) => vec![domain.to_string()],
+        None => defaults.to_vec(),
     }
 }
 
@@ -1528,6 +1554,23 @@ mod tests {
         assert_eq!(
             tcp16_detail(DET_TLS_HANDSHAKE_TIMEOUT.to_string(), 8.4),
             DET_TLS_HANDSHAKE_TIMEOUT
+        );
+    }
+
+    /// An empty domain box means the configured list. It used to keep the host a
+    /// previous screen session stored, so a run probed `ely.by` while the box it
+    /// was answered from looked empty.
+    #[test]
+    fn empty_domain_box_goes_back_to_the_configured_list() {
+        let defaults = vec!["www.google.com".to_string(), "ely.by".to_string()];
+        assert_eq!(
+            burst_targets_after_screen(&defaults, Some("ely.by")),
+            vec!["ely.by".to_string()]
+        );
+        assert_eq!(burst_targets_after_screen(&defaults, None), defaults);
+        assert_eq!(
+            burst_targets_after_screen(&defaults, Some("example.com")),
+            vec!["example.com".to_string()]
         );
     }
 
