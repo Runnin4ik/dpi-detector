@@ -22,15 +22,15 @@ pub struct CliArgs {
     pub tcp16: Option<String>,
     pub ascii: bool,
     pub fingerprint: Option<String>,
-    /// Test 7: simultaneous handshakes per round.
+    /// Test 6: simultaneous handshakes per round.
     pub burst: Option<usize>,
-    /// Test 7: per-handshake timeout in seconds.
+    /// Test 6: per-handshake timeout in seconds.
     pub burst_timeout: Option<u64>,
-    /// Test 7: `all` or a comma list of profile codes/names.
+    /// Test 6: `all` or a comma list of profile codes/names.
     pub burst_profiles: Option<String>,
-    /// Test 7: pinned TLS version, `1.2` or `1.3`.
+    /// Test 6: pinned TLS version, `1.2` or `1.3`.
     pub burst_tls: Option<String>,
-    /// Test 7: ALPN to offer, `h2` or `http/1.1`.
+    /// Test 6: ALPN to offer, `h2` or `http/1.1`.
     pub burst_alpn: Option<String>,
 }
 

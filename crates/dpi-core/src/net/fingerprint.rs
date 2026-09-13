@@ -68,6 +68,11 @@ pub enum TlsFingerprint {
 struct Spec {
     id: TlsFingerprint,
     token: &'static str,
+    /// Token plus the version the shape reproduces, for the places that have
+    /// room for it (burst table headers, the settings screen, the live line).
+    /// The bare `token` stays version-less because it is also the round-trip
+    /// name the parsers accept back.
+    label: &'static str,
     code: &'static str,
 }
 
@@ -75,21 +80,25 @@ const SPECS: [Spec; 4] = [
     Spec {
         id: TlsFingerprint::Rustls,
         token: "RUSTLS",
+        label: "RUSTLS",
         code: "rustls",
     },
     Spec {
         id: TlsFingerprint::Custom,
         token: "FIREFOX",
+        label: "FIREFOX 133",
         code: "custom",
     },
     Spec {
         id: TlsFingerprint::Chrome,
         token: "CHROME",
+        label: "CHROME 107",
         code: "chrome",
     },
     Spec {
         id: TlsFingerprint::Safari,
         token: "SAFARI",
+        label: "SAFARI 155",
         code: "safari",
     },
 ];
@@ -105,6 +114,13 @@ impl TlsFingerprint {
     /// Canonical uppercase token for tables and logs. Never translated (rule 4).
     pub fn token(self) -> &'static str {
         self.spec().token
+    }
+
+    /// Token plus the version it reproduces ("CHROME 107"). Latin like `token`
+    /// and never translated (rule 4): a table header or a progress line that
+    /// says only "CHROME" hides which shape was actually sent.
+    pub fn display_label(self) -> &'static str {
+        self.spec().label
     }
 
     /// Stable value for machine JSON and the config file.
@@ -600,6 +616,21 @@ mod tests {
              49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513-21,29-23-24,0";
     const SAFARI_155_JA4: &str = "t13d2014h2_a09f3c656075_14788d8d241b";
     const FIREFOX_133_JA4_LESS_ECH: &str = "t13d1715h2_5b57614c22b0_8fb63dbc839a";
+
+    /// The version-bearing label is display only: it must not collide with a
+    /// parser name, and every profile whose shape is a pinned curl version has
+    /// to say which one.
+    #[test]
+    fn display_labels_name_the_pinned_version() {
+        assert_eq!(TlsFingerprint::Custom.display_label(), "FIREFOX 133");
+        assert_eq!(TlsFingerprint::Chrome.display_label(), "CHROME 107");
+        assert_eq!(TlsFingerprint::Safari.display_label(), "SAFARI 155");
+        assert_eq!(TlsFingerprint::Rustls.display_label(), "RUSTLS");
+        for fp in TlsFingerprint::ALL {
+            assert!(fp.display_label().starts_with(fp.token()), "{fp:?}");
+            assert!(fp.display_label().is_ascii(), "{fp:?}");
+        }
+    }
 
     #[test]
     fn fingerprint_tokens_are_stable() {

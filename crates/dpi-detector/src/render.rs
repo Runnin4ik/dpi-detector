@@ -1767,16 +1767,19 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
 
 // ─── Test 2: domains ──────────────────────────────────────────────────────────
 
-/// Test 7's table: one row per host, one column per profile, the cell being how
-/// many of the simultaneous handshakes came back. The header carries the
-/// canonical profile tokens (rule 4: never translated), and the detail column
-/// names the failure that happened most often across the profile columns.
+/// Test 6's table: one row per host, one column per profile, the cell being how
+/// many of the simultaneous handshakes came back. The header names each profile
+/// with the pinned version it reproduces (rule 4: Latin, never translated), and
+/// the detail column names the failure that happened most often across the
+/// profile columns.
 pub fn render_burst_table(reports: &[BurstReport], settings: &BurstSettings, msg: &Messages) -> String {
     let profiles: &[TlsFingerprint] = &settings.profiles;
     let mut table = Table::new();
     let mut header = vec![Cell::new(format_bidi(msg.domain, msg.lang))];
     for fingerprint in profiles {
-        header.push(Cell::new(fingerprint.token()));
+        // The version, not just the family: two runs of "CHROME" can differ in
+        // the shape they sent, and the header is where that is read off.
+        header.push(Cell::new(fingerprint.display_label()));
     }
     header.push(Cell::new(format_bidi(msg.detail, msg.lang)));
     table
@@ -2196,8 +2199,6 @@ pub struct SummaryData<'a> {
     pub dns: Option<&'a dpi_core::dns::availability::DnsAvailStats>,
     pub domains: Option<&'a DomainStats>,
     pub tcp: Option<(usize, usize, usize, usize)>, // ok, blocked, mixed, total
-    /// Test 7: handshakes answered, handshakes fired, hosts that lost at least one.
-    pub burst: Option<(usize, usize, usize)>,
     pub run_telegram: bool,
     pub telegram: Option<&'a TelegramFullReport>,
 }
@@ -2263,19 +2264,6 @@ pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
             msg.summary_domains.to_string(),
             format!("{}  {}  {}", stat("HTTP", d.http_ok), stat("TLS1.2", d.t12_ok), stat("TLS1.3", d.t13_ok)),
         ));
-    }
-
-    // Test 7's totals ride in the same panel: a burst that lost handshakes is a
-    // different finding from a host that is simply unreachable, and the two are
-    // read side by side.
-    if let Some((answered, total, lossy)) = data.burst {
-        let color = frac_color(answered, total);
-        let value = msg
-            .burst_summary_value
-            .replacen("{}", &answered.to_string(), 1)
-            .replacen("{}", &total.to_string(), 1)
-            .replacen("{}", &lossy.to_string(), 1);
-        items.push((msg.burst_summary_label.to_string(), format!("[{}]{}[/]", color, value)));
     }
 
     if let Some((ok, blocked, mixed, total)) = data.tcp {
@@ -2838,7 +2826,6 @@ mod tests {
                 dns: None,
                 domains: None,
                 tcp: Some((104, 0, 0, 110)),
-                burst: None,
                 run_telegram: false,
                 telegram: None,
             },
@@ -2904,7 +2891,6 @@ mod tests {
                 dns: Some(&stats),
                 domains: None,
                 tcp: None,
-                burst: None,
                 run_telegram: false,
                 telegram: None,
             },

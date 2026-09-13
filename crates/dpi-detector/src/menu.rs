@@ -599,8 +599,8 @@ fn get_test_options(msg: &Messages) -> [(char, &'static str); 8] {
         ('3', msg.menu_test_tcp),
         ('4', msg.menu_test_sni),
         ('5', msg.menu_test_telegram),
-        ('6', msg.menu_test_legend),
-        ('7', msg.menu_test_burst),
+        ('6', msg.menu_test_burst),
+        ('7', msg.menu_test_legend),
     ]
 }
 
@@ -624,6 +624,18 @@ const BURST_ROW_PROFILES: usize = 5;
 const BURST_LABEL_WIDTH: usize = 24;
 /// Inner cells of the domain input box (`[ ` … ` ]` is drawn around them).
 const BURST_INPUT_WIDTH: usize = 34;
+/// Background of the domain input box while its row is selected but not being
+/// typed into, and while it is: grey reads as "a field you can open", the blue
+/// as "the keyboard goes here". The text colors keep the two states apart on a
+/// light console theme too. All five are the 16-colour set on purpose: the
+/// legacy console translator maps exactly those to `SetConsoleTextAttribute`,
+/// while a 256-colour code would leave a Windows 7/8 console with no background
+/// at all.
+const IDLE_BG: &str = "\x1b[100m";
+const IDLE_FG: &str = "\x1b[37m";
+const TYPED_FG: &str = "\x1b[97m";
+const EDITING_BG: &str = "\x1b[44m";
+const EDITING_FG: &str = "\x1b[97m";
 
 /// The last `width` characters of the text: the caret sits at the end, so a long
 /// host keeps its end in view rather than its beginning.
@@ -636,12 +648,12 @@ fn tail_of(text: &str, width: usize) -> String {
     }
 }
 
-/// Test 7's own screen: how many handshakes at once, how long each may take,
+/// Test 6's own screen: how many handshakes at once, how long each may take,
 /// which host, and which ClientHello profiles.
 ///
 /// Returns `None` when the user cancels (Q/Esc/Ctrl-C): the caller then skips
-/// test 7 instead of running it with guesses. The screen is only shown for an
-/// interactive run; a piped `-t 7` takes the values from the CLI.
+/// test 6 instead of running it with guesses. The screen is only shown for an
+/// interactive run; a piped `-t 6` takes the values from the CLI.
 pub async fn burst_settings_menu(
     lang: Language,
     initial: &BurstSettings,
@@ -852,27 +864,29 @@ fn burst_settings_rows(
     lines.push(field(BURST_ROW_TLS, msg.burst_field_tls, steer(BURST_ROW_TLS, tls.token().to_string())));
     lines.push(field(BURST_ROW_HTTP, msg.burst_field_http, steer(BURST_ROW_HTTP, alpn.token().to_string())));
 
-    // Domain: a grey input box. Right makes it active (caret, letters become
-    // text), Left returns it to grey; what an empty field means is spelled out
-    // on the line below it.
+    // Domain: an input box whose own background carries the state — dark grey
+    // while the row is only selected (letters are still hotkeys), blue while it
+    // is being typed into (letters become text). The brackets and the pad are
+    // painted with the same background, so the box reads as one field instead of
+    // a color behind some text.
     let domain_value = {
-        let placeholder = label(msg.burst_domain_placeholder);
-        let (inner, visible) = if editing {
+        let (background, foreground, inner, visible) = if editing {
             let shown = tail_of(text, BURST_INPUT_WIDTH - 1);
             let visible = shown.chars().count() + 1;
-            (format!("\x1b[1;36m{}\x1b[0m\x1b[1;33m▏\x1b[0m", shown), visible)
+            (EDITING_BG, EDITING_FG, format!("{}\x1b[1;33m▏", shown), visible)
         } else if text.is_empty() {
+            let placeholder = label(msg.burst_domain_placeholder);
             let visible = placeholder.chars().count();
-            (format!("\x1b[2m{}\x1b[0m", placeholder), visible)
+            (IDLE_BG, IDLE_FG, placeholder, visible)
         } else {
             let shown = tail_of(text, BURST_INPUT_WIDTH);
             let visible = shown.chars().count();
-            (format!("\x1b[2m{}\x1b[0m", shown), visible)
+            (IDLE_BG, TYPED_FG, shown, visible)
         };
-        let brackets = if editing { "\x1b[1;33m" } else { "\x1b[2m" };
         format!(
-            "{}[ \x1b[0m{}\x1b[2m{} ]\x1b[0m",
-            brackets,
+            "{}{}[ {}{} ]\x1b[0m",
+            background,
+            foreground,
             inner,
             " ".repeat(BURST_INPUT_WIDTH.saturating_sub(visible))
         )
@@ -894,13 +908,14 @@ fn burst_settings_rows(
             let name = if index == 0 {
                 label(msg.burst_profiles_all)
             } else {
-                // Canonical tokens, like the table headers: the cycler names the
-                // profile the run will actually use (rule 4, never translated).
-                TlsFingerprint::ALL[index - 1].token().to_string()
+                // Latin with the pinned version, like the table headers: the
+                // cycler names the exact shape the run will use (rule 4, never
+                // translated).
+                TlsFingerprint::ALL[index - 1].display_label().to_string()
             };
             format!("{} \x1b[2m[{}/{}]\x1b[0m", name, index + 1, PROFILE_CHOICES)
         }
-        None => profiles.iter().map(|f| f.token()).collect::<Vec<_>>().join(", "),
+        None => profiles.iter().map(|f| f.display_label()).collect::<Vec<_>>().join(", "),
     };
     lines.push(field(BURST_ROW_PROFILES, msg.burst_field_profiles, profile_value));
     let lines: Vec<String> = lines.into_iter().map(|l| asc(&l)).collect();
@@ -1036,12 +1051,55 @@ mod tests {
         assert!(!joined.contains("Переключитесь для ввода"), "{joined}");
 
         // A single-profile selection is what the cycler shows after a press: the
-        // position counts the `all` entry, so CHROME is the fourth of five.
+        // position counts the `all` entry, so CHROME is the fourth of five — and
+        // it is named with the version it reproduces, not with the bare family.
         let chrome = [TlsFingerprint::Chrome];
         let single = burst_settings_rows(
             &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12, BurstAlpn::Http2, "", false, &chrome, profile_index_of(&chrome), 35,
         );
-        assert!(strip_ansi(&single.join("\n")).contains("CHROME [4/5]"));
+        assert!(strip_ansi(&single.join("\n")).contains("CHROME 107 [4/5]"));
+    }
+
+    /// The domain box announces its state with its own background — grey while
+    /// the row is only selected, blue while it is being typed into — and the
+    /// brackets and pad carry it too, so the box reads as one field. A pair of
+    /// screenshots is not something a test can hold, so the escapes are.
+    #[test]
+    fn burst_domain_box_paints_its_state() {
+        let msg = get_messages(Language::Ru);
+        let all = vec![TlsFingerprint::Chrome];
+        let box_row = |editing: bool, text: &str| {
+            burst_settings_rows(
+                &msg,
+                Language::Ru,
+                BURST_ROW_DOMAIN,
+                4,
+                8,
+                BurstTlsVersion::Tls13,
+                BurstAlpn::Http2,
+                text,
+                editing,
+                &all,
+                Some(0),
+                35,
+            )
+            .into_iter()
+            .find(|row| row.contains("[ ") && row.contains(" ]"))
+            .expect("domain input box")
+        };
+
+        let idle = box_row(false, "");
+        assert!(idle.contains(IDLE_BG) && idle.contains(IDLE_FG), "{idle:?}");
+        assert!(!idle.contains(EDITING_BG), "a selected row is not an open field: {idle:?}");
+
+        let typed = box_row(false, "www.google.com");
+        assert!(typed.contains(IDLE_BG) && typed.contains(TYPED_FG), "{typed:?}");
+        assert!(typed.contains("www.google.com"), "{typed:?}");
+
+        let editing = box_row(true, "www.google.com");
+        assert!(editing.contains(EDITING_BG) && editing.contains(EDITING_FG), "{editing:?}");
+        assert!(!editing.contains(IDLE_BG), "an open field must not look selected: {editing:?}");
+        assert!(editing.contains('▏'), "the caret marks the active field: {editing:?}");
     }
 
     /// The keycaps of both screens must not exceed an 80-column console.

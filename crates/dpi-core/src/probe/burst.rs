@@ -297,6 +297,26 @@ impl BurstReport {
     }
 }
 
+/// Follows a burst round by round. The runner draws its live line from this;
+/// the no-op implementation below lets tests and library callers ignore it.
+pub trait BurstObserver {
+    /// A profile round starts: `index` (0-based) of `total` shapes is about to
+    /// be fired at `hosts` resolved targets.
+    fn round_started(
+        &self,
+        _fingerprint: TlsFingerprint,
+        _index: usize,
+        _total: usize,
+        _hosts: usize,
+    ) {
+    }
+
+    /// One host finished its round, answered or not.
+    fn host_finished(&self) {}
+}
+
+impl BurstObserver for () {}
+
 /// Fires every profile at every target, one profile at a time.
 ///
 /// The outer loop is the profile: all targets are probed with the first shape,
@@ -310,6 +330,7 @@ pub async fn burst_targets(
     targets: &[BurstTarget],
     settings: &BurstSettings,
     concurrency: usize,
+    observer: &dyn BurstObserver,
 ) -> Vec<BurstReport> {
     let gate = Arc::new(Semaphore::new(concurrency.max(1)));
     let addresses = resolve_targets(cfg, targets, &gate).await;
@@ -323,7 +344,11 @@ pub async fn burst_targets(
         })
         .collect();
 
-    for &fingerprint in &settings.profiles {
+    // Unresolved hosts are not probed, so they must not count towards the
+    // round's total either.
+    let hosts = addresses.iter().filter(|address| address.is_some()).count();
+    for (index, &fingerprint) in settings.profiles.iter().enumerate() {
+        observer.round_started(fingerprint, index, settings.profiles.len(), hosts);
         let mut rounds = JoinSet::new();
         for (index, target) in targets.iter().enumerate() {
             let Some(address) = addresses[index] else {
@@ -339,6 +364,7 @@ pub async fn burst_targets(
             });
         }
         while let Some(joined) = rounds.join_next().await {
+            observer.host_finished();
             if let Ok((index, report)) = joined {
                 reports[index].profiles.push(report);
             }
@@ -734,7 +760,24 @@ mod tests {
             BurstTarget { domain: "fast.example".to_string(), address: Some(fast_addr) },
         ];
         let plan = settings(2, 4000, vec![TlsFingerprint::Rustls, TlsFingerprint::Chrome]);
-        let reports = burst_targets(&AppConfig::default(), &targets, &plan, 4).await;
+        // The live line the runner draws comes from the observer: a round must
+        // be announced once, in the order the profiles are fired, or the line
+        // would name a shape that is not on the wire.
+        #[derive(Default)]
+        struct Rounds {
+            started: std::sync::Mutex<Vec<(TlsFingerprint, usize, usize, usize)>>,
+            finished: std::sync::atomic::AtomicUsize,
+        }
+        impl BurstObserver for Rounds {
+            fn round_started(&self, fp: TlsFingerprint, index: usize, total: usize, hosts: usize) {
+                self.started.lock().expect("lock").push((fp, index, total, hosts));
+            }
+            fn host_finished(&self) {
+                self.finished.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let rounds = Rounds::default();
+        let reports = burst_targets(&AppConfig::default(), &targets, &plan, 4, &rounds).await;
 
         slow.await.expect("slow stand");
         fast.await.expect("fast stand");
@@ -745,6 +788,14 @@ mod tests {
             witness.unexpected.lock()
         );
         assert!(!witness.overlapped.load(Ordering::SeqCst), "two shapes were in flight at the same time");
+        assert_eq!(
+            *rounds.started.lock().expect("lock"),
+            vec![
+                (TlsFingerprint::Rustls, 0, 2, 2),
+                (TlsFingerprint::Chrome, 1, 2, 2),
+            ]
+        );
+        assert_eq!(rounds.finished.load(Ordering::SeqCst), 4, "one tick per host per round");
         assert_eq!(reports.len(), 2);
         for report in &reports {
             let shapes: Vec<TlsFingerprint> = report.profiles.iter().map(|p| p.fingerprint).collect();

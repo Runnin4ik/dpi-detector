@@ -25,7 +25,8 @@ use dpi_core::probe::domains::{
 };
 use dpi_core::probe::telegram::run_telegram_full;
 use dpi_core::probe::burst::{
-    burst_targets, BurstAlpn, BurstSettings, BurstTarget, BurstTlsVersion, BURST_DEFAULT_ATTEMPTS,
+    burst_targets, BurstAlpn, BurstObserver, BurstSettings, BurstTarget, BurstTlsVersion,
+    BURST_DEFAULT_ATTEMPTS,
     BURST_DEFAULT_TIMEOUT_SECS,
 };
 use dpi_core::probe::whitelist::run_whitelist_sni;
@@ -49,8 +50,8 @@ use render::{
     SummaryData, TcpRow,
 };
 /// Splits a test selection string into per-test flags (mirrors `_selection_flags`).
-/// Tests: 0 netinfo, 1 DNS, 2 domains, 3 TCP, 4 white-SNI, 5 Telegram, 6 legend,
-/// 7 fingerprint stress (burst).
+/// Tests: 0 netinfo, 1 DNS, 2 domains, 3 TCP, 4 white-SNI, 5 Telegram,
+/// 6 fingerprint/burst, 7 legend.
 fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool) {
     let has = |c: char| selection.contains(c);
     let net = has('0');
@@ -59,8 +60,8 @@ fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool, bool, bool
     let tcp = has('3');
     let sni = has('4');
     let tg = has('5');
-    let burst = has('7');
-    let legend = has('6');
+    let burst = has('6');
+    let legend = has('7');
     let only_legend = legend && !(net || dns || dom || tcp || sni || tg || burst);
     (net, dns, dom, tcp, sni, tg, burst, legend, only_legend)
 }
@@ -650,14 +651,14 @@ async fn main() {
     let mut selection = tests_str.clone();
 
     loop {
-        // Test 7 is destructive for its targets, so it asks for its own settings
+        // Test 6 is destructive for its targets, so it asks for its own settings
         // screen before it runs instead of starting with guesses: cancelling the
-        // screen drops test 7 from the selection and runs the rest. The screen
-        // belongs to the test itself, so an explicit `-t 7` gets it too — but
+        // screen drops test 6 from the selection and runs the rest. The screen
+        // belongs to the test itself, so an explicit `-t 6` gets it too — but
         // only on a terminal at both ends: with stdin or stdout redirected there
         // is nobody to answer the screen, and the CLI flags stand in for it.
         let settings_screen = !args.json
-            && selection.contains('7')
+            && selection.contains('6')
             && std::io::stdin().is_terminal()
             && std::io::stdout().is_terminal()
             && tui_available();
@@ -674,9 +675,9 @@ async fn main() {
                     }
                 }
                 None => {
-                    selection = selection.replace('7', "");
+                    selection = selection.replace('6', "");
                     if selection.is_empty() {
-                        // Test 7 was the only selection and its settings were
+                        // Test 6 was the only selection and its settings were
                         // cancelled: leave instead of printing an empty report.
                         println_out("");
                         return;
@@ -843,13 +844,13 @@ fn timeout_family() -> NetFamilyInfo {
     }
 }
 
-/// Everything test 7 needs: the burst shape and the hosts to fire it at.
+/// Everything test 6 needs: the burst shape and the hosts to fire it at.
 struct BurstPlan {
     settings: BurstSettings,
     targets: Vec<String>,
 }
 
-/// Reports an unknown test 7 axis value (TLS version, ALPN) and keeps the
+/// Reports an unknown test 6 axis value (TLS version, ALPN) and keeps the
 /// default, the way an unknown profile name is reported rather than swapped
 /// silently.
 fn warn_unknown_axis(msg: &Messages, args: &CliArgs, flag: &str, value: &str, fallback: &str) {
@@ -865,7 +866,7 @@ fn warn_unknown_axis(msg: &Messages, args: &CliArgs, flag: &str, value: &str, fa
     );
 }
 
-/// Builds test 7's plan from the CLI. An unknown profile name is reported (the
+/// Builds test 6's plan from the CLI. An unknown profile name is reported (the
 /// test then runs the profiles it did understand) rather than silently swapped
 /// for a different set.
 fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Messages) -> BurstPlan {
@@ -875,7 +876,8 @@ fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Messages) -> Bu
     };
     if !args.json {
         for token in unknown {
-            let fallback = profiles.iter().map(|f| f.token()).collect::<Vec<_>>().join(", ");
+            let fallback =
+                profiles.iter().map(|f| f.display_label()).collect::<Vec<_>>().join(", ");
             eprintln!(
                 "{}",
                 msg.warn_unknown_fingerprint.replacen("{}", &token, 1).replacen("{}", &fallback, 1)
@@ -911,6 +913,34 @@ fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Messages) -> Bu
         args.domain.clone()
     };
     BurstPlan { settings, targets }
+}
+
+/// Draws the burst's live line: the shape on the wire right now, which round
+/// that is of how many, how many hosts of the round are done, and the clock.
+struct BurstLine {
+    live: Arc<LiveProgress>,
+    msg: Messages,
+}
+
+impl BurstObserver for BurstLine {
+    fn round_started(&self, fingerprint: TlsFingerprint, index: usize, total: usize, hosts: usize) {
+        // `LiveProgress` resets its clock on every `set`, so the timer reads as
+        // the round's elapsed time rather than the whole run's.
+        self.live.set(
+            format!(
+                "{}: {} {}/{}",
+                self.msg.burst_testing,
+                fingerprint.display_label(),
+                index + 1,
+                total
+            ),
+            hosts,
+        );
+    }
+
+    fn host_finished(&self) {
+        self.live.tick();
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -990,7 +1020,6 @@ async fn run_test_suite(
     let mut dom_stats = None;
     let mut tcp_summary = None;
     let mut tg_full = None;
-    let mut burst_summary = None;
 
     // ── Test 0: network & system ──
     if run_net {
@@ -1373,48 +1402,28 @@ async fn run_test_suite(
         tg_full = Some(rep);
     }
 
-    // ── Test 7: fingerprint stress (simultaneous handshakes) ──
+    // ── Test 6: fingerprint / Siberian blocking (simultaneous handshakes) ──
     if run_burst {
         let settings = &burst.settings;
-        if !args.json {
-            let profile_label = if settings.profiles.len() == TlsFingerprint::ALL.len() {
-                msg.burst_profiles_all.to_string()
-            } else {
-                settings.profiles.iter().map(|f| f.token()).collect::<Vec<_>>().join(", ")
-            };
-            emitter.emit(&format!(
-                "\n{}  {}: {} | {}: {} | {}: {}s | {}: {} | {}: {} | {}: {}\n\n",
-                msg.burst_title,
-                msg.targets_label,
-                burst.targets.len(),
-                msg.burst_attempts_label,
-                settings.attempts,
-                msg.timeout_label,
-                settings.timeout.as_secs(),
-                msg.burst_field_tls.trim_end_matches(':'),
-                settings.tls.token(),
-                msg.burst_field_http.trim_end_matches(':'),
-                settings.alpn.token(),
-                msg.burst_field_profiles.trim_end_matches(':'),
-                profile_label,
-            ));
-        }
-        let spinner = (!args.json).then(|| Spinner::start(msg.burst_title));
         // Profile-major: `burst_targets` probes every target with the first
         // shape to the end before the next shape starts, so a block one shape
         // triggers can never be read as the other's result. The simultaneity the
         // test measures is *within* a host (its N handshakes all leave together);
         // hosts inside one shape overlap like any other phase of the suite.
         let targets: Vec<BurstTarget> = burst.targets.iter().map(BurstTarget::new).collect();
-        let reports = burst_targets(cfg, &targets, settings, concurrency).await;
-        if let Some(spinner) = spinner {
-            spinner.finish();
+        // No banner and no header block: the test says what it is doing on one
+        // live line that names the shape currently on the wire and how far the
+        // run has got, and nothing else is printed until the table.
+        let line = BurstLine { live: Arc::clone(&live), msg: *msg };
+        let observer: &dyn BurstObserver = if args.json || !std::io::stderr().is_terminal() {
+            &()
+        } else {
+            &line
+        };
+        let reports = burst_targets(cfg, &targets, settings, concurrency, observer).await;
+        if !args.json && std::io::stderr().is_terminal() {
+            live.finish();
         }
-
-        let answered: usize = reports.iter().map(|r| r.answered()).sum();
-        let total: usize = reports.iter().map(|r| r.total()).sum();
-        let lossy = reports.iter().filter(|r| r.has_losses()).count();
-        burst_summary = Some((answered, total, lossy));
 
         if !args.json {
             emitter.emit(&render_burst_table(&reports, settings, msg));
@@ -1459,7 +1468,7 @@ async fn run_test_suite(
         }
     }
 
-    // ── Test 6: legend ──
+    // ── Test 7: legend ──
     if run_legend && !args.json {
         print_out(&legend_text(lang, msg));
     }
@@ -1472,7 +1481,6 @@ async fn run_test_suite(
                 dns: dns_stats.as_ref(),
                 domains: dom_stats.as_ref(),
                 tcp: tcp_summary,
-                burst: burst_summary,
                 run_telegram: run_tg,
                 telegram: tg_full.as_ref(),
             },
@@ -1543,11 +1551,17 @@ mod tests {
         assert!(run_leg);
         assert!(!only_leg);
 
-        let (_, _, _, _, _, _, _, run_leg, only_leg) = selection_flags("6");
+        // The legend is test 7 now, and the fingerprint burst test 6.
+        let (_, _, _, _, _, _, run_burst, run_leg, only_leg) = selection_flags("6");
+        assert!(run_burst);
+        assert!(!run_leg);
+        assert!(!only_leg);
+
+        let (_, _, _, _, _, _, _, run_leg, only_leg) = selection_flags("7");
         assert!(run_leg);
         assert!(only_leg);
 
-        let (run_net, _, _, _, _, _, _, run_leg, only_leg) = selection_flags("06");
+        let (run_net, _, _, _, _, _, _, run_leg, only_leg) = selection_flags("07");
         assert!(run_net);
         assert!(run_leg);
         assert!(!only_leg);

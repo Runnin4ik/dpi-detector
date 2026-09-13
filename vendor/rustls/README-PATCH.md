@@ -140,6 +140,18 @@ failing handshake or a real mismatched fingerprint, not a theoretical concern:
   and registers a verbatim body. Listing GREASE only in `raw_extensions` — as the
   first version did — silently drops it, because the encoder iterates the order.
 
+* **The GREASE key share is load-bearing on a censored link — but it is not the
+  whole shape.** A greasing profile also offers a key share for its GREASE group
+  (one dummy byte, Chrome's placement at the head of the list), which is what
+  `curl_chrome107`/`curl_safari155` send. Measured against `standby-rezka.tv`
+  over TLS 1.3: with the share our chrome/safari hellos get a fatal alert every
+  time (12/12 across three interleaved rounds), without it they complete, while
+  the bundle's own `curl_chrome107` — which also carries a GREASE share —
+  completes. So the peer reads more than the share: the hello we still do not
+  reproduce exactly is `supported_versions` (`[0x0304]` here against
+  `[GREASE, 0x0304, 0x0303]` in the bundle), and until that matches, a
+  chrome/safari block on such a host is *our* hello being refused, not evidence
+  that the pinned browser shape is.
 * **`sent_extensions` must be the set that reaches the wire.** rustls builds
   `ClientHelloDetails::sent_extensions` from its typed fields, but a profile can
   add extensions rustls has no typed field for (`ec_point_formats`,
