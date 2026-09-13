@@ -20,10 +20,10 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
+use crate::classify::DET_SYN_TIMEOUT_SHORT;
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
 use crate::net::tls::create_insecure_dpi_tls_config;
-use crate::i18n::Language;
 use crate::PhaseProgress;
 
 #[derive(Debug, Clone)]
@@ -94,7 +94,7 @@ pub async fn probe_telegram_dc(dc: &TelegramDc, timeout_dur: Duration) -> Telegr
                     region: dc.region.to_string(),
                     available: false,
                     latency_ms: None,
-                    error: Some("SYN timeout".to_string()),
+                    error: Some(DET_SYN_TIMEOUT_SHORT.to_string()),
                 },
             }
         }
@@ -144,42 +144,6 @@ pub async fn run_telegram_test(timeout_dur: Duration) -> TelegramReport {
 }
 
 // ─── Speed formatting (mirrors _fmt_speed / _fmt_size) ───────────────────────
-
-pub fn fmt_speed(bps: f64) -> String {
-    fmt_speed_lang(bps, Language::Ru)
-}
-
-pub fn fmt_speed_lang(bps: f64, lang: Language) -> String {
-    let is_ru = lang == Language::Ru;
-    if bps >= 1024.0 * 1024.0 {
-        let unit = if is_ru { "МБ/с" } else { "MB/s" };
-        format!("{:>6.2} {}", bps / (1024.0 * 1024.0), unit)
-    } else if bps >= 1024.0 {
-        let unit = if is_ru { "КБ/с" } else { "KB/s" };
-        format!("{:>6.1} {}", bps / 1024.0, unit)
-    } else {
-        let unit = if is_ru { "Б/с" } else { "B/s" };
-        format!("{:>6.0} {}", bps, unit)
-    }
-}
-
-pub fn fmt_size(b: u64) -> String {
-    fmt_size_lang(b, Language::Ru)
-}
-
-pub fn fmt_size_lang(b: u64, lang: Language) -> String {
-    let is_ru = lang == Language::Ru;
-    if b >= 1024 * 1024 {
-        let unit = if is_ru { "МБ" } else { "MB" };
-        format!("{:.2} {}", b as f64 / (1024.0 * 1024.0), unit)
-    } else if b >= 1024 {
-        let unit = if is_ru { "КБ" } else { "KB" };
-        format!("{:.1} {}", b as f64 / 1024.0, unit)
-    } else {
-        let unit = if is_ru { "Б" } else { "B" };
-        format!("{} {}", b, unit)
-    }
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct TransferStats {
@@ -540,7 +504,7 @@ pub struct TelegramFullReport {
 pub async fn run_telegram_full(cfg: &AppConfig, phases: Option<PhaseProgress>) -> TelegramFullReport {
     let tick = phases
         .as_ref()
-        .map(|p| (p.on_phase)(crate::PhaseId::Telegram, 3, true));
+        .map(|p| (p.on_phase)(crate::PhaseId::Telegram, 3));
     let tick_dl = tick.clone();
     let tick_ul = tick.clone();
     let tick_dc = tick.clone();
@@ -601,13 +565,6 @@ mod tests {
         assert_eq!(TELEGRAM_DCS.len(), 5);
         assert_eq!(TELEGRAM_DCS[0].name, "DC1");
         assert_eq!(TELEGRAM_DCS[4].name, "DC5");
-    }
-
-    #[test]
-    fn test_fmt_speed() {
-        assert!(fmt_speed(2.0 * 1024.0 * 1024.0).contains("МБ/с"));
-        assert!(fmt_speed(1500.0).contains("КБ/с"));
-        assert!(fmt_speed(500.0).contains("Б/с"));
     }
 
     #[test]

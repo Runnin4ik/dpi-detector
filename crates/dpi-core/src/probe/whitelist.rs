@@ -3,8 +3,10 @@
 //!
 //! Algorithm:
 //! 1. Take all port-443 TCP targets.
-//! 2. Baseline probe finds DETECTED IPs per AS (min RTT wins on ties).
-//! 3. For each DETECTED AS, probe SNI candidates in batches: step 0 with
+//! 2. Baseline probe collects blocked IPs per AS — transfer-window blocks
+//!    (DETECTED 16–20 KB) and TLS-stage kills of the ClientHello (TLS RST /
+//!    TLS DROP) alike (min RTT wins on ties).
+//! 3. For each blocked AS, probe SNI candidates in batches: step 0 with
 //!    empty SNI, then file-ordered batches; first OKs (up to top_n) win.
 //!    A whole batch of connect-level failures means ban/rate-limit.
 
@@ -12,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-use crate::classify::DpiStatus;
+use crate::classify::{DpiStatus, DET_AT_KB_MARKER};
 use crate::config::{AppConfig, Tcp16Target};
 use crate::PhaseProgress;
 use super::tcp16::check_tcp_16_20;
@@ -75,10 +77,24 @@ fn is_ok(status: DpiStatus) -> bool {
     status == DpiStatus::Ok
 }
 
+/// True when a baseline verdict proves the target is DPI-filtered and is
+/// therefore worth an SNI search: a transfer-window block
+/// (`Tcp16Detected`/`Tcp16Range`) or a TLS-stage kill of the ClientHello —
+/// `TlsRst` (RST after ClientHello), `TlsDropped` (silent drop / handshake
+/// timeout) and `TlsAbort` (WSAECONNABORTED 10053, how a reset often surfaces
+/// on Windows). Plain connectivity failures (SYN timeout, refused,
+/// unreachable) stay out: those are the ban/rate-limit signal the batch loop
+/// aborts on.
 fn is_detected(status: DpiStatus, detail: &str) -> bool {
-    status == DpiStatus::Tcp16Detected || status == DpiStatus::Tcp16Range
-        || (status == DpiStatus::Timeout && detail.contains("at "))
-        || (status == DpiStatus::ReadTimeout && detail.contains("at "))
+    matches!(
+        status,
+        DpiStatus::Tcp16Detected
+            | DpiStatus::Tcp16Range
+            | DpiStatus::TlsRst
+            | DpiStatus::TlsDropped
+            | DpiStatus::TlsAbort
+    ) || ((status == DpiStatus::Timeout || status == DpiStatus::ReadTimeout)
+        && detail.contains(DET_AT_KB_MARKER))
 }
 
 pub async fn run_whitelist_sni(
@@ -94,7 +110,7 @@ pub async fn run_whitelist_sni(
     }
     let tick_base = phases
         .as_ref()
-        .map(|p| (p.on_phase)(crate::PhaseId::SniBase, port443.len(), true));
+        .map(|p| (p.on_phase)(crate::PhaseId::SniBase, port443.len()));
 
     let sni_index: HashMap<&str, usize> =
         clean_sni.iter().map(|(s, n)| (s.as_str(), *n)).collect();
@@ -112,18 +128,18 @@ pub async fn run_whitelist_sni(
                 cfg.fat_default_sni.clone()
             };
             let sni = item.sni.clone().unwrap_or(default_sni);
-            let (alive, status, detail, rtt) =
+            let (status, detail, rtt) =
                 check_tcp_16_20(&item.ip, 443, &sni, &cfg, &sem, None).await;
-            let _ = alive;
             (item, status, detail, rtt)
         }));
     }
     let mut base_rows = Vec::new();
     for h in handles {
+        let done = h.await;
         if let Some(t) = tick_base.as_ref() {
             t();
         }
-        if let Ok(r) = h.await {
+        if let Ok(r) = done {
             base_rows.push(r);
         }
     }
@@ -177,7 +193,6 @@ pub async fn run_whitelist_sni(
                 top_n,
             },
             detected.len(),
-            true,
         )
     });
 
@@ -214,13 +229,13 @@ async fn probe_as(
 
     // Step 0: probe without SNI
     {
-        let (_alive, st0, d0, _rtt) =
+        let (st0, d0, _rtt) =
             check_tcp_16_20(&cand.ip, 443, "", cfg, sem, cand.rtt).await;
         if is_ok(st0) {
             found.push((NO_SNI_TAG.to_string(), 0));
-        } else if !is_detected(st0, &d0) && !d0.contains("at ") {
+        } else if !is_detected(st0, &d0) && !d0.contains(DET_AT_KB_MARKER) {
             ban_detected = true;
-            ban_detail = format!("{:?}", st0);
+            ban_detail = st0.display_label().to_string();
         }
     }
 
@@ -238,7 +253,7 @@ async fn probe_as(
                 let ip = cand.ip.clone();
                 let rtt = cand.rtt;
                 handles.push(tokio::spawn(async move {
-                    let (_a, s, d, _r) = check_tcp_16_20(&ip, 443, &sni, &cfg, &sem, rtt).await;
+                    let (s, d, _r) = check_tcp_16_20(&ip, 443, &sni, &cfg, &sem, rtt).await;
                     (sni, s, d)
                 }));
             }
@@ -258,7 +273,7 @@ async fn probe_as(
             if connect_fails == results.len() && !results.is_empty() {
                 ban_detected = true;
                 if let Some((_, s, _)) = results.first() {
-                    ban_detail = format!("{:?}", s);
+                    ban_detail = s.display_label().to_string();
                 }
                 break 'outer;
             }
@@ -290,6 +305,26 @@ async fn probe_as(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::classify::{
+        DET_ABORTED, DET_CONN_REFUSED, DET_NET_UNREACH, DET_RST_HELLO, DET_TCP_SYN_TIMEOUT,
+        DET_TLS_HANDSHAKE_TIMEOUT,
+    };
+
+    /// Which baseline verdicts make an AS worth an SNI search: the transfer
+    /// window blocks and the TLS-stage kills; connectivity failures stay out.
+    #[test]
+    fn test_detected_predicate_covers_tls_kills() {
+        assert!(is_detected(DpiStatus::Tcp16Detected, "Read Timeout at 16KB"));
+        assert!(is_detected(DpiStatus::Tcp16Range, "Timeout 20.0KB"));
+        assert!(is_detected(DpiStatus::TlsRst, DET_RST_HELLO));
+        assert!(is_detected(DpiStatus::TlsDropped, DET_TLS_HANDSHAKE_TIMEOUT));
+        assert!(is_detected(DpiStatus::TlsAbort, DET_ABORTED));
+
+        assert!(!is_detected(DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT));
+        assert!(!is_detected(DpiStatus::Refused, DET_CONN_REFUSED));
+        assert!(!is_detected(DpiStatus::NetUnreach, DET_NET_UNREACH));
+        assert!(!is_detected(DpiStatus::Ok, ""));
+    }
 
     #[test]
     fn test_asn_key() {

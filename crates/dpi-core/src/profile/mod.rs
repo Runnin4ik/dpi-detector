@@ -31,15 +31,6 @@ impl RegionProfile {
         }
     }
 
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::Ru => "Russia (ТСПУ / RKN)",
-            Self::Ir => "Iran (Filternet / TIC)",
-            Self::Cn => "China (GFW / Great Firewall)",
-            Self::Global => "Global Baseline",
-        }
-    }
-
     /// Target domains representative of blocking in this region.
     pub fn default_domains(&self) -> Vec<&'static str> {
         match self {

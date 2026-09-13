@@ -107,7 +107,17 @@ pub fn ipv6_supported() -> bool {
 
 /// Simple, pure-Rust HTTP/HTTPS GET returning text content (capped at 64 KB).
 pub async fn http_get_text(url_str: &str, timeout_dur: Duration) -> Result<String, String> {
-    // Mirrors httpx follow_redirects=True + status 200 check.
+    // The timeout bounds the whole fetch, redirects included: `http_get_once`
+    // applies it per hop, so four hops could spend four times what the caller
+    // asked for and overrun its own deadline.
+    match timeout(timeout_dur, http_get_chain(url_str, timeout_dur)).await {
+        Ok(result) => result,
+        Err(_) => Err("HTTP request timeout".to_string()),
+    }
+}
+
+/// Follows redirects (mirrors httpx `follow_redirects=True` + status 200 check).
+async fn http_get_chain(url_str: &str, timeout_dur: Duration) -> Result<String, String> {
     let mut url = Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
     for _ in 0..4 {
         let (status, location, body) = http_get_once(&url, timeout_dur).await?;
@@ -257,6 +267,21 @@ fn is_private_lookup_ip(ip: &IpAddr) -> bool {
 
 /// Resolves IP ASN, subnet, country code, and Org name via Team Cymru reverse-DNS TXT query over DoH.
 pub async fn fetch_ip_cymru(
+    ip: &IpAddr,
+    doh_servers: &[String],
+    timeout_dur: Duration,
+) -> Option<IpCymruInfo> {
+    // The timeout bounds the whole server chain, not each attempt: one DoH
+    // attempt spends it per stage (resolve, TCP, TLS, handshake, body), so a
+    // chain of dead servers could run for many multiples of what the caller
+    // allowed and overrun its deadline (test 0 caps the panel fetch at 10 s).
+    timeout(timeout_dur, fetch_ip_cymru_chain(ip, doh_servers, timeout_dur))
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn fetch_ip_cymru_chain(
     ip: &IpAddr,
     doh_servers: &[String],
     timeout_dur: Duration,
