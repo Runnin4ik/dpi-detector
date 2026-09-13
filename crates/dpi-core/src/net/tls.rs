@@ -45,12 +45,11 @@ pub fn create_verifying_tls_config() -> Arc<ClientConfig> {
     let mut root_store = RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-    let mut config = ClientConfig::builder_with_provider(crypto_provider())
+    let config = ClientConfig::builder_with_provider(crypto_provider())
         .with_safe_default_protocol_versions()
         .expect("safe default protocol versions")
         .with_root_certificates(root_store)
         .with_no_client_auth();
-    keep_baseline_wire_shape(&mut config);
 
     Arc::new(config)
 }
@@ -66,7 +65,6 @@ pub fn create_verifying_doh_tls_config() -> Arc<ClientConfig> {
         .with_root_certificates(root_store)
         .with_no_client_auth();
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    keep_baseline_wire_shape(&mut config);
 
     Arc::new(config)
 }
@@ -178,8 +176,12 @@ fn insecure_builder(
 /// profile that offered http/1.1 while the config offered nothing made every
 /// server answer `SelectedUnofferedApplicationProtocol`.
 fn apply_fingerprint(config: &mut ClientConfig, fingerprint: TlsFingerprint, alpn: Option<Vec<Vec<u8>>>) {
-    if !crate::net::fingerprint::advertises_cert_compression(fingerprint) {
-        keep_baseline_wire_shape(config);
+    // The decompressor list is what makes rustls set `offered_cert_compression`,
+    // and that is what puts extension 27 into the hello; the *offered algorithm
+    // list* is the profile's. A profile that must not send the extension keeps
+    // rustls's empty default, the shape this tool has always had.
+    if crate::net::fingerprint::advertises_cert_compression(fingerprint) {
+        config.cert_decompressors = crate::net::cert_compression::decompressors();
     }
     crate::net::fingerprint::apply(config, fingerprint);
     match alpn {
@@ -199,13 +201,6 @@ fn apply_fingerprint(config: &mut ClientConfig, fingerprint: TlsFingerprint, alp
             }
         }
     }
-}
-
-/// Restores the ClientHello shape of a build without the `brotli`/`zlib`
-/// features — i.e. exactly what this tool sent before fingerprint profiles
-/// existed. See [`crate::net::fingerprint::advertises_cert_compression`].
-fn keep_baseline_wire_shape(config: &mut ClientConfig) {
-    config.cert_decompressors.clear();
 }
 
 /// [`create_insecure_dpi_tls_config`] with a ClientHello profile.

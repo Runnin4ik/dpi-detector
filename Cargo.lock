@@ -519,6 +519,8 @@ name = "dpi-core"
 version = "5.0.0-alpha.11"
 dependencies = [
  "base64",
+ "brotli",
+ "brotli-decompressor",
  "bytes",
  "http-body-util",
  "hyper",
@@ -540,6 +542,7 @@ dependencies = [
  "webpki-roots",
  "winreg",
  "x25519-dalek",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -1546,14 +1549,11 @@ dependencies = [
 name = "rustls"
 version = "0.23.43"
 dependencies = [
- "brotli",
- "brotli-decompressor",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki 0.103.15",
  "subtle",
  "zeroize",
- "zlib-rs",
 ]
 
 [[package]]

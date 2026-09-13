@@ -25,9 +25,14 @@ x25519-dalek = { workspace = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
+brotli-decompressor = { workspace = true }
+zlib-rs = { workspace = true }
 tracing = { workspace = true }
 url = "2.5"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+# Test-only: the round-trip test needs a real encoder to produce the payloads
+# `net::cert_compression` has to read. Never linked into a release build.
+brotli = "8"

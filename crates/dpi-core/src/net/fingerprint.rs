@@ -259,13 +259,13 @@ pub fn needs_pq(fingerprint: TlsFingerprint) -> bool {
 
 /// True when this selection advertises `compress_certificate` (extension 27).
 ///
-/// The `brotli`/`zlib` rustls features are enabled in this workspace only so that
-/// a profile can both advertise the extension and decode what the server then
-/// sends. With those features on, plain rustls would start advertising extension
-/// 27 in *every* ClientHello — a silent change to the baseline fingerprint that
-/// all previous measurements were taken with. Callers therefore clear
-/// [`rustls::ClientConfig::cert_decompressors`] for the default profile,
-/// restoring the exact wire shape the tool has always sent.
+/// The decompressors behind it are ours, not rustls's features (see
+/// [`crate::net::cert_compression`]), and the decompressor list is exactly what
+/// makes rustls offer the extension. Installing it for every profile would
+/// advertise extension 27 in *every* ClientHello — a silent change to the
+/// baseline fingerprint that all previous measurements were taken with — so the
+/// default profile keeps rustls's empty list and sends the wire shape this tool
+/// has always sent.
 pub fn advertises_cert_compression(fingerprint: TlsFingerprint) -> bool {
     !matches!(fingerprint, TlsFingerprint::Rustls)
 }
@@ -951,5 +951,52 @@ mod tests {
         assert!(advertises_cert_compression(TlsFingerprint::Chrome));
         assert!(advertises_cert_compression(TlsFingerprint::Safari));
         assert!(!advertises_cert_compression(TlsFingerprint::Rustls));
+    }
+
+    /// The decompressor list is what rustls reads to decide whether to offer
+    /// extension 27 and to pick a decoder for the algorithm the server answered
+    /// with; an empty list against an advertised extension is a fatal
+    /// `SelectedUnofferedCertCompression`. The default profile must keep the
+    /// empty list so its hello stays the baseline shape.
+    #[test]
+    fn the_decompressor_list_follows_the_profile() {
+        for (name, fingerprint, decompressors) in [
+            ("Rustls", TlsFingerprint::Rustls, 0),
+            ("Firefox", TlsFingerprint::Custom, 2),
+            ("Chrome", TlsFingerprint::Chrome, 2),
+            ("Safari", TlsFingerprint::Safari, 2),
+        ] {
+            let config = crate::net::tls::create_insecure_dpi_tls_config_tls13_with(fingerprint);
+            assert_eq!(
+                config.cert_decompressors.len(),
+                decompressors,
+                "{name} decompressor count"
+            );
+        }
+    }
+
+    /// RFC 8879: the server may compress its certificate with anything the hello
+    /// offered, so every code point a profile advertises has to have a
+    /// decompressor behind it — otherwise the handshake dies on a certificate
+    /// this build cannot read.
+    #[test]
+    fn every_advertised_compression_algorithm_is_readable() {
+        for (name, profile) in [
+            ("Firefox", custom_profile()),
+            ("Chrome", chrome_profile()),
+            ("Safari", safari_profile()),
+        ] {
+            let advertised = profile
+                .cert_compression
+                .clone()
+                .unwrap_or_else(|| panic!("{name} advertises no algorithm list"));
+            assert!(!advertised.is_empty(), "{name} advertises an empty list");
+            for code in advertised {
+                assert!(
+                    crate::net::cert_compression::covers(code.into()),
+                    "{name} advertises {code}, which this build cannot decompress"
+                );
+            }
+        }
     }
 }

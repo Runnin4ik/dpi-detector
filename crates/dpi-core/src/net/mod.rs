@@ -1,4 +1,5 @@
 pub mod tls;
+pub mod cert_compression;
 pub mod pq_kx;
 pub mod fingerprint;
 pub mod ja3;
