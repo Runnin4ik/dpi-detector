@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::selection_flags;
+use crate::TestSelection;
 use crate::render::{
     BOX_WIDTH, asc, ascii_mode, clean_output, frame_home, frame_repaint, output_str,
     panel_to_string, plain_mode, render_banner, strip_ansi_len,
@@ -559,8 +559,7 @@ pub(crate) async fn menu_until_something_to_run(
             MenuResult::Run(chosen) => chosen,
             MenuResult::Quit => return None,
         };
-        let (_, _, _, _, _, _, _, _, only_legend) = selection_flags(&chosen.selected_tests);
-        if !only_legend {
+        if !TestSelection::parse(&chosen.selected_tests).only_legend {
             return Some(chosen);
         }
         match legend_loop(chosen.language, &get_messages(chosen.language)) {

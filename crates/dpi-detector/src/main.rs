@@ -34,27 +34,45 @@ use render::{
     asc, clean_output, output_str, plain_mode, render_banner, render_fingerprint_header, set_ascii_mode,
     set_has_vt, set_plain_mode, strip_ansi,
 };
-/// Splits a test selection string into per-test flags.
-/// Tests: 0 netinfo, 1 DNS, 2 domains, 3 TCP, 4 white-SNI, 5 Telegram,
-/// 6 fingerprint/burst, 7 legend.
-pub(crate) fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool) {
-    let has = |c: char| selection.contains(c);
-    let net = has('0');
-    let dns = has('1');
-    let dom = has('2');
-    let tcp = has('3');
-    let sni = has('4');
-    let tg = has('5');
-    let burst = has('6');
-    let legend = has('7');
-    let only_legend = legend && !(net || dns || dom || tcp || sni || tg || burst);
-    (net, dns, dom, tcp, sni, tg, burst, legend, only_legend)
+/// Which tests a run turns on, parsed from the selection string (digits 0–7).
+///
+/// Named fields on purpose: the tuple this replaced had nine `bool`s, and swapping
+/// two of them at a call site compiled silently. Test digits: 0 netinfo, 1 DNS,
+/// 2 domains, 3 TCP, 4 white-SNI, 5 Telegram, 6 fingerprint/burst, 7 legend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct TestSelection {
+    pub net: bool,
+    pub dns: bool,
+    pub domains: bool,
+    pub tcp: bool,
+    pub sni: bool,
+    pub telegram: bool,
+    pub burst: bool,
+    pub legend: bool,
+    /// Only the legend was asked for: the run prints the legend and nothing else.
+    pub only_legend: bool,
 }
 
-/// Cell of the CDN (16 KB) table's detail column. An empty probe detail is a
-/// clean 20 KB pass, so the row carries only its duration; every other detail is
-/// a drop/RST/timeout diagnosis and stands alone — a duration glued to an error
-/// reads as if the timing were part of the verdict.
+impl TestSelection {
+    pub(crate) fn parse(selection: &str) -> Self {
+        let has = |c: char| selection.contains(c);
+        let mut sel = Self {
+            net: has('0'),
+            dns: has('1'),
+            domains: has('2'),
+            tcp: has('3'),
+            sni: has('4'),
+            telegram: has('5'),
+            burst: has('6'),
+            legend: has('7'),
+            only_legend: false,
+        };
+        sel.only_legend = sel.legend
+            && !(sel.net || sel.dns || sel.domains || sel.tcp || sel.sni || sel.telegram || sel.burst);
+        sel
+    }
+}
+
 pub(crate) fn tcp16_detail(detail: Detail, elapsed: f64) -> Detail {
     if detail.is_none() {
         Detail::Elapsed(elapsed)
@@ -366,7 +384,7 @@ async fn main() {
             println_out(&format!("\x1b[2m{}: \x1b[33m{}\x1b[0m", proxy_label, mask_proxy(p)));
         }
     }
-    let (_, _, _, _, _, _, _, _, only_legend) = selection_flags(&tests_str);
+    let only_legend = TestSelection::parse(&tests_str).only_legend;
     if only_legend {
         // Only `-t 7`, or the menu picking the legend and nothing else, gets
         // here. The screen's menu key leads back into the menu; without a
@@ -628,48 +646,35 @@ mod tests {
     /// "7" alone is a legend-only run.
     #[test]
     fn test_selection_flags() {
-        let (run_net, run_dns, run_dom, run_tcp, run_wl, run_tg, run_burst, run_leg, only_leg) =
-            selection_flags("123");
-        assert!(!run_net);
-        assert!(run_dns);
-        assert!(run_dom);
-        assert!(run_tcp);
-        assert!(!run_wl);
-        assert!(!run_tg);
-        assert!(!run_burst);
-        assert!(!run_leg);
-        assert!(!only_leg);
+        let sel = TestSelection::parse("123");
+        assert_eq!(
+            sel,
+            TestSelection { dns: true, domains: true, tcp: true, ..Default::default() }
+        );
 
-        let (_, _, _, _, _, _, run_burst, run_leg, only_leg) = selection_flags("67");
-        assert!(run_burst);
-        assert!(run_leg);
-        assert!(!only_leg);
+        let sel = TestSelection::parse("67");
+        assert!(sel.burst && sel.legend && !sel.only_legend);
 
         // The legend is test 7 now, and the fingerprint burst test 6.
-        let (_, _, _, _, _, _, run_burst, run_leg, only_leg) = selection_flags("6");
-        assert!(run_burst);
-        assert!(!run_leg);
-        assert!(!only_leg);
+        let sel = TestSelection::parse("6");
+        assert!(sel.burst && !sel.legend && !sel.only_legend);
 
-        let (_, _, _, _, _, _, _, run_leg, only_leg) = selection_flags("7");
-        assert!(run_leg);
-        assert!(only_leg);
+        let sel = TestSelection::parse("7");
+        assert!(sel.legend && sel.only_legend);
 
-        let (run_net, _, _, _, _, _, _, run_leg, only_leg) = selection_flags("07");
-        assert!(run_net);
-        assert!(run_leg);
-        assert!(!only_leg);
+        let sel = TestSelection::parse("07");
+        assert!(sel.net && sel.legend && !sel.only_legend);
     }
 
     #[test]
     fn test_selection_flags_with_commas_and_spaces() {
         let raw = "1, 2, 3";
         let normalized: String = raw.chars().filter(|c| ('0'..='7').contains(c)).collect();
-        let (run_net, run_dns, run_dom, run_tcp, _, _, _, _, _) = selection_flags(&normalized);
-        assert!(!run_net);
-        assert!(run_dns);
-        assert!(run_dom);
-        assert!(run_tcp);
+        let sel = TestSelection::parse(&normalized);
+        assert_eq!(
+            sel,
+            TestSelection { dns: true, domains: true, tcp: true, ..Default::default() }
+        );
     }
 
 }

@@ -42,7 +42,7 @@ use crate::render::{
     render_whitelist, LiveProgress,
     NetFamilyInfo, NetInfoData, NetTtlb, Spinner, SummaryData, TcpRow,
 };
-use crate::{print_out, selection_flags, tcp16_detail, Emitter};
+use crate::{print_out, tcp16_detail, Emitter};
 
 /// The domains to probe: `-d` names first, then `--domains`/the configured file,
 /// then the embedded list, then the profile's own. A file that parses to nothing
@@ -283,8 +283,7 @@ pub(crate) async fn run_test_suite(
     banner_done: bool,
     emitter: &mut Emitter,
 ) {
-    let (run_net, run_dns, run_dom, run_tcp, run_sni, run_tg, run_burst, run_legend, _) =
-        selection_flags(tests_str);
+    let tests = crate::TestSelection::parse(tests_str);
 
     let mut results = crate::json::Results::default();
 
@@ -345,7 +344,7 @@ pub(crate) async fn run_test_suite(
     let mut tg_full = None;
 
     // ── Test 0: network & system ──
-    if run_net {
+    if tests.net {
         let spinner = (!args.json).then(|| Spinner::start(msg.fetching_net_info));
         // The cap must clear the inner budgets (3.5 s public-IP race then 5 s
         // Cymru, both bounding their whole fetch): with a smaller one a slow
@@ -487,7 +486,7 @@ pub(crate) async fn run_test_suite(
 
     }
     // ── Test 1: DNS availability ──
-    if run_dns {
+    if tests.dns {
         if cfg.availability_servers().is_empty() {
             if !args.json {
                 emitter.emit(msg.dns_servers_empty_skip);
@@ -518,7 +517,7 @@ pub(crate) async fn run_test_suite(
     }
 
     // ── Test 2: domains (resolve → TLS1.3 → TLS1.2 → HTTP) ──
-    if run_dom {
+    if tests.domains {
         if !args.json {
             emitter.emit(&format!(
                 "\n{}  {}: {} | {}: {} | {}: {}s\n\n",
@@ -584,7 +583,7 @@ pub(crate) async fn run_test_suite(
     }
 
     // ── Test 3: TCP 16–20 KB ──
-    if run_tcp {
+    if tests.tcp {
         if !args.json {
             emitter.emit(&format!(
                 "\n{}  {}: {} | {}: {}s\n",
@@ -652,7 +651,7 @@ pub(crate) async fn run_test_suite(
     }
 
     // ── Test 4: white SNI ──
-    if run_sni {
+    if tests.sni {
         if whitelist_sni.is_empty() {
             if !args.json {
                 emitter.emit(msg.whitelist_skipped);
@@ -698,7 +697,7 @@ pub(crate) async fn run_test_suite(
     }
 
     // ── Test 5: Telegram ──
-    if run_tg {
+    if tests.telegram {
         let rep = run_telegram_full(cfg, phases.clone()).await;
         live.finish();
         if !args.json {
@@ -723,7 +722,7 @@ pub(crate) async fn run_test_suite(
     }
 
     // ── Test 6: fingerprint / Siberian blocking (simultaneous handshakes) ──
-    if run_burst {
+    if tests.burst {
         let settings = &burst.settings;
         // Profile-major: `burst_targets` probes every target with the first
         // shape to the end before the next shape starts, so a block one shape
@@ -781,7 +780,7 @@ pub(crate) async fn run_test_suite(
     }
 
     // ── Test 7: legend ──
-    if run_legend && !args.json {
+    if tests.legend && !args.json {
         print_out(&legend_text(lang, msg));
     }
 
@@ -789,11 +788,11 @@ pub(crate) async fn run_test_suite(
     if !args.json {
         let summary = render_summary(
             &SummaryData {
-                run_dns,
+                run_dns: tests.dns,
                 dns: dns_stats.as_ref(),
                 domains: dom_stats.as_ref(),
                 tcp: tcp_summary,
-                run_telegram: run_tg,
+                run_telegram: tests.telegram,
                 telegram: tg_full.as_ref(),
             },
             msg,
