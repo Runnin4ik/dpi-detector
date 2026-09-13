@@ -8,3 +8,4 @@
 AGENTS.md
 /vendor/*/target/
 /vendor/*/Cargo.lock
+/dist/
