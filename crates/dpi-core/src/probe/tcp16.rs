@@ -19,7 +19,10 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
-use crate::classify::{classify_connect_error_full, classify_read_error, DpiStatus, ProbeMetrics};
+use crate::classify::{
+    classify_connect_error_full, classify_read_error, DpiStatus, ProbeMetrics, DET_AT_KB_MARKER,
+    DET_KB_SUFFIX, DET_READ_TIMEOUT_WORD_CAPS, DET_WRITE_TIMEOUT_WORD,
+};
 use crate::config::AppConfig;
 
 fn random_pool(size: usize) -> Vec<u8> {
@@ -41,17 +44,20 @@ fn random_pool(size: usize) -> Vec<u8> {
     out
 }
 
-fn hyper_info(e: &hyper::Error) -> String {
+/// Message plus the OS code and kind of the `io::Error` at the end of the hyper
+/// chain: the code is what classifies a reset when Windows has localized the
+/// system message.
+fn hyper_info(e: &hyper::Error) -> (String, Option<i32>, Option<std::io::ErrorKind>) {
     let mut msg = e.to_string();
     let mut source = std::error::Error::source(e);
     while let Some(s) = source {
         if let Some(io_err) = s.downcast_ref::<std::io::Error>() {
             msg.push_str(&format!(" | {}", io_err));
-            break;
+            return (msg, io_err.raw_os_error(), Some(io_err.kind()));
         }
         source = std::error::Error::source(s);
     }
-    msg
+    (msg, None, None)
 }
 
 async fn connect_fat_target(
@@ -111,8 +117,8 @@ async fn connect_fat_target(
                 Ok(sender)
             }
             Err(e) => {
-                let msg = hyper_info(&e);
-                let (s, d) = classify_connect_error_full(&msg, None, None, 0, "tls_connected");
+                let (msg, os_code, os_kind) = hyper_info(&e);
+                let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, "tls_connected");
                 Err((s, d))
             }
         }
@@ -126,27 +132,34 @@ async fn connect_fat_target(
                 Ok(sender)
             }
             Err(e) => {
-                let msg = hyper_info(&e);
-                let (s, d) = classify_connect_error_full(&msg, None, None, 0, "tcp_connect");
+                let (msg, os_code, os_kind) = hyper_info(&e);
+                let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, "tcp_connect");
                 Err((s, d))
             }
         }
     }
 }
 
-/// Raw FAT probe. Returns (alive_label, status, detail, rtt_secs).
-/// `alive_label` is "Yes"/"No"/"—" indicating connection liveness.
+/// KB actually handed to the socket before the failing chunk, rounded up: the
+/// detail reports the chunk the drop happened in, and cutting the remainder
+/// (`i * chunk_size / 1024`) made a 16 KB mark read as `15KB` on the default
+/// 4000-byte chunks.
+fn kb_sent(chunks_sent: usize, chunk_size: usize) -> usize {
+    (chunks_sent * chunk_size).div_ceil(1024)
+}
+
+/// Raw FAT probe. Returns (status, detail, rtt_secs).
 pub async fn probe_tcp_16_20(
     ip: &str,
     port: u16,
     sni: &str,
     cfg: &AppConfig,
     hint_rtt: Option<f64>,
-) -> (String, DpiStatus, String, Option<f64>) {
+) -> (DpiStatus, String, Option<f64>) {
     let target_ip: IpAddr = match ip.parse() {
         Ok(a) => a,
         Err(_) => {
-            return ("[dim]—[/dim]".into(), DpiStatus::Err, format!("bad IP: {}", ip), None);
+            return (DpiStatus::Err, format!("bad IP: {}", ip), None);
         }
     };
     let addr = SocketAddr::new(target_ip, port);
@@ -174,10 +187,9 @@ pub async fn probe_tcp_16_20(
 
     let mut sender = match connect_fat_target(addr, target_ip, sni, use_tls, cfg).await {
         Ok(s) => s,
-        Err((s, d)) => return ("[red]No[/red]".into(), s, d, measured_rtt),
+        Err((s, d)) => return (s, d, measured_rtt),
     };
 
-    let mut alive = "[dim]—[/dim]".to_string();
 
     for i in 0..chunks {
         // If keep-alive connection was closed by peer or previous response, reconnect
@@ -186,12 +198,11 @@ pub async fn probe_tcp_16_20(
                 Ok(s) => s,
                 Err((_s, d)) => {
                     if i < min_detect_chunk {
-                        return (alive, DpiStatus::Timeout, d, measured_rtt);
+                        return (DpiStatus::Timeout, d, measured_rtt);
                     } else {
                         return (
-                            alive,
                             DpiStatus::Tcp16Detected,
-                            format!("{} at {}KB", d, i * chunk_size / 1024),
+                            format!("{}{}{}{}", d, DET_AT_KB_MARKER, kb_sent(i, chunk_size), DET_KB_SUFFIX),
                             measured_rtt,
                         );
                     }
@@ -228,7 +239,7 @@ pub async fn probe_tcp_16_20(
 
         // If connection was closed concurrently between requests, reconnect and retry this chunk once
         if let Ok(Err(ref e)) = res {
-            let emsg = hyper_info(e);
+            let (emsg, _, _) = hyper_info(e);
             if e.is_canceled() || emsg.contains("canceled") || sender.is_closed() {
                 if let Ok(new_sender) = connect_fat_target(addr, target_ip, sni, use_tls, cfg).await {
                     sender = new_sender;
@@ -242,11 +253,8 @@ pub async fn probe_tcp_16_20(
             Ok(Ok(resp)) => {
                 let _ = resp.into_body().collect().await;
                 let elapsed = t0.elapsed().as_secs_f64();
-                if i == 0 {
-                    alive = "[green]Yes[/green]".to_string();
-                    if measured_rtt.is_none() {
-                        measured_rtt = Some(elapsed);
-                    }
+                if i == 0 && measured_rtt.is_none() {
+                    measured_rtt = Some(elapsed);
                 }
                 if hint_rtt.is_none() && i < 2 {
                     rtt_samples.push(elapsed);
@@ -260,56 +268,53 @@ pub async fn probe_tcp_16_20(
                 }
             }
             Ok(Err(e)) => {
-                let msg = hyper_info(&e);
+                let (msg, os_code, os_kind) = hyper_info(&e);
                 let lower = msg.to_ascii_lowercase();
                 let is_read_timeout = e.is_timeout() || lower.contains("timed out");
                 if is_read_timeout {
-                    let err_type = if lower.contains("write") { "Write Timeout" } else { "Read Timeout" };
+                    let err_type = if lower.contains("write") { DET_WRITE_TIMEOUT_WORD } else { DET_READ_TIMEOUT_WORD_CAPS };
                     if i == 0 {
-                        return ("[green]Yes[/green]".into(), DpiStatus::ReadTimeout, err_type.into(), measured_rtt);
+                        return (DpiStatus::ReadTimeout, err_type.into(), measured_rtt);
                     }
                     if i < min_detect_chunk {
-                        return (alive, DpiStatus::Timeout, err_type.into(), measured_rtt);
+                        return (DpiStatus::Timeout, err_type.into(), measured_rtt);
                     }
                     return (
-                        alive,
                         DpiStatus::Tcp16Detected,
-                        format!("{} at {}KB", err_type, i * chunk_size / 1024),
+                        format!("{}{}{}{}", err_type, DET_AT_KB_MARKER, kb_sent(i, chunk_size), DET_KB_SUFFIX),
                         measured_rtt,
                     );
                 }
-                let (s, d) = classify_read_error(&msg, 0);
+                let (s, d) = classify_read_error(&msg, os_code, os_kind, 0);
                 if i == 0 {
-                    return ("[green]Yes[/green]".into(), s, d, measured_rtt);
+                    return (s, d, measured_rtt);
                 }
                 if i < min_detect_chunk {
-                    return (alive, DpiStatus::Timeout, d, measured_rtt);
+                    return (DpiStatus::Timeout, d, measured_rtt);
                 }
                 return (
-                    alive,
                     DpiStatus::Tcp16Detected,
-                    format!("{} at {}KB", d, i * chunk_size / 1024),
+                    format!("{}{}{}{}", d, DET_AT_KB_MARKER, kb_sent(i, chunk_size), DET_KB_SUFFIX),
                     measured_rtt,
                 );
             }
             Err(_) => {
                 if i == 0 {
-                    return ("[green]Yes[/green]".into(), DpiStatus::ReadTimeout, "Read Timeout".into(), measured_rtt);
+                    return (DpiStatus::ReadTimeout, DET_READ_TIMEOUT_WORD_CAPS.into(), measured_rtt);
                 }
                 if i < min_detect_chunk {
-                    return (alive, DpiStatus::Timeout, "Read Timeout".into(), measured_rtt);
+                    return (DpiStatus::Timeout, DET_READ_TIMEOUT_WORD_CAPS.into(), measured_rtt);
                 }
                 return (
-                    alive,
                     DpiStatus::Tcp16Detected,
-                    format!("Read Timeout at {}KB", i * chunk_size / 1024),
+                    format!("{}{}{}{}", DET_READ_TIMEOUT_WORD_CAPS, DET_AT_KB_MARKER, kb_sent(i, chunk_size), DET_KB_SUFFIX),
                     measured_rtt,
                 );
             }
         }
     }
 
-    (alive, DpiStatus::Ok, String::new(), measured_rtt)
+    (DpiStatus::Ok, String::new(), measured_rtt)
 }
 
 fn create_tls_config(
@@ -326,7 +331,7 @@ pub async fn check_tcp_16_20(
     cfg: &AppConfig,
     sem: &Semaphore,
     hint_rtt: Option<f64>,
-) -> (String, DpiStatus, String, Option<f64>) {
+) -> (DpiStatus, String, Option<f64>) {
     let _permit = sem.acquire().await.unwrap();
     probe_tcp_16_20(ip, port, sni, cfg, hint_rtt).await
 }
@@ -341,7 +346,7 @@ pub async fn probe_tcp16(target: SocketAddr, _payload_size: usize, timeout_dur: 
         fat_read_timeout: timeout_dur.as_secs_f64(),
         ..AppConfig::default()
     };
-    let (_alive, status, detail, _rtt) =
+    let (status, detail, _rtt) =
         probe_tcp_16_20(&target.ip().to_string(), target.port(), &cfg.fat_default_sni.clone(), &cfg, None).await;
     metrics.duration_ms = start.elapsed().as_millis() as u64;
     metrics.status = match status {
@@ -369,7 +374,19 @@ mod tests {
     fn test_min_detect_chunk_math() {
         // 12 KB / 4 KB = chunk 3
         let chunk_size = 4000usize;
-        let min_detect = ((12u64 * 1024 + chunk_size as u64 - 1) / chunk_size as u64).max(1) as usize;
-        assert_eq!(min_detect, 4); // chunks are 0-based: detect range starts at i>=4 → ≥12KB sent... (i*4000/1024 = 15KB at i=4)
+        let min_detect = (12u64 * 1024).div_ceil(chunk_size as u64).max(1) as usize;
+        assert_eq!(min_detect, 4); // chunks are 0-based: the detect range starts at i>=4
+    }
+
+    /// The offset in the detail is the mark the drop happened at, not the last
+    /// whole KB below it: 4 chunks of 4000 B are 16 KB (15.6 rounded down read
+    /// as "15KB" and made the 16 KB test look off by one).
+    #[test]
+    fn test_kb_sent_rounds_up_to_the_mark() {
+        assert_eq!(kb_sent(4, 4000), 16);
+        assert_eq!(kb_sent(5, 4000), 20);
+        assert_eq!(kb_sent(3, 4000), 12);
+        assert_eq!(kb_sent(3, 1024), 3);
+        assert_eq!(kb_sent(0, 4000), 0);
     }
 }

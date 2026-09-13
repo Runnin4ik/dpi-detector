@@ -32,7 +32,11 @@ impl ConnectionStage {
 #[serde(rename_all = "snake_case")]
 pub enum DpiStatus {
     Ok,
-    Redir,
+    /// Redirect (301/302) to a foreign host: red `REDIR`, not ok. Python has one
+    /// `ProbeStatus.REDIR` badge whose color depends on the target host
+    /// (`core/tls_scanner.py:207-213`), and the `--json` token stays the frozen
+    /// `redir` (Rule 5) — never the internal variant name.
+    #[serde(rename = "redir")]
     RedirSuspect,
     Blocked,
     IspPage,
@@ -76,8 +80,7 @@ impl DpiStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Ok => "ok",
-            Self::Redir => "redir",
-            Self::RedirSuspect => "redir_suspect",
+            Self::RedirSuspect => "redir",
             Self::Blocked => "blocked",
             Self::IspPage => "isp_page",
             Self::LocalIp => "local_ip",
@@ -120,7 +123,6 @@ impl DpiStatus {
     pub fn display_label(&self) -> &'static str {
         match self {
             Self::Ok => "OK",
-            Self::Redir => "REDIR",
             Self::RedirSuspect => "REDIR",
             Self::Blocked => "BLOCKED",
             Self::IspPage => "ISP PAGE",
@@ -161,10 +163,12 @@ impl DpiStatus {
         }
     }
 
-    /// Mirrors Python `ProbeStatus.is_ok`: green OK or legitimate redirect.
-    /// A suspicious (foreign-domain) redirect is NOT ok.
+    /// Mirrors Python `ProbeStatus.is_ok` (`utils/error_classifier.py:30-42`):
+    /// only a plain `OK` counts. A redirect to the same host/subdomain is
+    /// classified `Ok` at the probe; a foreign one lands here as `RedirSuspect`
+    /// (red `REDIR`) and is not ok.
     pub fn is_ok_status(&self) -> bool {
-        matches!(self, Self::Ok | Self::Redir)
+        matches!(self, Self::Ok)
     }
 
     pub fn is_blocked(&self) -> bool {
@@ -214,5 +218,26 @@ impl Default for ProbeMetrics {
             duration_ms: 0,
             detail: String::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rule 5: the `--json` status tokens are frozen. A redirect to a foreign
+    /// host keeps the historical `redir` token — the internal variant name must
+    /// never reach the wire — and both directions of the mapping agree with
+    /// `as_str()`.
+    #[test]
+    fn foreign_redirect_keeps_the_frozen_redir_token() {
+        assert_eq!(DpiStatus::RedirSuspect.as_str(), "redir");
+        assert_eq!(serde_json::to_string(&DpiStatus::RedirSuspect).unwrap(), "\"redir\"");
+        assert_eq!(serde_json::from_str::<DpiStatus>("\"redir\"").unwrap(), DpiStatus::RedirSuspect);
+        // Badge stays canonical Latin (Rule 4); a suspect redirect is neither
+        // ok (mirrors `ProbeStatus.is_ok`) nor a censorship verdict.
+        assert_eq!(DpiStatus::RedirSuspect.display_label(), "REDIR");
+        assert!(!DpiStatus::RedirSuspect.is_ok_status());
+        assert!(!DpiStatus::RedirSuspect.is_blocked());
     }
 }

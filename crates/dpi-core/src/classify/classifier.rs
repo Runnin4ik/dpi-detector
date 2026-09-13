@@ -59,6 +59,26 @@ pub fn classify_ssl_error(
     if msg.contains("alert") && (msg.contains("handshake") || msg.contains("ssl") || msg.contains("tls") || msg.contains("certificate")) {
         return (DpiStatus::TlsAlert, DET_FAKE_TLS_ALERT.into());
     }
+    // A message about a protocol element our own TLS stack does not implement is
+    // not evidence about the network. rustls words these with "certificate"
+    // (`got CompressedCertificate when expecting Certificate`,
+    // `UnknownCertificateExtension`), so without this they are reported as an
+    // interception. Real interference still lands in the branches above: a
+    // censor's spoofed ServerHello arrives as a version/record/alert error.
+    if [
+        "unsupportedextension",
+        "unsupported extension",
+        "unknowncertificateextension",
+        "unknown certificate extension",
+        "compressedcertificate",
+        "compressed certificate",
+    ]
+    .iter()
+    .any(|m| msg.contains(m))
+    {
+        return (DpiStatus::Unknown, short_detail(err_msg));
+    }
+
     if msg.contains("certificate") || msg.contains("unknown ca") || msg.contains("self-signed") || msg.contains("self signed") {
         if msg.contains("unable to get local issuer certificate") || msg.contains("unknownissuer") {
             return (DpiStatus::NoCa, DET_NO_ROOT_CA.into());
@@ -136,7 +156,7 @@ pub fn classify_connect_error_full(
             "tcp_connect" => (DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT.into()),
             "sending_data" => (DpiStatus::SendTimeout, DET_SEND_TIMEOUT.into()),
             "reading_data" => (DpiStatus::ReadTimeout, DET_READ_TIMEOUT.into()),
-            _ => (DpiStatus::Timeout, format!("Timeout ({})", stage)),
+            _ => (DpiStatus::Timeout, format!("{} ({})", DET_TIMEOUT_WORD, stage)),
         };
     }
 
@@ -154,15 +174,15 @@ pub fn classify_connect_error_full(
     // TLS alerts surfacing inside connect errors (DPI)
     if full.contains("sslv3_alert") || full.contains("ssl alert") || (full.contains("alert") && full.contains("handshake")) {
         if full.contains("handshake_failure") || full.contains("handshake failure") {
-            return (DpiStatus::TlsAlert, "Handshake alert".into());
+            return (DpiStatus::TlsAlert, DET_ALERT_HANDSHAKE.into());
         }
         if full.contains("unrecognized_name") {
-            return (DpiStatus::TlsAlert, "SNI alert".into());
+            return (DpiStatus::TlsAlert, DET_ALERT_SNI.into());
         }
         if full.contains("protocol_version") {
-            return (DpiStatus::TlsAlert, "Version alert".into());
+            return (DpiStatus::TlsAlert, DET_ALERT_VERSION.into());
         }
-        return (DpiStatus::TlsAlert, "TLS alert".into());
+        return (DpiStatus::TlsAlert, DET_ALERT_TLS.into());
     }
     if full.contains("certificate") || full.contains("unknown ca") {
         let (s, d) = classify_ssl_error(err_msg, bytes_read, ConnectionStage::TlsClientHelloSent);
@@ -213,7 +233,7 @@ pub fn classify_connect_error_full(
         return match stage {
             "tls_handshake" => (DpiStatus::TlsDropped, DET_TLS_HANDSHAKE_TIMEOUT.into()),
             "tcp_connect" => (DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT.into()),
-            _ => (DpiStatus::Timeout, format!("Timeout ({})", stage)),
+            _ => (DpiStatus::Timeout, format!("{} ({})", DET_TIMEOUT_WORD, stage)),
         };
     }
 
@@ -241,7 +261,7 @@ pub fn classify_connect_error(err: Option<&io::Error>, is_timeout: bool) -> (Dpi
             let msg = e.to_string();
             classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tcp_connect")
         }
-        None => (DpiStatus::Unknown, "Unknown connection failure".into()),
+        None => (DpiStatus::Unknown, DET_UNKNOWN_CONN_FAILURE.into()),
     }
 }
 
@@ -314,10 +334,18 @@ pub fn classify_tls_error(
 }
 
 /// Classifies HTTP-layer failures (mirrors Python `classify_read_error`
-/// for the reading_data stage).
-pub fn classify_read_error(err_msg: &str, bytes_read: usize) -> (DpiStatus, String) {
+/// for the reading_data stage). `raw_os_error`/`kind` come from the `io::Error`
+/// at the end of the hyper error chain: Windows localizes that message
+/// ("Удаленный хост принудительно разорвал существующее подключение" is
+/// WSAECONNRESET), so the numeric code is the signal classification can trust.
+pub fn classify_read_error(
+    err_msg: &str,
+    raw_os_error: Option<i32>,
+    kind: Option<io::ErrorKind>,
+    bytes_read: usize,
+) -> (DpiStatus, String) {
     let (status, detail) =
-        classify_connect_error_full(err_msg, None, None, bytes_read, "reading_data");
+        classify_connect_error_full(err_msg, raw_os_error, kind, bytes_read, "reading_data");
     if status == DpiStatus::Unknown {
         return (DpiStatus::Unknown, short_detail(err_msg));
     }
@@ -327,6 +355,24 @@ pub fn classify_read_error(err_msg: &str, bytes_read: usize) -> (DpiStatus, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The OS message for WSAECONNRESET is localized ("Удаленный хост
+    /// принудительно разорвал существующее подключение" on a Russian Windows),
+    /// so the numeric code and the `ErrorKind` from the error chain - not the
+    /// text - are what identify a reset. Dropping them, as the hyper wrappers
+    /// used to, turned a plain RST into `UNKNOWN` plus the raw system text.
+    #[test]
+    fn test_reset_classified_from_os_code_not_text() {
+        let localized =
+            "connection error | Удаленный хост принудительно разорвал существующее подключение";
+        let (s, d) =
+            classify_read_error(localized, Some(10054), Some(io::ErrorKind::ConnectionReset), 0);
+        assert_eq!(s, DpiStatus::TcpRst);
+        assert_eq!(d, DET_CONN_RESET);
+
+        let (s, _) = classify_read_error(localized, None, None, 0);
+        assert_eq!(s, DpiStatus::Unknown, "the localized text alone is unrecognisable");
+    }
 
     #[test]
     fn test_classify_connect_error() {
@@ -382,6 +428,23 @@ mod tests {
             ConnectionStage::TlsClientHelloSent,
         );
         assert_eq!(s, DpiStatus::TlsRst);
+    }
+
+    #[test]
+    fn test_engine_protocol_errors_are_not_interception() {
+        // rustls words its own unimplemented-element errors with "certificate"
+        // (`got CompressedCertificate when expecting Certificate`,
+        // `UnknownCertificateExtension`). Those must stay unclassified instead of
+        // being reported as a MITM, while real certificate failures keep their
+        // verdict (covered above).
+        for msg in [
+            "received unexpected handshake message: got CompressedCertificate when expecting Certificate or CertificateRequest",
+            "received corrupt message of type UnknownCertificateExtension",
+            "peer misbehaved: UnsolicitedServerHelloExtension",
+        ] {
+            let (s, d) = classify_ssl_error(msg, 0, ConnectionStage::TlsClientHelloSent);
+            assert_eq!(s, DpiStatus::Unknown, "{msg} -> {d}");
+        }
     }
 
     #[test]

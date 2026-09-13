@@ -25,7 +25,8 @@ use tokio::time::timeout;
 use crate::classify::{
     classify_connect_error_full, classify_ssl_error, ConnectionStage, DpiStatus,
     DET_DOMAIN_NOT_FOUND, DET_IPV6_UNSUPPORTED, DET_ISP_STUB_ARROW, DET_ISP_STUB_SPACE,
-    DET_LOCAL_IP_ARROW, DET_RST_HELLO,
+    DET_KB_SUFFIX, DET_LOCAL_IP_ARROW, DET_READ_TIMEOUT_WORD, DET_RST_HELLO, DET_TCP_SYN_TIMEOUT,
+    DET_TIMEOUT_WORD, DET_TLS_HANDSHAKE_TIMEOUT,
 };
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
@@ -143,6 +144,29 @@ fn parse_host(url_or_host: &str) -> String {
     s.trim_matches(|c| c == '.' || c == '[' || c == ']').to_string()
 }
 
+/// Resolves a `Location` against the probe's base URL the way
+/// `urllib.parse.urljoin` does for the shapes a redirect uses, so the redirect
+/// is judged against the host it really goes to:
+///   `https://host/x`  - absolute, used as is;
+///   `//host/x`        - protocol-relative: scheme from the base, host from the
+///                       Location (a foreign host here is NOT a local path);
+///   `/x`, `x`, `?q`   - relative: stays on the base scheme and host.
+fn resolve_location(base: &str, location: &str) -> String {
+    let scheme = base.split("://").next().unwrap_or("https");
+    if location.contains("://") {
+        return location.to_string();
+    }
+    if let Some(rest) = location.strip_prefix("//") {
+        return format!("{}://{}", scheme, rest);
+    }
+    let host = parse_host(base);
+    if location.starts_with('/') {
+        format!("{}://{}{}", scheme, host, location)
+    } else {
+        format!("{}://{}/{}", scheme, host, location)
+    }
+}
+
 /// Classifies an HTTP redirect (mirrors `_check_tls_single` /
 /// `check_http_injection` redirect branches).
 pub fn classify_redirect(
@@ -152,18 +176,7 @@ pub fn classify_redirect(
     location: &str,
     http_phase: bool,
 ) -> (DpiStatus, String) {
-    // Resolve relative locations against the base URL
-    let resolved = if location.contains("://") {
-        location.to_string()
-    } else if let Some(path_idx) = location.find('/') {
-        let _ = path_idx;
-        // absolute-path or relative → same host as base
-        let base_host = parse_host(base_url);
-        format!("https://{}{}", base_host, if location.starts_with('/') { location.to_string() } else { format!("/{}", location) })
-    } else {
-        let base_host = parse_host(base_url);
-        format!("https://{}/{}", base_host, location)
-    };
+    let resolved = resolve_location(base_url, location);
 
     let loc_host_raw = parse_host(&resolved);
     let loc_host = loc_host_raw.to_ascii_lowercase();
@@ -178,7 +191,9 @@ pub fn classify_redirect(
             return (DpiStatus::Ok, format!("{} → https", status));
         }
         if same_host {
-            return (DpiStatus::Redir, format!("{}", status));
+            // Same domain (or a subdomain) is a normal redirect: OK, not a badge
+            // of its own. Only a foreign domain is flagged, as a red REDIR.
+            return (DpiStatus::Ok, format!("{}", status));
         }
         return (DpiStatus::RedirSuspect, format!("→ {}", short_host));
     }
@@ -187,7 +202,7 @@ pub fn classify_redirect(
         return (DpiStatus::Ok, "→ https".to_string());
     }
     if same_host {
-        return (DpiStatus::Redir, format!("→ {}", short_host));
+        return (DpiStatus::Ok, format!("→ {}", short_host));
     }
     (DpiStatus::RedirSuspect, format!("→ {}", short_host))
 }
@@ -205,19 +220,22 @@ pub struct HttpCheck {
     pub detail: String,
 }
 
-/// Extracts (message, os_code) from a hyper error chain.
-fn hyper_err_info(e: &hyper::Error) -> (String, Option<i32>) {
+/// Extracts (message, os code, kind) from a hyper error chain. The trailing
+/// `io::Error` is the only element that carries the OS code, and Windows
+/// localizes its message, so the code - not the text - is the signal the
+/// classifier can rely on.
+fn hyper_err_info(e: &hyper::Error) -> (String, Option<i32>, Option<std::io::ErrorKind>) {
     let msg = e.to_string();
     let mut source = std::error::Error::source(e);
     while let Some(s) = source {
         if let Some(io_err) = s.downcast_ref::<std::io::Error>() {
             let mut full = msg.clone();
             full.push_str(&format!(" | {}", io_err));
-            return (full, io_err.raw_os_error());
+            return (full, io_err.raw_os_error(), Some(io_err.kind()));
         }
         source = std::error::Error::source(s);
     }
-    (msg, None)
+    (msg, None, None)
 }
 
 fn inner_hyper(
@@ -227,26 +245,26 @@ fn inner_hyper(
     min_kb: u64,
     max_kb: u64,
 ) -> (DpiStatus, String) {
-    let (msg, _) = hyper_err_info(e);
+    let (msg, os_code, os_kind) = hyper_err_info(e);
     let lower = msg.to_ascii_lowercase();
 
     // Read timeout inside the fat window → TCP16-20 signature
     if (e.is_timeout() || lower.contains("timed out")) && stage == "reading_data" {
         let kb = bytes as f64 / 1024.0;
         if kb >= min_kb as f64 && kb <= max_kb as f64 {
-            return (DpiStatus::Tcp16Range, format!("Timeout {:.1}KB", kb));
+            return (DpiStatus::Tcp16Range, format!("{} {:.1}{}", DET_TIMEOUT_WORD, kb, DET_KB_SUFFIX));
         }
         if bytes > 0 {
-            return (DpiStatus::ReadTimeout, format!("Read timeout {:.1}KB", kb));
+            return (DpiStatus::ReadTimeout, format!("{} {:.1}{}", DET_READ_TIMEOUT_WORD, kb, DET_KB_SUFFIX));
         }
-        return (DpiStatus::ReadTimeout, "Read timeout".into());
+        return (DpiStatus::ReadTimeout, DET_READ_TIMEOUT_WORD.into());
     }
 
     let (s, d) = classify_ssl_error(&msg, bytes, ConnectionStage::TlsClientHelloSent);
     if s != DpiStatus::Unknown {
         return (s, d);
     }
-    classify_connect_error_full(&msg, None, None, bytes, stage)
+    classify_connect_error_full(&msg, os_code, os_kind, bytes, stage)
 }
 
 /// Single TLS check against `target` with SNI/host = `domain`
@@ -274,12 +292,13 @@ pub async fn check_domain_tls(
                 return (s, d, 0usize);
             }
             Err(_) => {
-                return (DpiStatus::SynDropped, "TCP SYN timeout".to_string(), 0usize);
+                return (DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT.to_string(), 0usize);
             }
         };
 
         // TLS handshake (version-pinned client)
         *stage.lock() = "tls_handshake".to_string();
+        let fingerprint = cfg.fingerprint();
         let rustls_conn = if tls12_only {
             RustlsConnector::new_insecure_tls12_with(fingerprint)
         } else {
@@ -298,7 +317,6 @@ pub async fn check_domain_tls(
             rustls_conn.connect(server_name, probe_stream),
         )
         .await
-        let fingerprint = cfg.fingerprint();
         {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
@@ -317,7 +335,7 @@ pub async fn check_domain_tls(
                 return (s2, d2, 0usize);
             }
             Err(_) => {
-                return (DpiStatus::TlsDropped, "TLS Handshake timeout".to_string(), 0usize);
+                return (DpiStatus::TlsDropped, DET_TLS_HANDSHAKE_TIMEOUT.to_string(), 0usize);
             }
         };
 
@@ -354,7 +372,7 @@ pub async fn check_domain_tls(
                 return (s, d, 0usize);
             }
             Err(_) => {
-                return (DpiStatus::ReadTimeout, "Read timeout".to_string(), 0usize);
+                return (DpiStatus::ReadTimeout, DET_READ_TIMEOUT_WORD.to_string(), 0usize);
             }
         };
 
@@ -374,7 +392,9 @@ pub async fn check_domain_tls(
             return (s, d, 0usize);
         }
         if (300..400).contains(&status) {
-            return (DpiStatus::Redir, String::new(), 0usize);
+            // A 3xx with no Location points nowhere foreign: normal, like a
+            // same-host redirect.
+            return (DpiStatus::Ok, String::new(), 0usize);
         }
 
         // Read body capped at 64 KB
@@ -399,12 +419,12 @@ pub async fn check_domain_tls(
                 Err(_) => {
                     let kb = bytes_read as f64 / 1024.0;
                     if kb >= cfg.tcp_block_min_kb as f64 && kb <= cfg.tcp_block_max_kb as f64 {
-                        return (DpiStatus::Tcp16Range, format!("Timeout {:.1}KB", kb), bytes_read);
+                        return (DpiStatus::Tcp16Range, format!("{} {:.1}{}", DET_TIMEOUT_WORD, kb, DET_KB_SUFFIX), bytes_read);
                     }
                     if bytes_read > 0 {
-                        return (DpiStatus::ReadTimeout, format!("Read timeout {:.1}KB", kb), bytes_read);
+                        return (DpiStatus::ReadTimeout, format!("{} {:.1}{}", DET_READ_TIMEOUT_WORD, kb, DET_KB_SUFFIX), bytes_read);
                     }
-                    return (DpiStatus::ReadTimeout, "Read timeout".to_string(), bytes_read);
+                    return (DpiStatus::ReadTimeout, DET_READ_TIMEOUT_WORD.to_string(), bytes_read);
                 }
             }
         }
@@ -421,9 +441,9 @@ pub async fn check_domain_tls(
         Err(_) => {
             let st = stage.lock().clone();
             let (s, d) = match st.as_str() {
-                "tls_handshake" => (DpiStatus::TlsDropped, "TLS Handshake timeout".to_string()),
-                "tcp_connect" => (DpiStatus::SynDropped, "TCP SYN timeout".to_string()),
-                _ => (DpiStatus::ReadTimeout, "Read timeout".to_string()),
+                "tls_handshake" => (DpiStatus::TlsDropped, DET_TLS_HANDSHAKE_TIMEOUT.to_string()),
+                "tcp_connect" => (DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT.to_string()),
+                _ => (DpiStatus::ReadTimeout, DET_READ_TIMEOUT_WORD.to_string()),
             };
             TlsCheck { status: s, detail: d, elapsed: start.elapsed().as_secs_f64() }
         }
@@ -472,7 +492,7 @@ pub async fn check_http_injection(
                 return HttpCheck { status: s, detail: d };
             }
             Err(_) => {
-                return HttpCheck { status: DpiStatus::SynDropped, detail: "TCP SYN timeout".to_string() };
+                return HttpCheck { status: DpiStatus::SynDropped, detail: DET_TCP_SYN_TIMEOUT.to_string() };
             }
         };
 
@@ -510,13 +530,13 @@ pub async fn check_http_injection(
                     } else {
                         DpiStatus::ReadTimeout
                     };
-                    return HttpCheck { status: kind, detail: "Timeout".to_string() };
+                    return HttpCheck { status: kind, detail: DET_TIMEOUT_WORD.to_string() };
                 }
                 let (s, d) = inner_hyper(&e, "reading_data", 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
                 return HttpCheck { status: s, detail: d };
             }
             Err(_) => {
-                return HttpCheck { status: DpiStatus::ReadTimeout, detail: "Timeout".to_string() };
+                return HttpCheck { status: DpiStatus::ReadTimeout, detail: DET_TIMEOUT_WORD.to_string() };
             }
         };
 
@@ -536,14 +556,14 @@ pub async fn check_http_injection(
             return HttpCheck { status: s, detail: d };
         }
         if (300..400).contains(&status) {
-            return HttpCheck { status: DpiStatus::Redir, detail: format!("{}", status) };
+            return HttpCheck { status: DpiStatus::Ok, detail: format!("{}", status) };
         }
         HttpCheck { status: DpiStatus::Ok, detail: format!("{}", status) }
     };
 
     match timeout(total_timeout, fut).await {
         Ok(r) => r,
-        Err(_) => HttpCheck { status: DpiStatus::ReadTimeout, detail: "Timeout".to_string() },
+        Err(_) => HttpCheck { status: DpiStatus::ReadTimeout, detail: DET_TIMEOUT_WORD.to_string() },
     }
 }
 
@@ -582,7 +602,7 @@ pub async fn resolve_all(
 ) -> Vec<DomainEntry> {
     let tick = phases
         .as_ref()
-        .map(|p| (p.on_phase)(crate::PhaseId::DomainDns, domains.len(), true));
+        .map(|p| (p.on_phase)(crate::PhaseId::DomainDns, domains.len()));
     let mut handles = Vec::new();
     for domain in domains {
         let domain = domain.clone();
@@ -641,10 +661,11 @@ pub async fn resolve_all(
     }
     let mut out = Vec::new();
     for h in handles {
+        let done = h.await;
         if let Some(t) = tick.as_ref() {
             t();
         }
-        if let Ok(e) = h.await {
+        if let Ok(e) = done {
             out.push(e);
         }
     }
@@ -660,7 +681,7 @@ pub async fn check_tls_all(
 ) {
     let total = entries.iter().filter(|e| e.dns_fake == Some(false)).count();
     let pid = if tls12_only { crate::PhaseId::DomainTls12 } else { crate::PhaseId::DomainTls13 };
-    let tick = phases.as_ref().map(|p| (p.on_phase)(pid, total, true));
+    let tick = phases.as_ref().map(|p| (p.on_phase)(pid, total));
     let mut handles = Vec::new();
     for (idx, e) in entries.iter().enumerate() {
         if e.dns_fake != Some(false) {
@@ -677,10 +698,11 @@ pub async fn check_tls_all(
         }));
     }
     for h in handles {
+        let done = h.await;
         if let Some(t) = tick.as_ref() {
             t();
         }
-        if let Ok((idx, r)) = h.await {
+        if let Ok((idx, r)) = done {
             if tls12_only {
                 entries[idx].t12 = r;
             } else {
@@ -701,7 +723,7 @@ pub async fn check_http_all(
     let total = entries.iter().filter(|e| e.dns_fake == Some(false)).count();
     let tick = phases
         .as_ref()
-        .map(|p| (p.on_phase)(crate::PhaseId::DomainHttp, total, true));
+        .map(|p| (p.on_phase)(crate::PhaseId::DomainHttp, total));
     let mut handles = Vec::new();
     for (idx, e) in entries.iter().enumerate() {
         if e.dns_fake != Some(false) {
@@ -719,10 +741,11 @@ pub async fn check_http_all(
         }));
     }
     for h in handles {
+        let done = h.await;
         if let Some(t) = tick.as_ref() {
             t();
         }
-        if let Ok((idx, r)) = h.await {
+        if let Ok((idx, r)) = done {
             entries[idx].http = r;
         }
     }
@@ -775,7 +798,7 @@ fn col_ok(status: DpiStatus) -> bool {
 }
 
 fn col_ok_t12(status: DpiStatus) -> bool {
-    matches!(status, DpiStatus::Ok | DpiStatus::Redir | DpiStatus::NoTls13)
+    matches!(status, DpiStatus::Ok | DpiStatus::NoTls13)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -902,7 +925,7 @@ mod tests {
     #[test]
     fn test_build_domain_row_http_timeout_tls_ok_shows_time() {
         let mut entry = DomainEntry::pending("browserleaks.com".to_string(), None, None);
-        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: "Timeout".to_string() };
+        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: DET_TIMEOUT_WORD.to_string() };
         entry.t12 = TlsCheck { status: DpiStatus::Ok, detail: String::new(), elapsed: 0.35 };
         entry.t13 = TlsCheck { status: DpiStatus::Ok, detail: String::new(), elapsed: 0.28 };
 
@@ -917,7 +940,7 @@ mod tests {
     #[test]
     fn test_build_domain_row_http_timeout_tls_rst_omits_http_timeout() {
         let mut entry = DomainEntry::pending("danbooru.donmai.us".to_string(), None, None);
-        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: "Timeout".to_string() };
+        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: DET_TIMEOUT_WORD.to_string() };
         entry.t12 = TlsCheck { status: DpiStatus::TlsRst, detail: "TCP RST on ClientHello".to_string(), elapsed: 0.1 };
         entry.t13 = TlsCheck { status: DpiStatus::TlsRst, detail: "TCP RST on ClientHello".to_string(), elapsed: 0.1 };
 
@@ -933,9 +956,9 @@ mod tests {
     #[test]
     fn test_build_domain_row_tls_drop_omits_http_timeout() {
         let mut entry = DomainEntry::pending("discord.com".to_string(), None, None);
-        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: "Timeout".to_string() };
-        entry.t12 = TlsCheck { status: DpiStatus::TlsDropped, detail: "TLS Handshake timeout".to_string(), elapsed: 5.0 };
-        entry.t13 = TlsCheck { status: DpiStatus::TlsDropped, detail: "TLS Handshake timeout".to_string(), elapsed: 5.0 };
+        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: DET_TIMEOUT_WORD.to_string() };
+        entry.t12 = TlsCheck { status: DpiStatus::TlsDropped, detail: DET_TLS_HANDSHAKE_TIMEOUT.to_string(), elapsed: 5.0 };
+        entry.t13 = TlsCheck { status: DpiStatus::TlsDropped, detail: DET_TLS_HANDSHAKE_TIMEOUT.to_string(), elapsed: 5.0 };
 
         let (http_s, t12_s, t13_s, details) = build_domain_row(&entry);
         assert_eq!(http_s, DpiStatus::ReadTimeout);
@@ -965,5 +988,42 @@ mod tests {
         let (s, d) = classify_redirect("example.com", "http://example.com", 301, "https://example.com/", true);
         assert_eq!(s, DpiStatus::Ok);
         assert_eq!(d, "301 → https");
+    }
+
+    /// Same-host-or-subdomain redirects read as a plain `OK`, a redirect to
+    /// another domain is a red `REDIR` (`RedirSuspect`, not counted as ok), and
+    /// a protocol-relative `Location` belongs to the host it names - it is not a
+    /// path on the base host. Host resolution matches the Python original
+    /// (`urljoin` + `_strip_www` in `_check_tls_single` / `check_http_injection`).
+    #[test]
+    fn test_classify_redirect_matrix() {
+        // (base, status, location, expected status, expected detail)
+        let cases: &[(&str, u16, &str, DpiStatus, &str)] = &[
+            ("https://holod.media", 301, "https://holod.media/", DpiStatus::Ok, "→ https"),
+            ("https://holod.media", 301, "/en/", DpiStatus::Ok, "→ https"),
+            ("https://holod.media", 301, "index.html", DpiStatus::Ok, "→ https"),
+            ("https://holod.media", 301, "?q=1", DpiStatus::Ok, "→ https"),
+            ("https://holod.media", 301, "https://sub.holod.media/x", DpiStatus::Ok, "→ https"),
+            ("https://holod.media", 302, "http://holod.media/x", DpiStatus::Ok, "→ holod.media"),
+            ("http://holod.media", 301, "https://holod.media/", DpiStatus::Ok, "301 → https"),
+            ("http://holod.media", 301, "https://sub.holod.media/x", DpiStatus::Ok, "301 → https"),
+            ("http://holod.media", 301, "http://holod.media/x", DpiStatus::Ok, "301"),
+            ("http://holod.media", 301, "/en/", DpiStatus::Ok, "301"),
+            ("http://holod.media", 301, "index.html", DpiStatus::Ok, "301"),
+            ("http://holod.media", 301, "?q=1", DpiStatus::Ok, "301"),
+            ("https://holod.media", 302, "//evil.com/block", DpiStatus::RedirSuspect, "→ evil.com"),
+            ("http://holod.media", 302, "//evil.com/block", DpiStatus::RedirSuspect, "→ evil.com"),
+            ("https://holod.media", 302, "https://evil.com/block", DpiStatus::RedirSuspect, "→ evil.com"),
+            ("https://holod.media", 302, "https://not-holod.media/", DpiStatus::RedirSuspect, "→ not-holod.media"),
+            ("https://holod.media", 302, "https://holod.media.evil.com/", DpiStatus::RedirSuspect, "→ holod.media.evil.com"),
+        ];
+        for (base, status, location, want, detail) in cases {
+            let http_phase = base.starts_with("http:");
+            let (s, d) = classify_redirect("holod.media", base, *status, location, http_phase);
+            assert_eq!(s, *want, "{base} + {location} -> {d}");
+            assert_eq!(d, *detail, "{base} + {location}");
+            // A legitimate redirect counts as success, a foreign one does not.
+            assert_eq!(s.is_ok_status(), *want != DpiStatus::RedirSuspect, "{base} + {location}");
+        }
     }
 }
