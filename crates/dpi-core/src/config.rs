@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -5,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 fn d_max_concurrent() -> usize { 50 }
 fn d_ip_version() -> String { "ipv4".to_string() }
+fn d_tls_fingerprint() -> String { "rustls".to_string() }
 fn d_connect_timeout() -> f64 { 8.0 }
 fn d_read_timeout() -> f64 { 8.0 }
 fn d_pool_timeout() -> f64 { 2.0 }
@@ -19,9 +21,6 @@ fn d_user_agent() -> String {
 }
 fn d_dns_check_timeout() -> f64 { 5.0 }
 fn d_dns_availability_timeout() -> f64 { 10.0 }
-fn d_dns_probe_concurrency() -> usize { 20 }
-fn d_dns_udp_concurrency() -> usize { 15 }
-fn d_dns_doh_concurrency() -> usize { 20 }
 fn d_dns_egress_concurrency() -> usize { 10 }
 fn d_dns_asn_concurrency() -> usize { 8 }
 fn d_dns_stub_threshold() -> u32 { 2 }
@@ -215,6 +214,10 @@ pub struct AppConfig {
     pub max_concurrent: usize,
     #[serde(default = "d_ip_version")]
     pub ip_version: String,
+    /// ClientHello shape the probes present: `rustls` (default, unchanged
+    /// behaviour) or `custom` (Firefox-shaped, for fingerprint A/B runs).
+    #[serde(default = "d_tls_fingerprint")]
+    pub tls_fingerprint: String,
     #[serde(default)]
     pub proxy_url: Option<String>,
     /// Legacy alias: CLI --proxy writes here; mirrors proxy_url.
@@ -244,10 +247,12 @@ pub struct AppConfig {
     pub dns_check_timeout: f64,
     #[serde(default = "d_dns_availability_timeout")]
     pub dns_availability_timeout: f64,
-    #[serde(default = "d_dns_probe_concurrency")]
-    pub dns_probe_concurrency: usize,
     #[serde(default = "d_dns_check_domains")]
     pub dns_check_domains: Vec<String>,
+    /// Domain → real IPs, used only where the live DoH/DoT truth is empty
+    /// (a network that blocks every encrypted resolver).
+    #[serde(default)]
+    pub dns_truth_fallback: HashMap<String, Vec<String>>,
     #[serde(default = "d_dns_udp_servers")]
     pub dns_udp_servers: Vec<Vec<String>>,
     #[serde(default = "d_dns_availability_domains")]
@@ -255,10 +260,6 @@ pub struct AppConfig {
     /// Raw server rows: [addr, name, kind, port?]. Parsed via `availability_servers()`.
     #[serde(default)]
     pub dns_availability_servers: Vec<Vec<serde_yaml::Value>>,
-    #[serde(default = "d_dns_udp_concurrency")]
-    pub dns_udp_concurrency: usize,
-    #[serde(default = "d_dns_doh_concurrency")]
-    pub dns_doh_concurrency: usize,
     #[serde(default = "d_dns_egress_concurrency")]
     pub dns_egress_concurrency: usize,
     #[serde(default = "d_dns_asn_concurrency")]
@@ -321,7 +322,23 @@ pub struct AppConfig {
     #[serde(skip)]
     pub config_load_error: Option<String>,
     #[serde(skip)]
-    pub config_warnings: Vec<String>,
+    pub config_warnings: Vec<ConfigWarning>,
+}
+
+/// A recoverable `config.yml` problem. The user-facing text lives in the i18n
+/// layer ([`crate::i18n::Messages::config_warning`]) so warnings follow `--lang`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigWarning {
+    /// Key rejected by the type/shape check.
+    InvalidValue { key: String },
+    /// Key that is not part of the schema.
+    UnknownKey { key: String },
+    UnknownFingerprint { value: String },
+    MaxConcurrentReset,
+    IpVersionReset,
+    StubThresholdReset,
+    UploadPortReset,
+    DcPortReset,
 }
 
 impl Default for AppConfig {
@@ -329,6 +346,7 @@ impl Default for AppConfig {
         Self {
             max_concurrent: d_max_concurrent(),
             ip_version: d_ip_version(),
+            tls_fingerprint: d_tls_fingerprint(),
             proxy_url: None,
             proxy: None,
             connect_timeout: d_connect_timeout(),
@@ -343,13 +361,11 @@ impl Default for AppConfig {
             user_agent: d_user_agent(),
             dns_check_timeout: d_dns_check_timeout(),
             dns_availability_timeout: d_dns_availability_timeout(),
-            dns_probe_concurrency: d_dns_probe_concurrency(),
             dns_check_domains: d_dns_check_domains(),
+            dns_truth_fallback: HashMap::new(),
             dns_udp_servers: d_dns_udp_servers(),
             dns_availability_domains: d_dns_availability_domains(),
             dns_availability_servers: Vec::new(),
-            dns_udp_concurrency: d_dns_udp_concurrency(),
-            dns_doh_concurrency: d_dns_doh_concurrency(),
             dns_egress_concurrency: d_dns_egress_concurrency(),
             dns_asn_concurrency: d_dns_asn_concurrency(),
             dns_stub_threshold: d_dns_stub_threshold(),
@@ -386,14 +402,14 @@ impl Default for AppConfig {
 }
 
 const KNOWN_KEYS: &[&str] = &[
-    "MAX_CONCURRENT", "IP_VERSION", "PROXY_URL", "CONNECT_TIMEOUT", "READ_TIMEOUT",
+    "MAX_CONCURRENT", "IP_VERSION", "TLS_FINGERPRINT", "PROXY_URL", "CONNECT_TIMEOUT", "READ_TIMEOUT",
     "POOL_TIMEOUT", "STUB_IPS_TIMEOUT", "TCP_BLOCK_MIN_KB", "TCP_BLOCK_MAX_KB",
     "FAT_DEFAULT_SNI", "FAT_CONNECT_TIMEOUT", "FAT_READ_TIMEOUT", "USER_AGENT",
     "WSAECONNRESET", "WSAECONNREFUSED", "WSAETIMEDOUT", "WSAENETUNREACH",
     "WSAEHOSTUNREACH", "WSAECONNABORTED", "DNS_CHECK_TIMEOUT", "DNS_AVAILABILITY_TIMEOUT",
-    "DNS_PROBE_CONCURRENCY", "DNS_CHECK_DOMAINS", "DNS_UDP_SERVERS",
-    "DNS_AVAILABILITY_DOMAINS", "DNS_AVAILABILITY_SERVERS", "DNS_UDP_CONCURRENCY",
-    "DNS_DOH_CONCURRENCY", "DNS_EGRESS_CONCURRENCY", "DNS_ASN_CONCURRENCY",
+    "DNS_CHECK_DOMAINS", "DNS_TRUTH_FALLBACK", "DNS_UDP_SERVERS",
+    "DNS_AVAILABILITY_DOMAINS", "DNS_AVAILABILITY_SERVERS",
+    "DNS_EGRESS_CONCURRENCY", "DNS_ASN_CONCURRENCY",
     "ASN_CACHE_FILE", "FAT_CHUNKS_COUNT", "FAT_CHUNK_SIZE", "FAT_CHUNK_DELAY",
     "FAT_RANDOM_POOL_SIZE", "SNI_BATCH_SIZE", "SNI_TOP_N", "TELEGRAM_MEDIA_URL",
     "TELEGRAM_MEDIA_SIZE_MB", "TELEGRAM_UPLOAD_IP", "TELEGRAM_UPLOAD_PORT",
@@ -407,7 +423,7 @@ const KNOWN_KEYS: &[&str] = &[
 /// Per-key type validation (mirrors Python VALIDATORS): a mistyped value is
 /// dropped so its default survives, and a warning names the key. Without
 /// this, one bad scalar fails the whole serde mapping and resets everything.
-fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<String>) {
+fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<ConfigWarning>) {
     let is_uint = |v: &serde_yaml::Value| v.as_u64().is_some();
     let is_num = |v: &serde_yaml::Value| v.as_u64().is_some() || v.as_f64().is_some();
     // Canonical key order is UPPER_SNAKE (mirrors config.yml).
@@ -419,8 +435,7 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<String
             None => continue,
         };
         let ok = match key.as_str() {
-            "MAX_CONCURRENT" | "DNS_PROBE_CONCURRENCY" | "DNS_UDP_CONCURRENCY"
-            | "DNS_DOH_CONCURRENCY" | "DNS_EGRESS_CONCURRENCY" | "DNS_ASN_CONCURRENCY"
+            "MAX_CONCURRENT" | "DNS_EGRESS_CONCURRENCY" | "DNS_ASN_CONCURRENCY"
             | "FAT_CHUNKS_COUNT" | "FAT_CHUNK_SIZE" | "FAT_RANDOM_POOL_SIZE"
             | "SNI_BATCH_SIZE" | "SNI_TOP_N" | "TCP_BLOCK_MIN_KB" | "TCP_BLOCK_MAX_KB" => {
                 is_uint(v)
@@ -453,6 +468,24 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<String
             }
             "PROXY_URL" | "ASN_CACHE_FILE" => v.is_null() || v.as_str().is_some(),
             "DEBUG" => v.as_bool().is_some(),
+            // Domain → IP list: drop rows that are not `name: [ip, ...]`.
+            "DNS_TRUTH_FALLBACK" => match v {
+                serde_yaml::Value::Mapping(map) => {
+                    let bad: Vec<serde_yaml::Value> = map
+                        .iter()
+                        .filter(|(k, val)| {
+                            k.as_str().is_none()
+                                || !matches!(val, serde_yaml::Value::Sequence(s) if s.iter().all(|e| e.as_str().is_some()))
+                        })
+                        .map(|(k, _)| k.clone())
+                        .collect();
+                    for k in bad {
+                        map.remove(&k);
+                    }
+                    true
+                }
+                _ => false,
+            },
             // String lists: keep string elements (mirrors Python comment
             // stripping at load; a non-string element is ignored, not fatal).
             "DNS_CHECK_DOMAINS" | "DNS_AVAILABILITY_DOMAINS" | "DNS_KNOWN_RESOLVER_NAMES"
@@ -481,7 +514,7 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<String
             _ => true,
         };
         if !ok {
-            warnings.push(format!("{} has invalid value, using default", key));
+            warnings.push(ConfigWarning::InvalidValue { key: key.clone() });
             drop_keys.push(k.clone());
         }
     }
@@ -510,12 +543,12 @@ impl AppConfig {
             }
         };
 
-        let mut warnings = Vec::new();
+        let mut warnings: Vec<ConfigWarning> = Vec::new();
         for key in mapping.keys() {
             if let Some(k) = key.as_str() {
                 let upper = k.to_uppercase();
                 if !KNOWN_KEYS.contains(&upper.as_str()) {
-                    warnings.push(format!("Unknown config key: {}", k));
+                    warnings.push(ConfigWarning::UnknownKey { key: k.to_string() });
                 }
             }
         }
@@ -561,26 +594,40 @@ impl AppConfig {
         cfg
     }
 
+    /// The ClientHello profile the probes must present.
+    ///
+    /// Parsed here rather than at every call site; an unknown value has already
+    /// been reset with a warning in [`Self::clamp`].
+    pub fn fingerprint(&self) -> crate::net::fingerprint::TlsFingerprint {
+        crate::net::fingerprint::TlsFingerprint::parse(&self.tls_fingerprint).unwrap_or_default()
+    }
+
     fn clamp(&mut self) {
         if self.max_concurrent < 1 {
             self.max_concurrent = 50;
-            self.config_warnings.push("MAX_CONCURRENT < 1, reset to 50".to_string());
+            self.config_warnings.push(ConfigWarning::MaxConcurrentReset);
         }
         if self.ip_version != "ipv4" && self.ip_version != "ipv6" {
             self.ip_version = "ipv4".to_string();
-            self.config_warnings.push("IP_VERSION invalid, reset to ipv4".to_string());
+            self.config_warnings.push(ConfigWarning::IpVersionReset);
+        }
+        if crate::net::fingerprint::TlsFingerprint::parse(&self.tls_fingerprint).is_none() {
+            self.config_warnings.push(ConfigWarning::UnknownFingerprint {
+                value: self.tls_fingerprint.clone(),
+            });
+            self.tls_fingerprint = d_tls_fingerprint();
         }
         if !(1..=50).contains(&self.dns_stub_threshold) {
             self.dns_stub_threshold = 2;
-            self.config_warnings.push("DNS_STUB_THRESHOLD out of range 1..50, reset to 2".to_string());
+            self.config_warnings.push(ConfigWarning::StubThresholdReset);
         }
         if self.telegram_upload_port == 0 {
             self.telegram_upload_port = 443;
-            self.config_warnings.push("TELEGRAM_UPLOAD_PORT invalid, reset to 443".to_string());
+            self.config_warnings.push(ConfigWarning::UploadPortReset);
         }
         if self.telegram_dc_port == 0 {
             self.telegram_dc_port = 443;
-            self.config_warnings.push("TELEGRAM_DC_PORT invalid, reset to 443".to_string());
+            self.config_warnings.push(ConfigWarning::DcPortReset);
         }
         if self.fat_chunks_count < 1 {
             self.fat_chunks_count = 10;
@@ -889,7 +936,7 @@ mod tests {
         assert_eq!(cfg.max_concurrent, 50);
         assert_eq!(cfg.ip_version, "ipv4");
         assert!(cfg.connect_timeout > 0.0);
-        assert!(cfg.dns_probe_concurrency > 0);
+        assert!(cfg.dns_egress_concurrency > 0);
         assert_eq!(cfg.dns_stub_threshold, 2);
         assert_eq!(cfg.fat_chunks_count, 10);
         assert_eq!(cfg.telegram_dcs.len(), 5);
@@ -923,7 +970,7 @@ mod tests {
         assert_eq!(cfg.max_concurrent, 50);
         assert_eq!(cfg.ip_version, "ipv4");
         assert_eq!(cfg.connect_timeout, 8.0);
-        let text = cfg.config_warnings.join(" ");
+        let text = format!("{:?}", cfg.config_warnings);
         assert!(text.contains("MAX_CONCURRENT"), "{text}");
         assert!(text.contains("IP_VERSION"), "{text}");
         assert!(text.contains("CONNECT_TIMEOUT"), "{text}");
@@ -1011,9 +1058,17 @@ mod tests {
     #[test]
     fn test_embedded_lists_match_files() {
         let domains = embedded_domains();
-        assert_eq!(domains.len(), 36);
+        assert!(!domains.is_empty(), "the fallback ships a list");
         assert!(domains.contains(&"vk.ru".to_string()));
         assert!(domains.contains(&"www.instagram.com".to_string()));
+        // The list is data, not a constant - it grows and shrinks with the file,
+        // so pin the invariant instead of a count: no shipped line may be
+        // dropped by the cleaner.
+        let shipped = EMBEDDED_DOMAINS_TXT
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+            .count();
+        assert_eq!(domains.len(), shipped, "every shipped domain survives cleaning");
         let file_targets: Vec<Tcp16Target> =
             serde_json::from_str(include_str!("../../../tcp16.json")).unwrap();
         assert_eq!(embedded_tcp16_targets(), file_targets);

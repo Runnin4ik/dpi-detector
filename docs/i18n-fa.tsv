@@ -1,0 +1,315 @@
+# dpi-detector — файл локализации: English -> Farsi
+#
+# Как редактировать:
+#   * Меняйте ТОЛЬКО третью колонку (fa). Колонку key не трогайте: по ней
+#     правки вернутся в Rust-исходники (crates/dpi-core/src/i18n/).
+#   * Колонка en — эталонный английский текст, не менять.
+#   * Колонки разделены ОДНИМ символом табуляции (TAB). Табуляции внутри
+#     текста быть не должно. Строки не переносить.
+#   * Сохраняйте без изменений служебные вставки:
+#       \n            — перенос строки        (оставить как два символа)
+#       \x1b[36m...   — цвет терминала      (оставить как есть)
+#       {}            — подстановка значения (ровно столько, сколько в en)
+#       стрелки, кавычки, начальные/конечные пробелы, скобки — как в en.
+#     Если в en нет {}, не добавляйте его в fa.
+#   * Строки, где en и fa совпадают, — это статус-бейджи и протокольные
+#     токены (OK, TLS RST, TCP, UDP, DoH, SNI, ClientHello...). По правилу 4
+#     они НЕ переводятся: оставьте латиницей как есть.
+#   * Язык Farsi здесь — «финглиш»: только латиница, без диакритики.
+#     Персидская вязь/арабица сломает тест i18n::tests::test_finglish_is_latin_only
+#     и верстку таблиц (RTL). Допустимы только символы: ✓ × ⚠ ↑
+#   * Не удаляйте и не добавляйте строки; пустые значения недопустимы.
+#
+# Источник: crates/dpi-core/src/i18n/mod.rs (Messages, legend_sections_fa),
+#           crates/dpi-core/src/i18n/details.rs (detail.DET_*).
+# Формат: key <TAB> en <TAB> fa
+
+key	en	fa
+
+# ===== messages — интерфейс (Messages) =====
+messages.banner_subtitle	Rust Native DPI & Censorship Diagnostic Engine	Motore boomi-e tashkhis-e filtering va barresi-e amigh-e packet ha (DPI)
+messages.netinfo_title	Network & System Information	Ettela'ate shabake va system
+messages.dns_title	DNS Resolver Availability:	Vaziyat-e dastrasi be kargozarhaye DNS:
+messages.domain_title	TLS / SNI Domain Inspection Results:	Natayej-e barresi-e domain ha (TLS / SNI):
+messages.summary_title	Summary	Kholase-ye natayej
+messages.status	Status	Vaziyat
+messages.available	AVAILABLE	AVAILABLE
+messages.blocked	BLOCKED	BLOCKED
+messages.domain	Domain	Domain
+messages.stage	Stage	Marhale
+messages.bytes	Bytes (Tx/Rx)	Byte ha (ersal/daryaft)
+messages.duration	Duration	Moddat-e zaman
+messages.detail	Detail	Joz'iyat
+messages.provider	Provider	Ara'e-dahande
+messages.region	Region	Mantaghe
+messages.bypass_tools	DPI Bypass Tools	Abarhaye door zadan-e filtering
+messages.gateway	Default Gateway	Darvaze-ye pishfarz
+messages.menu_title	Parameters & test selection	Tanzimat va entekhab-e test ha
+messages.menu_language	Language	Zaban
+messages.menu_ip_version	IP version	IP version
+messages.menu_concurrency	Concurrency	Teedade worker ha
+messages.menu_hw_row	row	Peymayesh
+messages.menu_hw_change	change	Taghir
+messages.menu_hw_tests	tests	Test ha
+messages.menu_hw_start	start	Shoroo
+messages.menu_hw_quit	quit	Khorooj
+messages.menu_line_prompt	Enter selection [123]: 	Entekhab-e khod ra vared konid [123]: 
+messages.menu_invalid_line	Invalid input, running tests 1, 2, 3.	Voroodi-e na-motabar; test haye 1, 2, 3 ejra mishavand.
+messages.menu_need_one	Select at least one test	Hadaghal yek test ra entekhab konid
+messages.menu_test_netinfo	Network & system information	Ettela'ate shabake va system
+messages.menu_test_dns	DNS server availability	DNS server haye dar dastras
+messages.menu_test_domains	Website availability	Website haye dar dastras
+messages.menu_test_tcp	CDN & hosting availability (16 KB test)	CDN va hosting haye dar dastras
+messages.menu_test_sni	Whitelist SNI discovery	Jost o juye SNI haye whitelist
+messages.menu_test_telegram	Telegram availability	Dastrasi be Telegram
+messages.menu_test_legend	Status legend (help)	Rahnemaye barname
+messages.fingerprint_label	Fingerprint	Fingerprint
+messages.fingerprint_note	The CUSTOM profile reproduces a Firefox-like ClientHello shape; CHROME and SAFARI reproduce the curl-impersonate JA3 shapes Russian TSPU reportedly blocks (chrome 99-116 / edge 99-101 and safari 15.5-18.4 families). None is byte-for-byte a real browser — deeper fingerprinting (HTTP/2 settings, ALPN, record timing) can still distinguish them.	The CUSTOM profile reproduces a Firefox-like ClientHello shape; CHROME and SAFARI reproduce the curl-impersonate JA3 shapes Russian TSPU reportedly blocks (chrome 99-116 / edge 99-101 and safari 15.5-18.4 families). None is byte-for-byte a real browser - deeper fingerprinting (HTTP/2 settings, ALPN, record timing) can still distinguish them.
+messages.replies_label	replies	pasokh ha
+messages.blocked_short	blocked	masdood
+messages.mixed_short	mixed	tarkibi
+messages.legend_title	\nStatus legend:\n	\nRahnemaye vaziyat ha:\n
+messages.latest_version	✓ Latest version	✓ Akharin noskhe
+messages.author	Author:	Nivisande:
+messages.chat	Chat:	Goruh:
+messages.update_failed	× Failed to check for updates	× Khata dar barresi-e update ha
+messages.update_available	↑ New version available {}	↑ Noskhe-ye jadid dar dastras ast {}
+messages.update_current	✓ Up to date	✓ Akharin noskhe
+messages.checking_updates	Checking for updates...	Barresi-e update...
+messages.os	OS:	System-e amel:
+messages.system_dns	System DNS:	DNS system:
+messages.active_interface	Active interface:	Interface-e fa'al:
+messages.inactive_dns	Inactive DNS:	DNS-e gheyr-e fa'al:
+messages.router_resolver	Router resolver	Resolver-e router
+messages.upstream_vpn	Upstream VPN	Upstream VPN
+messages.wsl_proxy	WSL proxy	Proxy-e WSL
+messages.wsl_network	WSL network:	Shabake-ye WSL:
+messages.local_bypass	Local DPI bypass on device:	Door zadan-e mahalli-e DPI dar device:
+messages.not_detected	not detected	peyda nashod
+messages.unavailable	unavailable	dar dastras nist
+messages.subnet_label	Subnet:	Subnet:
+messages.ttlb_label	TTLB:	TTLB:
+messages.org_label	Org:	Org:
+messages.location_label	Location:	Location:
+messages.dns_check_title	DNS Server Availability Check	Barresi-e dar dastras boodan-e serverhaye DNS
+messages.doh_endpoints	DoH endpoints	Endpoint haye DoH
+messages.dot_endpoints	DoT endpoints	Endpoint haye DoT
+messages.udp_endpoints	UDP endpoints	Endpoint haye UDP
+messages.doh_min	DoH min	Hadaghal-e DoH
+messages.dot_min	DoT min	Hadaghal-e DoT
+messages.udp_min	UDP min	Hadaghal-e UDP
+messages.real_udp_resolver	Real UDP resolver	Resolver-e vaghe'i-e UDP
+messages.spoofing	Spoofing	Ja'l
+messages.timeout_label	timeout	mohlat
+messages.egress_na	egress N/A	egress N/A
+messages.partial_dns_warn	Partially available DNS servers (packet loss):	Serverhaye DNS ba dastrasi-e naghes (az dast raftan-e packet ha):
+messages.dns_truth_fallback_note	Reference IPs for part of the domains come from DNS_TRUTH_FALLBACK\n(config.yml): no encrypted DNS answered here, so they may be outdated.	IP haye reference baraye barkhi domain ha az DNS_TRUTH_FALLBACK\n(config.yml) miyayand: hich DNS-e encrypted pasokh nadad, pas momken ast ghadimi bashand.
+messages.dns_fakeip_warn	[!] DNS responses contain FakeIP\nDisable proxy/FakeIP during check for accurate assessment.	[!] Pasokh haye DNS shamel-e FakeIP hastand\nBaraye arzyabi-e daghigh, dar tool-e test proxy/FakeIP ra khamoosh konid.
+messages.dns_intercept_warn	[!] Your ISP intercepts DNS queries\nISP replaces UDP DNS responses with stubs or fake NXDOMAIN/EMPTY/TIMEOUT	[!] ISP shoma porsoju haye DNS ra intercept mikonad\nPasokh haye UDP ba blockpage ya pasokh haye ja'li jaygozin mishavand
+messages.dns_stub_ip_label	ISP blockpage IP: {}.	IP-e blockpage-e ISP: {}.
+messages.doh_recommendation	Recommendation: Configure DoH on your device/router if not already done.	Tavsiye: agar emkan darad DoH ra rooye device ya router-e khod fa'al konid.
+messages.non_socks_proxy_warn	Proxy is not SOCKS5 — UDP probes bypass proxy: UDP relay is not possible via HTTP proxy.\n	Proxy az no'e SOCKS5 nist - probe haye UDP mostaghim ersal mishavand: enteghal-e UDP az tarigh-e HTTP proxy momken nist.\n
+messages.blocked_domains_label	Blocked domains for check:	Domain haye masdood baraye barresi:
+messages.unblocked_domains_label	Unblocked domains for check:	Domain haye mojaz baraye barresi:
+messages.dns_independent_warn	WARNING: This is an independent check and does not use your configured DNS!\n	Tavajjoh: in yek test-e mostaghel ast va az DNS-e tanzim shode dar system-e shoma estefade nemikonad!\n
+messages.http	HTTP	HTTP
+messages.tls12	TLS1.2	TLS1.2
+messages.tls13	TLS1.3	TLS1.3
+messages.dns_info_title	[i] DNS RESOLUTION INFO:	[i] Ettela'ate tahlil-e DNS:
+messages.traffic_fakeip	Traffic intercepted by Fake-IP: for {} domains	Traffic tavasot-e Fake-IP intercept mishavad: baraye {} domain
+messages.dns_isp_stub	DNS returned ISP blockpage IP ({}): for {} domains	DNS IP-e blockpage-e ISP ra bargardand ({}): baraye {} domain
+messages.dns_local_ip	DNS returned local IPs (AdGuard/hosts?): ({}): for {} domains	DNS IP haye mahalli ra bargardand (AdGuard/hosts?): ({}): baraye {} domain
+messages.dns_fail_detected	DNS FAIL detected for {} sites	Khatay-e DNS FAIL baraye {} site moshahede shod
+messages.doh_flush_guide	Recommendation: Configure DoH on your device and router\n\nAfter configuring, flush DNS cache:\nWindows: ipconfig /flushdns\nmacOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\nLinux: sudo resolvectl flush-caches\n	Tavsiye: DoH ra rooye device va router-e khod tanzim konid\n\nPas az tanzim, cache-e DNS ra pak konid:\nWindows: ipconfig /flushdns\nmacOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\nLinux: sudo resolvectl flush-caches\n
+messages.tcp16_check_title	TCP 16–20 KB Block Check	Barresi-e masdoodsazi-e TCP 16-20KB
+messages.tcp_mixed_warn	Mixed results indicate ISP DPI load balancing	Natayej-e tarkibi neshane-dahande-ye load balancing-e DPI-e ISP ast
+messages.no_port_443_targets	No port 443 targets for whitelist SNI test.\n	Hich hadafi ba port-e 443 baraye test-e SNI-e whitelist vojud nadarad.\n
+messages.no_as_blocked	No AS blocked — SNI discovery not needed.\n	Hich AS-i masdood nashode ast - niyazi be jost o juye SNI nist.\n
+messages.ban_after_label	  ⚠ ban after	  ⚠ masdood ba'd az
+messages.ban_rate_limit	ban/rate-limit	masdood/rate-limit
+messages.sni_not_found	× SNI not found (all blocked)	× SNI peyda nashod (hame masdood hastand)
+messages.whitelist_found_summary	Found white SNI: in {} of {} blocked AS	SNI-e sefid peyda shod: dar {} az {} AS-e masdood
+messages.whitelist_none_summary	No white SNI found for any of {} blocked AS	Hich SNI-e sefidi baraye hich yek az {} AS-e masdood peyda nashod
+messages.whitelist_skipped	File whitelist_sni.txt empty or not found — test 4 skipped.\n	File-e whitelist_sni.txt khali ast ya peyda nashod - test-e 4 nadide gerefte shod.\n
+messages.telegram_check_title	Telegram Availability Check	Barresi-e dastrasi be Telegram
+messages.col_id	ID	ID
+messages.col_asn	ASN	ASN
+messages.batch_label	batch	batch
+messages.dc_col	DC	DC
+messages.ip_col	IP	IP
+messages.ping_col	Ping	Ping
+messages.download_label	Download	Download
+messages.upload_label	Upload  	Upload  
+messages.peak_label	peak	peak
+messages.avg_label	avg	avg
+messages.stall_after	, stall after {}s	, stall ba'd az {}s
+messages.unit_mb_s	MB/s	MB/s
+messages.unit_kb_s	KB/s	KB/s
+messages.unit_b_s	B/s	B/s
+messages.unit_mb	MB	MB
+messages.unit_kb	KB	KB
+messages.unit_b	B	B
+messages.ms_unit	ms	ms
+messages.summary_dns_avail	DNS availability	Dastrasi be DNS
+messages.summary_resolver_hijack	Resolver hijack	Ja'l-e resolver
+messages.summary_all	All	Hame
+messages.summary_fakeip_resp	FakeIP responses	Pasokh haye FakeIP
+messages.summary_ans_hijack	Answer hijack	Ja'l-e pasokh
+messages.summary_domains	Domains	Domain ha
+messages.summary_tg_download	TG Download	Download-e Telegram
+messages.summary_tg_upload	TG Upload	Upload-e Telegram
+messages.summary_tg_datacenters	TG Datacenters	Datacenter haye Telegram
+messages.menu_control_repeat	Repeat	Tekrar
+messages.menu_control_menu	Menu	Menu
+messages.menu_control_export	Export	Export
+messages.menu_control_exit	Exit	Khorooj
+messages.report_saved	✓ Report saved to {}	✓ Gozaresh dar {} zakhire shod
+messages.report_save_fail	Failed to save file: {}	Khata dar zakhire-e file: {}
+messages.invalid_tests_flag	Invalid value for --tests: '{}'. Only digits 0-6 are allowed.	Meghdar-e na-motabar baraye --tests: '{}'. Faghat agham-e 0 ta 6 mojaz hastand.
+messages.invalid_concurrency_flag	The --concurrency parameter must be an integer >= 1.	Parametr-e --concurrency bayad yek adad-e sahih >= 1 bashad.
+messages.tui_unavailable	\r\nInteractive menu (TUI) is unavailable in this terminal [{}].\r\nRun diagnostics using command-line arguments:\r\n\x1b[36m  dpi-detector -t 1\x1b[0m       — DNS servers test\r\n\x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — basic tests (DNS + sites + TCP16)\r\n\x1b[36m  dpi-detector -t 12345\x1b[0m   — all tests\r\n\x1b[36m  dpi-detector --help\x1b[0m     — full list of options\r\n\r\n	\r\nMenyuye interactive (TUI) dar in terminal dar dastras nist [{}].\r\nBarname ra ba parametr ha ejra konid:\r\n\x1b[36m  dpi-detector -t 1\x1b[0m       - test-e DNS server ha\r\n\x1b[36m  dpi-detector -t 1,2,3\x1b[0m   - test haye asasi (DNS + site ha + TCP16)\r\n\x1b[36m  dpi-detector -t 12345\x1b[0m   - hame-ye test ha\r\n\x1b[36m  dpi-detector --help\x1b[0m     - list-e kamel-e parametr ha\r\n\r\n
+messages.unavailable_ascii	unavailable	unavailable
+messages.proxy_in_use	Proxy in use	Proxy dar hal-e estefade ast
+messages.tui_reason_stdin	stdin is not a terminal (pipe or redirection)	stdin terminal nist (pipe ya redirect)
+messages.tui_reason_raw_mode	terminal does not support raw mode	terminal az raw mode poshtibani nemikonad
+messages.crash_title	\n=== DPI DETECTOR FATAL ERROR ===\n{}\n================================	\n=== KHATA-YE KOLI DAR DPI DETECTOR ===\n{}\n=====================================
+messages.crash_press_enter	Press Enter to close...	Baraye bastan Enter ra bezanid...
+messages.ipv6_not_configured	Error: IPv6 mode selected, but IPv6 is not configured on the system.	Khata: halat-e IPv6 entekhab shode ama rooye system tanzim nashode ast.
+messages.ipv6_switch_hint	Switch family to IPv4: IP_VERSION: ipv4 in config.yml or left/right arrow in menu.	Taghir be IPv4: meghdar-e IP_VERSION: ipv4 dar config.yml ya ba kelid haye jahat-nama dar menu.
+messages.fetching_net_info	Fetching network info...	Daryaft-e ettela'ate shabake...
+messages.net_info_unavailable	Network information unavailable.\n	Ettela'ate shabake dar dastras nist.\n
+messages.domains_check_header	Domain Availability Check	Barresi-e dastrasi be website ha
+messages.targets_label	Targets	Hadaf ha
+messages.stages_label	Stages	Marhale ha
+messages.checking_status	Checking...	Dar hal-e barresi...
+messages.phase_sni_base	Phase 1/2: Base check...	Marhale 1/2: barresi-e paye...
+messages.phase_sni_parallel	Phase 2/2: Parallel SNI discovery for {} AS (batch {}, top-{})...	Marhale 2/2: jost o juye movazi-e SNI baraye {} AS (daste {}, top-{})...
+messages.phase_telegram	Telegram availability check	Barresi-e dastrasi be Telegram
+messages.config_load_error_label	Warning loading config.yml:	Hoshdar dar load-e config.yml:
+messages.config_warning_label	Notice config.yml:	E'lam-e config.yml:
+messages.cfg_warn_unknown_key	Unknown config key: {}	Key-e config nashenakhte: {}
+messages.cfg_warn_invalid_value	{} has invalid value, using default	{} meghdar-e na-motabar darad, meghdar-e pishfarz estefade shod
+messages.cfg_warn_max_concurrent	MAX_CONCURRENT < 1, reset to 50	MAX_CONCURRENT < 1, be 50 reset shod
+messages.cfg_warn_ip_version	IP_VERSION invalid, reset to ipv4	IP_VERSION na-motabar ast, be ipv4 reset shod
+messages.cfg_warn_fingerprint	TLS_FINGERPRINT '{}' unknown, using rustls	TLS_FINGERPRINT '{}' nashenakhte, rustls estefade shod
+messages.cfg_warn_stub_threshold	DNS_STUB_THRESHOLD out of range 1..50, reset to 2	DNS_STUB_THRESHOLD kharej az baze 1..50 ast, be 2 reset shod
+messages.cfg_warn_upload_port	TELEGRAM_UPLOAD_PORT invalid, reset to 443	TELEGRAM_UPLOAD_PORT na-motabar ast, be 443 reset shod
+messages.cfg_warn_dc_port	TELEGRAM_DC_PORT invalid, reset to 443	TELEGRAM_DC_PORT na-motabar ast, be 443 reset shod
+messages.warn_unknown_lang	Warning: unknown --lang '{}' (expected ru|en|zh|fa|auto), using en	Hoshdar: --lang '{}' nashenakhte (entezar: ru|en|zh|fa|auto), en estefade shod
+messages.warn_unknown_fingerprint	Warning: unknown --fingerprint '{}' (expected rustls|custom|chrome|safari), using {}	Hoshdar: --fingerprint '{}' nashenakhte (entezar: rustls|custom|chrome|safari), {} estefade shod
+messages.press_enter_to_exit	Press Enter to exit...	Baraye khorooj Enter ra feshar dahid...
+messages.invalid_proxy_err	Invalid proxy {}: {}\n	Proxy-e na-motabar {}: {}\n
+messages.dns_servers_empty_skip	DNS_AVAILABILITY_SERVERS not set in config.yml — test skipped.\n	Meghdar-e DNS_AVAILABILITY_SERVERS dar config.yml taeen nashode ast - test nadide gerefte shod.\n
+messages.no_sni_label	(no SNI)	(bedoone SNI)
+messages.detail_timeout_word	Timeout	Mohlat
+messages.detail_read_timeout	Read timeout	Mohlat-e khandan
+messages.detail_write_timeout	Write timeout	Mohlat-e neveshtan
+messages.detail_at	at	dar
+messages.detail_isp_stub	ISP blockpage	Blockpage-e ISP
+messages.detail_local_ip	Local IP	IP-e mahalli
+messages.cli_about	High-performance DPI & censorship detection tool	Abzare sare' va kam-hafezeye tashkhis-e DPI va sansur
+messages.cli_help	Print help	Namayesh-e help
+messages.cli_version	Print version	Namayesh-e version
+messages.cli_usage_heading	Usage:	Estefade:
+messages.cli_usage	dpi-detector [OPTIONS]	dpi-detector [GOZINE HA]
+messages.cli_options_heading	Options	Gozine ha
+messages.cli_tests	Test suite selection string (e.g. '012', '1', '2')	String-e entekhab-e test ha (mesal: '012', '1', '2')
+messages.cli_json	Emit machine-readable JSON output	Khorooj-e JSON (machine-readable)
+messages.cli_verbose	Enable verbose / debug logging	Faal kardan-e log-e verbose/debug
+messages.cli_lang	Interface language (ru, en, zh, fa, auto). Default auto	Zaban-e barname (ru, en, zh, fa, auto). Pishfarz: auto
+messages.cli_profile	Regional censorship profile (ru, ir, cn, global)	Profile-e mantaghe-i-e sansur (ru, ir, cn, global)
+messages.cli_legend	Display diagnostic status legend and exit	Namayesh-e rahnemaye vaziyat ha va khorooj
+messages.cli_proxy	SOCKS5 proxy URL (e.g. socks5://127.0.0.1:1080)	URL-e proxy-e SOCKS5 (mesal: socks5://127.0.0.1:1080)
+messages.cli_concurrency	Concurrency limit for parallel requests	Hadde aksar-e darkhast haye hamzaman
+messages.cli_domain	Specific domain(s) to test (repeat the flag: -d vk.com -d ya.ru)	Domain haye khass baraye barresi (mitavanid tekrar konid: -d vk.com -d ya.ru)
+messages.cli_output	Output file path to save report	Masir-e file baraye zakhire-ye report
+messages.cli_domains	Path to custom domain list file	Masir-e file-e list-e domain ha
+messages.cli_tcp16	Path to custom TCP16 target file	Masir-e file-e target haye TCP16
+messages.cli_ascii	ASCII-only output for legacy consoles (no Unicode glyphs or borders)	Khorooj-e faghat ASCII baraye console haye ghadimi (bedun-e glyph ya border-e Unicode)
+messages.cli_fingerprint	TLS ClientHello fingerprint profile (rustls|custom|chrome|safari). custom is a Firefox-shaped ClientHello; chrome/safari reproduce the curl-impersonate JA3 shapes	Profile-e fingerprint-e TLS ClientHello (rustls|custom|chrome|safari). custom yek ClientHello-e Firefox-shape ast; chrome/safari JA3-e curl-impersonate ra bazsazi mikonand
+
+# ===== legend — таблица --legend =====
+legend.section.0	— TLS / DPI —	- TLS / DPI -
+legend.0.0.TLS_DPI	DPI tears down or tampers with TLS: EOF, bad record, handshake abort	Tajhizat-e DPI ettesal-e TLS ra dastkari ya ghat mikonand: EOF, record-e kharab, laghv-e mosafhe
+legend.0.1.TLS_MITM	Man-in-the-Middle: certificate substituted (Unknown CA, Cert expired, Hostname mismatch)	Hamle-ye mard-e miyani: gavahi-ye ja'li (marja'-e nashenakhte, monghazi, adam-e tatabogh-e name-e mizban)
+legend.0.2.TLS_BLOCK	TLS version or protocol blocked wholesale (protocol_version alert)	Masdoodsazi-e noskhe ya kole protocol-e TLS (ekhtar-e protocol_version)
+legend.0.3.TLS_RST	Active TCP RST on ClientHello (TLS handshake reset)	Baste-ye fa'al-e TCP RST pas az ersal-e ClientHello (reset-e mosafhe-ye TLS)
+legend.0.4.TLS_DROP	TLS handshake timeout — packets silently dropped (no RST)	Etmam-e mohlat-e mosafhe-ye TLS - packet ha hazf shodand
+legend.0.5.UNKNOWN	Unknown error (exception type in parentheses)	Khatay-e nashenakhte (no'-e khata dar parantez)
+legend.0.6.NO_TLS1.3	Server does not support TLS 1.3 (normal for old servers)	Kargozar az TLS 1.3 poshtibani nemikonad (tabi'i baraye kargozar-haye ghadimi)
+legend.section.1	— TCP / Connection —	- TCP / Ettesal -
+legend.1.0.TCP_RST	Connection reset (TCP RST from DPI or server)	Ettesal reset shod (baste-ye TCP RST tavasot-e filtering ya kargozar)
+legend.1.1.SYN_DROP	TCP connection timeout — SYN sent, no reply	Etmam-e mohlat-e ettesal-e TCP - baste-ye SYN ersal shod vali pasokhi nayamad
+legend.1.2.ABORT	Connection aborted (ConnectionAborted / BrokenPipe)	Ettesal laghv shod (ConnectionAborted / BrokenPipe)
+legend.1.3.REFUSED	TCP connection refused (ECONNREFUSED)	Ettesal-e TCP rad shod (ECONNREFUSED)
+legend.1.4.TIMEOUT	Timeout: SYN drop, read timeout or OS timeout	Etmam-e mohlat: dur andakhtan-e SYN, mohlat-e khandan ya khatay-e system
+legend.1.5.NET_UNREACH	No route to network (ICMP unreachable)	Masir-e shabake dar dastras nist (ICMP unreachable)
+legend.1.6.HOST_UNREACH	No route to host	Mizban dar dastras nist
+legend.1.7.OS_ERR	Other OS errors (errno)	Sayer-e khata-haye system-amel (errno)
+legend.section.2	— DNS —	- DNS -
+legend.2.0.DNS_FAIL	Domain did not resolve via the system resolver	Domain az tarigh-e kargozar-e system hal nashod
+legend.2.1.DNS_FAKE	Domain IP matches a known provider stub	Adres-e IP ba blockpage-e era'e-dahande motabeghat darad
+legend.2.2.TIMEOUT	DNS server did not answer in time	Kargozar-e DNS dar zaman-e mogharrar pasokh nadad
+legend.2.3.BLOCKED	DoH server blocked by provider (HTTP failed)	Kargozar-e DoH tavasot-e era'e-dahande masdood shode ast
+legend.2.4.NXDOMAIN	Domain does not exist according to this server	Be gofte-ye in kargozar, domain vojud nadarad
+legend.section.3	— HTTP / Blocks —	- HTTP / Masdoodsazi -
+legend.3.0.BLOCKED	HTTP 451 — Unavailable for legal reasons	Kode 451 HTTP - be dalayel-e ghanuni dar dastras nist
+legend.3.1.ISP_PAGE	Resolved IP is a provider stub (DNS spoofing)	Adres-e IP-e hal shode blockpage-e era'e-dahande ast
+legend.3.2.REDIR	Green — redirect to the same domain/subdomain (normal); Red — redirect to a foreign domain (suspicious)	Sabz - hedayat be haman domain (tabi'i); ghermez - hedayat be domain-e bigane (mashkuk)
+legend.section.4	— TCP 16-20KB test —	- Azmun-e TCP 16-20KB -
+legend.4.0.DETECTED	Connection break after sending 14–36 KB	Ghat'-e ettesal pas az ersal-e 14 ta 36 kilobyte
+legend.4.1.OK	All 10 requests (up to 40 KB) passed without a break	Har 10 darkhast (ta 40 kilobyte) bedun-e ghat'i anjam shodand
+legend.section.5	— Other —	- Sayer -
+legend.5.0.OK	Site reachable (200–4xx with no block signs)	Site dar dastras ast (kode 200-4xx bedun-e alayem-e filtering)
+legend.5.1.UNKNOWN	Unknown error (exception type in parentheses)	Khatay-e nashenakhte (no'-e khata dar parantez)
+legend.5.2.TIMEOUT	Server accepted the request but the reply never arrived: DPI break/throttling, packet loss or server overload	Pasokhi az kargozar dar zaman-e mogharrar naresid: ekhtelal/kondi-ye DPI, oft-e packet ya bar-e kargozar
+legend.5.3.POOL_TIMEOUT	Socket pool exhausted — lower MAX_CONCURRENT	Takmil-e zarfiyat-e socket ha - lotfan teedade worker ha ra kahesh dahid
+
+# ===== details — расшифровка DET_* в таблицах =====
+detail.DET_RST_HELLO|DET_STREAM_RST_HELLO	TCP RST on ClientHello	TCP RST roye ClientHello
+detail.DET_STREAM_EOF_HELLO	DPI closed the connection right after TLS ClientHello	DPI ettesal ra fauran pas az TLS ClientHello bast
+detail.DET_STREAM_RST_CONNECT	TCP RST received from DPI on connect	TCP RST az taraf-e DPI dar zaman-e ettesal
+detail.DET_TLS_DROP_HANDSHAKE	TLS DROP (connection dropped during TLS handshake)	TLS DROP (ettesal dar zaman-e TLS handshake ghat shod)
+detail.DET_TIMEOUT_CONN	TIMEOUT (connection timeout)	TIMEOUT (mohlat-e ettesal)
+detail.DET_TLS_RST_HELLO	TLS RST (connection reset after ClientHello)	TLS RST (ettesal pas az ClientHello reset shod)
+detail.DET_WRONG_VERSION	Response spoofing (Wrong Version)	Spoofing-e pasokh (Wrong Version)
+detail.DET_GARBAGE_DATA	Response spoofing (Garbage Data)	Spoofing-e pasokh (Garbage Data)
+detail.DET_SNI_BLOCK_UNREC	SNI block (unrecognized name)	Block-e SNI (unrecognized name)
+detail.DET_DPI_ALERT_HS_FAIL	DPI alert (handshake failure)	Alert-e DPI (handshake failure)
+detail.DET_PROTOCOL_VERSION_ALERT	Protocol version alert	Alert-e version-e protocol
+detail.DET_FAKE_TLS_ALERT	Fake TLS alert	Alert-e TLS-e ja'li
+detail.DET_NO_ROOT_CA	Missing root certificates	Certificate haye rishe vojud nadarad
+detail.DET_CERT_EXPIRED	Certificate expired	Certificate monghazi shode ast
+detail.DET_SELF_SIGNED	Self-signed certificate	Certificate-e self-signed
+detail.DET_HOSTNAME_MISMATCH	Hostname mismatch	Adam-e tatabogh-e hostname
+detail.DET_FAKE_CERT	Certificate spoofing	Spoofing-e certificate
+detail.DET_TRANSFER_EOF	Transfer EOF	Ghat'-e enteghal (EOF)
+detail.DET_HANDSHAKE_EOF	Quiet teardown (handshake EOF)	Ghat'-e khamush (handshake EOF)
+detail.DET_NO_TLS13	Server has no TLS 1.3	Server az TLS 1.3 poshtibani nemikonad
+detail.DET_POOL_TIMEOUT	Socket pool exhausted	Socket pool por shod
+detail.DET_TLS_HANDSHAKE_TIMEOUT	TLS handshake timeout	Mohlat-e TLS handshake
+detail.DET_TCP_SYN_TIMEOUT	TCP SYN timeout	Mohlat-e TCP SYN
+detail.DET_SEND_TIMEOUT	Send timeout	Mohlat-e ersal
+detail.DET_SYN_TIMEOUT_SHORT	SYN timeout	Mohlat-e SYN
+detail.DET_READ_TIMEOUT|DET_READ_TIMEOUT_WORD|DET_READ_TIMEOUT_WORD_CAPS	Read timeout	Mohlat-e khandan
+detail.DET_WRITE_TIMEOUT_WORD	Write timeout	Mohlat-e neveshtan
+detail.DET_TIMEOUT_WORD	Timeout	Mohlat
+detail.DET_ALERT_HANDSHAKE	Handshake alert	Alert-e handshake
+detail.DET_ALERT_SNI	SNI alert	Alert-e SNI
+detail.DET_ALERT_VERSION	Version alert	Alert-e version
+detail.DET_ALERT_TLS	TLS alert	Alert-e TLS
+detail.DET_UNKNOWN_CONN_FAILURE	Unknown connection failure	Khata-ye nashenakhte dar ettesal
+detail.DET_DOMAIN_NOT_FOUND	Domain not found	Domain peyda nashod
+detail.DET_DNS_TIMEOUT_UNAVAIL	DNS timeout/unavailable	DNS mohlat ya dar dastras nist
+detail.DET_DNS_ERROR	DNS error	Khata-ye DNS
+detail.DET_CONN_REFUSED	TCP connection refused	Ettesal-e TCP rad shod
+detail.DET_RST_AFTER_HANDSHAKE	TCP RST after handshake	TCP RST ba'd az handshake
+detail.DET_CONN_RESET	TCP connection reset	Ettesal-e TCP reset shod
+detail.DET_ABORTED|DET_TCP_ABORTED	Connection aborted	Ettesal laghv shod
+detail.DET_NET_UNREACH	Net unreachable	Shabake dar dastras nist
+detail.DET_HOST_UNREACH	Host unreachable	Mizban dar dastras nist
+detail.DET_IPV6_UNSUPPORTED	IPv6 not supported/disabled	IPv6 poshtibani nemishavad ya ghayr-e fa'al ast
+detail.DET_IPV6_NOT_SUPPORTED_SHORT	IPv6 not supported	IPv6 poshtibani nemishavad
+
+# ===== misc =====
+misc.fingerprint.rustls	rustls (default)	rustls (pishfarz)

@@ -1,6 +1,9 @@
 use std::env;
 use serde::{Deserialize, Serialize};
 
+mod details;
+pub use details::{detail_lines, detail_text};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
@@ -8,7 +11,7 @@ pub enum Language {
     En,
     Ru,
     Zh,
-    Es,
+    Fa,
 }
 
 impl Language {
@@ -16,7 +19,7 @@ impl Language {
         Self::En,
         Self::Ru,
         Self::Zh,
-        Self::Es,
+        Self::Fa,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -24,7 +27,7 @@ impl Language {
             Self::En => "English",
             Self::Ru => "Русский",
             Self::Zh => "中文",
-            Self::Es => "Español",
+            Self::Fa => "Farsi",
         }
     }
     pub fn label_ascii(&self) -> &'static str {
@@ -32,7 +35,7 @@ impl Language {
             Self::En => "English",
             Self::Ru => "Русский",
             Self::Zh => "Chinese",
-            Self::Es => "Espanol",
+            Self::Fa => "Farsi",
         }
     }
     pub fn from_code(code: &str) -> Option<Self> {
@@ -40,7 +43,7 @@ impl Language {
             "en" | "en_us" | "en_gb" | "english" => Some(Self::En),
             "ru" | "ru_ru" | "russian" => Some(Self::Ru),
             "zh" | "zh_cn" | "zh_hans" | "chinese" => Some(Self::Zh),
-            "es" | "es_es" | "es_cu" | "spanish" => Some(Self::Es),
+            "fa" | "fa_ir" | "farsi" | "persian" => Some(Self::Fa),
             _ => None,
         }
     }
@@ -50,7 +53,7 @@ impl Language {
             Self::En => "en",
             Self::Ru => "ru",
             Self::Zh => "zh",
-            Self::Es => "es",
+            Self::Fa => "fa",
         }
     }
 
@@ -59,7 +62,7 @@ impl Language {
             Self::En => "English",
             Self::Ru => "Русский",
             Self::Zh => "简体中文",
-            Self::Es => "Español",
+            Self::Fa => "Farsi",
         }
     }
 
@@ -116,13 +119,8 @@ pub struct Messages {
     pub netinfo_title: &'static str,
     pub dns_title: &'static str,
     pub domain_title: &'static str,
-    pub tcp16_title: &'static str,
-    pub telegram_title: &'static str,
     pub summary_title: &'static str,
-    pub resolver: &'static str,
     pub status: &'static str,
-    pub ip_count: &'static str,
-    pub latency: &'static str,
     pub available: &'static str,
     pub blocked: &'static str,
     pub domain: &'static str,
@@ -130,20 +128,14 @@ pub struct Messages {
     pub bytes: &'static str,
     pub duration: &'static str,
     pub detail: &'static str,
-    pub target: &'static str,
     pub provider: &'static str,
     pub region: &'static str,
-    pub speed: &'static str,
     pub bypass_tools: &'static str,
     pub gateway: &'static str,
-    pub syn_drop_desc: &'static str,
-    pub tcp_rst_desc: &'static str,
-    pub tls_rst_desc: &'static str,
-    pub tls_drop_desc: &'static str,
-    pub tls_alert_desc: &'static str,
-    pub http_blocked_desc: &'static str,
-    pub tcp16_drop_desc: &'static str,
-    pub unreachable_desc: &'static str,
+
+
+
+
     pub menu_title: &'static str,
     pub menu_language: &'static str,
     pub menu_ip_version: &'static str,
@@ -163,6 +155,21 @@ pub struct Messages {
     pub menu_test_sni: &'static str,
     pub menu_test_telegram: &'static str,
     pub menu_test_legend: &'static str,
+    pub menu_test_burst: &'static str,
+    pub burst_settings_title: &'static str,
+    pub burst_field_attempts: &'static str,
+    pub burst_field_timeout: &'static str,
+    pub burst_field_domain: &'static str,
+    pub burst_domain_placeholder: &'static str,
+    pub burst_domain_default_hint: &'static str,
+    pub burst_field_profiles: &'static str,
+    pub burst_profiles_all: &'static str,
+    pub burst_title: &'static str,
+    pub burst_attempts_label: &'static str,
+    pub burst_summary_label: &'static str,
+    pub burst_summary_value: &'static str,
+    pub fingerprint_label: &'static str,
+    pub fingerprint_note: &'static str,
     pub lang: Language,
     pub replies_label: &'static str,
     pub blocked_short: &'static str,
@@ -173,6 +180,9 @@ pub struct Messages {
     pub latest_version: &'static str,
     pub author: &'static str,
     pub chat: &'static str,
+    pub update_failed: &'static str,
+    pub update_available: &'static str,
+    pub update_current: &'static str,
     pub checking_updates: &'static str,
 
     // NetInfo panel
@@ -189,6 +199,10 @@ pub struct Messages {
     pub unavailable: &'static str,
 
     // DNS Endpoints & Availability
+    pub subnet_label: &'static str,
+    pub ttlb_label: &'static str,
+    pub org_label: &'static str,
+    pub location_label: &'static str,
     pub dns_check_title: &'static str,
     pub doh_endpoints: &'static str,
     pub dot_endpoints: &'static str,
@@ -201,6 +215,9 @@ pub struct Messages {
     pub timeout_label: &'static str,
     pub egress_na: &'static str,
     pub partial_dns_warn: &'static str,
+    /// Shown when the substitution reference came from DNS_TRUTH_FALLBACK
+    /// instead of a live encrypted-DNS answer.
+    pub dns_truth_fallback_note: &'static str,
     pub dns_fakeip_warn: &'static str,
     pub dns_intercept_warn: &'static str,
     pub dns_stub_ip_label: &'static str,
@@ -235,6 +252,9 @@ pub struct Messages {
 
     // Telegram
     pub telegram_check_title: &'static str,
+    pub col_id: &'static str,
+    pub col_asn: &'static str,
+    pub batch_label: &'static str,
     pub dc_col: &'static str,
     pub ip_col: &'static str,
     pub ping_col: &'static str,
@@ -243,6 +263,12 @@ pub struct Messages {
     pub peak_label: &'static str,
     pub avg_label: &'static str,
     pub stall_after: &'static str,
+    pub unit_mb_s: &'static str,
+    pub unit_kb_s: &'static str,
+    pub unit_b_s: &'static str,
+    pub unit_mb: &'static str,
+    pub unit_kb: &'static str,
+    pub unit_b: &'static str,
     pub ms_unit: &'static str,
 
     // Summary
@@ -266,37 +292,85 @@ pub struct Messages {
     pub invalid_tests_flag: &'static str,
     pub invalid_concurrency_flag: &'static str,
     pub tui_unavailable: &'static str,
+    pub unavailable_ascii: &'static str,
+    pub proxy_in_use: &'static str,
+    pub tui_reason_stdin: &'static str,
+    pub tui_reason_raw_mode: &'static str,
+    pub crash_title: &'static str,
+    pub crash_press_enter: &'static str,
     pub ipv6_not_configured: &'static str,
     pub ipv6_switch_hint: &'static str,
     pub fetching_net_info: &'static str,
     pub net_info_unavailable: &'static str,
     pub domains_check_header: &'static str,
     pub targets_label: &'static str,
-    pub phase_dns: &'static str,
-    pub phase_tls13: &'static str,
-    pub phase_tls12: &'static str,
-    pub phase_http: &'static str,
+    pub stages_label: &'static str,
     pub checking_status: &'static str,
     pub phase_sni_base: &'static str,
     pub phase_sni_parallel: &'static str,
     pub phase_telegram: &'static str,
     pub config_load_error_label: &'static str,
     pub config_warning_label: &'static str,
+    pub cfg_warn_unknown_key: &'static str,
+    pub cfg_warn_invalid_value: &'static str,
+    pub cfg_warn_max_concurrent: &'static str,
+    pub cfg_warn_ip_version: &'static str,
+    pub cfg_warn_fingerprint: &'static str,
+    pub cfg_warn_stub_threshold: &'static str,
+    pub cfg_warn_upload_port: &'static str,
+    pub cfg_warn_dc_port: &'static str,
+    pub warn_unknown_lang: &'static str,
+    pub warn_unknown_fingerprint: &'static str,
     pub press_enter_to_exit: &'static str,
     pub invalid_proxy_err: &'static str,
     pub dns_servers_empty_skip: &'static str,
     pub no_sni_label: &'static str,
+    pub detail_timeout_word: &'static str,
+    pub detail_read_timeout: &'static str,
+    pub detail_write_timeout: &'static str,
+    pub detail_at: &'static str,
+
+    pub detail_isp_stub: &'static str,
+    pub detail_local_ip: &'static str,
+    pub cli_about: &'static str,
+    pub cli_help: &'static str,
+    pub cli_version: &'static str,
+    pub cli_usage_heading: &'static str,
+    pub cli_usage: &'static str,
+    pub cli_options_heading: &'static str,
+    pub cli_tests: &'static str,
+    pub cli_json: &'static str,
+    pub cli_verbose: &'static str,
+    pub cli_lang: &'static str,
+    pub cli_profile: &'static str,
+    pub cli_legend: &'static str,
+    pub cli_proxy: &'static str,
+    pub cli_concurrency: &'static str,
+    pub cli_domain: &'static str,
+    pub cli_output: &'static str,
+    pub cli_burst: &'static str,
+    pub cli_burst_timeout: &'static str,
+    pub cli_burst_profiles: &'static str,
+    pub cli_domains: &'static str,
+    pub cli_tcp16: &'static str,
+    pub cli_ascii: &'static str,
+    pub cli_fingerprint: &'static str,
+
 }
 
 impl Messages {
     pub fn phase_text(&self, phase: crate::PhaseId) -> String {
         match phase {
-            crate::PhaseId::DnsAvailability => self.checking_status.to_string(),
-            crate::PhaseId::DomainDns => self.phase_dns.to_string(),
-            crate::PhaseId::DomainTls13 => self.phase_tls13.to_string(),
-            crate::PhaseId::DomainTls12 => self.phase_tls12.to_string(),
-            crate::PhaseId::DomainHttp => self.phase_http.to_string(),
-            crate::PhaseId::Tcp16 => self.checking_status.to_string(),
+            // Test 1 labels itself with the block tokens UDP/DoH/DoT/EGRESS,
+            // which say more than any translation of "checking" would.
+            crate::PhaseId::DnsAvailability => "DNS".to_string(),
+            // Test 2 stages label themselves with their canonical token: they
+            // share one line, where a sentence per stage would not fit.
+            crate::PhaseId::DomainDns => crate::ProgressBlock::DomainDns.token().to_string(),
+            crate::PhaseId::DomainTls13 => crate::ProgressBlock::DomainTls13.token().to_string(),
+            crate::PhaseId::DomainTls12 => crate::ProgressBlock::DomainTls12.token().to_string(),
+            crate::PhaseId::DomainHttp => crate::ProgressBlock::DomainHttp.token().to_string(),
+            crate::PhaseId::Tcp16 => self.tcp16_check_title.to_string(),
             crate::PhaseId::SniBase => self.phase_sni_base.to_string(),
             crate::PhaseId::SniParallel { detected_as, batch, top_n } => {
                 self.phase_sni_parallel
@@ -332,13 +406,8 @@ pub fn get_messages(lang: Language) -> Messages {
             netinfo_title: "Network & System Information",
             dns_title: "DNS Resolver Availability:",
             domain_title: "TLS / SNI Domain Inspection Results:",
-            tcp16_title: "TCP 16–20 KB Window Throttling Results:",
-            telegram_title: "Telegram Data Centers Availability:",
             summary_title: "Summary",
-            resolver: "Resolver",
             status: "Status",
-            ip_count: "IP Count",
-            latency: "Latency",
             available: "AVAILABLE",
             blocked: "BLOCKED",
             domain: "Domain",
@@ -346,20 +415,10 @@ pub fn get_messages(lang: Language) -> Messages {
             bytes: "Bytes (Tx/Rx)",
             duration: "Duration",
             detail: "Detail",
-            target: "Target",
             provider: "Provider",
             region: "Region",
-            speed: "Speed",
             bypass_tools: "DPI Bypass Tools",
             gateway: "Default Gateway",
-            syn_drop_desc: "SYN DROP (Middlebox dropped TCP SYN packet)",
-            tcp_rst_desc: "TCP RST (Connection reset by DPI during connect)",
-            tls_rst_desc: "TLS RST (Reset after ClientHello / SNI block)",
-            tls_drop_desc: "TLS DROP (Connection dropped during TLS handshake)",
-            tls_alert_desc: "TLS ALERT (Certificate error or fatal TLS alert)",
-            http_blocked_desc: "HTTP BLOCK (ISP blockpage redirect detected)",
-            tcp16_drop_desc: "TCP16 DROP (Window throttled or connection dropped)",
-            unreachable_desc: "UNREACHABLE (Network route unreachable)",
             menu_title: "Parameters & test selection",
             menu_language: "Language",
             menu_ip_version: "IP version",
@@ -379,6 +438,21 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_test_sni: "Whitelist SNI discovery",
             menu_test_telegram: "Telegram availability",
             menu_test_legend: "Status legend (help)",
+            menu_test_burst: "Fingerprint stress (burst)",
+            burst_settings_title: "Test 7 settings",
+            burst_field_attempts: "Simultaneous requests",
+            burst_field_timeout: "Timeout, s",
+            burst_field_domain: "Domain to test",
+            burst_domain_placeholder: "Press → to start typing",
+            burst_domain_default_hint: "By default — all domains",
+            burst_field_profiles: "Fingerprints",
+            burst_profiles_all: "all",
+            burst_title: "Simultaneous handshakes (fingerprint stress)",
+            burst_attempts_label: "Requests at once",
+            burst_summary_label: "Stress",
+            burst_summary_value: "{} of {} handshakes answered · hosts with losses: {}",
+            fingerprint_label: "Fingerprint",
+            fingerprint_note: "The FIREFOX profile reproduces a Firefox 148 ClientHello shape; CHROME and SAFARI reproduce the curl-impersonate JA3 shapes Russian TSPU reportedly blocks (chrome 99-116 / edge 99-101 and safari 15.5-18.4 families). None is byte-for-byte a real browser — deeper fingerprinting (HTTP/2 settings, ALPN, record timing) can still distinguish them.",
             lang: Language::En,
             replies_label: "replies",
             blocked_short: "blocked",
@@ -388,6 +462,10 @@ pub fn get_messages(lang: Language) -> Messages {
             latest_version: "✓ Latest version",
             author: "Author:",
             chat: "Chat:",
+
+            update_failed: "× Failed to check for updates",
+            update_available: "↑ New version available {}",
+            update_current: "✓ Up to date",
             checking_updates: "Checking for updates...",
             os: "OS:",
             system_dns: "System DNS:",
@@ -401,6 +479,11 @@ pub fn get_messages(lang: Language) -> Messages {
             not_detected: "not detected",
             unavailable: "unavailable",
 
+
+            subnet_label: "Subnet:",
+            ttlb_label: "TTLB:",
+            org_label: "Org:",
+            location_label: "Location:",
             dns_check_title: "DNS Server Availability Check",
             doh_endpoints: "DoH endpoints",
             dot_endpoints: "DoT endpoints",
@@ -413,6 +496,7 @@ pub fn get_messages(lang: Language) -> Messages {
             timeout_label: "timeout",
             egress_na: "egress N/A",
             partial_dns_warn: "Partially available DNS servers (packet loss):",
+            dns_truth_fallback_note: "Reference IPs for part of the domains come from DNS_TRUTH_FALLBACK\n(config.yml): no encrypted DNS answered here, so they may be outdated.",
             dns_fakeip_warn: "[!] DNS responses contain FakeIP\nDisable proxy/FakeIP during check for accurate assessment.",
             dns_intercept_warn: "[!] Your ISP intercepts DNS queries\nISP replaces UDP DNS responses with stubs or fake NXDOMAIN/EMPTY/TIMEOUT",
             dns_stub_ip_label: "ISP blockpage IP: {}.",
@@ -444,6 +528,10 @@ pub fn get_messages(lang: Language) -> Messages {
             whitelist_skipped: "File whitelist_sni.txt empty or not found — test 4 skipped.\n",
 
             telegram_check_title: "Telegram Availability Check",
+
+            col_id: "ID",
+            col_asn: "ASN",
+            batch_label: "batch",
             dc_col: "DC",
             ip_col: "IP",
             ping_col: "Ping",
@@ -452,6 +540,13 @@ pub fn get_messages(lang: Language) -> Messages {
             peak_label: "peak",
             avg_label: "avg",
             stall_after: ", stall after {}s",
+
+            unit_mb_s: "MB/s",
+            unit_kb_s: "KB/s",
+            unit_b_s: "B/s",
+            unit_mb: "MB",
+            unit_kb: "KB",
+            unit_b: "B",
             ms_unit: "ms",
 
             summary_dns_avail: "DNS availability",
@@ -470,42 +565,81 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_control_exit: "Exit",
             report_saved: "✓ Report saved to {}",
             report_save_fail: "Failed to save file: {}",
-            invalid_tests_flag: "Invalid value for --tests: '{}'. Only digits 0-6 are allowed.",
+            invalid_tests_flag: "Invalid value for --tests: '{}'. Only digits 0-7 are allowed.",
             invalid_concurrency_flag: "The --concurrency parameter must be an integer >= 1.",
-            tui_unavailable: "TUI is not available in this terminal. Run with parameters, e.g.: dpi-detector -t 1,2,3 (see dpi-detector --help).",
+            tui_unavailable: "\r\nInteractive menu (TUI) is unavailable in this terminal [{}].\r\nRun diagnostics using command-line arguments:\r\n\x1b[36m  dpi-detector -t 1\x1b[0m       — DNS servers test\r\n\x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — basic tests (DNS + sites + TCP16)\r\n\x1b[36m  dpi-detector -t 12345\x1b[0m   — all tests\r\n\x1b[36m  dpi-detector --help\x1b[0m     — full list of options\r\n\r\n",
+
+            unavailable_ascii: "unavailable",
+            proxy_in_use: "Proxy in use",
+            tui_reason_stdin: "stdin is not a terminal (pipe or redirection)",
+            tui_reason_raw_mode: "terminal does not support raw mode",
+            crash_title: "\n=== DPI DETECTOR FATAL ERROR ===\n{}\n================================",
+            crash_press_enter: "Press Enter to close...",
             ipv6_not_configured: "Error: IPv6 mode selected, but IPv6 is not configured on the system.",
             ipv6_switch_hint: "Switch family to IPv4: IP_VERSION: ipv4 in config.yml or left/right arrow in menu.",
             fetching_net_info: "Fetching network info...",
             net_info_unavailable: "Network information unavailable.\n",
             domains_check_header: "Domain Availability Check",
             targets_label: "Targets",
-            phase_dns: "Phase 0/3: DNS resolve...",
-            phase_tls13: "Phase 1/3: TLS 1.3...",
-            phase_tls12: "Phase 2/3: TLS 1.2...",
-            phase_http: "Phase 3/3: HTTP...",
+            stages_label: "Stages",
             checking_status: "Checking...",
             phase_sni_base: "Phase 1/2: Base check...",
             phase_sni_parallel: "Phase 2/2: Parallel SNI discovery for {} AS (batch {}, top-{})...",
             phase_telegram: "Telegram availability check",
             config_load_error_label: "Warning loading config.yml:",
             config_warning_label: "Notice config.yml:",
+            cfg_warn_unknown_key: "Unknown config key: {}",
+            cfg_warn_invalid_value: "{} has invalid value, using default",
+            cfg_warn_max_concurrent: "MAX_CONCURRENT < 1, reset to 50",
+            cfg_warn_ip_version: "IP_VERSION invalid, reset to ipv4",
+            cfg_warn_fingerprint: "TLS_FINGERPRINT '{}' unknown, using rustls",
+            cfg_warn_stub_threshold: "DNS_STUB_THRESHOLD out of range 1..50, reset to 2",
+            cfg_warn_upload_port: "TELEGRAM_UPLOAD_PORT invalid, reset to 443",
+            cfg_warn_dc_port: "TELEGRAM_DC_PORT invalid, reset to 443",
+
+            warn_unknown_lang: "Warning: unknown --lang '{}' (expected ru|en|zh|fa|auto), using en",
+            warn_unknown_fingerprint: "Warning: unknown --fingerprint '{}' (expected rustls|custom|chrome|safari), using {}",
             press_enter_to_exit: "Press Enter to exit...",
             invalid_proxy_err: "Invalid proxy {}: {}\n",
             dns_servers_empty_skip: "DNS_AVAILABILITY_SERVERS not set in config.yml — test skipped.\n",
             no_sni_label: "(no SNI)",
+            detail_timeout_word: "Timeout",
+            detail_read_timeout: "Read timeout",
+            detail_write_timeout: "Write timeout",
+            detail_at: "at",
+            detail_isp_stub: "ISP blockpage",
+            detail_local_ip: "Local IP",
+            cli_about: "High-performance DPI & censorship detection tool",
+            cli_help: "Print help",
+            cli_version: "Print version",
+            cli_usage_heading: "Usage:",
+            cli_usage: "dpi-detector [OPTIONS]",
+            cli_options_heading: "Options",
+            cli_tests: "Test suite selection string (e.g. '012', '1', '2')",
+            cli_json: "Emit machine-readable JSON output",
+            cli_verbose: "Enable verbose / debug logging",
+            cli_lang: "Interface language (ru, en, zh, fa, auto). Default auto",
+            cli_profile: "Regional censorship profile (ru, ir, cn, global)",
+            cli_legend: "Display diagnostic status legend and exit",
+            cli_proxy: "SOCKS5 proxy URL (e.g. socks5://127.0.0.1:1080)",
+            cli_concurrency: "Concurrency limit for parallel requests",
+            cli_domain: "Specific domain(s) to test (repeat the flag: -d vk.com -d ya.ru)",
+            cli_output: "Output file path to save report",
+            cli_burst: "Fingerprint stress (test 7): simultaneous requests per round [default: 4]",
+            cli_burst_timeout: "Test 7: timeout of one handshake, seconds [default: 8]",
+            cli_burst_profiles: "Test 7 fingerprints: all|rustls,custom,chrome,safari [default: all]",
+            cli_domains: "Path to custom domain list file",
+            cli_tcp16: "Path to custom TCP16 target file",
+            cli_ascii: "ASCII-only output for legacy consoles (no Unicode glyphs or borders)",
+            cli_fingerprint: "TLS ClientHello fingerprint profile (rustls|custom|chrome|safari). custom is a Firefox-shaped ClientHello; chrome/safari reproduce the curl-impersonate JA3 shapes",
         },
         Language::Ru => Messages {
             banner_subtitle: "Детектор блокировок DPI и цензуры (Rust Native)",
             netinfo_title: "Информация о сети и системе",
             dns_title: "Доступность DNS-резолверов:",
             domain_title: "Результаты проверки доменов (TLS / SNI):",
-            tcp16_title: "Результаты проверки TCP 16–20 KB блокировки:",
-            telegram_title: "Доступность датацентров Telegram:",
             summary_title: "Итог",
-            resolver: "Резолвер",
             status: "Статус",
-            ip_count: "Кол-во IP",
-            latency: "Задержка",
             available: "AVAILABLE",
             blocked: "BLOCKED",
             domain: "Домен",
@@ -513,22 +647,12 @@ pub fn get_messages(lang: Language) -> Messages {
             bytes: "Байты (Tx/Rx)",
             duration: "Время",
             detail: "Детали",
-            target: "Цель",
             provider: "Провайдер",
             region: "Регион",
-            speed: "Скорость",
             bypass_tools: "Обходы DPI",
             gateway: "Основной шлюз",
-            syn_drop_desc: "SYN DROP (ТСПУ дропнул пакет TCP SYN)",
-            tcp_rst_desc: "TCP RST (ТСПУ сбросил TCP-соединение)",
-            tls_rst_desc: "TLS RST (ТСПУ разорвал TLS после ClientHello/SNI)",
-            tls_drop_desc: "TLS DROP (ТСПУ дропнул пакеты во время TLS handshake)",
-            tls_alert_desc: "TLS ALERT (Ошибка сертификата или фатальный алерт)",
-            http_blocked_desc: "HTTP BLOCK (Обнаружен редирект на заглушку провайдера)",
-            tcp16_drop_desc: "TCP16 DROP (Сброс соединения при передаче большого окна)",
-            unreachable_desc: "UNREACHABLE (Сеть или хост недоступны)",
             menu_title: "Параметры и выбор тестов",
-            menu_language: "Language",
+            menu_language: "Язык",
             menu_ip_version: "IP-версия",
             menu_concurrency: "Параллельность",
             menu_hw_row: "строка",
@@ -546,6 +670,21 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_test_sni: "Поиск белых SNI",
             menu_test_telegram: "Доступность Telegram",
             menu_test_legend: "Легенда статусов (справка)",
+            menu_test_burst: "Стресс отпечатка (burst)",
+            burst_settings_title: "Настройки теста 7",
+            burst_field_attempts: "Одновременных запросов",
+            burst_field_timeout: "Таймаут, с",
+            burst_field_domain: "Домен для тестирования",
+            burst_domain_placeholder: "Переключитесь для ввода",
+            burst_domain_default_hint: "По умолчанию — все домены",
+            burst_field_profiles: "Отпечатки",
+            burst_profiles_all: "все",
+            burst_title: "Одновременные рукопожатия (стресс отпечатка)",
+            burst_attempts_label: "Запросов сразу",
+            burst_summary_label: "Стресс",
+            burst_summary_value: "{} из {} рукопожатий ответили · доменов с потерями: {}",
+            fingerprint_label: "Отпечаток TLS",
+            fingerprint_note: "Профиль FIREFOX воспроизводит форму ClientHello Firefox 148; CHROME и SAFARI — JA3-формы curl-impersonate, которые, по сообщениям, блокирует российский TSPU (семейства chrome 99-116 / edge 99-101 и safari 15.5-18.4). Ни один не является побайтовой копией настоящего браузера — более глубокий фингерпринтинг (настройки HTTP/2, ALPN, тайминги записей) всё ещё может их отличить.",
             lang: Language::Ru,
             replies_label: "ответов",
             blocked_short: "блок.",
@@ -555,19 +694,28 @@ pub fn get_messages(lang: Language) -> Messages {
             latest_version: "✓ Актуальная версия",
             author: "Автор:",
             chat: "Чат:",
+
+            update_failed: "× Не удалось проверить обновления",
+            update_available: "↑ Доступна новая версия {}",
+            update_current: "✓ Актуальная версия",
             checking_updates: "Проверка обновлений...",
             os: "ОС:",
             system_dns: "Системный DNS:",
             active_interface: "Активный интерфейс:",
             inactive_dns: "Неактивные DNS:",
             router_resolver: "Резолвер роутера",
-            upstream_vpn: "Upstream VPN",
+            upstream_vpn: "Внешний VPN",
             wsl_proxy: "прокси WSL",
             wsl_network: "WSL-сеть:",
             local_bypass: "Локальный обход DPI на устройстве:",
             not_detected: "не обнаружен",
             unavailable: "недоступен",
 
+
+            subnet_label: "Subnet:",
+            ttlb_label: "TTLB:",
+            org_label: "Org:",
+            location_label: "Location:",
             dns_check_title: "Проверка доступности DNS-серверов",
             doh_endpoints: "DoH эндпоинты",
             dot_endpoints: "DoT эндпоинты",
@@ -580,6 +728,7 @@ pub fn get_messages(lang: Language) -> Messages {
             timeout_label: "таймаут",
             egress_na: "выход н/д",
             partial_dns_warn: "Частично доступные DNS-серверы (потери запросов):",
+            dns_truth_fallback_note: "Эталонные IP части доменов взяты из DNS_TRUTH_FALLBACK\n(config.yml): зашифрованный DNS здесь не ответил, они могут быть устаревшими.",
             dns_fakeip_warn: "[!] DNS-ответы содержат FakeIP\nДля честной оценки DNS отключите прокси/FakeIP на время проверки.",
             dns_intercept_warn: "[!] Ваш интернет-провайдер перехватывает DNS-запросы\nПровайдер подменяет ответы UDP DNS на заглушки или ложные NXDOMAIN/EMPTY/TIMEOUT",
             dns_stub_ip_label: "IP адрес заглушки провайдера - {}.",
@@ -611,6 +760,10 @@ pub fn get_messages(lang: Language) -> Messages {
             whitelist_skipped: "Файл whitelist_sni.txt пуст или не найден — тест 4 пропущен.\n",
 
             telegram_check_title: "Проверка доступности Telegram",
+
+            col_id: "ID",
+            col_asn: "ASN",
+            batch_label: "batch",
             dc_col: "DC",
             ip_col: "IP",
             ping_col: "Пинг",
@@ -619,6 +772,13 @@ pub fn get_messages(lang: Language) -> Messages {
             peak_label: "пик",
             avg_label: "ср.",
             stall_after: ", обрыв после {}с",
+
+            unit_mb_s: "МБ/с",
+            unit_kb_s: "КБ/с",
+            unit_b_s: "Б/с",
+            unit_mb: "МБ",
+            unit_kb: "КБ",
+            unit_b: "Б",
             ms_unit: "мс",
 
             summary_dns_avail: "DNS доступность",
@@ -637,42 +797,81 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_control_exit: "Выход",
             report_saved: "✓ Отчёт сохранён в {}",
             report_save_fail: "Не удалось сохранить файл: {}",
-            invalid_tests_flag: "Недопустимое значение --tests: '{}'. Допустимы только цифры 0-6.",
+            invalid_tests_flag: "Недопустимое значение --tests: '{}'. Допустимы только цифры 0-7.",
             invalid_concurrency_flag: "Параметр --concurrency должен быть целым числом >= 1.",
-            tui_unavailable: "TUI недоступно в этом терминале. Запустите с параметрами, например: dpi-detector -t 1,2,3 (см. dpi-detector --help).",
+            tui_unavailable: "\r\nИнтерактивное меню (TUI) недоступно в этом терминале [{}].\r\nЗапустите диагностику с параметрами:\r\n\x1b[36m  dpi-detector -t 1\x1b[0m       — проверка DNS-серверов\r\n\x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — базовые тесты (DNS + сайты + TCP16)\r\n\x1b[36m  dpi-detector -t 12345\x1b[0m   — все тесты\r\n\x1b[36m  dpi-detector --help\x1b[0m     — список всех параметров\r\n\r\n",
+
+            unavailable_ascii: "недоступен",
+            proxy_in_use: "Используется прокси",
+            tui_reason_stdin: "stdin не является терминалом (pipe или перенаправление)",
+            tui_reason_raw_mode: "терминал не поддерживает raw mode",
+            crash_title: "\n=== КРИТИЧЕСКАЯ ОШИБКА DPI DETECTOR ===\n{}\n====================================",
+            crash_press_enter: "Нажмите Enter для закрытия...",
             ipv6_not_configured: "Ошибка: выбран режим IPv6, но IPv6 не настроен в системе.",
             ipv6_switch_hint: "Переключите семейство на IPv4: IP_VERSION: ipv4 в config.yml или стрелки ← → в меню.",
             fetching_net_info: "Получение сетевых данных...",
             net_info_unavailable: "Информация о сети недоступна.\n",
             domains_check_header: "Проверка доступности доменов",
             targets_label: "Целей",
-            phase_dns: "Фаза 0/3: DNS-резолв...",
-            phase_tls13: "Фаза 1/3: TLS 1.3...",
-            phase_tls12: "Фаза 2/3: TLS 1.2...",
-            phase_http: "Фаза 3/3: HTTP...",
+            stages_label: "Этапы",
             checking_status: "Проверка...",
             phase_sni_base: "Фаза 1/2: Базовая проверка...",
             phase_sni_parallel: "Фаза 2/2: Параллельный перебор SNI для {} AS (батч {}, топ-{})...",
             phase_telegram: "Проверка доступности Telegram",
             config_load_error_label: "Внимание при загрузке config.yml:",
             config_warning_label: "Предупреждение config.yml:",
+            cfg_warn_unknown_key: "Неизвестный ключ конфигурации: {}",
+            cfg_warn_invalid_value: "{}: недопустимое значение, используется значение по умолчанию",
+            cfg_warn_max_concurrent: "MAX_CONCURRENT < 1, сброшено на 50",
+            cfg_warn_ip_version: "IP_VERSION недопустим, сброшено на ipv4",
+            cfg_warn_fingerprint: "TLS_FINGERPRINT '{}' неизвестен, используется rustls",
+            cfg_warn_stub_threshold: "DNS_STUB_THRESHOLD вне диапазона 1..50, сброшено на 2",
+            cfg_warn_upload_port: "TELEGRAM_UPLOAD_PORT недопустим, сброшено на 443",
+            cfg_warn_dc_port: "TELEGRAM_DC_PORT недопустим, сброшено на 443",
+
+            warn_unknown_lang: "Предупреждение: неизвестный --lang '{}' (ожидается ru|en|zh|fa|auto), используется en",
+            warn_unknown_fingerprint: "Предупреждение: неизвестный --fingerprint '{}' (ожидается rustls|custom|chrome|safari), используется {}",
             press_enter_to_exit: "Нажмите Enter для выхода...",
             invalid_proxy_err: "Некорректный прокси {}: {}\n",
             dns_servers_empty_skip: "DNS_AVAILABILITY_SERVERS не задан в config.yml — тест пропущен.\n",
             no_sni_label: "(без SNI)",
+            detail_timeout_word: "Таймаут",
+            detail_read_timeout: "Таймаут чтения",
+            detail_write_timeout: "Таймаут записи",
+            detail_at: "на",
+            detail_isp_stub: "Заглушка провайдера",
+            detail_local_ip: "Локальный IP",
+            cli_about: "Высокопроизводительный детектор DPI и цензуры",
+            cli_help: "Показать справку",
+            cli_version: "Показать версию",
+            cli_usage_heading: "Использование:",
+            cli_usage: "dpi-detector [ОПЦИИ]",
+            cli_options_heading: "Опции",
+            cli_tests: "Строка выбора тестов (например, '012', '1', '2')",
+            cli_json: "Вывод в машиночитаемом JSON",
+            cli_verbose: "Подробное / отладочное логирование",
+            cli_lang: "Язык интерфейса (ru, en, zh, fa, auto). По умолчанию auto",
+            cli_profile: "Региональный профиль цензуры (ru, ir, cn, global)",
+            cli_legend: "Показать легенду статусов и выйти",
+            cli_proxy: "URL SOCKS5-прокси (например, socks5://127.0.0.1:1080)",
+            cli_concurrency: "Лимит параллельных запросов",
+            cli_domain: "Конкретные домены для проверки (флаг можно повторять: -d vk.com -d ya.ru)",
+            cli_output: "Путь к файлу отчёта",
+            cli_burst: "Стресс отпечатка (тест 7): одновременных запросов за раунд [по умолчанию: 4]",
+            cli_burst_timeout: "Тест 7: таймаут одного рукопожатия, секунды [по умолчанию: 8]",
+            cli_burst_profiles: "Отпечатки для теста 7: all|rustls,custom,chrome,safari [по умолчанию: all]",
+            cli_domains: "Путь к файлу со списком доменов",
+            cli_tcp16: "Путь к файлу целей TCP16",
+            cli_ascii: "Только ASCII для старых консолей (без Unicode-глифов и рамок)",
+            cli_fingerprint: "Профиль отпечатка TLS ClientHello (rustls|custom|chrome|safari). custom — Firefox-подобный ClientHello; chrome/safari воспроизводят JA3-формы curl-impersonate",
         },
         Language::Zh => Messages {
             banner_subtitle: "Rust 原生 DPI 审查与网络阻断诊断引擎",
             netinfo_title: "网络与系统信息",
             dns_title: "DNS 解析器可用性测试:",
             domain_title: "TLS / SNI 域名阻断探测结果:",
-            tcp16_title: "TCP 16–20 KB 窗口限制探测结果:",
-            telegram_title: "Telegram 数据中心可用性:",
             summary_title: "诊断汇总",
-            resolver: "解析服务器",
             status: "状态",
-            ip_count: "IP数量",
-            latency: "延迟",
             available: "AVAILABLE",
             blocked: "BLOCKED",
             domain: "域名",
@@ -680,22 +879,12 @@ pub fn get_messages(lang: Language) -> Messages {
             bytes: "流量 (发送/接收)",
             duration: "耗时",
             detail: "详情",
-            target: "目标",
             provider: "服务商",
             region: "区域",
-            speed: "速度",
             bypass_tools: "DPI 绕过工具",
             gateway: "默认网关",
-            syn_drop_desc: "SYN DROP (审查设备丢弃了 TCP SYN 报文)",
-            tcp_rst_desc: "TCP RST (握手期间连接被审查设备重置)",
-            tls_rst_desc: "TLS RST (发送 ClientHello / SNI 后被重置)",
-            tls_drop_desc: "TLS DROP (TLS 握手过程被丢弃)",
-            tls_alert_desc: "TLS ALERT (证书错误或 TLS Alert 告警)",
-            http_blocked_desc: "HTTP BLOCK (检测到重定向至运营商拦截页面)",
-            tcp16_drop_desc: "TCP16 DROP (大窗口传输被限制或切断)",
-            unreachable_desc: "UNREACHABLE (网络不可达)",
             menu_title: "参数与测试选择",
-            menu_language: "Language",
+            menu_language: "界面语言",
             menu_ip_version: "IP 版本",
             menu_concurrency: "并发数",
             menu_hw_row: "行",
@@ -713,6 +902,21 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_test_sni: "发现白名单 SNI",
             menu_test_telegram: "Telegram 可用性",
             menu_test_legend: "状态图例 (帮助)",
+            menu_test_burst: "指纹压力测试 (burst)",
+            burst_settings_title: "测试 7 设置",
+            burst_field_attempts: "同时请求数",
+            burst_field_timeout: "超时, 秒",
+            burst_field_domain: "要测试的域名",
+            burst_domain_placeholder: "按 → 开始输入",
+            burst_domain_default_hint: "默认 — 全部域名",
+            burst_field_profiles: "指纹",
+            burst_profiles_all: "全部",
+            burst_title: "同时握手 (指纹压力)",
+            burst_attempts_label: "并发请求",
+            burst_summary_label: "压力",
+            burst_summary_value: "{} / {} 次握手得到响应 · 有丢包的域名: {}",
+            fingerprint_label: "TLS 指纹",
+            fingerprint_note: "FIREFOX 配置重现 Firefox 148 的 ClientHello 形态；CHROME 与 SAFARI 重现据称被俄罗斯 TSPU 封锁的 curl-impersonate JA3 形态（chrome 99-116 / edge 99-101 与 safari 15.5-18.4 系列）。三者均非真实浏览器的逐字节复制，更深层的指纹识别（HTTP/2 设置、ALPN、记录时序）仍可能将它们区分开。",
             lang: Language::Zh,
             replies_label: "响应",
             blocked_short: "阻断",
@@ -722,19 +926,28 @@ pub fn get_messages(lang: Language) -> Messages {
             latest_version: "✓ 最新版本",
             author: "作者:",
             chat: "群聊:",
+
+            update_failed: "× 检查更新失败",
+            update_available: "↑ 发现新版本 {}",
+            update_current: "✓ 已是最新版本",
             checking_updates: "正在检查更新...",
             os: "操作系统:",
             system_dns: "系统 DNS:",
             active_interface: "活动接口:",
             inactive_dns: "非活动 DNS:",
             router_resolver: "路由器解析器",
-            upstream_vpn: "Upstream VPN",
+            upstream_vpn: "上游 VPN",
             wsl_proxy: "WSL 代理",
             wsl_network: "WSL 网络:",
             local_bypass: "设备本地 DPI 绕过:",
             not_detected: "未检测到",
             unavailable: "不可用",
 
+
+            subnet_label: "子网:",
+            ttlb_label: "TTLB:",
+            org_label: "组织:",
+            location_label: "位置:",
             dns_check_title: "DNS 服务器可用性检查",
             doh_endpoints: "DoH 端点",
             dot_endpoints: "DoT 端点",
@@ -747,6 +960,7 @@ pub fn get_messages(lang: Language) -> Messages {
             timeout_label: "超时",
             egress_na: "出口不可用",
             partial_dns_warn: "部分可用的 DNS 服务器 (丢包):",
+            dns_truth_fallback_note: "部分域名的基准 IP 来自 DNS_TRUTH_FALLBACK\n(config.yml)：本网络加密 DNS 无应答，这些 IP 可能已过期。",
             dns_fakeip_warn: "[!] DNS 响应包含 FakeIP\n为了进行准确的 DNS 评估，请在测试期间关闭代理/FakeIP。",
             dns_intercept_warn: "[!] 您的互联网服务提供商拦截了 DNS 查询\nISP 将 UDP DNS 响应替换为封锁页面或虚假 NXDOMAIN/EMPTY/TIMEOUT",
             dns_stub_ip_label: "ISP 封锁页面 IP - {}。",
@@ -778,6 +992,10 @@ pub fn get_messages(lang: Language) -> Messages {
             whitelist_skipped: "文件 whitelist_sni.txt 为空或未找到 — 跳过测试 4。\n",
 
             telegram_check_title: "Telegram 可用性检查",
+
+            col_id: "ID",
+            col_asn: "ASN",
+            batch_label: "批次",
             dc_col: "DC",
             ip_col: "IP",
             ping_col: "延迟",
@@ -786,6 +1004,13 @@ pub fn get_messages(lang: Language) -> Messages {
             peak_label: "峰值",
             avg_label: "平均",
             stall_after: "，{}秒后中断",
+
+            unit_mb_s: "MB/s",
+            unit_kb_s: "KB/s",
+            unit_b_s: "B/s",
+            unit_mb: "MB",
+            unit_kb: "KB",
+            unit_b: "B",
             ms_unit: "毫秒",
 
             summary_dns_avail: "DNS 可用性",
@@ -804,218 +1029,330 @@ pub fn get_messages(lang: Language) -> Messages {
             menu_control_exit: "退出",
             report_saved: "✓ 报告已保存到 {}",
             report_save_fail: "保存文件失败: {}",
-            invalid_tests_flag: "--tests 的值无效: '{}'。仅允许数字 0-6。",
+            invalid_tests_flag: "--tests 的值无效: '{}'。仅允许数字 0-7。",
             invalid_concurrency_flag: "--concurrency 参数必须是 >= 1 的整数。",
-            tui_unavailable: "此终端不支持 TUI。请携带参数运行，例如: dpi-detector -t 1,2,3 (参见 dpi-detector --help)。",
+            tui_unavailable: "\r\n交互式菜单 (TUI) 在此终端中不可用 [{}]。\r\n请使用命令行参数运行诊断:\r\n\x1b[36m  dpi-detector -t 1\x1b[0m       — DNS 服务器测试\r\n\x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — 基础测试 (DNS + 网站 + TCP16)\r\n\x1b[36m  dpi-detector -t 12345\x1b[0m   — 全部测试\r\n\x1b[36m  dpi-detector --help\x1b[0m     — 完整参数列表\r\n\r\n",
+
+            unavailable_ascii: "unavailable",
+            proxy_in_use: "使用代理",
+            tui_reason_stdin: "标准输入不是终端（管道或重定向）",
+            tui_reason_raw_mode: "终端不支持原始模式",
+            crash_title: "\n=== DPI DETECTOR 致命错误 ===\n{}\n========================",
+            crash_press_enter: "按 Enter 键关闭...",
             ipv6_not_configured: "错误: 已选择 IPv6 模式，但系统中未配置 IPv6。",
             ipv6_switch_hint: "请切换到 IPv4: 在 config.yml 中设置 IP_VERSION: ipv4 或在菜单中使用左右箭头。",
             fetching_net_info: "正在获取网络信息...",
             net_info_unavailable: "网络信息不可用。\n",
             domains_check_header: "域名可用性检查",
             targets_label: "目标",
-            phase_dns: "阶段 0/3: DNS 解析...",
-            phase_tls13: "阶段 1/3: TLS 1.3...",
-            phase_tls12: "阶段 2/3: TLS 1.2...",
-            phase_http: "阶段 3/3: HTTP...",
+            stages_label: "阶段",
             checking_status: "正在检查...",
             phase_sni_base: "阶段 1/2: 基础检查...",
             phase_sni_parallel: "阶段 2/2: 针对 {} 个 AS 并行探测 SNI (批次 {}, 前 {})...",
             phase_telegram: "Telegram 可用性检查",
             config_load_error_label: "加载 config.yml 时的警告:",
             config_warning_label: "config.yml 提示:",
+            cfg_warn_unknown_key: "未知配置键: {}",
+            cfg_warn_invalid_value: "{} 的值无效，改用默认值",
+            cfg_warn_max_concurrent: "MAX_CONCURRENT < 1，已重置为 50",
+            cfg_warn_ip_version: "IP_VERSION 无效，已重置为 ipv4",
+            cfg_warn_fingerprint: "TLS_FINGERPRINT '{}' 未知，改用 rustls",
+            cfg_warn_stub_threshold: "DNS_STUB_THRESHOLD 超出范围 1..50，已重置为 2",
+            cfg_warn_upload_port: "TELEGRAM_UPLOAD_PORT 无效，已重置为 443",
+            cfg_warn_dc_port: "TELEGRAM_DC_PORT 无效，已重置为 443",
+
+            warn_unknown_lang: "警告: 未知的 --lang '{}'（应为 ru|en|zh|fa|auto），改用 en",
+            warn_unknown_fingerprint: "警告: 未知的 --fingerprint '{}'（应为 rustls|custom|chrome|safari），改用 {}",
             press_enter_to_exit: "按回车键退出...",
             invalid_proxy_err: "无效代理 {}: {}\n",
             dns_servers_empty_skip: "config.yml 中未设置 DNS_AVAILABILITY_SERVERS — 跳过测试。\n",
             no_sni_label: "(无 SNI)",
+            detail_timeout_word: "超时",
+            detail_read_timeout: "读取超时",
+            detail_write_timeout: "写入超时",
+            detail_at: "在",
+            detail_isp_stub: "ISP 拦截页",
+            detail_local_ip: "本地 IP",
+            cli_about: "高性能 DPI 与网络审查检测工具",
+            cli_help: "显示帮助",
+            cli_version: "显示版本",
+            cli_usage_heading: "用法:",
+            cli_usage: "dpi-detector [选项]",
+            cli_options_heading: "选项",
+            cli_tests: "测试选择字符串（例如 '012'、'1'、'2'）",
+            cli_json: "输出机器可读的 JSON",
+            cli_verbose: "启用详细/调试日志",
+            cli_lang: "界面语言（ru、en、zh、fa、auto）。默认 auto",
+            cli_profile: "地区审查配置文件（ru、ir、cn、global）",
+            cli_legend: "显示状态图例并退出",
+            cli_proxy: "SOCKS5 代理 URL（例如 socks5://127.0.0.1:1080）",
+            cli_concurrency: "并行请求的并发上限",
+            cli_domain: "要测试的指定域名（可重复指定: -d vk.com -d ya.ru）",
+            cli_output: "保存报告的输出文件路径",
+            cli_burst: "指纹压力测试 (测试 7): 每轮同时请求数 [默认: 4]",
+            cli_burst_timeout: "测试 7: 单次握手超时, 秒 [默认: 8]",
+            cli_burst_profiles: "测试 7 的指纹: all|rustls,custom,chrome,safari [默认: all]",
+            cli_domains: "自定义域名列表文件路径",
+            cli_tcp16: "自定义 TCP16 目标文件路径",
+            cli_ascii: "面向旧终端的纯 ASCII 输出（无 Unicode 符号或边框）",
+            cli_fingerprint: "TLS ClientHello 指纹配置（rustls|custom|chrome|safari）。custom 为 Firefox 形态的 ClientHello；chrome/safari 复现 curl-impersonate 的 JA3 形态",
         },
-        Language::Es => Messages {
-            banner_subtitle: "Motor Nativo en Rust para Diagnóstico de DPI y Censura",
-            netinfo_title: "Información de Red y Sistema",
-            dns_title: "Disponibilidad de Servidores DNS:",
-            domain_title: "Resultados de Inspección de Dominios (TLS / SNI):",
-            tcp16_title: "Resultados de Limitación de Ventana TCP 16–20 KB:",
-            telegram_title: "Disponibilidad de Servidores de Telegram:",
-            summary_title: "Resumen",
-            resolver: "Servidor DNS",
-            status: "Estado",
-            ip_count: "Núm. IPs",
-            latency: "Latencia",
+        Language::Fa => Messages {
+            banner_subtitle: "Motore boomi-e tashkhis-e filtering va barresi-e amigh-e packet ha (DPI)",
+            netinfo_title: "Ettela'ate shabake va system",
+            dns_title: "Vaziyat-e dastrasi be kargozarhaye DNS:",
+            domain_title: "Natayej-e barresi-e domain ha (TLS / SNI):",
+            summary_title: "Kholase-ye natayej",
+            status: "Vaziyat",
             available: "AVAILABLE",
             blocked: "BLOCKED",
-            domain: "Dominio",
-            stage: "Etapa",
-            bytes: "Bytes (Tx/Rx)",
-            duration: "Duración",
-            detail: "Detalle",
-            target: "Objetivo",
-            provider: "Proveedor",
-            region: "Región",
-            speed: "Velocidad",
-            bypass_tools: "Herramientas de Bypass",
-            gateway: "Puerta de Enlace",
-            syn_drop_desc: "SYN DROP (El equipo de censura descartó el paquete TCP SYN)",
-            tcp_rst_desc: "TCP RST (Conexión TCP reiniciada por DPI al conectar)",
-            tls_rst_desc: "TLS RST (Reinicio tras ClientHello / bloqueo por SNI)",
-            tls_drop_desc: "TLS DROP (Conexión descartada durante el handshake TLS)",
-            tls_alert_desc: "TLS ALERT (Error de certificado o alerta fatal TLS)",
-            http_blocked_desc: "HTTP BLOCK (Redirección a página de bloqueo detectada)",
-            tcp16_drop_desc: "TCP16 DROP (Limitación de ventana o conexión cerrada)",
-            unreachable_desc: "UNREACHABLE (Red o destino inalcanzable)",
-            menu_title: "Parámetros y selección de pruebas",
-            menu_language: "Language",
-            menu_ip_version: "Versión IP",
-            menu_concurrency: "Concurrencia",
-            menu_hw_row: "fila",
-            menu_hw_change: "cambiar",
-            menu_hw_tests: "pruebas",
-            menu_hw_start: "iniciar",
-            menu_hw_quit: "salir",
-            menu_line_prompt: "Ingrese su selección [123]: ",
-            menu_invalid_line: "Entrada no válida, ejecutando pruebas 1, 2, 3.",
-            menu_need_one: "Seleccione al menos una prueba",
-            menu_test_netinfo: "Información de red y sistema",
-            menu_test_dns: "Disponibilidad de servidores DNS",
-            menu_test_domains: "Disponibilidad de sitios web",
-            menu_test_tcp: "Disponibilidad de CDN y hosting (prueba 16 KB)",
-            menu_test_sni: "Búsqueda de SNI permitidos",
-            menu_test_telegram: "Disponibilidad de Telegram",
-            menu_test_legend: "Leyenda de estados (ayuda)",
-            lang: Language::Es,
-            replies_label: "respuestas",
-            blocked_short: "bloq.",
-            mixed_short: "mixto",
-            legend_title: "\nLeyenda de estados:\n",
+            domain: "Domain",
+            stage: "Marhale",
+            bytes: "Byte ha (ersal/daryaft)",
+            duration: "Moddat-e zaman",
+            detail: "Joz'iyat",
+            provider: "Ara'e-dahande",
+            region: "Mantaghe",
+            bypass_tools: "Abarhaye door zadan-e filtering",
+            gateway: "Darvaze-ye pishfarz",
+            menu_title: "Tanzimat va entekhab-e test ha",
+            menu_language: "Zaban",
+            menu_ip_version: "IP version",
+            menu_concurrency: "Teedade worker ha",
+            menu_hw_row: "Peymayesh",
+            menu_hw_change: "Taghir",
+            menu_hw_tests: "Test ha",
+            menu_hw_start: "Shoroo",
+            menu_hw_quit: "Khorooj",
+            menu_line_prompt: "Entekhab-e khod ra vared konid [123]: ",
+            menu_invalid_line: "Voroodi-e na-motabar; test haye 1, 2, 3 ejra mishavand.",
+            menu_need_one: "Hadaghal yek test ra entekhab konid",
+            menu_test_netinfo: "Ettela'ate shabake va system",
+            menu_test_dns: "DNS server haye dar dastras",
+            menu_test_domains: "Website haye dar dastras",
+            menu_test_tcp: "CDN va hosting haye dar dastras",
+            menu_test_sni: "Jost o juye SNI haye whitelist",
+            menu_test_telegram: "Dastrasi be Telegram",
+            menu_test_legend: "Rahnemaye barname",
+            menu_test_burst: "Stress-e fingerprint (burst)",
+            burst_settings_title: "Tanzimat-e test 7",
+            burst_field_attempts: "Darkhast haye hamzaman",
+            burst_field_timeout: "Timeout, sanie",
+            burst_field_domain: "Domain baraye test",
+            burst_domain_placeholder: "Baraye neveshtan -> bezanid",
+            burst_domain_default_hint: "Pishfarz - hame-ye domain ha",
+            burst_field_profiles: "Fingerprint ha",
+            burst_profiles_all: "hame",
+            burst_title: "Mosafehe haye hamzaman (stress-e fingerprint)",
+            burst_attempts_label: "Darkhast dar yek bar",
+            burst_summary_label: "Stress",
+            burst_summary_value: "{} az {} mosafehe javab dad | domain ba ziyan: {}",
+            fingerprint_label: "Fingerprint",
+            fingerprint_note: "The FIREFOX profile reproduces a Firefox 148 ClientHello shape; CHROME and SAFARI reproduce the curl-impersonate JA3 shapes Russian TSPU reportedly blocks (chrome 99-116 / edge 99-101 and safari 15.5-18.4 families). None is byte-for-byte a real browser - deeper fingerprinting (HTTP/2 settings, ALPN, record timing) can still distinguish them.",
+            lang: Language::Fa,
+            replies_label: "pasokh ha",
+            blocked_short: "masdood",
+            mixed_short: "tarkibi",
+            legend_title: "\nRahnemaye vaziyat ha:\n",
+            latest_version: "✓ Akharin noskhe",
+            author: "Nivisande:",
+            chat: "Goruh:",
 
-            latest_version: "✓ Versión actual",
-            author: "Autor:",
-            chat: "Chat:",
-            checking_updates: "Buscando actualizaciones...",
-            os: "SO:",
-            system_dns: "DNS del sistema:",
-            active_interface: "Interfaz activa:",
-            inactive_dns: "DNS inactivos:",
-            router_resolver: "Resolvedor del router",
+            update_failed: "× Khata dar barresi-e update ha",
+            update_available: "↑ Noskhe-ye jadid dar dastras ast {}",
+            update_current: "✓ Akharin noskhe",
+            checking_updates: "Barresi-e update...",
+            os: "System-e amel:",
+            system_dns: "DNS system:",
+            active_interface: "Interface-e fa'al:",
+            inactive_dns: "DNS-e gheyr-e fa'al:",
+            router_resolver: "Resolver-e router",
             upstream_vpn: "Upstream VPN",
-            wsl_proxy: "proxy WSL",
-            wsl_network: "Red WSL:",
-            local_bypass: "Evasión local de DPI en el dispositivo:",
-            not_detected: "no detectado",
-            unavailable: "no disponible",
+            wsl_proxy: "Proxy-e WSL",
+            wsl_network: "Shabake-ye WSL:",
+            local_bypass: "Door zadan-e mahalli-e DPI dar device:",
+            not_detected: "peyda nashod",
+            unavailable: "dar dastras nist",
 
-            dns_check_title: "Comprobación de disponibilidad de servidores DNS",
-            doh_endpoints: "Extremos DoH",
-            dot_endpoints: "Extremos DoT",
-            udp_endpoints: "Extremos UDP",
-            doh_min: "DoH mín",
-            dot_min: "DoT mín",
-            udp_min: "UDP mín",
-            real_udp_resolver: "Resolvedor UDP real",
-            spoofing: "Suplantación",
-            timeout_label: "tiempo de espera",
-            egress_na: "salida N/D",
-            partial_dns_warn: "Servidores DNS parcialmente disponibles (pérdida de paquetes):",
-            dns_fakeip_warn: "[!] Las respuestas DNS contienen FakeIP\nDesactive el proxy/FakeIP durante la prueba para una evaluación precisa.",
-            dns_intercept_warn: "[!] Su proveedor de Internet intercepta las consultas DNS\nEl ISP sustituye las respuestas UDP por páginas de bloqueo o respuestas falsas",
-            dns_stub_ip_label: "IP de la página de bloqueo del ISP: {}.",
-            doh_recommendation: "Recomendación: configure DoH en su dispositivo/router si aún no lo ha hecho.",
-            non_socks_proxy_warn: "El proxy no es SOCKS5 — Las pruebas UDP van directas: el relé UDP no es posible a través de proxy HTTP.\n",
-            blocked_domains_label: "Dominios bloqueados para la prueba:",
-            unblocked_domains_label: "Dominios desbloqueados para la prueba:",
-            dns_independent_warn: "ATENCIÓN: ¡Esta es una comprobación independiente y no utiliza sus DNS configurados!\n",
-
+            subnet_label: "Subnet:",
+            ttlb_label: "TTLB:",
+            org_label: "Org:",
+            location_label: "Location:",
+            dns_check_title: "Barresi-e dar dastras boodan-e serverhaye DNS",
+            doh_endpoints: "Endpoint haye DoH",
+            dot_endpoints: "Endpoint haye DoT",
+            udp_endpoints: "Endpoint haye UDP",
+            doh_min: "Hadaghal-e DoH",
+            dot_min: "Hadaghal-e DoT",
+            udp_min: "Hadaghal-e UDP",
+            real_udp_resolver: "Resolver-e vaghe'i-e UDP",
+            spoofing: "Ja'l",
+            timeout_label: "mohlat",
+            egress_na: "egress N/A",
+            partial_dns_warn: "Serverhaye DNS ba dastrasi-e naghes (az dast raftan-e packet ha):",
+            dns_truth_fallback_note: "IP haye reference baraye barkhi domain ha az DNS_TRUTH_FALLBACK\n(config.yml) miyayand: hich DNS-e encrypted pasokh nadad, pas momken ast ghadimi bashand.",
+            dns_fakeip_warn: "[!] Pasokh haye DNS shamel-e FakeIP hastand\nBaraye arzyabi-e daghigh, dar tool-e test proxy/FakeIP ra khamoosh konid.",
+            dns_intercept_warn: "[!] ISP shoma porsoju haye DNS ra intercept mikonad\nPasokh haye UDP ba blockpage ya pasokh haye ja'li jaygozin mishavand",
+            dns_stub_ip_label: "IP-e blockpage-e ISP: {}.",
+            doh_recommendation: "Tavsiye: agar emkan darad DoH ra rooye device ya router-e khod fa'al konid.",
+            non_socks_proxy_warn: "Proxy az no'e SOCKS5 nist - probe haye UDP mostaghim ersal mishavand: enteghal-e UDP az tarigh-e HTTP proxy momken nist.\n",
+            blocked_domains_label: "Domain haye masdood baraye barresi:",
+            unblocked_domains_label: "Domain haye mojaz baraye barresi:",
+            dns_independent_warn: "Tavajjoh: in yek test-e mostaghel ast va az DNS-e tanzim shode dar system-e shoma estefade nemikonad!\n",
             http: "HTTP",
             tls12: "TLS1.2",
             tls13: "TLS1.3",
-            dns_info_title: "[i] INFORMACIÓN DE RESOLUCIÓN DNS:",
-            traffic_fakeip: "Tráfico interceptado por Fake-IP: en {} dominios",
-            dns_isp_stub: "El DNS devolvió la IP de bloqueo del ISP ({}): en {} dominios",
-            dns_local_ip: "El DNS devolvió IP locales (¿AdGuard/hosts?): ({}): en {} dominios",
-            dns_fail_detected: "Se detectó DNS FAIL en {} sitios",
-            doh_flush_guide: "Recomendación: Configure DoH en su dispositivo y router\n\nDespués de configurarlo, vacíe la caché de DNS:\nWindows: ipconfig /flushdns\nmacOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\nLinux: sudo resolvectl flush-caches\n",
+            dns_info_title: "[i] Ettela'ate tahlil-e DNS:",
+            traffic_fakeip: "Traffic tavasot-e Fake-IP intercept mishavad: baraye {} domain",
+            dns_isp_stub: "DNS IP-e blockpage-e ISP ra bargardand ({}): baraye {} domain",
+            dns_local_ip: "DNS IP haye mahalli ra bargardand (AdGuard/hosts?): ({}): baraye {} domain",
+            dns_fail_detected: "Khatay-e DNS FAIL baraye {} site moshahede shod",
+            doh_flush_guide: "Tavsiye: DoH ra rooye device va router-e khod tanzim konid\n\nPas az tanzim, cache-e DNS ra pak konid:\nWindows: ipconfig /flushdns\nmacOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\nLinux: sudo resolvectl flush-caches\n",
+            tcp16_check_title: "Barresi-e masdoodsazi-e TCP 16-20KB",
+            tcp_mixed_warn: "Natayej-e tarkibi neshane-dahande-ye load balancing-e DPI-e ISP ast",
+            no_port_443_targets: "Hich hadafi ba port-e 443 baraye test-e SNI-e whitelist vojud nadarad.\n",
+            no_as_blocked: "Hich AS-i masdood nashode ast - niyazi be jost o juye SNI nist.\n",
+            ban_after_label: "  ⚠ masdood ba'd az",
+            ban_rate_limit: "masdood/rate-limit",
+            sni_not_found: "× SNI peyda nashod (hame masdood hastand)",
+            whitelist_found_summary: "SNI-e sefid peyda shod: dar {} az {} AS-e masdood",
+            whitelist_none_summary: "Hich SNI-e sefidi baraye hich yek az {} AS-e masdood peyda nashod",
+            whitelist_skipped: "File-e whitelist_sni.txt khali ast ya peyda nashod - test-e 4 nadide gerefte shod.\n",
+            telegram_check_title: "Barresi-e dastrasi be Telegram",
 
-            tcp16_check_title: "Comprobación de bloqueo TCP 16-20 KB",
-            tcp_mixed_warn: "Los resultados mixtos indican balanceo de carga de DPI en el ISP",
-            no_port_443_targets: "No hay objetivos con puerto 443 para la prueba de SNI.\n",
-            no_as_blocked: "Ningún AS está bloqueado: no es necesario buscar SNI.\n",
-            ban_after_label: "  ⚠ bloqueo tras",
-            ban_rate_limit: "bloqueo/límite",
-            sni_not_found: "× SNI no encontrado (todos bloqueados)",
-            whitelist_found_summary: "SNI en lista blanca encontrados: en {} de {} AS bloqueados",
-            whitelist_none_summary: "No se encontraron SNI en lista blanca para ninguno de los {} AS bloqueados",
-            whitelist_skipped: "El archivo whitelist_sni.txt está vacío o no se encuentra: se omite la prueba 4.\n",
-
-            telegram_check_title: "Comprobación de disponibilidad de Telegram",
+            col_id: "ID",
+            col_asn: "ASN",
+            batch_label: "batch",
             dc_col: "DC",
             ip_col: "IP",
             ping_col: "Ping",
-            download_label: "Descarga",
-            upload_label: "Subida  ",
-            peak_label: "pico",
-            avg_label: "media",
-            stall_after: ", corte tras {}s",
+            download_label: "Download",
+            upload_label: "Upload  ",
+            peak_label: "peak",
+            avg_label: "avg",
+            stall_after: ", stall ba'd az {}s",
+
+            unit_mb_s: "MB/s",
+            unit_kb_s: "KB/s",
+            unit_b_s: "B/s",
+            unit_mb: "MB",
+            unit_kb: "KB",
+            unit_b: "B",
             ms_unit: "ms",
+            summary_dns_avail: "Dastrasi be DNS",
+            summary_resolver_hijack: "Ja'l-e resolver",
+            summary_all: "Hame",
+            summary_fakeip_resp: "Pasokh haye FakeIP",
+            summary_ans_hijack: "Ja'l-e pasokh",
+            summary_domains: "Domain ha",
+            summary_tg_download: "Download-e Telegram",
+            summary_tg_upload: "Upload-e Telegram",
+            summary_tg_datacenters: "Datacenter haye Telegram",
+            menu_control_repeat: "Tekrar",
+            menu_control_menu: "Menu",
+            menu_control_export: "Export",
+            menu_control_exit: "Khorooj",
+            report_saved: "✓ Gozaresh dar {} zakhire shod",
+            report_save_fail: "Khata dar zakhire-e file: {}",
+            invalid_tests_flag: "Meghdar-e na-motabar baraye --tests: '{}'. Faghat agham-e 0 ta 7 mojaz hastand.",
+            invalid_concurrency_flag: "Parametr-e --concurrency bayad yek adad-e sahih >= 1 bashad.",
+            tui_unavailable: "\r\nMenyuye interactive (TUI) dar in terminal dar dastras nist [{}].\r\nBarname ra ba parametr ha ejra konid:\r\n\x1b[36m  dpi-detector -t 1\x1b[0m       - test-e DNS server ha\r\n\x1b[36m  dpi-detector -t 1,2,3\x1b[0m   - test haye asasi (DNS + site ha + TCP16)\r\n\x1b[36m  dpi-detector -t 12345\x1b[0m   - hame-ye test ha\r\n\x1b[36m  dpi-detector --help\x1b[0m     - list-e kamel-e parametr ha\r\n\r\n",
 
-            summary_dns_avail: "Disponibilidad de DNS",
-            summary_resolver_hijack: "Suplantación de resolvedor",
-            summary_all: "Todos",
-            summary_fakeip_resp: "Respuestas FakeIP",
-            summary_ans_hijack: "Suplantación de respuestas",
-            summary_domains: "Dominios",
-            summary_tg_download: "Descarga TG",
-            summary_tg_upload: "Subida TG",
-            summary_tg_datacenters: "Centros de datos TG",
+            unavailable_ascii: "unavailable",
+            proxy_in_use: "Proxy dar hal-e estefade ast",
+            tui_reason_stdin: "stdin terminal nist (pipe ya redirect)",
+            tui_reason_raw_mode: "terminal az raw mode poshtibani nemikonad",
+            crash_title: "\n=== KHATA-YE KOLI DAR DPI DETECTOR ===\n{}\n=====================================",
+            crash_press_enter: "Baraye bastan Enter ra bezanid...",
+            ipv6_not_configured: "Khata: halat-e IPv6 entekhab shode ama rooye system tanzim nashode ast.",
+            ipv6_switch_hint: "Taghir be IPv4: meghdar-e IP_VERSION: ipv4 dar config.yml ya ba kelid haye jahat-nama dar menu.",
+            fetching_net_info: "Daryaft-e ettela'ate shabake...",
+            net_info_unavailable: "Ettela'ate shabake dar dastras nist.\n",
+            domains_check_header: "Barresi-e dastrasi be website ha",
+            targets_label: "Hadaf ha",
+            stages_label: "Marhale ha",
+            checking_status: "Dar hal-e barresi...",
+            phase_sni_base: "Marhale 1/2: barresi-e paye...",
+            phase_sni_parallel: "Marhale 2/2: jost o juye movazi-e SNI baraye {} AS (daste {}, top-{})...",
+            phase_telegram: "Barresi-e dastrasi be Telegram",
+            config_load_error_label: "Hoshdar dar load-e config.yml:",
+            config_warning_label: "E'lam-e config.yml:",
+            cfg_warn_unknown_key: "Key-e config nashenakhte: {}",
+            cfg_warn_invalid_value: "{} meghdar-e na-motabar darad, meghdar-e pishfarz estefade shod",
+            cfg_warn_max_concurrent: "MAX_CONCURRENT < 1, be 50 reset shod",
+            cfg_warn_ip_version: "IP_VERSION na-motabar ast, be ipv4 reset shod",
+            cfg_warn_fingerprint: "TLS_FINGERPRINT '{}' nashenakhte, rustls estefade shod",
+            cfg_warn_stub_threshold: "DNS_STUB_THRESHOLD kharej az baze 1..50 ast, be 2 reset shod",
+            cfg_warn_upload_port: "TELEGRAM_UPLOAD_PORT na-motabar ast, be 443 reset shod",
+            cfg_warn_dc_port: "TELEGRAM_DC_PORT na-motabar ast, be 443 reset shod",
 
-            menu_control_repeat: "Repetir",
-            menu_control_menu: "Menú",
-            menu_control_export: "Exportar",
-            menu_control_exit: "Salir",
-            report_saved: "✓ Informe guardado en {}",
-            report_save_fail: "Error al guardar el archivo: {}",
-            invalid_tests_flag: "Valor no válido para --tests: '{}'. Solo se permiten dígitos del 0 al 6.",
-            invalid_concurrency_flag: "El parámetro --concurrency debe ser un entero >= 1.",
-            tui_unavailable: "TUI no está disponible en este terminal. Ejecute con parámetros, p. ej.: dpi-detector -t 1,2,3 (consulte dpi-detector --help).",
-            ipv6_not_configured: "Error: se seleccionó el modo IPv6, pero IPv6 no está configurado en el sistema.",
-            ipv6_switch_hint: "Cambie a IPv4: IP_VERSION: ipv4 en config.yml o flechas ← → en el menú.",
-            fetching_net_info: "Obteniendo información de red...",
-            net_info_unavailable: "Información de red no disponible.\n",
-            domains_check_header: "Comprobación de disponibilidad de dominios",
-            targets_label: "Objetivos",
-            phase_dns: "Fase 0/3: Resolución DNS...",
-            phase_tls13: "Fase 1/3: TLS 1.3...",
-            phase_tls12: "Fase 2/3: TLS 1.2...",
-            phase_http: "Fase 3/3: HTTP...",
-            checking_status: "Comprobando...",
-            phase_sni_base: "Fase 1/2: Comprobación básica...",
-            phase_sni_parallel: "Fase 2/2: Búsqueda paralela de SNI para {} AS (lote {}, top-{})...",
-            phase_telegram: "Comprobación de disponibilidad de Telegram",
-            config_load_error_label: "Advertencia al cargar config.yml:",
-            config_warning_label: "Aviso de config.yml:",
-            press_enter_to_exit: "Presione Enter para salir...",
-            invalid_proxy_err: "Proxy inválido {}: {}\n",
-            dns_servers_empty_skip: "DNS_AVAILABILITY_SERVERS no configurado en config.yml — prueba omitida.\n",
-            no_sni_label: "(sin SNI)",
+            warn_unknown_lang: "Hoshdar: --lang '{}' nashenakhte (entezar: ru|en|zh|fa|auto), en estefade shod",
+            warn_unknown_fingerprint: "Hoshdar: --fingerprint '{}' nashenakhte (entezar: rustls|custom|chrome|safari), {} estefade shod",
+            press_enter_to_exit: "Baraye khorooj Enter ra feshar dahid...",
+            invalid_proxy_err: "Proxy-e na-motabar {}: {}\n",
+            dns_servers_empty_skip: "Meghdar-e DNS_AVAILABILITY_SERVERS dar config.yml taeen nashode ast - test nadide gerefte shod.\n",
+            no_sni_label: "(bedoone SNI)",
+            detail_timeout_word: "Mohlat",
+            detail_read_timeout: "Mohlat-e khandan",
+            detail_write_timeout: "Mohlat-e neveshtan",
+            detail_at: "dar",
+            detail_isp_stub: "Blockpage-e ISP",
+            detail_local_ip: "IP-e mahalli",
+            cli_about: "Abzare sare' va kam-hafezeye tashkhis-e DPI va sansur",
+            cli_help: "Namayesh-e help",
+            cli_version: "Namayesh-e version",
+            cli_usage_heading: "Estefade:",
+            cli_usage: "dpi-detector [GOZINE HA]",
+            cli_options_heading: "Gozine ha",
+            cli_tests: "String-e entekhab-e test ha (mesal: '012', '1', '2')",
+            cli_json: "Khorooj-e JSON (machine-readable)",
+            cli_verbose: "Faal kardan-e log-e verbose/debug",
+            cli_lang: "Zaban-e barname (ru, en, zh, fa, auto). Pishfarz: auto",
+            cli_profile: "Profile-e mantaghe-i-e sansur (ru, ir, cn, global)",
+            cli_legend: "Namayesh-e rahnemaye vaziyat ha va khorooj",
+            cli_proxy: "URL-e proxy-e SOCKS5 (mesal: socks5://127.0.0.1:1080)",
+            cli_concurrency: "Hadde aksar-e darkhast haye hamzaman",
+            cli_domain: "Domain haye khass baraye barresi (mitavanid tekrar konid: -d vk.com -d ya.ru)",
+            cli_output: "Masir-e file baraye zakhire-ye report",
+            cli_burst: "Stress-e fingerprint (test 7): darkhast haye hamzaman dar har round [pishfarz: 4]",
+            cli_burst_timeout: "Test 7: timeout-e yek mosafehe, sanie [pishfarz: 8]",
+            cli_burst_profiles: "Fingerprint haye test 7: all|rustls,custom,chrome,safari [pishfarz: all]",
+            cli_domains: "Masir-e file-e list-e domain ha",
+            cli_tcp16: "Masir-e file-e target haye TCP16",
+            cli_ascii: "Khorooj-e faghat ASCII baraye console haye ghadimi (bedun-e glyph ya border-e Unicode)",
+            cli_fingerprint: "Profile-e fingerprint-e TLS ClientHello (rustls|custom|chrome|safari). custom yek ClientHello-e Firefox-shape ast; chrome/safari JA3-e curl-impersonate ra bazsazi mikonand",
         },
     }
 }
 
-/// Prints the full diagnostic status legend (mirrors `cli/ui.py::print_legend`).
+/// Full diagnostic status legend as text (mirrors `cli/ui.py::print_legend`).
 /// Terms stay Latin; descriptions follow the selected language (en/ru full,
 /// other languages fall back to English descriptions).
-pub fn print_legend(lang: Language, msg: &Messages) {
-    println!("{}", format_bidi(msg.legend_title, lang));
+///
+/// Returns the text instead of printing it: the caller owns the console, and on
+/// a legacy (non-VT) Windows console raw `println!` bytes land on screen as
+/// `?[36m` garbage — the SGR has to go through the binary's output writer, which
+/// translates it into console attributes.
+pub fn legend_text(lang: Language, msg: &Messages) -> String {
+    let mut out = format!("{}\n", format_bidi(msg.legend_title, lang));
     let sections = match lang {
         Language::Ru => legend_sections(),
         Language::Zh => legend_sections_zh(),
-        Language::Es => legend_sections_es(),
+        Language::Fa => legend_sections_fa(),
         Language::En => legend_sections_en(),
     };
     for (section, items) in &sections {
-        println!("  {}", format_bidi(section, lang));
+        out.push_str(&format!("  {}\n", format_bidi(section, lang)));
         for (term, desc) in items {
-            println!("    \x1b[36m{:<14}\x1b[0m \x1b[2m{}\x1b[0m", term, format_bidi(desc, lang));
+            out.push_str(&format!(
+                "    \x1b[36m{:<14}\x1b[0m \x1b[2m{}\x1b[0m\n",
+                term,
+                format_bidi(desc, lang)
+            ));
         }
-        println!();
+        out.push('\n');
     }
+    out
 }
 
 /// Full legend sections in Chinese.
@@ -1050,7 +1387,7 @@ pub fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'static st
         ("— HTTP / 阻断 —", vec![
             ("BLOCKED", "HTTP 451 — 因法律或监管原因不可访问"),
             ("ISP PAGE", "解析到的 IP 为运营商拦截页面 (DNS 劫持篡改)"),
-            ("REDIR", "绿色 — 重定向至同一主域名/子域名 (正常)；红色 — 重定向至外部陌生域名 (可疑)"),
+            ("REDIR", "红色 — 重定向至外部陌生域名 (可疑)；重定向至同一主域名/子域名时显示为 OK"),
         ]),
         ("— TCP 16-20KB 测试 —", vec![
             ("DETECTED", "传输达到 14–36 KB 后连接被切断 (特征性窗口阻断)"),
@@ -1065,54 +1402,55 @@ pub fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'static st
     ]
 }
 
-/// Full legend sections in Spanish.
-pub fn legend_sections_es() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+/// Full legend in Finglish: the Persian interface is romanized (Latin letters,
+/// no diacritics, "we dont use a"), technical terms and status badges stay in
+/// English. Section headings and entries mirror the English legend one to one.
+pub fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
     vec![
-        ("— TLS / DPI —", vec![
-            ("TLS DPI", "DPI interrumpe o manipula TLS: EOF, registro corrupto, fallo de handshake"),
-            ("TLS MITM", "Man-in-the-Middle: certificado sustituido (CA desconocida, expirado, nombre incorrecto)"),
-            ("TLS BLOCK", "Versión de TLS o protocolo bloqueado (alerta protocol_version)"),
-            ("TLS RST", "TCP RST activo tras ClientHello (reinicio del handshake TLS)"),
-            ("TLS DROP", "Tiempo de espera agotado en TLS — paquetes descartados silenciosamente"),
-            ("UNKNOWN", "Error desconocido (tipo de excepción entre paréntesis)"),
-            ("NO TLS1.3", "El servidor no admite TLS 1.3 (normal en servidores antiguos)"),
+        ("- TLS / DPI -", vec![
+            ("TLS DPI", "Tajhizat-e DPI ettesal-e TLS ra dastkari ya ghat mikonand: EOF, record-e kharab, laghv-e mosafhe"),
+            ("TLS MITM", "Hamle-ye mard-e miyani: gavahi-ye ja'li (marja'-e nashenakhte, monghazi, adam-e tatabogh-e name-e mizban)"),
+            ("TLS BLOCK", "Masdoodsazi-e noskhe ya kole protocol-e TLS (ekhtar-e protocol_version)"),
+            ("TLS RST", "Baste-ye fa'al-e TCP RST pas az ersal-e ClientHello (reset-e mosafhe-ye TLS)"),
+            ("TLS DROP", "Etmam-e mohlat-e mosafhe-ye TLS - packet ha hazf shodand"),
+            ("UNKNOWN", "Khatay-e nashenakhte (no'-e khata dar parantez)"),
+            ("NO TLS1.3", "Kargozar az TLS 1.3 poshtibani nemikonad (tabi'i baraye kargozar-haye ghadimi)"),
         ]),
-        ("— TCP / Conexión —", vec![
-            ("TCP RST", "Conexión reiniciada (paquete TCP RST del DPI o del servidor)"),
-            ("SYN DROP", "Tiempo de espera agotado — SYN enviado sin respuesta"),
-            ("ABORT", "Conexión abortada (ConnectionAborted / BrokenPipe)"),
-            ("REFUSED", "Conexión TCP rechazada (ECONNREFUSED)"),
-            ("TIMEOUT", "Tiempo agotado: SYN drop, lectura o tiempo del sistema"),
-            ("NET UNREACH", "Sin ruta a la red (ICMP inalcanzable)"),
-            ("HOST UNREACH", "Sin ruta al host"),
-            ("OS ERR", "Otros errores del sistema operativo (errno)"),
+        ("- TCP / Ettesal -", vec![
+            ("TCP RST", "Ettesal reset shod (baste-ye TCP RST tavasot-e filtering ya kargozar)"),
+            ("SYN DROP", "Etmam-e mohlat-e ettesal-e TCP - baste-ye SYN ersal shod vali pasokhi nayamad"),
+            ("ABORT", "Ettesal laghv shod (ConnectionAborted / BrokenPipe)"),
+            ("REFUSED", "Ettesal-e TCP rad shod (ECONNREFUSED)"),
+            ("TIMEOUT", "Etmam-e mohlat: dur andakhtan-e SYN, mohlat-e khandan ya khatay-e system"),
+            ("NET UNREACH", "Masir-e shabake dar dastras nist (ICMP unreachable)"),
+            ("HOST UNREACH", "Mizban dar dastras nist"),
+            ("OS ERR", "Sayer-e khata-haye system-amel (errno)"),
         ]),
-        ("— DNS —", vec![
-            ("DNS FAIL", "El dominio no se resolvió mediante el resolvedor del sistema"),
-            ("DNS FAKE", "La IP coincide con una página de bloqueo conocida del proveedor"),
-            ("TIMEOUT", "El servidor DNS no respondió a tiempo"),
-            ("BLOCKED", "Servidor DoH bloqueado por el proveedor (fallo HTTP)"),
-            ("NXDOMAIN", "El dominio no existe según este servidor"),
+        ("- DNS -", vec![
+            ("DNS FAIL", "Domain az tarigh-e kargozar-e system hal nashod"),
+            ("DNS FAKE", "Adres-e IP ba blockpage-e era'e-dahande motabeghat darad"),
+            ("TIMEOUT", "Kargozar-e DNS dar zaman-e mogharrar pasokh nadad"),
+            ("BLOCKED", "Kargozar-e DoH tavasot-e era'e-dahande masdood shode ast"),
+            ("NXDOMAIN", "Be gofte-ye in kargozar, domain vojud nadarad"),
         ]),
-        ("— HTTP / Bloqueos —", vec![
-            ("BLOCKED", "HTTP 451 — No disponible por razones legales"),
-            ("ISP PAGE", "La IP resuelta es una página de bloqueo del proveedor"),
-            ("REDIR", "Verde — redirección al mismo dominio (normal); Rojo — redirección a otro dominio (sospechoso)"),
+        ("- HTTP / Masdoodsazi -", vec![
+            ("BLOCKED", "Kode 451 HTTP - be dalayel-e ghanuni dar dastras nist"),
+            ("ISP PAGE", "Adres-e IP-e hal shode blockpage-e era'e-dahande ast"),
+            ("REDIR", "Ghermez - hedayat be domain-e bigane (mashkuk); hedayat be haman domain ya subdomain = OK"),
         ]),
-        ("— Prueba TCP 16-20KB —", vec![
-            ("DETECTED", "Corte de conexión tras transferir 14–36 KB"),
-            ("OK", "Las 10 solicitudes (hasta 40 KB) pasaron sin cortes"),
+        ("- Azmun-e TCP 16-20KB -", vec![
+            ("DETECTED", "Ghat'-e ettesal pas az ersal-e 14 ta 36 kilobyte"),
+            ("OK", "Har 10 darkhast (ta 40 kilobyte) bedun-e ghat'i anjam shodand"),
         ]),
-        ("— Otros —", vec![
-            ("OK", "Sitio accesible (200–4xx sin indicios de censura)"),
-            ("UNKNOWN", "Error desconocido (tipo de excepción entre paréntesis)"),
-            ("TIMEOUT", "El servidor aceptó la petición pero la respuesta no llegó a tiempo: corte/limitación DPI o sobrecarga"),
-            ("POOL TIMEOUT", "Grupo de sockets agotado: reduzca la concurrencia"),
+        ("- Sayer -", vec![
+            ("OK", "Site dar dastras ast (kode 200-4xx bedun-e alayem-e filtering)"),
+            ("UNKNOWN", "Khatay-e nashenakhte (no'-e khata dar parantez)"),
+            ("TIMEOUT", "Pasokhi az kargozar dar zaman-e mogharrar naresid: ekhtelal/kondi-ye DPI, oft-e packet ya bar-e kargozar"),
+            ("POOL TIMEOUT", "Takmil-e zarfiyat-e socket ha - lotfan teedade worker ha ra kahesh dahid"),
         ]),
     ]
 }
 
-/// Full legend sections in Russian (canonical, mirrors Python).
 pub fn legend_sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
     vec![
         ("— TLS / DPI —", vec![
@@ -1144,7 +1482,7 @@ pub fn legend_sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>
         ("— HTTP / Блокировки —", vec![
             ("BLOCKED", "HTTP 451 — Недоступно по юридическим причинам"),
             ("ISP PAGE", "Resolved IP является заглушкой провайдера (DNS подмена)"),
-            ("REDIR", "Зелёный — редирект на тот же домен/поддомен (норма); Красный — редирект на чужой домен (подозрительно)"),
+            ("REDIR", "Красный — редирект на чужой домен (подозрительно); редирект на тот же домен/поддомен — это OK"),
         ]),
         ("— TCP 16-20KB тест —", vec![
             ("DETECTED", "Обрыв соединения после отправки 14–36 KB"),
@@ -1191,7 +1529,7 @@ pub fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'static st
         ("— HTTP / Blocks —", vec![
             ("BLOCKED", "HTTP 451 — Unavailable for legal reasons"),
             ("ISP PAGE", "Resolved IP is a provider stub (DNS spoofing)"),
-            ("REDIR", "Green — redirect to the same domain/subdomain (normal); Red — redirect to a foreign domain (suspicious)"),
+            ("REDIR", "Red — redirect to a foreign domain (suspicious); a redirect to the same domain/subdomain reads as OK"),
         ]),
         ("— TCP 16-20KB test —", vec![
             ("DETECTED", "Connection break after sending 14–36 KB"),
@@ -1206,6 +1544,61 @@ pub fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'static st
     ]
 }
 
+impl Messages {
+    /// Text for a recoverable configuration problem (see [`crate::config::ConfigWarning`]).
+    pub fn config_warning(&self, warning: &crate::config::ConfigWarning) -> String {
+        use crate::config::ConfigWarning as W;
+        match warning {
+            W::UnknownKey { key } => self.cfg_warn_unknown_key.replace("{}", key),
+            W::InvalidValue { key } => self.cfg_warn_invalid_value.replace("{}", key),
+            W::UnknownFingerprint { value } => self.cfg_warn_fingerprint.replace("{}", value),
+            W::MaxConcurrentReset => self.cfg_warn_max_concurrent.to_string(),
+            W::IpVersionReset => self.cfg_warn_ip_version.to_string(),
+            W::StubThresholdReset => self.cfg_warn_stub_threshold.to_string(),
+            W::UploadPortReset => self.cfg_warn_upload_port.to_string(),
+            W::DcPortReset => self.cfg_warn_dc_port.to_string(),
+        }
+    }
+}
+
+/// Display label for a TLS ClientHello profile. The canonical token and the
+/// profile names stay Latin (rule 4); only the default profile is spelled out
+/// per language ("pishfarz" is the Finglish for "default").
+pub fn fingerprint_label(fp: crate::net::fingerprint::TlsFingerprint, lang: Language) -> &'static str {
+    use crate::net::fingerprint::TlsFingerprint as F;
+    match (fp, lang) {
+        (F::Rustls, Language::Fa) => "rustls (pishfarz)",
+        (F::Rustls, _) => "rustls (default)",
+        (F::Custom, _) => "firefox 148",
+        (F::Chrome, _) => "curl chrome 99-116",
+        (F::Safari, _) => "curl safari 15.5-18.4",
+    }
+}
+
+/// Transfer rate in the interface's speed units (Ru uses Cyrillic units).
+pub fn fmt_speed(bps: f64, lang: Language) -> String {
+    let msg = get_messages(lang);
+    if bps >= 1024.0 * 1024.0 {
+        format!("{:>6.2} {}", bps / (1024.0 * 1024.0), msg.unit_mb_s)
+    } else if bps >= 1024.0 {
+        format!("{:>6.1} {}", bps / 1024.0, msg.unit_kb_s)
+    } else {
+        format!("{:>6.0} {}", bps, msg.unit_b_s)
+    }
+}
+
+/// Byte count in the interface's size units.
+pub fn fmt_size(bytes: u64, lang: Language) -> String {
+    let msg = get_messages(lang);
+    if bytes >= 1024 * 1024 {
+        format!("{:.2} {}", bytes as f64 / (1024.0 * 1024.0), msg.unit_mb)
+    } else if bytes >= 1024 {
+        format!("{:.1} {}", bytes as f64 / 1024.0, msg.unit_kb)
+    } else {
+        format!("{} {}", bytes, msg.unit_b)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1215,8 +1608,29 @@ mod tests {
         assert_eq!(Language::from_code("ru"), Some(Language::Ru));
         assert_eq!(Language::from_code("en"), Some(Language::En));
         assert_eq!(Language::from_code("zh"), Some(Language::Zh));
-        assert_eq!(Language::from_code("es"), Some(Language::Es));
+        assert_eq!(Language::from_code("fa"), Some(Language::Fa));
         assert_eq!(Language::from_code("unknown"), None);
+    }
+
+    /// The live progress line must name what it is counting. Test 1 is labelled
+    /// with the block tokens UDP/DoH/DoT/EGRESS, so it needs no wording of its
+    /// own; the TCP window test names itself instead of a generic "Checking...".
+    #[test]
+    fn test_phase_text_names_each_phase() {
+        for lang in [Language::En, Language::Ru, Language::Zh, Language::Fa] {
+            let msg = get_messages(lang);
+            assert_eq!(msg.phase_text(crate::PhaseId::DnsAvailability), "DNS");
+        }
+        assert_eq!(
+            get_messages(Language::En).phase_text(crate::PhaseId::Tcp16),
+            "TCP 16–20 KB Block Check"
+        );
+
+        // Tokens are canonical Latin across every language (rule 4).
+        assert_eq!(crate::ProgressBlock::Udp.token(), "UDP");
+        assert_eq!(crate::ProgressBlock::Doh.token(), "DoH");
+        assert_eq!(crate::ProgressBlock::Dot.token(), "DoT");
+        assert_eq!(crate::ProgressBlock::Egress.token(), "EGRESS");
     }
 
     #[test]
@@ -1225,14 +1639,20 @@ mod tests {
             Language::En,
             Language::Ru,
             Language::Zh,
-            Language::Es,
+            Language::Fa,
         ] {
             let msg = get_messages(lang);
             assert!(!msg.banner_subtitle.is_empty());
             assert!(!msg.dns_title.is_empty());
             assert!(!msg.domain_title.is_empty());
-            assert!(!msg.syn_drop_desc.is_empty());
-            assert!(!msg.tls_rst_desc.is_empty());
+            assert!(!msg.update_failed.is_empty());
+            assert!(!msg.proxy_in_use.is_empty());
+            assert!(!msg.tui_unavailable.is_empty());
+            assert!(!msg.crash_title.is_empty());
+            assert!(!msg.detail_read_timeout.is_empty());
+            assert!(!msg.cli_about.is_empty());
+            assert!(!msg.cfg_warn_invalid_value.is_empty());
+            assert!(!msg.cfg_warn_unknown_key.is_empty());
             assert!(!msg.menu_title.is_empty());
             assert!(!msg.menu_language.is_empty());
             assert!(!msg.menu_ip_version.is_empty());
@@ -1272,4 +1692,34 @@ mod tests {
         }
     }
 
+    /// Finglish is written with Latin letters: no Persian/Arabic script and no
+    /// Latin diacritics (the reviewer's rule - "we dont use a with accent").
+    /// The only non-ASCII characters allowed are the status marks every other
+    /// language uses in the same places.
+    #[test]
+    fn test_finglish_is_latin_only() {
+        const MARKS: [char; 4] = ['✓', '×', '⚠', '↑'];
+        let mut texts = vec![format!("{:?}", get_messages(Language::Fa))];
+        for (section, entries) in legend_sections_fa() {
+            texts.push(section.to_string());
+            for (term, desc) in entries {
+                texts.push(term.to_string());
+                texts.push(desc.to_string());
+            }
+        }
+        for text in texts {
+            for (i, c) in text.char_indices() {
+                if c.is_ascii() || MARKS.contains(&c) {
+                    continue;
+                }
+                let from = text[..i].char_indices().rev().nth(39).map(|(k, _)| k).unwrap_or(0);
+                panic!(
+                    "Finglish must be Latin: {:?} (U+{:04X}) in ...{}...",
+                    c,
+                    c as u32,
+                    &text[from..i + c.len_utf8()]
+                );
+            }
+        }
+    }
 }
