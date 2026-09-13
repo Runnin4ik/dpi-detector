@@ -672,10 +672,13 @@ mod tests {
     /// mean the stand is not looking at what the test thinks it is).
     #[derive(Clone, Default)]
     struct Witness {
-        open: Arc<Mutex<Vec<((usize, usize), TlsFingerprint)>>>,
+        open: OpenRuns,
         overlapped: Arc<AtomicBool>,
         unexpected: Arc<Mutex<Vec<String>>>,
     }
+
+    /// Open runs as (stand, connection) pairs with the shape each one proved.
+    type OpenRuns = Arc<Mutex<Vec<((usize, usize), TlsFingerprint)>>>;
 
     /// Accepts `count` ClientHellos, names each shape by its cipher list and
     /// holds it open for `hold`. Two of these with different holds are how the

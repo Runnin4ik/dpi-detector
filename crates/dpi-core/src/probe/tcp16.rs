@@ -22,7 +22,7 @@ use crate::classify::{
     DET_KB_SUFFIX, DET_READ_TIMEOUT_WORD_CAPS, DET_WRITE_TIMEOUT_WORD,
 };
 use crate::config::AppConfig;
-use crate::probe::http::{negotiated_h2, HttpRequest, HttpSender};
+use crate::probe::http::{hyper_err_info, negotiated_h2, HttpRequest, HttpSender};
 
 fn random_pool(size: usize) -> Vec<u8> {
     // xorshift64* — deterministic PRNG, no extra deps, ASCII alphanumerics
@@ -41,22 +41,6 @@ fn random_pool(size: usize) -> Vec<u8> {
         }
     }
     out
-}
-
-/// Message plus the OS code and kind of the `io::Error` at the end of the hyper
-/// chain: the code is what classifies a reset when Windows has localized the
-/// system message.
-fn hyper_info(e: &hyper::Error) -> (String, Option<i32>, Option<std::io::ErrorKind>) {
-    let mut msg = e.to_string();
-    let mut source = std::error::Error::source(e);
-    while let Some(s) = source {
-        if let Some(io_err) = s.downcast_ref::<std::io::Error>() {
-            msg.push_str(&format!(" | {}", io_err));
-            return (msg, io_err.raw_os_error(), Some(io_err.kind()));
-        }
-        source = std::error::Error::source(s);
-    }
-    (msg, None, None)
 }
 
 async fn connect_fat_target(
@@ -112,7 +96,7 @@ async fn connect_fat_target(
         match HttpSender::handshake(io, alpn_h2).await {
             Ok(sender) => Ok(sender),
             Err(e) => {
-                let (msg, os_code, os_kind) = hyper_info(&e);
+                let (msg, os_code, os_kind) = hyper_err_info(&e);
                 let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, "tls_connected");
                 Err((s, d))
             }
@@ -123,7 +107,7 @@ async fn connect_fat_target(
         match HttpSender::handshake(io, false).await {
             Ok(sender) => Ok(sender),
             Err(e) => {
-                let (msg, os_code, os_kind) = hyper_info(&e);
+                let (msg, os_code, os_kind) = hyper_err_info(&e);
                 let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, "tcp_connect");
                 Err((s, d))
             }
@@ -234,7 +218,7 @@ pub async fn probe_tcp_16_20(
 
         // If connection was closed concurrently between requests, reconnect and retry this chunk once
         if let Ok(Err(ref e)) = res {
-            let (emsg, _, _) = hyper_info(e);
+            let (emsg, _, _) = hyper_err_info(e);
             if e.is_canceled() || emsg.contains("canceled") || sender.is_closed() {
                 if let Ok(new_sender) = connect_fat_target(addr, target_ip, sni, use_tls, cfg).await {
                     sender = new_sender;
@@ -263,7 +247,7 @@ pub async fn probe_tcp_16_20(
                 }
             }
             Ok(Err(e)) => {
-                let (msg, os_code, os_kind) = hyper_info(&e);
+                let (msg, os_code, os_kind) = hyper_err_info(&e);
                 let lower = msg.to_ascii_lowercase();
                 let is_read_timeout = e.is_timeout() || lower.contains("timed out");
                 if is_read_timeout {

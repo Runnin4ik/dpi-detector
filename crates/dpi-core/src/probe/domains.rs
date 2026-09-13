@@ -32,7 +32,7 @@ use crate::config::AppConfig;
 use crate::dns::resolve_host;
 use crate::PhaseProgress;
 use crate::probe::connector::RustlsConnector;
-use crate::probe::http::{negotiated_h2, HttpRequest, HttpSender};
+use crate::probe::http::{hyper_err_info, negotiated_h2, HttpRequest, HttpSender};
 use crate::probe::DpiTlsConnector;
 
 const BODY_CAP: usize = 64 * 1024;
@@ -219,24 +219,6 @@ pub struct TlsCheck {
 pub struct HttpCheck {
     pub status: DpiStatus,
     pub detail: String,
-}
-
-/// Extracts (message, os code, kind) from a hyper error chain. The trailing
-/// `io::Error` is the only element that carries the OS code, and Windows
-/// localizes its message, so the code - not the text - is the signal the
-/// classifier can rely on.
-fn hyper_err_info(e: &hyper::Error) -> (String, Option<i32>, Option<std::io::ErrorKind>) {
-    let msg = e.to_string();
-    let mut source = std::error::Error::source(e);
-    while let Some(s) = source {
-        if let Some(io_err) = s.downcast_ref::<std::io::Error>() {
-            let mut full = msg.clone();
-            full.push_str(&format!(" | {}", io_err));
-            return (full, io_err.raw_os_error(), Some(io_err.kind()));
-        }
-        source = std::error::Error::source(s);
-    }
-    (msg, None, None)
 }
 
 fn inner_hyper(

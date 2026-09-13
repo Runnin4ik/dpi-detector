@@ -13,6 +13,25 @@ use hyper::header::{HOST, USER_AGENT};
 use hyper::{Method, Request, Response};
 use hyper_util::rt::TokioExecutor;
 
+/// Message plus the OS code and kind of the `io::Error` at the end of a hyper
+/// error chain.
+///
+/// The trailing `io::Error` is the only element that carries the OS code, and
+/// Windows localizes its message, so the code — not the text — is the signal the
+/// classifier can rely on when it has to tell a reset from an abort.
+pub(crate) fn hyper_err_info(e: &hyper::Error) -> (String, Option<i32>, Option<std::io::ErrorKind>) {
+    let mut msg = e.to_string();
+    let mut source = std::error::Error::source(e);
+    while let Some(s) = source {
+        if let Some(io_err) = s.downcast_ref::<std::io::Error>() {
+            msg.push_str(&format!(" | {}", io_err));
+            return (msg, io_err.raw_os_error(), Some(io_err.kind()));
+        }
+        source = std::error::Error::source(s);
+    }
+    (msg, None, None)
+}
+
 /// A request both protocols can carry.
 ///
 /// `host` is the SNI name: the `Host` header in HTTP/1.1, the `:authority`

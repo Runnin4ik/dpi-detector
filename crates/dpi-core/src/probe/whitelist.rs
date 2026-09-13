@@ -31,17 +31,6 @@ fn asn_key_of(item: &Tcp16Target) -> String {
         .to_string()
 }
 
-fn asn_display_of(item: &Tcp16Target) -> String {
-    let raw = item.asn.trim();
-    if raw.is_empty() {
-        "-".to_string()
-    } else if raw.to_uppercase().starts_with("AS") {
-        raw.to_uppercase()
-    } else {
-        format!("AS{}", raw)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct AsCandidate {
     pub ip: String,
@@ -154,7 +143,7 @@ pub async fn run_whitelist_sni(
         let cand = AsCandidate {
             ip: item.ip.clone(),
             provider: item.provider.clone(),
-            asn_str: asn_display_of(&item),
+            asn_str: item.display_asn(),
             asn_key: key.clone(),
             rtt,
         };
@@ -337,6 +326,6 @@ mod tests {
             sni: None,
         };
         assert_eq!(asn_key_of(&t), "24940");
-        assert_eq!(asn_display_of(&t), "AS24940");
+        assert_eq!(t.display_asn(), "AS24940");
     }
 }

@@ -4,7 +4,7 @@ use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
 use super::socks::{associate_socks5_udp, unwrap_socks_udp, wrap_socks_udp, SocksProxyConfig};
-use super::types::{DnsError, DnsRecord};
+use super::types::DnsError;
 use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
 
 /// Probes a DNS resolver over UDP, measuring latency and returning resolved IP addresses.
@@ -73,14 +73,5 @@ pub async fn probe_udp_dns(
     let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     let response = parse_dns_response(&resp_bytes, Some(tx_id))?;
-    let mut ips = Vec::new();
-    for ans in response.answers {
-        match ans {
-            DnsRecord::A(v4) => ips.push(IpAddr::V4(v4)),
-            DnsRecord::AAAA(v6) => ips.push(IpAddr::V6(v6)),
-            _ => {}
-        }
-    }
-
-    Ok((ips, latency_ms))
+    Ok((response.collect_ips(), latency_ms))
 }

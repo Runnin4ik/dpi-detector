@@ -871,8 +871,8 @@ mod tests {
         let (ja3_http11, ja4_http11) = hello(false, Some(vec![b"http/1.1".to_vec()]));
         assert!(ja4_http11.starts_with("t13d1516h1_"), "{ja4_http11}");
         assert_eq!(
-            ja4_http11.splitn(2, '_').nth(1),
-            ja4_default.splitn(2, '_').nth(1),
+            ja4_http11.split_once('_').map(|x| x.1),
+            ja4_default.split_once('_').map(|x| x.1),
             "h2 and http/1.1 differ in the ALPN field only"
         );
         assert_eq!(ja3_http11, ja3_default, "JA3 hashes types, not ALPN values");

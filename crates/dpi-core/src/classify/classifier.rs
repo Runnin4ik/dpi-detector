@@ -134,6 +134,24 @@ fn dns_failure_text(msg: &str) -> bool {
     MARKERS.iter().any(|m| msg.contains(m))
 }
 
+/// The verdict for a timeout at `stage`.
+///
+/// Both the message-text path and the OS-code path land here: a `WSAETIMEDOUT`
+/// (10060) on a reading stage is the same drop as one whose text said "timed
+/// out", and while the two branches were written separately the code path had
+/// lost the `sending_data` / `reading_data` arms, so the same condition was
+/// reported as a bare `Timeout` on one path and as `SendTimeout`/`ReadTimeout`
+/// on the other.
+fn timeout_at_stage(stage: &str) -> (DpiStatus, String) {
+    match stage {
+        "tls_handshake" => (DpiStatus::TlsDropped, DET_TLS_HANDSHAKE_TIMEOUT.into()),
+        "tcp_connect" => (DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT.into()),
+        "sending_data" => (DpiStatus::SendTimeout, DET_SEND_TIMEOUT.into()),
+        "reading_data" => (DpiStatus::ReadTimeout, DET_READ_TIMEOUT.into()),
+        _ => (DpiStatus::Timeout, format!("{} ({})", DET_TIMEOUT_WORD, stage)),
+    }
+}
+
 /// Classifies a TCP connection error (mirrors Python `classify_connect_error`).
 /// `stage` uses Python stage names: "tcp_connect", "tls_handshake",
 /// "tls_connected", "sending_data", "reading_data".
@@ -151,13 +169,7 @@ pub fn classify_connect_error_full(
     }
 
     if full.contains("connect timeout") || full.contains("connection timed out") || full.contains("timed out") || full.contains("timeout") {
-        return match stage {
-            "tls_handshake" => (DpiStatus::TlsDropped, DET_TLS_HANDSHAKE_TIMEOUT.into()),
-            "tcp_connect" => (DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT.into()),
-            "sending_data" => (DpiStatus::SendTimeout, DET_SEND_TIMEOUT.into()),
-            "reading_data" => (DpiStatus::ReadTimeout, DET_READ_TIMEOUT.into()),
-            _ => (DpiStatus::Timeout, format!("{} ({})", DET_TIMEOUT_WORD, stage)),
-        };
+        return timeout_at_stage(stage);
     }
 
     // DNS resolution failures (socket.gaierror equivalent)
@@ -230,11 +242,7 @@ pub fn classify_connect_error_full(
         || matches!(raw_os_error, Some(110) | Some(10060))
         || full.contains("timed out");
     if timed_out {
-        return match stage {
-            "tls_handshake" => (DpiStatus::TlsDropped, DET_TLS_HANDSHAKE_TIMEOUT.into()),
-            "tcp_connect" => (DpiStatus::SynDropped, DET_TCP_SYN_TIMEOUT.into()),
-            _ => (DpiStatus::Timeout, format!("{} ({})", DET_TIMEOUT_WORD, stage)),
-        };
+        return timeout_at_stage(stage);
     }
 
     if matches!(raw_os_error, Some(101) | Some(10051)) || full.contains("network is unreachable") {
@@ -466,6 +474,41 @@ mod tests {
             "tcp_connect",
         );
         assert_eq!(s, DpiStatus::TcpRst);
+    }
+
+    /// An OS timeout carries no "timeout" in its text on Windows (WSAETIMEDOUT
+    /// is "A connection attempt failed because the connected party did not
+    /// properly respond…"), so the OS-code path has to reach the same verdict as
+    /// the text path — including the send/read stages, which the second branch
+    /// used to collapse into a bare `Timeout`.
+    #[test]
+    fn test_os_timeout_keeps_the_stage() {
+        let (s, _) = classify_connect_error_full(
+            "connection error",
+            Some(10060),
+            None,
+            0,
+            "reading_data",
+        );
+        assert_eq!(s, DpiStatus::ReadTimeout);
+
+        let (s, _) = classify_connect_error_full(
+            "connection error",
+            Some(110),
+            Some(io::ErrorKind::TimedOut),
+            0,
+            "sending_data",
+        );
+        assert_eq!(s, DpiStatus::SendTimeout);
+
+        let (s, _) = classify_connect_error_full(
+            "connection error",
+            Some(10060),
+            None,
+            0,
+            "tls_handshake",
+        );
+        assert_eq!(s, DpiStatus::TlsDropped);
     }
 
     #[test]

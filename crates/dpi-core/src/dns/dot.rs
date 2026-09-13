@@ -13,7 +13,7 @@ use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
 use super::resolve::resolve_host;
-use super::types::{DnsError, DnsRecord};
+use super::types::DnsError;
 use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
 use crate::net::tls::create_verifying_tls_config;
 
@@ -161,15 +161,7 @@ impl DotSession {
             let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
 
             let parsed = parse_dns_response(&buf, Some(tx_id))?;
-            let mut ips = Vec::new();
-            for ans in parsed.answers {
-                match ans {
-                    DnsRecord::A(v4) => ips.push(IpAddr::V4(v4)),
-                    DnsRecord::AAAA(v6) => ips.push(IpAddr::V6(v6)),
-                    _ => {}
-                }
-            }
-            Ok((ips, latency_ms))
+            Ok((parsed.collect_ips(), latency_ms))
         };
 
         timeout(timeout_dur, execute)

@@ -40,6 +40,26 @@ pub fn ascii_mode() -> bool {
     *ASCII_MODE.get().unwrap_or(&false)
 }
 
+/// The box-drawing glyphs for the current mode, as
+/// `(top-left, top-right, bottom-left, bottom-right, horizontal, vertical)`.
+///
+/// Every box in the TUI takes its border from here, so `--ascii` can never be
+/// honoured by half the screens.
+pub fn box_chars() -> (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+) {
+    if ascii_mode() {
+        ("┌", "┐", "└", "┘", "─", "│")
+    } else {
+        ("╭", "╮", "╰", "╯", "─", "│")
+    }
+}
+
 /// Enables plain (ANSI-free) output for terminals without color support.
 pub fn set_plain_mode(v: bool) {
     let _ = PLAIN_MODE.set(v);
@@ -655,11 +675,7 @@ pub fn panel_with(title: &str, lines: &[String], width: usize, centered: bool, b
     // cannot bleach the border run or shift the right edge.
     let title_len = strip_ansi_len(&title_clean);
     let inner = width.saturating_sub(2);
-    let (tl, tr, bl, br, hb, vb) = if ascii_mode() {
-        ("┌", "┐", "└", "┘", "─", "│")
-    } else {
-        ("╭", "╮", "╰", "╯", "─", "│")
-    };
+    let (tl, tr, bl, br, hb, vb) = box_chars();
     if centered {
         let left = inner.saturating_sub(title_len) / 2;
         let right = inner.saturating_sub(title_len + left);

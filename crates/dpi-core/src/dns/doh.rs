@@ -257,15 +257,7 @@ impl DohSession {
         let body = timeout(timeout_dur, body_fut).await.map_err(|_| DnsError::Timeout)??;
         let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
         let parsed = parse_dns_response(&body, Some(tx_id))?;
-        let mut ips = Vec::new();
-        for ans in parsed.answers {
-            match ans {
-                DnsRecord::A(v4) => ips.push(IpAddr::V4(v4)),
-                DnsRecord::AAAA(v6) => ips.push(IpAddr::V6(v6)),
-                _ => {}
-            }
-        }
-        Ok((ips, latency_ms))
+        Ok((parsed.collect_ips(), latency_ms))
     }
 }
 
@@ -296,15 +288,7 @@ pub async fn probe_doh_dns(
     let body = query_doh_raw(endpoint_url, &query_data, timeout_dur).await?;
     let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
     let parsed = parse_dns_response(&body, Some(tx_id))?;
-    let mut ips = Vec::new();
-    for ans in parsed.answers {
-        match ans {
-            DnsRecord::A(v4) => ips.push(IpAddr::V4(v4)),
-            DnsRecord::AAAA(v6) => ips.push(IpAddr::V6(v6)),
-            _ => {}
-        }
-    }
-    Ok((ips, latency_ms))
+    Ok((parsed.collect_ips(), latency_ms))
 }
 
 /// Queries a DoH resolver for TXT records (e.g. for Team Cymru ASN lookups).

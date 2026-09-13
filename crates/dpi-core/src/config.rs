@@ -824,18 +824,30 @@ pub fn clean_domain(raw: &str) -> Option<String> {
 /// Loads and cleans domain names from a line-separated text file.
 pub fn load_domains_from_file(path: impl AsRef<Path>) -> io::Result<Vec<String>> {
     let content = fs::read_to_string(path)?;
-    Ok(content
+    Ok(parse_domains(&content))
+}
+
+/// Line parsing shared by the file and the embedded domain list: blank lines and
+/// `#` comments dropped, everything else through [`clean_domain`].
+fn parse_domains(content: &str) -> Vec<String> {
+    content
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .filter_map(clean_domain)
-        .collect())
+        .collect()
 }
 
 /// Loads whitelist SNI entries (mirrors load_whitelist_sni): non-empty,
 /// non-comment lines with their 1-based file numbers.
 pub fn load_whitelist_sni(path: impl AsRef<Path>) -> Vec<(String, usize)> {
     let content = fs::read_to_string(path).unwrap_or_default();
+    parse_whitelist_sni(&content)
+}
+
+/// Line parsing shared by the file and the embedded SNI list. The second field
+/// is the 1-based number of the entry, which the report prints.
+fn parse_whitelist_sni(content: &str) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     let mut num = 0usize;
     for line in content.lines() {
@@ -851,27 +863,12 @@ pub fn load_whitelist_sni(path: impl AsRef<Path>) -> Vec<(String, usize)> {
 
 /// Domains shipped inside the binary (fallback when domains.txt is absent).
 pub fn embedded_domains() -> Vec<String> {
-    EMBEDDED_DOMAINS_TXT
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(clean_domain)
-        .collect()
+    parse_domains(EMBEDDED_DOMAINS_TXT)
 }
 
 /// Whitelist SNI shipped inside the binary.
 pub fn embedded_whitelist_sni() -> Vec<(String, usize)> {
-    let mut out = Vec::new();
-    let mut num = 0usize;
-    for line in EMBEDDED_WHITELIST_SNI_TXT.lines() {
-        let s = line.trim();
-        if s.is_empty() || s.starts_with('#') {
-            continue;
-        }
-        num += 1;
-        out.push((s.to_string(), num));
-    }
-    out
+    parse_whitelist_sni(EMBEDDED_WHITELIST_SNI_TXT)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -891,6 +888,21 @@ pub struct Tcp16Target {
 
 fn default_tcp16_port() -> u16 {
     443
+}
+
+impl Tcp16Target {
+    /// The ASN as the tables show it: `AS` + digits, `AS` kept when the list
+    /// already wrote it, `-` when the target carries none.
+    pub fn display_asn(&self) -> String {
+        let raw = self.asn.trim();
+        if raw.is_empty() {
+            "-".to_string()
+        } else if raw.to_uppercase().starts_with("AS") {
+            raw.to_uppercase()
+        } else {
+            format!("AS{}", raw)
+        }
+    }
 }
 
 /// Loads TCP16 targets from a JSON file.

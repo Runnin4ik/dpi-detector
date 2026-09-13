@@ -1,7 +1,8 @@
 use std::collections::HashSet;
+use std::io::{stdout, IsTerminal, Write};
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -11,15 +12,16 @@ use dpi_core::probe::burst::{
     BurstAlpn, BurstSettings, BurstTlsVersion, BURST_MAX_ATTEMPTS, BURST_MAX_TIMEOUT_SECS,
     BURST_MIN_ATTEMPTS, BURST_MIN_TIMEOUT_SECS,
 };
-use dpi_core::i18n::{fingerprint_label, format_bidi, get_messages, Language, Messages};
+use dpi_core::i18n::{fingerprint_label, format_bidi, get_messages, legend_text, Language, Messages};
 use dpi_core::net::netinfo::ipv6_supported;
 use dpi_core::net::version::{version_badge_lang, ReleaseInfo};
 use dpi_core::profile::RegionProfile;
 
 use crate::render::{
-    asc, ascii_mode, clean_output, frame_home, frame_repaint, output_str, plain_mode, render_banner,
-    strip_ansi_len, BOX_WIDTH,
+    asc, ascii_mode, box_chars, clean_output, frame_home, frame_repaint, output_str, panel_to_string,
+    plain_mode, render_banner, strip_ansi_len, BOX_WIDTH,
 };
+use crate::{print_out, println_out, selection_flags};
 
 #[derive(Debug, Clone)]
 pub struct MenuSelection {
@@ -185,7 +187,7 @@ async fn run_menu_loop(
             dirty = true;
             notice = None;
             let code = match code {
-                KeyCode::Char(c) => KeyCode::Char(crate::normalize_key_char(c)),
+                KeyCode::Char(c) => KeyCode::Char(nav_key(c)),
                 other => other,
             };
             if modifiers.contains(KeyModifiers::CONTROL) && (code == KeyCode::Char('c') || code == KeyCode::Char('C')) {
@@ -199,14 +201,8 @@ async fn run_menu_loop(
                 | KeyCode::Char('W')
                 | KeyCode::Char('z')
                 | KeyCode::Char('Z')
-                | KeyCode::Char('ц')
-                | KeyCode::Char('Ц')
-                | KeyCode::Char('ص')
-                | KeyCode::Char('ㄊ')
                 | KeyCode::Char('k')
-                | KeyCode::Char('K')
-                | KeyCode::Char('л')
-                | KeyCode::Char('Л') => {
+                | KeyCode::Char('K') => {
                     cursor = (cursor + total_rows - 1) % total_rows;
                 }
 
@@ -215,17 +211,8 @@ async fn run_menu_loop(
                 | KeyCode::Tab
                 | KeyCode::Char('s')
                 | KeyCode::Char('S')
-                | KeyCode::Char('ы')
-                | KeyCode::Char('Ы')
-                | KeyCode::Char('і')
-                | KeyCode::Char('І')
-                | KeyCode::Char('س')
-                | KeyCode::Char('ㄋ')
-                | KeyCode::Char('ד')
                 | KeyCode::Char('j')
-                | KeyCode::Char('J')
-                | KeyCode::Char('о')
-                | KeyCode::Char('О') => {
+                | KeyCode::Char('J') => {
                     cursor = (cursor + 1) % total_rows;
                 }
 
@@ -233,15 +220,8 @@ async fn run_menu_loop(
                 KeyCode::Left
                 | KeyCode::Char('a')
                 | KeyCode::Char('A')
-                | KeyCode::Char('ф')
-                | KeyCode::Char('Ф')
-                | KeyCode::Char('ش')
-                | KeyCode::Char('ㄇ')
-                | KeyCode::Char('ש')
                 | KeyCode::Char('h')
                 | KeyCode::Char('H')
-                | KeyCode::Char('р')
-                | KeyCode::Char('Р')
                 | KeyCode::Char('-')
                 | KeyCode::Char('<') => {
                     if cursor == 0 {
@@ -270,16 +250,8 @@ async fn run_menu_loop(
                 KeyCode::Right
                 | KeyCode::Char('d')
                 | KeyCode::Char('D')
-                | KeyCode::Char('в')
-                | KeyCode::Char('В')
-                | KeyCode::Char('ی')
-                | KeyCode::Char('ي')
-                | KeyCode::Char('ㄎ')
-                | KeyCode::Char('ג')
                 | KeyCode::Char('l')
                 | KeyCode::Char('L')
-                | KeyCode::Char('д')
-                | KeyCode::Char('Д')
                 | KeyCode::Char('+')
                 | KeyCode::Char('>') => {
                     if cursor == 0 {
@@ -304,12 +276,10 @@ async fn run_menu_loop(
                     }
                 }
 
-                // Toggle at cursor: Space or 'x' / 'X' / 'ч' / 'Ч'
+                // Toggle at cursor: Space or 'x'
                 KeyCode::Char(' ')
                 | KeyCode::Char('x')
-                | KeyCode::Char('X')
-                | KeyCode::Char('ч')
-                | KeyCode::Char('Ч') => {
+                | KeyCode::Char('X') => {
                     if cursor == 0 {
                         let all = Language::ALL;
                         let cur_idx = all.iter().position(|&l| l == current_lang).unwrap_or(0);
@@ -337,18 +307,12 @@ async fn run_menu_loop(
                     toggle_test(&mut selected_tests, c);
                 }
 
-                // Start tests: Enter or 'r' / 'R' / 'к' / 'К' (Run) or 'g' / 'G' / 'п' / 'П' (Go)
+                // Start tests: Enter or 'r' (Run) / 'g' (Go)
                 KeyCode::Enter
                 | KeyCode::Char('r')
                 | KeyCode::Char('R')
-                | KeyCode::Char('к')
-                | KeyCode::Char('К')
-                | KeyCode::Char('ر')
-                | KeyCode::Char('ㄐ')
                 | KeyCode::Char('g')
-                | KeyCode::Char('G')
-                | KeyCode::Char('п')
-                | KeyCode::Char('П') => {
+                | KeyCode::Char('G') => {
                     if selected_tests.is_empty() {
                         // Mirrors Python: refuse to run with no tests checked.
                         notice = Some(msg.menu_need_one.to_string());
@@ -363,14 +327,8 @@ async fn run_menu_loop(
                     });
                 }
 
-                // Quit: 'q' / 'Q' / 'й' / 'Й' / 'ض' / 'ㄆ' or Esc
-                KeyCode::Char('q')
-                | KeyCode::Char('Q')
-                | KeyCode::Char('й')
-                | KeyCode::Char('Й')
-                | KeyCode::Char('ض')
-                | KeyCode::Char('ㄆ')
-                | KeyCode::Esc => {
+                // Quit: 'q' or Esc
+                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
                     return MenuResult::Quit;
                 }
                 _ => {}
@@ -499,11 +457,7 @@ fn draw_menu(
     let title_clean = format!(" {} ", asc(&format_bidi(msg.menu_title, current_lang)));
     let title_len = strip_ansi_len(&title_clean);
     let border_total = BOX_WIDTH.saturating_sub(title_len + 3);
-    let (tl, tr, bl, br, hb, vb) = if ascii_mode() {
-        ("┌", "┐", "└", "┘", "─", "│")
-    } else {
-        ("╭", "╮", "╰", "╯", "─", "│")
-    };
+    let (tl, tr, bl, br, hb, vb) = box_chars();
 
     let top_border = format!(
         "\x1b[1;36m{}{}\x1b[1;36m{}\x1b[1;36m{}\x1b[1;36m{}\x1b[0m",
@@ -717,12 +671,23 @@ async fn burst_settings_loop(
             continue;
         }
         let code = match code {
-            KeyCode::Char(c) => KeyCode::Char(crate::normalize_key_char(c)),
+            KeyCode::Char(c) => KeyCode::Char(normalize_key_char(c)),
             other => other,
         };
         if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c') | KeyCode::Char('C')) {
             return None;
         }
+        // Outside the text field a key is a command, so it resolves through the
+        // layout mapping like every other screen; inside it, letters are text
+        // and must arrive exactly as typed.
+        let code = if editing {
+            code
+        } else {
+            match code {
+                KeyCode::Char(c) => KeyCode::Char(nav_key(c)),
+                other => other,
+            }
+        };
         // The domain field has two states: inactive (a grey input box) and
         // editing, entered with Right and left with Left. Only while editing are
         // the letters text — `w`/`a`/`s`/`d`/`q` are host characters there, so a
@@ -738,11 +703,21 @@ async fn burst_settings_loop(
                 editing = false;
             }
             KeyCode::Char('q') | KeyCode::Char('Q') if !editing => return None,
-            KeyCode::Char('w') | KeyCode::Char('W') if !editing => {
+            KeyCode::Char('w')
+            | KeyCode::Char('W')
+            | KeyCode::Char('z')
+            | KeyCode::Char('Z')
+            | KeyCode::Char('k')
+            | KeyCode::Char('K')
+            if !editing => {
                 cursor = cursor.saturating_sub(1);
                 editing = false;
             }
-            KeyCode::Char('s') | KeyCode::Char('S') if !editing => {
+            KeyCode::Char('s')
+            | KeyCode::Char('S')
+            | KeyCode::Char('j')
+            | KeyCode::Char('J')
+            if !editing => {
                 cursor = (cursor + 1).min(BURST_ROW_PROFILES);
                 editing = false;
             }
@@ -757,7 +732,14 @@ async fn burst_settings_loop(
             }
             // Left leaves the field, and outside it steps a value down.
             KeyCode::Left if editing => editing = false,
-            KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('A') if !editing => match cursor {
+            KeyCode::Left
+            | KeyCode::Char('a')
+            | KeyCode::Char('A')
+            | KeyCode::Char('h')
+            | KeyCode::Char('H')
+            | KeyCode::Char('-')
+            | KeyCode::Char('<')
+            if !editing => match cursor {
                 BURST_ROW_ATTEMPTS => attempts = attempts.saturating_sub(1).max(BURST_MIN_ATTEMPTS),
                 BURST_ROW_TIMEOUT => timeout_secs = timeout_secs.saturating_sub(1).max(BURST_MIN_TIMEOUT_SECS),
                 // Two-valued axes: either direction flips them.
@@ -771,7 +753,14 @@ async fn burst_settings_loop(
                 _ => {}
             },
             // Right enters the field, and outside it steps a value up.
-            KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('D') if !editing => match cursor {
+            KeyCode::Right
+            | KeyCode::Char('d')
+            | KeyCode::Char('D')
+            | KeyCode::Char('l')
+            | KeyCode::Char('L')
+            | KeyCode::Char('+')
+            | KeyCode::Char('>')
+            if !editing => match cursor {
                 BURST_ROW_DOMAIN => editing = true,
                 BURST_ROW_ATTEMPTS => attempts = (attempts + 1).min(BURST_MAX_ATTEMPTS),
                 BURST_ROW_TIMEOUT => timeout_secs = (timeout_secs + 1).min(BURST_MAX_TIMEOUT_SECS),
@@ -929,11 +918,7 @@ fn burst_settings_rows(
     let title_clean = format!(" {} ", asc(&format_bidi(msg.burst_settings_title, lang)));
     let title_len = strip_ansi_len(&title_clean);
     let border_total = BOX_WIDTH.saturating_sub(title_len + 3);
-    let (tl, tr, bl, br, hb, vb) = if ascii_mode() {
-        ("┌", "┐", "└", "┘", "─", "│")
-    } else {
-        ("╭", "╮", "╰", "╯", "─", "│")
-    };
+    let (tl, tr, bl, br, hb, vb) = box_chars();
     rows.push(clean_output(&format!(
         "\x1b[1;36m{}{}\x1b[1;36m{}\x1b[1;36m{}\x1b[1;36m{}\x1b[0m",
         tl, hb, title_clean, hb.repeat(border_total), tr
@@ -1029,10 +1014,292 @@ fn burst_hotkey_row(msg: &Messages, lang: Language, plain: bool) -> String {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum PostTestAction {
+    Repeat,
+    Menu,
+    Export,
+    Quit,
+}
+pub fn normalize_key_char(c: char) -> char {
+    // Fullwidth ASCII (Chinese, Japanese, Korean IME 全角: ｑ -> q, １ -> 1, etc.)
+    if ('\u{FF01}'..='\u{FF5E}').contains(&c) {
+        return char::from_u32(c as u32 - 0xFEE0).unwrap_or(c);
+    }
+    if c == '\u{3000}' {
+        return ' ';
+    }
+    c
+}
+
+/// The Latin key at the same physical position, for the layouts the menus answer
+/// to: Russian/Ukrainian, Persian/Arabic, Bopomofo and Hebrew.
+///
+/// Navigation is written in Latin (`w`/`a`/`s`/`d`, Vim `hjkl`, `r`/`m`/`x`), and
+/// every screen has to answer the same physical key on every layout. Mapping it
+/// once here is what keeps the screens consistent: the alternative — listing the
+/// non-Latin characters in each `match` — is how the burst-settings screen came
+/// to accept only Latin keys while the menu accepted six layouts.
+pub(crate) fn latin_key(c: char) -> char {
+    match c {
+        // Russian / Ukrainian: ц(w) ы(s) ф(a) в(d) й(q) к(r) ч(x) п(g) м(m) ь(m)
+        // л(k) р(h) о(j) д(l) і(s)
+        'ц' | 'Ц' => 'w',
+        'ы' | 'Ы' | 'і' | 'І' => 's',
+        'ф' | 'Ф' => 'a',
+        'в' | 'В' => 'd',
+        'й' | 'Й' => 'q',
+        'к' | 'К' => 'r',
+        'ч' | 'Ч' => 'x',
+        'п' | 'П' => 'g',
+        'м' | 'М' | 'ь' | 'Ь' => 'm',
+        'л' | 'Л' => 'k',
+        'р' | 'Р' => 'h',
+        'о' | 'О' => 'j',
+        'д' | 'Д' => 'l',
+        // Persian / Arabic
+        'ص' => 'w',
+        'س' => 's',
+        'ش' => 'a',
+        'ی' | 'ي' => 'd',
+        'ض' => 'q',
+        'ر' => 'r',
+        'پ' | 'م' | 'ة' => 'm',
+        // Bopomofo
+        'ㄊ' => 'w',
+        'ㄋ' => 's',
+        'ㄇ' => 'a',
+        'ㄎ' => 'd',
+        'ㄆ' => 'q',
+        'ㄐ' => 'r',
+        'ㄩ' => 'm',
+        // Hebrew
+        'ד' => 's',
+        'ש' => 'a',
+        'ג' => 'd',
+        'צ' => 'm',
+        other => other,
+    }
+}
+
+/// The character as key handling sees it: IME width folded to ASCII first, then
+/// [`latin_key`].
+pub fn nav_key(c: char) -> char {
+    latin_key(normalize_key_char(c))
+}
+
+pub(crate) fn read_post_test_action() -> PostTestAction {
+    let _ = enable_raw_mode();
+    loop {
+        if let Ok(Event::Key(KeyEvent { code, modifiers, kind, .. })) = event::read() {
+            if kind != KeyEventKind::Press {
+                continue;
+            }
+            let code = match code {
+                KeyCode::Char(c) => KeyCode::Char(nav_key(c)),
+                other => other,
+            };
+            if modifiers.contains(KeyModifiers::CONTROL) && (code == KeyCode::Char('c') || code == KeyCode::Char('C')) {
+                let _ = disable_raw_mode();
+                return PostTestAction::Quit;
+            }
+
+            match code {
+                // Repeat: Enter or 'r' (any layout)
+                KeyCode::Enter | KeyCode::Char('r') | KeyCode::Char('R') => {
+                    let _ = disable_raw_mode();
+                    print!("\r\n");
+                    let _ = stdout().flush();
+                    return PostTestAction::Repeat;
+                }
+
+                // Menu: 'm' (any layout)
+                KeyCode::Char('m') | KeyCode::Char('M') => {
+                    let _ = disable_raw_mode();
+                    print!("\r\n");
+                    let _ = stdout().flush();
+                    return PostTestAction::Menu;
+                }
+
+                // Export: 's' (any layout)
+                KeyCode::Char('s') | KeyCode::Char('S') => {
+                    let _ = disable_raw_mode();
+                    print!("\r\n");
+                    let _ = stdout().flush();
+                    return PostTestAction::Export;
+                }
+
+                // Quit: 'q' (any layout) or Esc
+                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+                    let _ = disable_raw_mode();
+                    print!("\r\n");
+                    let _ = stdout().flush();
+                    return PostTestAction::Quit;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+pub(crate) fn export_report(path: &str, content: &str, msg: &Messages) {
+    match std::fs::write(path, content) {
+        Ok(()) => println_out(&format!("\x1b[1;32m{}\x1b[0m", msg.report_saved.replace("{}", path))),
+        Err(e) => println_out(&format!("\x1b[1;33m{}\x1b[0m", msg.report_save_fail.replace("{}", &e.to_string()))),
+    }
+}
+
+
+/// Legend-only interactive loop (mirrors `handle_legend_menu`).
+pub(crate) fn legend_loop(lang: Language, msg: &Messages) -> MenuAction {
+    loop {
+        print_out(&legend_text(lang, msg));
+        if !std::io::stdin().is_terminal() {
+            return MenuAction::Quit;
+        }
+        println_out(&panel_to_string(
+            msg.menu_control_menu,
+            &[format!(
+                "  \x1b[1;42;37m Enter \x1b[0m {}   \x1b[1;44;37m M \x1b[0m {}   \x1b[1;41;37m Q \x1b[0m {}",
+                msg.menu_control_repeat, msg.menu_control_menu, msg.menu_control_exit
+            )],
+        ));
+        let _ = stdout().flush();
+        match read_post_test_action() {
+            PostTestAction::Repeat => continue,
+            PostTestAction::Menu => return MenuAction::Menu,
+            PostTestAction::Export => continue,
+            PostTestAction::Quit => return MenuAction::Quit,
+        }
+    }
+}
+
+pub(crate) enum MenuAction {
+    Menu,
+    Quit,
+}
+
+/// The interactive menu, and then the legend screen for as long as the selection
+/// is only the legend.
+///
+/// A legend-only selection has nothing to run, so the legend text stands in for
+/// the run. It used to be printed once and its own menu key was answered by
+/// running the (empty) selection again: the screen came back with the post-run
+/// panel and only the *second* press opened the menu. The key now does what it
+/// says, and the screen ends when the selection can actually run.
+pub(crate) async fn menu_until_something_to_run(
+    lang: Language,
+    profile: RegionProfile,
+    cfg: &AppConfig,
+    badge: &str,
+    version_slot: &VersionSlot,
+) -> Option<MenuSelection> {
+    loop {
+        let chosen = match run_interactive_menu(lang, profile, cfg, badge, version_slot).await {
+            MenuResult::Run(chosen) => chosen,
+            MenuResult::Quit => return None,
+        };
+        let (_, _, _, _, _, _, _, _, only_legend) = selection_flags(&chosen.selected_tests);
+        if !only_legend {
+            return Some(chosen);
+        }
+        match legend_loop(chosen.language, &get_messages(chosen.language)) {
+            MenuAction::Menu => continue,
+            MenuAction::Quit => return None,
+        }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::render::{asc_with, strip_ansi};
+
+    #[test]
+    fn test_normalize_key_char() {
+        // Fullwidth letters to ASCII (Chinese / Japanese / Korean IME)
+        assert_eq!(normalize_key_char('ｑ'), 'q');
+        assert_eq!(normalize_key_char('Ｑ'), 'Q');
+        assert_eq!(normalize_key_char('ｗ'), 'w');
+        assert_eq!(normalize_key_char('ｓ'), 's');
+        assert_eq!(normalize_key_char('ａ'), 'a');
+        assert_eq!(normalize_key_char('ｄ'), 'd');
+        assert_eq!(normalize_key_char('ｒ'), 'r');
+        assert_eq!(normalize_key_char('ｍ'), 'm');
+
+        // Fullwidth digits to ASCII
+        assert_eq!(normalize_key_char('０'), '0');
+        assert_eq!(normalize_key_char('１'), '1');
+        assert_eq!(normalize_key_char('２'), '2');
+        assert_eq!(normalize_key_char('６'), '6');
+
+        // Fullwidth space
+        assert_eq!(normalize_key_char('\u{3000}'), ' ');
+
+        // Standard characters preserved
+        assert_eq!(normalize_key_char('q'), 'q');
+        assert_eq!(normalize_key_char('й'), 'й');
+        assert_eq!(normalize_key_char('ض'), 'ض');
+    }
+
+    /// Navigation is answered by physical position: the burst-settings screen
+    /// used to accept only Latin letters, so a user in a Cyrillic, Persian,
+    /// Bopomofo or Hebrew layout could not move the cursor there even though the
+    /// menu accepted the same keys.
+    #[test]
+    fn test_nav_key_covers_the_supported_layouts() {
+        for (typed, key) in [
+            // Russian / Ukrainian
+            ('ц', 'w'),
+            ('Ц', 'w'),
+            ('ы', 's'),
+            ('Ы', 's'),
+            ('ф', 'a'),
+            ('в', 'd'),
+            ('й', 'q'),
+            ('к', 'r'),
+            ('ч', 'x'),
+            ('п', 'g'),
+            ('ь', 'm'),
+            ('д', 'l'),
+            ('і', 's'),
+            ('л', 'k'),
+            ('р', 'h'),
+            ('о', 'j'),
+            // Persian / Arabic
+            ('ص', 'w'),
+            ('س', 's'),
+            ('ش', 'a'),
+            ('ی', 'd'),
+            ('ض', 'q'),
+            ('ر', 'r'),
+            ('ة', 'm'),
+            // Bopomofo
+            ('ㄊ', 'w'),
+            ('ㄋ', 's'),
+            ('ㄇ', 'a'),
+            ('ㄎ', 'd'),
+            ('ㄆ', 'q'),
+            ('ㄐ', 'r'),
+            ('ㄩ', 'm'),
+            // Hebrew
+            ('ד', 's'),
+            ('ש', 'a'),
+            ('ג', 'd'),
+            ('צ', 'm'),
+            // Fullwidth Latin goes through the IME fold first.
+            ('ｗ', 'w'),
+            ('ｑ', 'q'),
+        ] {
+            assert_eq!(nav_key(typed), key, "{typed} must answer as {key}");
+        }
+
+        // Latin keys and characters of no mapped layout stay as they are.
+        for c in ['w', 'W', 'q', 'Q', 'x', 'ж', 'щ', 'ㄅ', '1', ' ', '-'] {
+            assert_eq!(nav_key(c), c);
+        }
+    }
 
     /// The settings screen is a fixed-width box: every row must be exactly the
     /// box width, an inactive empty field prompts how to start typing, and the

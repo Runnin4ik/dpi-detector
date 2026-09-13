@@ -476,6 +476,17 @@ fn hklm() -> RegKey {
     RegKey::predef(HKEY_LOCAL_MACHINE)
 }
 
+/// One registry value that Windows may store as either a single string or a
+/// list of them: an empty vector when the value is absent.
+#[cfg(target_os = "windows")]
+fn reg_strings(key: &RegKey, name: &str) -> Vec<String> {
+    if let Ok(s) = key.get_value::<String, _>(name) {
+        vec![s]
+    } else {
+        key.get_value::<Vec<String>, _>(name).unwrap_or_default()
+    }
+}
+
 /// GUIDs of really existing adapters (mirrors `_live_adapter_guids`).
 #[cfg(target_os = "windows")]
 fn live_adapter_guids() -> HashSet<String> {
@@ -607,19 +618,16 @@ fn read_dns_entries(guid: &str) -> Vec<(String, String)> {
             ("Dhcpv6DNSServers", "dhcp"),
             ("ProfileNameServer", "dhcp"),
         ] {
-            let mut cand: Vec<String> = Vec::new();
-            if let Ok(s) = key.get_value::<String, _>(val) {
-                cand.extend(split_list(&s));
-            } else if let Ok(v) = key.get_value::<Vec<String>, _>(val) {
-                for item in &v {
-                    cand.extend(split_list(item));
-                }
-            } else if let Ok(rv) = key.get_raw_value(val) {
-                if rv.vtype == REG_BINARY {
-                    for chunk in rv.bytes.chunks(16) {
-                        if chunk.len() == 16 {
-                            if let Ok(arr) = <&[u8; 16]>::try_from(chunk) {
-                                cand.push(Ipv6Addr::from(*arr).to_string());
+            let mut cand: Vec<String> =
+                reg_strings(&key, val).iter().flat_map(|s| split_list(s)).collect();
+            if cand.is_empty() {
+                if let Ok(rv) = key.get_raw_value(val) {
+                    if rv.vtype == REG_BINARY {
+                        for chunk in rv.bytes.chunks(16) {
+                            if chunk.len() == 16 {
+                                if let Ok(arr) = <&[u8; 16]>::try_from(chunk) {
+                                    cand.push(Ipv6Addr::from(*arr).to_string());
+                                }
                             }
                         }
                     }
@@ -671,12 +679,7 @@ fn adapter_for_route(gw: &str, iface_ip: &str, live: &HashSet<String>) -> String
             if let Ok(k) = key.open_subkey(&sub) {
                 if !gw.is_empty() {
                     for val in ["DhcpDefaultGateway", "DefaultGateway"] {
-                        let mut raw: Vec<String> = Vec::new();
-                        if let Ok(s) = k.get_value::<String, _>(val) {
-                            raw.push(s);
-                        } else if let Ok(v) = k.get_value::<Vec<String>, _>(val) {
-                            raw.extend(v);
-                        }
+                        let raw = reg_strings(&k, val);
                         for entry in raw {
                             if entry.split(',').next().unwrap_or("").trim() == gw {
                                 return sub_l;
@@ -686,12 +689,7 @@ fn adapter_for_route(gw: &str, iface_ip: &str, live: &HashSet<String>) -> String
                 }
                 if !iface_ip.is_empty() {
                     for val in ["DhcpIPAddress", "IPAddress"] {
-                        let mut raw: Vec<String> = Vec::new();
-                        if let Ok(s) = k.get_value::<String, _>(val) {
-                            raw.push(s);
-                        } else if let Ok(v) = k.get_value::<Vec<String>, _>(val) {
-                            raw.extend(v);
-                        }
+                        let raw = reg_strings(&k, val);
                         for entry in raw {
                             if entry.split(',').next().unwrap_or("").trim() == iface_ip {
                                 return sub_l;
@@ -747,17 +745,10 @@ fn interface_gateway(guid: &str) -> String {
     if let Ok(key) = hklm().open_subkey(TCPIP_BASE) {
         if let Ok(k) = key.open_subkey(guid) {
             for val in ["DhcpDefaultGateway", "DefaultGateway"] {
-                if let Ok(s) = k.get_value::<String, _>(val) {
-                    let first = s.split(',').next().unwrap_or("").trim();
+                for entry in reg_strings(&k, val) {
+                    let first = entry.split(',').next().unwrap_or("").trim();
                     if !first.is_empty() {
                         return first.to_string();
-                    }
-                } else if let Ok(v) = k.get_value::<Vec<String>, _>(val) {
-                    for entry in &v {
-                        let first = entry.split(',').next().unwrap_or("").trim();
-                        if !first.is_empty() {
-                            return first.to_string();
-                        }
                     }
                 }
             }

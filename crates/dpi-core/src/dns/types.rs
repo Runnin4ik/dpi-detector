@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +16,22 @@ pub struct DnsResponse {
     pub flags: u16,
     pub rcode: u8,
     pub answers: Vec<DnsRecord>,
+}
+
+impl DnsResponse {
+    /// The A/AAAA answers, in response order. Every resolver path (UDP, DoT,
+    /// both DoH entries) answers with exactly this list, so the walk lives here
+    /// rather than once per transport.
+    pub fn collect_ips(&self) -> Vec<IpAddr> {
+        self.answers
+            .iter()
+            .filter_map(|ans| match ans {
+                DnsRecord::A(v4) => Some(IpAddr::V4(*v4)),
+                DnsRecord::AAAA(v6) => Some(IpAddr::V6(*v6)),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

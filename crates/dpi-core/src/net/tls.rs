@@ -41,32 +41,45 @@ pub fn crypto_provider_with_pq() -> Arc<rustls::crypto::CryptoProvider> {
 }
 
 /// Creates a standard verifying TLS ClientConfig backed by system/webpki roots.
+///
+/// Built once: assembling the WebPKI roots (hundreds of anchors plus the
+/// verifier's name index) is per-connection work that a DoT/DoH probe would
+/// otherwise repeat on every dial, and a `ClientConfig` is immutable once built,
+/// which is why it is handed out as an `Arc`.
 pub fn create_verifying_tls_config() -> Arc<ClientConfig> {
-    let mut root_store = RootCertStore::empty();
-    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    static CONFIG: LazyLock<Arc<ClientConfig>> = LazyLock::new(|| {
+        let mut root_store = RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-    let config = ClientConfig::builder_with_provider(crypto_provider())
-        .with_safe_default_protocol_versions()
-        .expect("safe default protocol versions")
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
+        let config = ClientConfig::builder_with_provider(crypto_provider())
+            .with_safe_default_protocol_versions()
+            .expect("safe default protocol versions")
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
 
-    Arc::new(config)
+        Arc::new(config)
+    });
+    CONFIG.clone()
 }
 
 /// Creates a verifying TLS ClientConfig for DoH (RFC 8484) with ALPN h2 / http/1.1.
+/// Cached like [`create_verifying_tls_config`]; the ALPN list is part of the
+/// cached config and is never mutated afterwards.
 pub fn create_verifying_doh_tls_config() -> Arc<ClientConfig> {
-    let mut root_store = RootCertStore::empty();
-    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    static CONFIG: LazyLock<Arc<ClientConfig>> = LazyLock::new(|| {
+        let mut root_store = RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-    let mut config = ClientConfig::builder_with_provider(crypto_provider())
-        .with_safe_default_protocol_versions()
-        .expect("safe default protocol versions")
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        let mut config = ClientConfig::builder_with_provider(crypto_provider())
+            .with_safe_default_protocol_versions()
+            .expect("safe default protocol versions")
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
-    Arc::new(config)
+        Arc::new(config)
+    });
+    CONFIG.clone()
 }
 
 /// A verifier that accepts any server certificate (CERT_NONE equivalent for DPI testing).
