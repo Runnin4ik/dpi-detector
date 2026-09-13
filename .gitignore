@@ -2,6 +2,7 @@
 .omp/
 *.exe
 *.pdb
+/dpi_detector_crash.log
 .idea/
 .vscode/
 AGENTS.md
