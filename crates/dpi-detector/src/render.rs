@@ -5,20 +5,26 @@ use dpi_core::dns::availability::{
     known_resolver, net24, org_label, subst_counts, DnsAvailReport, ProbeKind,
 };
 use dpi_core::dns::availability::DnsAnswer;
-use dpi_core::i18n::{format_bidi, Language, Messages};
+use dpi_core::i18n::{
+    detail_lines, detail_text, fingerprint_label, fmt_size, fmt_speed, format_bidi, Messages,
+};
 use dpi_core::net::netinfo::{flag_emoji, is_tun_name, SystemDnsInfo};
+use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::probe::domains::{fake_ip_type, DomainEntry, DomainStats, FakeIpType};
+use dpi_core::probe::burst::{BurstReport, BurstSettings};
 use dpi_core::probe::telegram::TelegramFullReport;
-use dpi_core::probe::whitelist::{AsVerdict, WhitelistReport};
+use dpi_core::probe::whitelist::{AsVerdict, WhitelistReport, NO_SNI_TAG};
 use dpi_core::profile::RegionProfile;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Write};
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use dpi_core::ProgressBlock;
 /// ASCII-only output for legacy consoles (see `--ascii`).
 static ASCII_MODE: OnceLock<bool> = OnceLock::new();
 static PLAIN_MODE: OnceLock<bool> = OnceLock::new();
@@ -98,6 +104,29 @@ pub fn output_str(s: &str) {
 }
 
 #[cfg(windows)]
+#[allow(clippy::upper_case_acronyms)]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct COORD { x: i16, y: i16 }
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct SMALL_RECT { left: i16, top: i16, right: i16, bottom: i16 }
+#[cfg(windows)]
+#[allow(clippy::upper_case_acronyms)]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CONSOLE_SCREEN_BUFFER_INFO {
+    size: COORD,
+    cursor_pos: COORD,
+    attributes: u16,
+    window: SMALL_RECT,
+    max_size: COORD,
+}
+#[cfg(windows)]
+const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
+
+#[cfg(windows)]
 fn write_win32_ansi(s: &str) {
     extern "system" {
         fn GetStdHandle(nStdHandle: u32) -> isize;
@@ -114,25 +143,7 @@ fn write_win32_ansi(s: &str) {
             lpConsoleScreenBufferInfo: *mut CONSOLE_SCREEN_BUFFER_INFO,
         ) -> i32;
     }
-    #[allow(clippy::upper_case_acronyms)]
-    #[repr(C)]
-    #[derive(Clone, Copy, Default)]
-    struct COORD { x: i16, y: i16 }
-    #[repr(C)]
-    #[derive(Clone, Copy, Default)]
-    struct SMALL_RECT { left: i16, top: i16, right: i16, bottom: i16 }
-    #[allow(clippy::upper_case_acronyms)]
-    #[repr(C)]
-    #[derive(Clone, Copy, Default)]
-    struct CONSOLE_SCREEN_BUFFER_INFO {
-        size: COORD,
-        cursor_pos: COORD,
-        attributes: u16,
-        window: SMALL_RECT,
-        max_size: COORD,
-    }
 
-    const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
     let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
     if handle == 0 || handle == -1 {
         let _ = std::io::stdout().write_all(s.as_bytes());
@@ -192,6 +203,53 @@ fn write_win32_ansi(s: &str) {
     }
 }
 
+/// Returns the cursor to column 0 of the row `drawn` lines above it: the first
+/// row of the frame the previous paint left on screen. Nothing is erased and no
+/// absolute home is used, so the output written above the frame stays where it
+/// is and stays scrollable.
+///
+/// Written straight to stdout rather than through `output_str`: the legacy
+/// translator below drops every escape that is not SGR, and on those consoles
+/// (Windows 7/8) the move is done through the console API instead.
+pub fn frame_home(drawn: u16) {
+    if drawn == 0 {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        if !has_vt() {
+            win32_frame_home(drawn);
+            return;
+        }
+    }
+    let mut out = std::io::stdout();
+    let _ = out.write_all(format!("\x1b[{}A\r", drawn).as_bytes());
+    let _ = out.flush();
+}
+
+#[cfg(windows)]
+fn win32_frame_home(drawn: u16) {
+    extern "system" {
+        fn GetStdHandle(nStdHandle: u32) -> isize;
+        fn GetConsoleScreenBufferInfo(
+            hConsoleOutput: isize,
+            lpConsoleScreenBufferInfo: *mut CONSOLE_SCREEN_BUFFER_INFO,
+        ) -> i32;
+        fn SetConsoleCursorPosition(hConsoleOutput: isize, dwCursorPosition: COORD) -> i32;
+    }
+    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    if handle == 0 || handle == -1 {
+        return;
+    }
+    let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+    if unsafe { GetConsoleScreenBufferInfo(handle, &mut info) } != 0 {
+        // Buffer coordinates, clamped: an escape would wrap past the top row of
+        // the screen buffer and come back up from the bottom.
+        let row = (info.cursor_pos.y as i32 - drawn as i32).max(0) as i16;
+        unsafe { SetConsoleCursorPosition(handle, COORD { x: 0, y: row }) };
+    }
+}
+
 #[cfg(windows)]
 fn apply_ansi_code(code: &str, mut cur: u16, default_attr: u16) -> u16 {
     const FOREGROUND_BLUE: u16 = 0x0001;
@@ -202,7 +260,11 @@ fn apply_ansi_code(code: &str, mut cur: u16, default_attr: u16) -> u16 {
     const BACKGROUND_GREEN: u16 = 0x0020;
     const BACKGROUND_RED: u16 = 0x0040;
     const BACKGROUND_INTENSITY: u16 = 0x0080;
-    const FG_MASK: u16 = 0x000F;
+    // RGB bits only: intensity is a separate SGR attribute (`1` bright / `2`
+    // dim) and has to survive a color code, or `\x1b[1;32m` lands on a legacy
+    // console as plain dark green.
+    const FG_MASK: u16 = 0x0007;
+    const FG_ATTR_MASK: u16 = FG_MASK | FOREGROUND_INTENSITY;
     const BG_MASK: u16 = 0x00F0;
 
     if code == "0" || code.is_empty() {
@@ -234,7 +296,7 @@ fn apply_ansi_code(code: &str, mut cur: u16, default_attr: u16) -> u16 {
                 if g > 64 { fg |= FOREGROUND_GREEN; }
                 if b > 64 { fg |= FOREGROUND_BLUE; }
                 if r > 160 || g > 160 || b > 160 { fg |= FOREGROUND_INTENSITY; }
-                cur = (cur & !FG_MASK) | fg;
+                cur = (cur & !FG_ATTR_MASK) | fg;
                 idx += 4;
             }
             "38" if idx + 2 < parts.len() && parts[idx + 1] == "5" => {
@@ -258,7 +320,7 @@ fn apply_ansi_code(code: &str, mut cur: u16, default_attr: u16) -> u16 {
                     15 => FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
                     _ => FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
                 };
-                cur = (cur & !FG_MASK) | fg;
+                cur = (cur & !FG_ATTR_MASK) | fg;
                 idx += 2;
             }
             "90" => cur = (cur & !FG_MASK) | FOREGROUND_INTENSITY,
@@ -406,7 +468,7 @@ pub const BOX_WIDTH: usize = 71;
 /// Maps a probe status to its table cell color (mirrors the Rich markup).
 pub fn status_color(s: DpiStatus) -> Color {
     match s {
-        DpiStatus::Ok | DpiStatus::Redir => Color::Green,
+        DpiStatus::Ok => Color::Green,
         DpiStatus::NoTls13 | DpiStatus::NoCa => Color::Yellow,
         DpiStatus::LocalIp | DpiStatus::DnsFail | DpiStatus::NxDomain => Color::Yellow,
         DpiStatus::Err => Color::DarkGrey,
@@ -429,6 +491,151 @@ pub fn strip_ansi_len(s: &str) -> usize {
         }
     }
     count
+}
+
+/// One element of a styled string: an SGR escape run, or a visible character
+/// with its terminal cell width.
+enum AnsiTok {
+    Esc(String),
+    Ch(char, usize),
+}
+
+fn ansi_tokens(s: &str) -> Vec<AnsiTok> {
+    let mut out = Vec::new();
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            let mut esc = String::from(c);
+            for c2 in chars.by_ref() {
+                esc.push(c2);
+                if c2.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            out.push(AnsiTok::Esc(esc));
+        } else {
+            out.push(AnsiTok::Ch(c, unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)));
+        }
+    }
+    out
+}
+
+/// SGR sequences still in effect at the end of `s` (empty when the text is
+/// back to the default style).
+fn active_sgr(s: &str) -> String {
+    let mut active = String::new();
+    for tok in ansi_tokens(s) {
+        if let AnsiTok::Esc(e) = tok {
+            if e == "\x1b[0m" {
+                active.clear();
+            } else if e.ends_with('m') {
+                active.push_str(&e);
+            }
+        }
+    }
+    active
+}
+
+/// Terminates the line's open SGR: without it the panel's padding, which is
+/// written after the content in the same escape run, would inherit the colour.
+fn close_sgr(line: &mut String) {
+    if !active_sgr(line).is_empty() {
+        line.push_str("\x1b[0m");
+    }
+}
+
+/// Splits a styled string at the last possible space so it fits `width` cells;
+/// a single token wider than the column is broken by character. Every line is
+/// self-contained: a style open at the break is re-armed on the next line, so
+/// the colour of a wrapped value survives the break (mirrors what Rich does
+/// when it wraps a table cell).
+fn wrap_ansi(s: &str, width: usize) -> Vec<String> {
+    let width = width.max(8);
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0usize;
+    // Byte offset of the space the line may be broken at.
+    let mut brk: Option<usize> = None;
+    for tok in ansi_tokens(s) {
+        match tok {
+            AnsiTok::Esc(e) => cur.push_str(&e),
+            AnsiTok::Ch(c, cw) => {
+                if cur_w + cw > width {
+                    // Close the line and carry the open SGR over to the next one.
+                    // The break is at the last space; a single token wider than
+                    // the column is broken where it stands (by character).
+                    let tail = brk.take().map(|idx| cur.split_off(idx));
+                    let state = active_sgr(&cur);
+                    close_sgr(&mut cur);
+                    lines.push(std::mem::take(&mut cur));
+                    cur.push_str(&state);
+                    if let Some(tail) = tail {
+                        cur.push_str(tail.trim_start_matches(' '));
+                    }
+                    cur_w = strip_ansi_len(&cur);
+                }
+                if c == ' ' {
+                    // Remember the newest space: the line is filled greedily.
+                    brk = Some(cur.len());
+                }
+                cur.push(c);
+                cur_w += cw;
+            }
+        }
+    }
+    if !cur.is_empty() || lines.is_empty() {
+        close_sgr(&mut cur);
+        lines.push(cur);
+    }
+    lines
+}
+
+/// Erase to the end of the current row (`EL`), empty in plain (ANSI-free) mode.
+fn erase_line() -> &'static str {
+    if plain_mode() {
+        ""
+    } else {
+        "\x1b[K"
+    }
+}
+
+/// Erase everything below the cursor (`ED`), empty in plain (ANSI-free) mode.
+fn erase_below() -> &'static str {
+    if plain_mode() {
+        ""
+    } else {
+        "\x1b[J"
+    }
+}
+
+/// One repaint of a multi-line frame (menu) drawn from the top-left corner.
+///
+/// Every row is padded to the widest row of this frame *and* to the widest row
+/// of the previous one, so a line that shrank between repaints - another
+/// language, a shorter counter - cannot leave glyphs of the longer line behind.
+/// The erase sequences cover what padding cannot: `EL` after each row because a
+/// terminal with a CJK font advances ambiguous glyphs (`│`, `↑`, `←`, `•`) by two
+/// columns, so our width math lands a few cells short of the real row end, and
+/// `ED` once at the end to drop rows a previous, wrapped frame left below this
+/// one. Non-VT consoles get the padding only: their cells are one column wide,
+/// which is exactly what the padding is measured in, and they ignore both
+/// escapes.
+///
+/// `prev_max` is the widest row of the previous frame, updated in place.
+pub fn frame_repaint(rows: &[String], prev_max: &mut usize) -> String {
+    let widths: Vec<usize> = rows.iter().map(|r| strip_ansi_len(r)).collect();
+    let widest = widths.iter().copied().max().unwrap_or(0);
+    let target = widest.max(*prev_max);
+    let mut out = String::with_capacity(rows.len() * (target + 16));
+    for (row, width) in rows.iter().zip(widths.iter()) {
+        out.push_str(row);
+        out.push_str(&" ".repeat(target - width));
+        out.push_str(erase_line());
+        out.push_str("\r\n");
+    }
+    out.push_str(erase_below());
+    *prev_max = widest;
+    out
 }
 
 pub fn panel_to_string(title: &str, lines: &[String]) -> String {
@@ -479,53 +686,248 @@ pub fn panel_with(title: &str, lines: &[String], width: usize, centered: bool, b
     out.push_str(&format!("\x1b[{border}m{}{}{}\x1b[0m\n", bl, hb.repeat(width.saturating_sub(2)), br));
     out
 }
-struct ProgressState {
-    desc: String,
+struct BlockState {
+    /// Canonical protocol token (rule 4), empty for a single-counter phase.
+    token: &'static str,
+    done: usize,
     total: usize,
-    parens: bool,
 }
 
-/// Live one-line progress on stderr (mirrors rich transient `Progress` and the
-/// `\r` DNS bar). Draws only when stderr is a TTY; silent otherwise so pipes
-/// and the report file stay byte-clean.
+struct ProgressState {
+    desc: String,
+    blocks: Vec<BlockState>,
+    started: Instant,
+    /// Width of the last drawn line, so a shrinking counter cannot leave
+    /// digits behind on the terminal.
+    drawn: usize,
+}
+
+/// How often the line is redrawn while nothing finishes, so the elapsed clock
+/// keeps moving and a slow unit does not make the phase look hung.
+const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+
+/// `mm:ss`, or `h:mm:ss` past the hour.
+fn fmt_dur(d: Duration) -> String {
+    let s = d.as_secs();
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+    } else {
+        format!("{:02}:{:02}", s / 60, s % 60)
+    }
+}
+
+/// One progress line: `desc  12/50 · 00:07`. A multi-block phase (test 1) shows
+/// every counter that is running at the same time instead —
+/// `DNS  UDP 12/50 · DoH 2/37 · DoT 0/34 · EGRESS 5/50 · 00:31` — because the
+/// blocks overlap and no single sequential counter describes them. Only the
+/// elapsed clock is drawn, never an estimate: per-unit cost differs by an order
+/// of magnitude across blocks, so a projected rate would lie. The trailing
+/// ellipsis of the phase descriptions is dropped, the live numbers already say
+/// "running".
+fn progress_line(desc: &str, blocks: &[BlockState], elapsed: Duration) -> String {
+    let mut line = desc.trim_end_matches(['.', ' ']).to_string();
+    if blocks.len() == 1 && blocks[0].token.is_empty() {
+        line.push_str(&format!("  {}/{}", blocks[0].done, blocks[0].total));
+    } else if !blocks.is_empty() {
+        let counters: Vec<String> = blocks
+            .iter()
+            .map(|b| format!("{} {}/{}", b.token, b.done, b.total))
+            .collect();
+        line.push_str("  ");
+        line.push_str(&counters.join(" · "));
+    }
+    line.push_str(&format!(" · {}", fmt_dur(elapsed)));
+    line
+}
+
+/// A timer that redraws the line while a phase runs.
+struct Refresher {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Refresher {
+    fn idle() -> Self {
+        Self { stop: Arc::new(AtomicBool::new(false)), handle: None }
+    }
+}
+
+/// Live one-line progress on stderr (mirrors rich transient `Progress`).
+/// Draws only when stderr is a TTY; silent otherwise so pipes and the report
+/// file stay byte-clean.
 pub struct LiveProgress {
     state: Mutex<ProgressState>,
-    done: AtomicUsize,
+    /// Weak self-reference for the refresher thread (never a cycle).
+    me: Mutex<Weak<LiveProgress>>,
+    refresher: Mutex<Refresher>,
     tty: bool,
 }
 
 impl LiveProgress {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            state: Mutex::new(ProgressState { desc: String::new(), total: 0, parens: true }),
-            done: AtomicUsize::new(0),
+        let live = Arc::new(Self {
+            state: Mutex::new(ProgressState {
+                desc: String::new(),
+                blocks: Vec::new(),
+                started: Instant::now(),
+                drawn: 0,
+            }),
+            me: Mutex::new(Weak::new()),
+            refresher: Mutex::new(Refresher::idle()),
             tty: std::io::stderr().is_terminal(),
-        })
-    }
-
-    /// Starts (or restarts) a phase: resets the counter and draws `(0/total)`.
-    pub fn set(&self, desc: String, total: usize, parens: bool) {
-        self.done.store(0, Ordering::SeqCst);
-        if let Ok(mut st) = self.state.lock() {
-            *st = ProgressState { desc, total, parens };
+        });
+        if let Ok(mut me) = live.me.lock() {
+            *me = Arc::downgrade(&live);
         }
+        live
+    }
+
+    /// Starts a single-counter phase: resets the counter and its clock.
+    pub fn set(&self, desc: String, total: usize) {
+        self.start(desc, vec![BlockState { token: "", done: 0, total }]);
+    }
+
+    /// Starts a sequential run of stages that share one line (test 2: DNS →
+    /// TLS 1.3 → TLS 1.2 → HTTP): every stage keeps its own counter, the
+    /// counters already finished stay on screen and the clock spans the whole
+    /// run instead of restarting at each stage.
+    pub fn begin_stages(&self, desc: String, stages: &[(ProgressBlock, usize)]) {
+        self.start(
+            desc,
+            stages
+                .iter()
+                .map(|(block, total)| BlockState { token: block.token(), done: 0, total: *total })
+                .collect(),
+        );
+    }
+
+    /// Corrects the total of a stage that is already on the line, for when its
+    /// phase reports the count it actually iterates.
+    pub fn set_total(&self, block: ProgressBlock, total: usize) {
+        let changed = match self.state.lock() {
+            Ok(mut st) => match st.blocks.iter_mut().find(|b| b.token == block.token()) {
+                Some(b) if b.total != total => {
+                    b.total = total;
+                    true
+                }
+                _ => false,
+            },
+            Err(_) => false,
+        };
+        if changed {
+            self.draw();
+        }
+    }
+
+    /// Starts a phase whose blocks run concurrently and are all reported.
+    pub fn set_blocks(&self, desc: String, blocks: &[(ProgressBlock, usize)]) {
+        self.start(
+            desc,
+            blocks
+                .iter()
+                .map(|(block, total)| BlockState { token: block.token(), done: 0, total: *total })
+                .collect(),
+        );
+    }
+
+    fn start(&self, desc: String, blocks: Vec<BlockState>) {
+        if let Ok(mut st) = self.state.lock() {
+            st.desc = desc;
+            st.blocks = blocks;
+            st.started = Instant::now();
+        }
+        self.start_refresher();
         self.draw();
     }
 
+    /// Advances the single counter of the current phase.
     pub fn tick(&self) {
-        self.done.fetch_add(1, Ordering::SeqCst);
-        self.draw();
+        if self.bump_first() {
+            self.draw();
+        }
     }
 
-    /// Clears the line (transient: nothing remains after the phase).
+    /// Advances the counter of `block` in a multi-block phase.
+    pub fn bump(&self, block: ProgressBlock) {
+        let advanced = match self.state.lock() {
+            Ok(mut st) => match st.blocks.iter_mut().find(|b| b.token == block.token()) {
+                Some(b) => {
+                    b.done += 1;
+                    true
+                }
+                None => false,
+            },
+            Err(_) => false,
+        };
+        if advanced {
+            self.draw();
+        }
+    }
+
+    fn bump_first(&self) -> bool {
+        match self.state.lock() {
+            Ok(mut st) => match st.blocks.first_mut() {
+                Some(b) => {
+                    b.done += 1;
+                    true
+                }
+                None => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    /// Clears the line and stops redrawing (transient: nothing remains).
     pub fn finish(&self) {
-        if self.tty {
-            if has_vt() {
-                eprint!("\x1b[2K\r");
-            } else {
-                eprint!("\r                                                                               \r");
+        self.stop_refresher();
+        if !self.tty {
+            return;
+        }
+        let drawn = self.state.lock().map(|st| st.drawn).unwrap_or(0);
+        if has_vt() {
+            eprint!("\x1b[2K\r");
+        } else {
+            eprint!("\r{}\r", " ".repeat(drawn.max(79)));
+        }
+        let _ = std::io::stderr().flush();
+    }
+
+    fn start_refresher(&self) {
+        if !self.tty {
+            return;
+        }
+        self.stop_refresher();
+        let weak = match self.me.lock() {
+            Ok(me) => me.clone(),
+            Err(_) => return,
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_c = Arc::clone(&stop);
+        let handle = std::thread::spawn(move || {
+            while !stop_c.load(Ordering::SeqCst) {
+                std::thread::sleep(REFRESH_INTERVAL);
+                if stop_c.load(Ordering::SeqCst) {
+                    break;
+                }
+                match weak.upgrade() {
+                    Some(live) => live.draw(),
+                    None => break,
+                }
             }
-            let _ = std::io::stderr().flush();
+        });
+        if let Ok(mut r) = self.refresher.lock() {
+            *r = Refresher { stop, handle: Some(handle) };
+        }
+    }
+
+    fn stop_refresher(&self) {
+        let old = match self.refresher.lock() {
+            Ok(mut r) => std::mem::replace(&mut *r, Refresher::idle()),
+            Err(_) => return,
+        };
+        old.stop.store(true, Ordering::SeqCst);
+        if let Some(h) = old.handle {
+            let _ = h.join();
         }
     }
 
@@ -533,15 +935,16 @@ impl LiveProgress {
         if !self.tty {
             return;
         }
-        if let Ok(st) = self.state.lock() {
-            let done = self.done.load(Ordering::SeqCst);
-            let text = if st.parens {
-                format!("{} ({}/{})...", st.desc, done, st.total)
-            } else {
-                format!("{} {}/{}", st.desc, done, st.total)
-            };
-            eprint!("\r  {}   ", text);
+        if let Ok(mut st) = self.state.lock() {
+            let elapsed = st.started.elapsed();
+            let text = progress_line(&st.desc, &st.blocks, elapsed);
+            // Pad over the tail of a longer previous line before parking the
+            // cursor: `\r` alone only moves it, it does not erase.
+            let width = text.chars().count();
+            let pad = st.drawn.saturating_sub(width);
+            eprint!("\r  {}{}", text, " ".repeat(pad));
             let _ = std::io::stderr().flush();
+            st.drawn = width;
         }
     }
 }
@@ -612,6 +1015,28 @@ pub fn render_banner(msg: &Messages, _profile: RegionProfile, badge: &str) -> St
     );
     panel_with(&version_line, &[row1, row2], BOX_WIDTH, false, "36")
 }
+/// Active TLS fingerprint line(s) for the human report header (text mode only).
+/// Always one line with the profile (`Fingerprint: FIREFOX (firefox 148)`) using the
+/// canonical token and label; the translated caveat follows on a second line for every
+/// non-default profile (with RUSTLS it is irrelevant noise). The `[!]` prefix
+/// and colors are added here, never stored in i18n (rule 4 keeps
+/// JA3/JA4/ClientHello/TLS/RUSTLS/FIREFOX/CHROME/SAFARI untranslated there too).
+pub fn render_fingerprint_header(fp: TlsFingerprint, msg: &Messages) -> String {
+    let label = fingerprint_label(fp, msg.lang);
+    // The default profile's label repeats its code ("rustls (default)" against
+    // the RUSTLS token), which read as "RUSTLS (rustls (default))": a label
+    // that starts with the code keeps only the qualifier.
+    let head = match label.strip_prefix(fp.code()) {
+        Some(qualifier) => format!("{}: {}{}", msg.fingerprint_label, fp.token(), qualifier),
+        None => format!("{}: {} ({})", msg.fingerprint_label, fp.token(), label),
+    };
+    if fp != TlsFingerprint::Rustls {
+        let note = format!("\x1b[33m[!]\x1b[0m \x1b[2m{}\x1b[0m", msg.fingerprint_note);
+        format!("{}\n{}", head, note)
+    } else {
+        head
+    }
+}
 
 // ─── Test 0: network & system ─────────────────────────────────────────────────
 
@@ -652,10 +1077,10 @@ fn dim_val(v: &str) -> String {
     format!("\x1b[2m{}\x1b[0m", v)
 }
 
-fn ttlb_str(t: &NetTtlb) -> String {
+fn ttlb_str(t: &NetTtlb, msg: &Messages) -> String {
     match t {
-        NetTtlb::Timeout => "\x1b[31mtimeout\x1b[0m".to_string(),
-        NetTtlb::Ms(ms) => format!("\x1b[2m{} ms\x1b[0m", ms),
+        NetTtlb::Timeout => format!("\x1b[31m{}\x1b[0m", msg.timeout_label),
+        NetTtlb::Ms(ms) => format!("\x1b[2m{} {}\x1b[0m", ms, msg.ms_unit),
     }
 }
 
@@ -730,20 +1155,37 @@ pub fn render_netinfo_panel(
     msg: &Messages,
 ) -> String {
     let mut lines = Vec::new();
+    // Cymru-less fields carry the canonical "timeout" marker; it renders red
+    // like the DNS cells and follows the interface language.
+    let val = |v: &str| {
+        if v == "timeout" {
+            format!("\x1b[31m{}\x1b[0m", msg.timeout_label)
+        } else {
+            cyan_val(v)
+        }
+    };
 
     if data.empty {
-        lines.push(format!("IPv4: {}  Subnet: {}  TTLB: …", cyan_val("…"), cyan_val("…")));
+        lines.push(format!(
+            "IPv4: {}  {} {}  {} …",
+            cyan_val("…"),
+            msg.subnet_label,
+            cyan_val("…"),
+            msg.ttlb_label
+        ));
         lines.push(format!("IPv6: {}", cyan_val("…")));
-        lines.push(format!("Org: {}", cyan_val("…")));
-        lines.push(format!("Location: {}", cyan_val("…")));
+        lines.push(format!("{} {}", msg.org_label, cyan_val("…")));
+        lines.push(format!("{} {}", msg.location_label, cyan_val("…")));
     } else {
         match data.v4.as_ref() {
             Some(f) if !f.ip.is_empty() => {
                 lines.push(format!(
-                    "IPv4: {}  Subnet: {}  TTLB: {}",
+                    "IPv4: {}  {} {}  {} {}",
                     cyan_val(&f.ip),
-                    cyan_val(&f.subnet),
-                    ttlb_str(&f.ttlb)
+                    msg.subnet_label,
+                    val(&f.subnet),
+                    msg.ttlb_label,
+                    ttlb_str(&f.ttlb, msg)
                 ));
             }
             _ => lines.push(format!("IPv4: {}", dim_val(msg.unavailable))),
@@ -751,7 +1193,13 @@ pub fn render_netinfo_panel(
         match data.v6.as_ref() {
             Some(f) if !f.ip.is_empty() => {
                 lines.push(format!("IPv6: {}", cyan_val(&f.ip)));
-                lines.push(format!("      Subnet: {}  TTLB: {}", cyan_val(&f.subnet), ttlb_str(&f.ttlb)));
+                lines.push(format!(
+                    "      {} {}  {} {}",
+                    msg.subnet_label,
+                    val(&f.subnet),
+                    msg.ttlb_label,
+                    ttlb_str(&f.ttlb, msg)
+                ));
             }
             _ => lines.push(format!("IPv6: {}", dim_val(msg.unavailable))),
         }
@@ -794,7 +1242,7 @@ pub fn render_netinfo_panel(
                 main_org.to_string()
             }
         };
-        lines.push(format!("Org: {}", cyan_val(&org_s)));
+        lines.push(format!("{} {}", msg.org_label, val(&org_s)));
         let loc = if !v4_cc.is_empty() && !v6_cc.is_empty() && v4_cc != v6_cc {
             format!(
                 "{} {} {}, {} {} {}",
@@ -819,7 +1267,7 @@ pub fn render_netinfo_panel(
                 format!("{} {}", geo_country_ascii(main_cc).trim(), main_cc)
             }
         };
-        lines.push(format!("Location: {}", cyan_val(&loc)));
+        lines.push(format!("{} {}", msg.location_label, val(&loc)));
     }
 
     if let Some(os) = dns_info.os.as_ref() {
@@ -942,7 +1390,7 @@ pub fn render_netinfo_panel(
 pub fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "\n{}  DoH: {} | DoT: {} | UDP: {} | {}: {} | {}: {} | timeout: {}s\n\n",
+        "\n{}  DoH: {} | DoT: {} | UDP: {} | {}: {} | {}: {} | {}: {}s\n\n",
         msg.dns_check_title,
         report.doh_servers.len(),
         report.dot_servers.len(),
@@ -951,6 +1399,7 @@ pub fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> String {
         report.forbidden.len(),
         msg.available,
         report.allowed.len(),
+        msg.timeout_label,
         report.timeout_secs,
     ));
     out.push_str(&format!(
@@ -966,10 +1415,10 @@ pub fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> String {
     }
 
     // Endpoint tables per kind
-    for (title, servers) in [
-        (msg.doh_endpoints, &report.doh_servers),
-        (msg.dot_endpoints, &report.dot_servers),
-        (msg.udp_endpoints, &report.udp_servers),
+    for (title, servers, kind) in [
+        (msg.doh_endpoints, &report.doh_servers, ProbeKind::DohWire),
+        (msg.dot_endpoints, &report.dot_servers, ProbeKind::Dot),
+        (msg.udp_endpoints, &report.udp_servers, ProbeKind::Udp),
     ] {
         if servers.is_empty() {
             continue;
@@ -986,7 +1435,11 @@ pub fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> String {
         let mut order: Vec<String> = Vec::new();
         let mut by_name: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
         for (addr, name, port) in servers {
-            let default_port = if title.starts_with("DoH") { 443 } else if title.starts_with("DoT") { 853 } else { 53 };
+            let default_port = match kind {
+                ProbeKind::DohWire => 443,
+                ProbeKind::Dot => 853,
+                ProbeKind::Udp => 53,
+            };
             let disp = if *port != default_port {
                 format!("{}:{}", addr, port)
             } else {
@@ -1259,6 +1712,17 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
 
     out.push_str(&format!("{}\n", table));
 
+    // The reference was not measured on this network, so a stale configured IP
+    // must never look like a measurement.
+    if report.truth_fallback_used {
+        out.push('\n');
+        out.push_str(&format!(
+            "\x1b[1;33m[{}] {}\x1b[0m\n",
+            warn_mark(),
+            msg.dns_truth_fallback_note
+        ));
+    }
+
     if !partial_endpoints.is_empty() {
         out.push('\n');
         let warn = warn_mark();
@@ -1303,65 +1767,75 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
 
 // ─── Test 2: domains ──────────────────────────────────────────────────────────
 
-pub fn localize_detail(d: &str, lang: Language) -> String {
-    if lang == Language::Ru {
-        return d.to_string();
+/// Test 7's table: one row per host, one column per profile, the cell being how
+/// many of the simultaneous handshakes came back. The header carries the
+/// canonical profile tokens (rule 4: never translated), and the detail column
+/// names the failure that happened most often across the profile columns.
+pub fn render_burst_table(reports: &[BurstReport], settings: &BurstSettings, msg: &Messages) -> String {
+    let profiles: &[TlsFingerprint] = &settings.profiles;
+    let mut table = Table::new();
+    let mut header = vec![Cell::new(format_bidi(msg.domain, msg.lang))];
+    for fingerprint in profiles {
+        header.push(Cell::new(fingerprint.token()));
     }
-    match d {
-        DET_RST_HELLO | DET_STREAM_RST_HELLO => "TCP RST on ClientHello".to_string(),
-        DET_TLS_RST_HELLO => "TLS RST (connection reset after ClientHello)".to_string(),
-        DET_TLS_DROP_HANDSHAKE => "TLS DROP (connection dropped during TLS handshake)".to_string(),
-        DET_TIMEOUT_CONN => "TIMEOUT (connection timeout)".to_string(),
-        DET_RST_AFTER_HANDSHAKE => "TCP RST after handshake".to_string(),
-        DET_WRONG_VERSION => "Response spoofing (Wrong Version)".to_string(),
-        DET_GARBAGE_DATA => "Response spoofing (Garbage Data)".to_string(),
-        DET_FAKE_TLS_ALERT => "Fake TLS Alert".to_string(),
-        DET_NO_ROOT_CA => "Missing root certificates".to_string(),
-        DET_FAKE_CERT => "Certificate spoofing".to_string(),
-        DET_TRANSFER_EOF => "Transfer EOF".to_string(),
-        DET_HANDSHAKE_EOF => "Handshake EOF".to_string(),
-        DET_POOL_TIMEOUT => "Socket pool exhausted".to_string(),
-        DET_SEND_TIMEOUT => "Send timeout".to_string(),
-        DET_READ_TIMEOUT => "Read timeout".to_string(),
-        DET_DOMAIN_NOT_FOUND => "Domain not found".to_string(),
-        DET_DNS_TIMEOUT_UNAVAIL => "DNS timeout/unavailable".to_string(),
-        DET_DNS_ERROR => "DNS error".to_string(),
-        DET_CONN_REFUSED => "TCP connection refused".to_string(),
-        DET_CONN_RESET => "TCP connection reset".to_string(),
-        DET_ABORTED | DET_TCP_ABORTED => "Connection aborted".to_string(),
-        DET_NET_UNREACH => "Net unreachable".to_string(),
-        DET_HOST_UNREACH => "Host unreachable".to_string(),
-        DET_IPV6_UNSUPPORTED => "IPv6 not supported/disabled".to_string(),
-        DET_IPV6_NOT_SUPPORTED_SHORT => "IPv6 not supported".to_string(),
-        other => {
-            if let Some(rest) = other.strip_prefix(DET_ISP_STUB_ARROW) {
-                format!("ISP blockpage -> {}", rest)
-            } else if let Some(rest) = other.strip_prefix(DET_ISP_STUB_SPACE) {
-                format!("ISP blockpage {}", rest)
-            } else if let Some(rest) = other.strip_prefix(DET_LOCAL_IP_ARROW) {
-                format!("Local IP -> {}", rest)
-            } else {
-                other.to_string()
-            }
+    header.push(Cell::new(format_bidi(msg.detail, msg.lang)));
+    table
+        .load_preset(table_preset())
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(header);
+
+    // A cell is green when everything was answered, red when nothing was, and
+    // yellow in between: a burst that lost part of its handshakes is a weaker
+    // signal than one that lost all of them.
+    let cell_color_for = |answered: usize, total: usize| {
+        if total == 0 {
+            Color::DarkGrey
+        } else if answered == total {
+            Color::Green
+        } else if answered == 0 {
+            Color::Red
+        } else {
+            Color::Yellow
         }
+    };
+
+    for report in reports {
+        let mut row = vec![Cell::new(cell_color(&report.domain, Color::Cyan))];
+        for fingerprint in profiles {
+            let cell = match report.profiles.iter().find(|p| p.fingerprint == *fingerprint) {
+                Some(profile) => cell_color(
+                    &format!("{}/{}", profile.answered(), profile.attempts.len()),
+                    cell_color_for(profile.answered(), profile.attempts.len()),
+                ),
+                None => cell_color("—", Color::DarkGrey),
+            };
+            row.push(Cell::new(cell));
+        }
+        let (detail, detail_color) = match report.resolved {
+            None => (
+                DpiStatus::DnsFail.display_label().to_string(),
+                status_color(DpiStatus::DnsFail),
+            ),
+            Some(_) => match report.dominant_failure() {
+                Some((status, _, count)) => (
+                    format!("{} ×{}", status.display_label(), count),
+                    status_color(status),
+                ),
+                None => (DET_ALL_ANSWERED.to_string(), Color::DarkGrey),
+            },
+        };
+        row.push(Cell::new(cell_color(&detail, detail_color)));
+        table.add_row(row);
     }
+
+    let mut out = String::new();
+    out.push_str(&format!("{}\n", table));
+    out
 }
 
-pub fn localize_domain_details(raw: &str, lang: Language) -> String {
-    if lang == Language::Ru {
-        return raw.to_string();
-    }
-    raw.lines()
-        .map(|line| {
-            if let Some((proto, rest)) = line.split_once(':') {
-                format!("{}:{}", proto, localize_detail(rest, lang))
-            } else {
-                localize_detail(line, lang)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+/// Detail cell of a host whose every handshake was answered: an em dash, like
+/// the other tables' empty-detail cells.
+const DET_ALL_ANSWERED: &str = "—";
 
 pub fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
     let mut out = String::new();
@@ -1379,7 +1853,7 @@ pub fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
 
     for e in entries {
         let (http_s, t12_s, t13_s, raw_details) = dpi_core::probe::domains::build_domain_row(e);
-        let details = localize_domain_details(&raw_details, msg.lang);
+        let details = detail_lines(&raw_details, msg.lang);
         table.add_row(vec![
             Cell::new(cell_color(&e.domain, Color::Cyan)),
             Cell::new(cell_color(http_s.display_label(), status_color(http_s))),
@@ -1409,7 +1883,7 @@ pub fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) -> Stri
     for e in entries {
         if e.t13.status == DpiStatus::DnsFail || e.t12.status == DpiStatus::DnsFail || e.http.status == DpiStatus::DnsFail {
             dns_fail += 1;
-            if e.t13.detail.contains("IPv6") && (e.t13.detail.contains("не поддерживается") || e.t13.detail.contains("not supported")) {
+            if e.t13.detail == DET_IPV6_UNSUPPORTED || e.t13.detail == DET_IPV6_NOT_SUPPORTED_SHORT {
                 no_ipv6 += 1;
             }
         }
@@ -1508,8 +1982,8 @@ pub fn render_tcp_table(rows: &[TcpRow], msg: &Messages) -> String {
         .load_preset(table_preset())
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec![
-            Cell::new("ID"),
-            Cell::new("ASN"),
+            Cell::new(format_bidi(msg.col_id, msg.lang)),
+            Cell::new(format_bidi(msg.col_asn, msg.lang)),
             Cell::new(format_bidi(msg.provider, msg.lang)),
             Cell::new(format_bidi(msg.status, msg.lang)),
             Cell::new(format_bidi(msg.detail, msg.lang)),
@@ -1531,7 +2005,7 @@ pub fn render_tcp_table(rows: &[TcpRow], msg: &Messages) -> String {
             Cell::new(cell_color(&r.asn, Color::Yellow)),
             Cell::new(cell_color(&r.provider, Color::Cyan)),
             Cell::new(cell_color(label, status_color(r.status))),
-            Cell::new(localize_detail(&r.detail, msg.lang)),
+            Cell::new(detail_text(&r.detail, msg.lang)),
         ]);
     }
     out.push_str(&format!("\n{}\n", msg.tcp16_check_title));
@@ -1565,37 +2039,57 @@ pub fn render_whitelist(report: &WhitelistReport, targets_total: usize, msg: &Me
                 let parts: Vec<String> = snis
                     .iter()
                     .map(|(label, n)| {
-                        let disp = if label == "(no SNI)" || label == "(без SNI)" {
+                        let disp = if label == NO_SNI_TAG {
                             msg.no_sni_label
                         } else {
                             label.as_str()
                         };
                         if *n > 0 {
-                            format!("{} #{}", disp, n)
+                            format!("\x1b[1;32m{}\x1b[0m \x1b[2m#{}\x1b[0m", disp, n)
                         } else {
-                            disp.to_string()
+                            format!("\x1b[1;32m{}\x1b[0m", disp)
                         }
                     })
                     .collect();
-                let suffix = if *ban_after { msg.ban_after_label } else { "" };
-                out.push_str(&asc(&format!("  {} {}  ✓ {}{}\n", row.provider, row.asn_str, parts.join("  "), suffix)));
+                let suffix = if *ban_after {
+                    format!("\x1b[2;33m{}\x1b[0m", msg.ban_after_label)
+                } else {
+                    String::new()
+                };
+                out.push_str(&asc(&format!(
+                    "  \x1b[36m{}\x1b[0m \x1b[2m{}\x1b[0m  \x1b[32m✓\x1b[0m {}{}\n",
+                    row.provider,
+                    row.asn_str,
+                    parts.join("  "),
+                    suffix
+                )));
             }
             AsVerdict::Banned { detail } => {
                 let clean = strip_brackets(detail);
-                out.push_str(&format!("  {} {}  {} {} ({})\n", row.provider, row.asn_str, warn_mark(), msg.ban_rate_limit, clean));
+                out.push_str(&asc(&format!(
+                    "  \x1b[36m{}\x1b[0m \x1b[2m{}\x1b[0m  \x1b[33m{} {}\x1b[0m \x1b[2m({})\x1b[0m\n",
+                    row.provider,
+                    row.asn_str,
+                    warn_mark(),
+                    msg.ban_rate_limit,
+                    clean
+                )));
             }
             AsVerdict::NotFound => {
-                out.push_str(&format!("  {} {}  {}\n", row.provider, row.asn_str, msg.sni_not_found));
+                out.push_str(&asc(&format!(
+                    "  \x1b[36m{}\x1b[0m \x1b[2m{}\x1b[0m  \x1b[31m{}\x1b[0m\n",
+                    row.provider, row.asn_str, msg.sni_not_found
+                )));
             }
         }
     }
     out.push('\n');
     if report.found_as > 0 {
         let s = msg.whitelist_found_summary.replacen("{}", &report.found_as.to_string(), 1).replacen("{}", &report.detected_as.to_string(), 1);
-        out.push_str(&format!("{}\n", s));
+        out.push_str(&format!("\x1b[32m{}\x1b[0m\n", s));
     } else {
         let s = msg.whitelist_none_summary.replace("{}", &report.detected_as.to_string());
-        out.push_str(&format!("{}\n", s));
+        out.push_str(&format!("\x1b[33m{}\x1b[0m\n", s));
     }
     out
 }
@@ -1618,7 +2112,7 @@ fn strip_brackets(s: &str) -> String {
 // ─── Test 5: Telegram ─────────────────────────────────────────────────────────
 
 pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
-    use dpi_core::probe::telegram::{fmt_size_lang, fmt_speed_lang};
+    
     let mut out = String::new();
     out.push_str(&format!("\n{}\n", msg.telegram_check_title));
 
@@ -1627,8 +2121,8 @@ pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
         .load_preset(table_preset())
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec![
-            Cell::new("DC"),
-            Cell::new("IP"),
+            Cell::new(format_bidi(msg.dc_col, msg.lang)),
+            Cell::new(format_bidi(msg.ip_col, msg.lang)),
             Cell::new(format_bidi(msg.region, msg.lang)),
             Cell::new(format_bidi(msg.status, msg.lang)),
             Cell::new(format_bidi(msg.ping_col, msg.lang)),
@@ -1641,7 +2135,7 @@ pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
         };
         let ping = match dc.latency_ms {
             Some(l) => format!("{}{}", l, msg.ms_unit),
-            None => dc.error.clone().unwrap_or_else(|| "—".to_string()),
+            None => detail_text(dc.error.as_deref().unwrap_or("—"), msg.lang),
         };
         // Region from telegram_dc_list order is not carried; show stored region
         table.add_row(vec![
@@ -1668,10 +2162,10 @@ pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
             label,
             st_text,
             msg.peak_label,
-            fmt_speed_lang(t.peak_bps, msg.lang),
+            fmt_speed(t.peak_bps, msg.lang),
             msg.avg_label,
-            fmt_speed_lang(t.avg_bps, msg.lang),
-            fmt_size_lang(t.bytes_total, msg.lang),
+            fmt_speed(t.avg_bps, msg.lang),
+            fmt_size(t.bytes_total, msg.lang),
             t.duration
         );
         if let Some(sec) = t.drop_at_sec {
@@ -1702,6 +2196,8 @@ pub struct SummaryData<'a> {
     pub dns: Option<&'a dpi_core::dns::availability::DnsAvailStats>,
     pub domains: Option<&'a DomainStats>,
     pub tcp: Option<(usize, usize, usize, usize)>, // ok, blocked, mixed, total
+    /// Test 7: handshakes answered, handshakes fired, hosts that lost at least one.
+    pub burst: Option<(usize, usize, usize)>,
     pub run_telegram: bool,
     pub telegram: Option<&'a TelegramFullReport>,
 }
@@ -1769,6 +2265,19 @@ pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
         ));
     }
 
+    // Test 7's totals ride in the same panel: a burst that lost handshakes is a
+    // different finding from a host that is simply unreachable, and the two are
+    // read side by side.
+    if let Some((answered, total, lossy)) = data.burst {
+        let color = frac_color(answered, total);
+        let value = msg
+            .burst_summary_value
+            .replacen("{}", &answered.to_string(), 1)
+            .replacen("{}", &total.to_string(), 1)
+            .replacen("{}", &lossy.to_string(), 1);
+        items.push((msg.burst_summary_label.to_string(), format!("[{}]{}[/]", color, value)));
+    }
+
     if let Some((ok, blocked, mixed, total)) = data.tcp {
         let pct = ok.checked_mul(100).and_then(|v| v.checked_div(total)).unwrap_or(0);
         let mut value = format!("[green]√ {}/{} OK[/]", ok, total);
@@ -1784,7 +2293,7 @@ pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
 
     if data.run_telegram {
         if let Some(t) = data.telegram {
-            use dpi_core::probe::telegram::{fmt_size_lang, fmt_speed_lang};
+            
             let tg_row = |label: &str, st: &dpi_core::probe::telegram::TransferStats, speed: f64, size: u64| {
                 let (raw, color) = match st.status.as_str() {
                     "ok" => ("OK", "green"),
@@ -1793,7 +2302,7 @@ pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
                     "blocked" => ("BLOCKED", "red"),
                     _ => ("ERROR", "red"),
                 };
-                let mut metrics = format!("{} {}, {}", msg.avg_label, fmt_speed_lang(speed, msg.lang), fmt_size_lang(size, msg.lang));
+                let mut metrics = format!("{} {}, {}", msg.avg_label, fmt_speed(speed, msg.lang), fmt_size(size, msg.lang));
                 if let Some(sec) = st.drop_at_sec {
                     metrics += &msg.stall_after.replace("{}", &sec.to_string());
                 }
@@ -1820,9 +2329,29 @@ pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
     if items.is_empty() {
         return String::new();
     }
+    // Two columns, as in the Python prototype (`cli/summary.py` uses a Rich table
+    // with `no_wrap` on the label column): pad the label column to its widest
+    // entry so every value starts at the same offset. Widths are measured after
+    // ANSI stripping, and per character, because CJK labels are two cells wide.
+    let label_w = items.iter().map(|(label, _)| strip_ansi_len(label)).max().unwrap_or(0);
+    // The value column: indent + label column + gap, and what is left of a row
+    // once the borders and the single space around the content are taken out.
+    let value_col = 2 + label_w + 2;
+    let value_w = BOX_WIDTH.saturating_sub(3 + value_col);
     let mut lines = Vec::new();
     for (label, val) in items {
-        lines.push(format!("  \x1b[1m{}\x1b[0m  {}", label, rich_to_ansi(&val)));
+        let pad = label_w.saturating_sub(strip_ansi_len(&label));
+        // `asc` widens glyphs in ASCII mode (`✓` becomes `[OK]`), so it has to run
+        // before the width is measured; `panel_with` repeats it on the finished
+        // line, which is idempotent.
+        let value = asc(&rich_to_ansi(&val));
+        for (i, chunk) in wrap_ansi(&value, value_w).into_iter().enumerate() {
+            if i == 0 {
+                lines.push(format!("  \x1b[1m{}{}\x1b[0m  {}", label, " ".repeat(pad), chunk));
+            } else {
+                lines.push(format!("{}{}", " ".repeat(value_col), chunk));
+            }
+        }
     }
     panel_to_string(msg.summary_title, &lines)
 }
@@ -1841,6 +2370,154 @@ fn rich_to_ansi(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal column/row model of a VT terminal: enough to prove that a repaint
+    /// leaves nothing of the previous frame behind. SGR sequences are skipped,
+    /// `EL` clears to the row end, `ED` clears from the cursor down, a write past
+    /// the last column wraps, and - as in a console with a CJK font - the
+    /// ambiguous glyphs the menu draws (`│`, `↑`, `←`, `●`) take two columns.
+    struct Screen {
+        width: usize,
+        rows: Vec<Vec<char>>,
+        row: usize,
+        col: usize,
+    }
+
+    impl Screen {
+        fn new(width: usize) -> Self {
+            Self { width, rows: vec![vec![' '; width]], row: 0, col: 0 }
+        }
+
+        fn put(&mut self, c: char, width: usize) {
+            if self.col >= self.width {
+                self.row += 1;
+                self.col = 0;
+                if self.rows.len() <= self.row {
+                    self.rows.push(vec![' '; self.width]);
+                }
+            }
+            self.rows[self.row][self.col] = c;
+            for k in 1..width {
+                if self.col + k < self.width {
+                    self.rows[self.row][self.col + k] = '\u{0}';
+                }
+            }
+            self.col += width;
+        }
+
+        /// Start of the frame: `frame_repaint` tests paint every frame from the
+        /// same row so only the row content is under test.
+        fn home(&mut self) {
+            self.row = 0;
+            self.col = 0;
+        }
+
+        fn erase_row_tail(&mut self) {
+            for c in self.col..self.width {
+                self.rows[self.row][c] = ' ';
+            }
+        }
+
+        fn write(&mut self, s: &str) {
+            let chars: Vec<char> = s.chars().collect();
+            let mut i = 0;
+            while i < chars.len() {
+                let c = chars[i];
+                if c == '\x1b' {
+                    if chars.get(i + 1) == Some(&'[') {
+                        let mut j = i + 2;
+                        while j < chars.len() && !chars[j].is_ascii_alphabetic() {
+                            j += 1;
+                        }
+                        match chars.get(j) {
+                            Some('K') => self.erase_row_tail(),
+                            Some('J') => {
+                                self.erase_row_tail();
+                                for r in self.row + 1..self.rows.len() {
+                                    self.rows[r] = vec![' '; self.width];
+                                }
+                            }
+                            _ => {}
+                        }
+                        i = j + 1;
+                        continue;
+                    }
+                    i += 1;
+                    continue;
+                }
+                match c {
+                    '\r' => self.col = 0,
+                    '\n' => {
+                        self.row += 1;
+                        if self.rows.len() <= self.row {
+                            self.rows.push(vec![' '; self.width]);
+                        }
+                    }
+                    _ => {
+                        let wide = matches!(c, '│' | '↑' | '↓' | '←' | '→' | '●' | '○' | '►');
+                        self.put(c, if wide { 2 } else { 1 });
+                    }
+                }
+                i += 1;
+            }
+        }
+
+        /// Visible text: cells written and not overwritten since.
+        fn text(&self) -> String {
+            self.rows
+                .iter()
+                .map(|r| r.iter().filter(|c| **c != '\u{0}').collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    }
+
+    /// Regression: switching the menu from Farsi to English left `rooj` (the tail
+    /// of `Khorooj`) on the footer row, because the repaint only padded to a
+    /// fixed width and a CJK font renders `│`/`↑` two columns wide, so the row was
+    /// wider than the pad. The frames below are the real footer shapes.
+    #[test]
+    fn repaint_leaves_no_tail_of_a_longer_frame() {
+        let fa = vec![
+            "  ╭─ Параметры и выбор тестов ─╮".to_string(),
+            "  ↑↓/WS  Peymayesh │ ←→/AD  Taghir │ 0-7  Test ha │ Enter  Shoroo │ Q  Khorooj".to_string(),
+        ];
+        let en = vec![
+            "  ╭─ Parameters & test selection ─╮".to_string(),
+            "  ↑↓/WS  row │ ←→/AD  change │ 0-7  tests │ Enter  start │ Q  quit".to_string(),
+        ];
+
+        let mut screen = Screen::new(80);
+        let mut prev_max = 0usize;
+        screen.home();
+        screen.write(&frame_repaint(&fa, &mut prev_max));
+        screen.home();
+        screen.write(&frame_repaint(&en, &mut prev_max));
+        let text = screen.text();
+        assert!(text.contains("Q  quit"), "the English footer is intact:\n{text}");
+        assert!(!text.contains("rooj"), "no Farsi tail survives:\n{text}");
+        assert!(!text.contains("Khorooj"), "no Farsi footer survives:\n{text}");
+    }
+
+    /// A frame whose rows wrap (the long Farsi footer on an 80-column console)
+    /// occupies one row more than the frame that replaces it; the row below the
+    /// new frame must be blanked as well.
+    #[test]
+    fn repaint_clears_the_row_a_wrapped_frame_left_below() {
+        let long = vec!["  Q  Khorooj az in barname".to_string()];
+        let short = vec!["  Q  quit".to_string()];
+
+        let mut screen = Screen::new(40);
+        let mut prev_max = 0usize;
+        screen.home();
+        screen.write(&frame_repaint(&long, &mut prev_max));
+        assert!(screen.text().contains("Khorooj"), "long frame is on screen");
+        screen.home();
+        screen.write(&frame_repaint(&short, &mut prev_max));
+        let text = screen.text();
+        assert!(text.contains("Q  quit"), "short frame replaced it:\n{text}");
+        assert!(!text.contains("rooj"), "wrapped tail is gone:\n{text}");
+    }
 
     #[test]
     fn panel_top_border_matches_box_width_with_styled_title() {
@@ -1882,16 +2559,21 @@ mod tests {
         use dpi_core::dns::availability::{DnsAnswer, DnsAvailReport, ProbeKey, ProbeKind};
         use std::collections::HashMap;
 
-        let mut report = DnsAvailReport::default();
-        report.allowed = vec!["vk.ru".to_string(), "gosuslugi.ru".to_string()];
-        report.forbidden = vec!["rutor.info".to_string()];
-        report.udp_servers = vec![
-            ("8.8.4.4".to_string(), "Google".to_string(), 53),
-            ("8.8.8.8".to_string(), "Google".to_string(), 53),
-        ];
-        report.doh_servers =
-            vec![("https://dns.google/dns-query".to_string(), "Google".to_string(), 443)];
-        report.all_names = vec!["Google".to_string()];
+        let mut report = DnsAvailReport {
+            allowed: vec!["vk.ru".to_string(), "gosuslugi.ru".to_string()],
+            forbidden: vec!["rutor.info".to_string()],
+            udp_servers: vec![
+                ("8.8.4.4".to_string(), "Google".to_string(), 53),
+                ("8.8.8.8".to_string(), "Google".to_string(), 53),
+            ],
+            doh_servers: vec![(
+                "https://dns.google/dns-query".to_string(),
+                "Google".to_string(),
+                443,
+            )],
+            all_names: vec!["Google".to_string()],
+            ..Default::default()
+        };
         for a in ["8.8.4.4", "8.8.8.8"] {
             let key = ProbeKey { kind: ProbeKind::Udp, addr: a.to_string(), name: "Google".to_string() };
             let mut dm = HashMap::new();
@@ -1962,7 +2644,7 @@ mod tests {
         use dpi_core::i18n::Language;
         let (data, dns, bypass) = netinfo_fixture();
         let out = render_netinfo_panel(&data, &dns, &bypass, &get_messages(Language::Ru));
-        assert!(out.contains("IPv4: \x1b[36m203.0.113.7\x1b[0m  Subnet: \x1b[36m203.0.113.0/24\x1b[0m  TTLB: \x1b[2m701 ms\x1b[0m"));
+        assert!(out.contains("IPv4: \x1b[36m203.0.113.7\x1b[0m  Subnet: \x1b[36m203.0.113.0/24\x1b[0m  TTLB: \x1b[2m701 мс\x1b[0m"));
         assert!(out.contains("IPv6: \x1b[2mнедоступен\x1b[0m"));
         assert!(out.contains("Org: \x1b[36mEXAMPLE-AS (AS65001)\x1b[0m"));
         assert!(out.contains("ОС: \x1b[36mWindows 11 (26200)\x1b[0m"));
@@ -2016,7 +2698,25 @@ mod tests {
         };
         let dns = Default::default();
         let out = render_netinfo_panel(&data, &dns, &[], &get_messages(Language::Ru));
-        assert!(out.contains("\x1b[31mtimeout\x1b[0m"), "cymru-less fields render red");
+        assert!(out.contains("\x1b[31mтаймаут\x1b[0m"), "cymru-less fields render red");
+    }
+
+    /// The domain table colors a foreign redirect red `REDIR` and a legitimate
+    /// response green `OK` (`status_color`; Python's `ProbeStatus.is_ok` counts a
+    /// red REDIR as not ok). The badge itself stays canonical Latin in every
+    /// language (Rule 4), and the cell colour survives `asc()` in ASCII mode.
+    #[test]
+    fn foreign_redirect_cell_is_red() {
+        use dpi_core::i18n::Language;
+        use dpi_core::i18n::get_messages;
+        for lang in Language::ALL {
+            let msg = get_messages(lang);
+            let cell = |s: DpiStatus| cell_color(s.display_label(), status_color(s));
+            assert_eq!(cell(DpiStatus::RedirSuspect), "\x1b[31mREDIR\x1b[0m", "{:?}", msg.lang);
+            assert_eq!(cell(DpiStatus::Ok), "\x1b[32mOK\x1b[0m", "{:?}", msg.lang);
+            assert!(!DpiStatus::RedirSuspect.is_ok_status());
+            assert!(asc_with(&cell(DpiStatus::RedirSuspect), true).contains("\x1b[31mREDIR\x1b[0m"));
+        }
     }
 
     #[test]
@@ -2053,17 +2753,6 @@ mod tests {
     }
 
     #[test]
-    fn test_localize_detail_constants() {
-        use dpi_core::classify::*;
-        assert_eq!(localize_detail(DET_RST_HELLO, Language::Ru), DET_RST_HELLO);
-        assert_eq!(localize_detail(DET_RST_HELLO, Language::En), "TCP RST on ClientHello");
-        assert_eq!(localize_detail(DET_RST_HELLO, Language::Zh), "TCP RST on ClientHello");
-        assert_eq!(localize_detail(DET_WRONG_VERSION, Language::En), "Response spoofing (Wrong Version)");
-        assert_eq!(localize_detail(DET_STREAM_RST_HELLO, Language::Ru), DET_STREAM_RST_HELLO);
-        assert_eq!(localize_detail(DET_STREAM_RST_HELLO, Language::En), "TCP RST on ClientHello");
-    }
-
-    #[test]
     fn test_cp866_table_preset_and_cell_color() {
         use comfy_table::*;
         let mut table = Table::new();
@@ -2086,5 +2775,237 @@ mod tests {
         assert!(ts.contains("AS12345"), "cell content preserved");
         assert!(ts.contains("OK"), "cell content preserved");
         assert!(ts.contains("\x1b[33mAS12345\x1b[0m"), "inline ANSI color preserved");
+    }
+
+    /// The live line is what the user watches during a run: a single-counter
+    /// phase names the unit and estimates the remainder while there is one, and
+    /// a multi-block phase shows every counter that is running at once.
+    #[test]
+    fn progress_line_single_and_blocks() {
+        let one = [BlockState { token: "", done: 12, total: 50 }];
+        assert_eq!(
+            progress_line("Проверка... ", &one, Duration::from_secs(7)),
+            "Проверка  12/50 · 00:07"
+        );
+        // The counter and clock are drawn in every state, 0/total included.
+        let start = [BlockState { token: "", done: 0, total: 50 }];
+        assert_eq!(progress_line("X", &start, Duration::from_secs(3)), "X  0/50 · 00:03");
+        let done = [BlockState { token: "", done: 50, total: 50 }];
+        assert_eq!(progress_line("X", &done, Duration::from_secs(60)), "X  50/50 · 01:00");
+
+        // Test 1: four blocks, one line, elapsed only (per-unit cost differs by
+        // an order of magnitude between blocks, so no aggregate estimate).
+        let blocks = [
+            BlockState { token: "UDP", done: 12, total: 50 },
+            BlockState { token: "DoH", done: 2, total: 37 },
+            BlockState { token: "DoT", done: 0, total: 34 },
+            BlockState { token: "EGRESS", done: 5, total: 50 },
+        ];
+        assert_eq!(
+            progress_line("DNS", &blocks, Duration::from_secs(31)),
+            "DNS  UDP 12/50 · DoH 2/37 · DoT 0/34 · EGRESS 5/50 · 00:31"
+        );
+
+        assert_eq!(fmt_dur(Duration::from_secs(3661)), "1:01:01");
+        assert_eq!(fmt_dur(Duration::from_secs(59)), "00:59");
+    }
+
+    #[test]
+    fn fingerprint_header_never_repeats_the_profile_code() {
+        use dpi_core::i18n::{get_messages, Language};
+        let en = get_messages(Language::En);
+        // The default label ("rustls (default)") carried the token as well, so
+        // the header read "RUSTLS (rustls (default))".
+        assert_eq!(render_fingerprint_header(TlsFingerprint::Rustls, &en), "Fingerprint: RUSTLS (default)");
+        let fa = get_messages(Language::Fa);
+        assert_eq!(render_fingerprint_header(TlsFingerprint::Rustls, &fa), "Fingerprint: RUSTLS (pishfarz)");
+        // A label that does not repeat the code keeps the full parenthetical.
+        let custom = render_fingerprint_header(TlsFingerprint::Custom, &en);
+        assert!(custom.starts_with("Fingerprint: FIREFOX (firefox 148)"), "{custom}");
+        assert!(custom.contains("The FIREFOX profile"), "the caveat still follows");
+    }
+
+    /// The summary is a two-column table (label, value), as in the Python
+    /// prototype's Rich table: the label column is padded to its widest entry,
+    /// so a short label cannot pull its value out of the column.
+    #[test]
+    fn summary_rows_align_their_values_into_two_columns() {
+        use dpi_core::i18n::{get_messages, Language};
+        let msg = get_messages(Language::Ru);
+        let out = render_summary(
+            &SummaryData {
+                run_dns: true,
+                dns: None,
+                domains: None,
+                tcp: Some((104, 0, 0, 110)),
+                burst: None,
+                run_telegram: false,
+                telegram: None,
+            },
+            &msg,
+        );
+        let rows: Vec<Vec<char>> = out
+            .lines()
+            .map(strip_ansi)
+            .filter(|l| l.starts_with('│'))
+            .map(|l| l.chars().collect())
+            .collect();
+        assert_eq!(rows.len(), 2, "one row per item, no wrapping");
+        // Border, one space, the two-space indent, the label column, the gap.
+        let longest = msg.summary_dns_avail.chars().count();
+        let short = "TCP 16-20KB".len();
+        assert!(longest > short, "the two labels must differ in width: {longest} vs {short}");
+        let value_col = 1 + 1 + 2 + longest + 2;
+        for row in &rows {
+            let line: String = row.iter().collect();
+            assert_ne!(row[value_col], ' ', "the value starts in the column: {line:?}");
+            let gap: String = row[value_col - 2..value_col].iter().collect();
+            assert_eq!(gap, "  ", "the column gap is intact: {line:?}");
+        }
+        // The short label is padded up to the column, not left ragged.
+        let short_end = 1 + 1 + 2 + short;
+        let pad: String = rows[1][short_end..value_col].iter().collect();
+        assert_eq!(pad, " ".repeat(value_col - short_end), "pad the short label to the column");
+    }
+
+    /// The panel is a fixed-width box: `panel_with` pads a row, it cannot reflow
+    /// one, so a value wider than its column has to be wrapped by the summary
+    /// itself - otherwise it pushes the right border off the line.
+    #[test]
+    fn summary_wraps_a_long_value_inside_the_box() {
+        use dpi_core::dns::availability::DnsAvailStats;
+        use dpi_core::i18n::{get_messages, Language};
+        let msg = get_messages(Language::Ru);
+        let brands: Vec<String> = [
+            "Cloudflare IP 2", "Google", "Level 3", "Level 3 2", "MSK-IX", "OpenDNS", "XboxDNS",
+            "НСДИ",
+        ]
+        .iter()
+        .map(|b| b.to_string())
+        .collect();
+        let stats = DnsAvailStats {
+            doh_ok: 33,
+            doh_total: 37,
+            dot_ok: 33,
+            dot_total: 34,
+            udp_ok: 44,
+            udp_total: 50,
+            hijacked_brands: brands.clone(),
+            resolvers_total: 120,
+            subst_sub: 43,
+            subst_total: 44,
+            fakeip_sub: 0,
+            fakeip_total: 0,
+            top_stub: None,
+        };
+        let out = render_summary(
+            &SummaryData {
+                run_dns: true,
+                dns: Some(&stats),
+                domains: None,
+                tcp: None,
+                burst: None,
+                run_telegram: false,
+                telegram: None,
+            },
+            &msg,
+        );
+        let rows: Vec<String> =
+            out.lines().map(strip_ansi).filter(|l| l.starts_with('│')).collect();
+        // Every row is exactly the box width: nothing spills past the border.
+        for row in &rows {
+            assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{row:?}");
+        }
+        // One row for DNS availability, two for the hijack list, one for the
+        // answer substitution - the list is the only value too wide to fit.
+        assert_eq!(rows.len(), 4, "{rows:#?}");
+        let label_w = msg.summary_resolver_hijack.chars().count();
+        let value_col = 1 + 1 + 2 + label_w + 2;
+        let list: Vec<String> = rows[1..rows.len() - 1]
+            .iter()
+            .map(|row| {
+                assert_eq!(row.chars().nth(value_col - 1), Some(' '), "gap before the value: {row:?}");
+                assert_ne!(row.chars().nth(value_col), Some(' '), "a value starts in the column: {row:?}");
+                let text: String = row.chars().skip(value_col).collect();
+                text.trim_end_matches('│').trim_end().to_string()
+            })
+            .collect();
+        assert!(rows[1].contains(msg.summary_resolver_hijack), "the label sits on the first line");
+        assert!(!rows[2].contains(msg.summary_resolver_hijack), "the continuation repeats no label");
+        assert_eq!(list.join(" "), brands.join(", "), "wrapping loses no entry");
+    }
+
+    /// The SNI discovery rows mirror the Rich markup of the Python original:
+    /// found is green, a ban is yellow, a miss is red, and every one of those
+    /// codes is what the legacy (non-VT) console translator maps onto a Win32
+    /// attribute — a row that loses its SGR goes monochrome on Windows 7.
+    #[test]
+    fn whitelist_rows_carry_their_status_colors() {
+        use dpi_core::i18n::{get_messages, Language};
+        use dpi_core::probe::whitelist::AsRow;
+        let msg = get_messages(Language::Ru);
+        let report = WhitelistReport {
+            rows: vec![
+                AsRow {
+                    provider: "EXAMPLE".to_string(),
+                    asn_str: "AS64500".to_string(),
+                    verdict: AsVerdict::Found {
+                        snis: vec![("www.example.org".to_string(), 3)],
+                        ban_after: true,
+                    },
+                },
+                AsRow {
+                    provider: "EXAMPLE".to_string(),
+                    asn_str: "AS64501".to_string(),
+                    verdict: AsVerdict::Banned { detail: "read timed out [connect]".to_string() },
+                },
+                AsRow {
+                    provider: "EXAMPLE".to_string(),
+                    asn_str: "AS64502".to_string(),
+                    verdict: AsVerdict::NotFound,
+                },
+            ],
+            detected_as: 3,
+            found_as: 1,
+        };
+        let out = render_whitelist(&report, 3, &msg);
+        assert!(
+            out.contains("\x1b[36mEXAMPLE\x1b[0m \x1b[2mAS64500\x1b[0m  \x1b[32m✓\x1b[0m "),
+            "found row: {out}"
+        );
+        assert!(out.contains("\x1b[1;32mwww.example.org\x1b[0m \x1b[2m#3\x1b[0m"), "found label: {out}");
+        assert!(out.contains("\x1b[2;33m"), "ban-after suffix is dim yellow: {out}");
+        assert!(out.contains("\x1b[33m"), "ban row is yellow: {out}");
+        assert!(out.contains("\x1b[31m"), "miss row is red: {out}");
+        assert!(out.contains("\x1b[32m"), "found summary is green: {out}");
+        // ASCII mode swaps the glyphs but must keep the colors.
+        let ascii = asc_with(&out, true);
+        assert!(ascii.contains("\x1b[32m[OK]\x1b[0m"), "ascii mark: {ascii}");
+        assert!(ascii.contains("\x1b[31mx SNI"), "ascii miss: {ascii}");
+        assert!(ascii.contains("\x1b[2;33m  ! "), "ascii ban-after: {ascii}");
+        assert!(!ascii.contains('✓') && !ascii.contains('×'), "glyphs left: {ascii}");
+    }
+
+    /// Windows 7/8 consoles have no VT processing: the SNI rows keep their
+    /// colors only if every SGR code they emit lands on a Win32 attribute. The
+    /// codes are the ones `render_whitelist` writes (cyan provider, dim ASN,
+    /// bold-green label, dim-yellow ban-after, yellow ban, red miss, green
+    /// summary); a code the translator drops would silently go monochrome.
+    #[cfg(windows)]
+    #[test]
+    fn legacy_console_maps_the_whitelist_colors() {
+        const DEFAULT: u16 = 0x0007;
+        const RED: u16 = 0x0004;
+        const GREEN: u16 = 0x0002;
+        const BLUE: u16 = 0x0001;
+        const BRIGHT: u16 = 0x0008;
+        assert_eq!(apply_ansi_code("36", DEFAULT, DEFAULT), GREEN | BLUE, "provider cyan");
+        assert_eq!(apply_ansi_code("31", DEFAULT, DEFAULT), RED, "miss red");
+        assert_eq!(apply_ansi_code("33", DEFAULT, DEFAULT), RED | GREEN, "ban yellow");
+        assert_eq!(apply_ansi_code("1;32", DEFAULT, DEFAULT), GREEN | BRIGHT, "label bold green");
+        assert_eq!(apply_ansi_code("2;33", DEFAULT, DEFAULT), RED | GREEN, "ban-after dim yellow");
+        assert_eq!(apply_ansi_code("32", DEFAULT, DEFAULT), GREEN, "summary green");
+        assert_eq!(apply_ansi_code("2", DEFAULT, DEFAULT), DEFAULT, "dim keeps the default fg");
+        assert_eq!(apply_ansi_code("0", RED, DEFAULT), DEFAULT, "reset restores");
     }
 }

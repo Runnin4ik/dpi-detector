@@ -3,7 +3,6 @@ use std::io::{stdout, IsTerminal, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dpi_core::config::{
@@ -13,7 +12,8 @@ use dpi_core::config::{
 };
 use dpi_core::dns::availability::check_dns_availability;
 use dpi_core::dns::parse_socks_proxy;
-use dpi_core::i18n::{get_messages, print_legend, Language, Messages};
+use dpi_core::i18n::{get_messages, legend_text, Language, Messages};
+use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::dns::udp::probe_udp_dns;
 use dpi_core::net::netinfo::{
     detect_bypass_tools, fetch_ip_cymru, fetch_public_ips, get_system_dns, is_tun_name, IpCymruInfo,
@@ -24,6 +24,9 @@ use dpi_core::probe::domains::{
     check_http_all, check_tls_all, collect_stub_ips, domain_stats, resolve_all, IpFamily,
 };
 use dpi_core::probe::telegram::run_telegram_full;
+use dpi_core::probe::burst::{
+    burst_domain, BurstReport, BurstSettings, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_TIMEOUT_SECS,
+};
 use dpi_core::probe::whitelist::run_whitelist_sni;
 use dpi_core::probe::{check_tcp_16_20, domains};
 use dpi_core::profile::RegionProfile;
@@ -35,17 +38,19 @@ mod menu;
 mod render;
 
 use args::CliArgs;
-use menu::{run_interactive_menu, tui_available, MenuResult, VersionSlot};
+use menu::{burst_settings_menu, run_interactive_menu, tui_available, MenuResult, VersionSlot};
 use render::{
-    asc, clean_output, output_str, panel_to_string, plain_mode, render_banner, render_dns_availability,
-    render_dns_endpoints, render_dns_resolve_notes, render_domain_table, render_netinfo_panel,
-    render_summary, render_tcp_table, render_telegram, render_whitelist, set_ascii_mode,
+    asc, clean_output, output_str, panel_to_string, plain_mode, render_banner, render_burst_table,
+    render_dns_availability,
+    render_dns_endpoints, render_dns_resolve_notes, render_domain_table, render_fingerprint_header,
+    render_netinfo_panel, render_summary, render_tcp_table, render_telegram, render_whitelist, set_ascii_mode,
     set_has_vt, set_plain_mode, strip_ansi, LiveProgress, NetFamilyInfo, NetInfoData, NetTtlb, Spinner,
     SummaryData, TcpRow,
 };
 /// Splits a test selection string into per-test flags (mirrors `_selection_flags`).
-/// Tests: 0 netinfo, 1 DNS, 2 domains, 3 TCP, 4 white-SNI, 5 Telegram, 6 legend.
-fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool) {
+/// Tests: 0 netinfo, 1 DNS, 2 domains, 3 TCP, 4 white-SNI, 5 Telegram, 6 legend,
+/// 7 fingerprint stress (burst).
+fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool) {
     let has = |c: char| selection.contains(c);
     let net = has('0');
     let dns = has('1');
@@ -53,9 +58,22 @@ fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool, bool, bool
     let tcp = has('3');
     let sni = has('4');
     let tg = has('5');
+    let burst = has('7');
     let legend = has('6');
-    let only_legend = legend && !(net || dns || dom || tcp || sni || tg);
-    (net, dns, dom, tcp, sni, tg, legend, only_legend)
+    let only_legend = legend && !(net || dns || dom || tcp || sni || tg || burst);
+    (net, dns, dom, tcp, sni, tg, burst, legend, only_legend)
+}
+
+/// Cell of the CDN (16 KB) table's detail column. An empty probe detail is a
+/// clean 20 KB pass, so the row carries only its duration; every other detail is
+/// a drop/RST/timeout diagnosis and stands alone — a duration glued to an error
+/// reads as if the timing were part of the verdict.
+fn tcp16_detail(detail: String, elapsed: f64) -> String {
+    if detail.is_empty() {
+        format!("{:.1}s", elapsed)
+    } else {
+        detail
+    }
 }
 fn print_out(s: &str) {
     output_str(&clean_output(s));
@@ -190,7 +208,7 @@ fn export_report(path: &str, content: &str, msg: &Messages) {
 /// Legend-only interactive loop (mirrors `handle_legend_menu`).
 fn legend_loop(lang: Language, msg: &Messages) -> MenuAction {
     loop {
-        print_legend(lang, msg);
+        print_out(&legend_text(lang, msg));
         if !std::io::stdin().is_terminal() {
             return MenuAction::Quit;
         }
@@ -216,21 +234,72 @@ enum MenuAction {
     Quit,
 }
 
+/// Language of the run, for the panic hook (which has no access to state).
+static PANIC_LANG: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn lang_code(lang: Language) -> u8 {
+    match lang {
+        Language::En => 0,
+        Language::Ru => 1,
+        Language::Zh => 2,
+        Language::Fa => 3,
+    }
+}
+
+fn lang_from_code(code: u8) -> Language {
+    match code {
+        1 => Language::Ru,
+        2 => Language::Zh,
+        3 => Language::Fa,
+        _ => Language::En,
+    }
+}
+
+/// Resolves the interface language from the raw arguments, before `clap` runs,
+/// so `--help` and parse errors speak the language the user asked for.
+fn prescan_language() -> Language {
+    let argv: Vec<String> = std::env::args().collect();
+    let mut raw: Option<String> = None;
+    let mut i = 1;
+    while i < argv.len() {
+        let arg = &argv[i];
+        if let Some(v) = arg.strip_prefix("--lang=") {
+            raw = Some(v.to_string());
+        } else if arg == "--lang" || arg == "-l" {
+            if let Some(v) = argv.get(i + 1) {
+                raw = Some(v.clone());
+                i += 1;
+            }
+        } else if let Some(v) = arg.strip_prefix("-l") {
+            if !v.is_empty() {
+                raw = Some(v.to_string());
+            }
+        }
+        i += 1;
+    }
+    match raw.as_deref() {
+        None | Some("auto") => Language::autodetect(),
+        Some(code) => Language::from_code(code).unwrap_or(Language::En),
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     // Panic hook: write crash details to file and pause so console does not instantly vanish.
     std::panic::set_hook(Box::new(|info| {
-        let err_msg = format!("\n=== DPI DETECTOR FATAL ERROR ===\n{}\n================================\n", info);
+        let msg = get_messages(lang_from_code(PANIC_LANG.load(std::sync::atomic::Ordering::Relaxed)));
+        let err_msg = format!("{}\n", msg.crash_title.replace("{}", &info.to_string()));
         let _ = std::fs::write("dpi_detector_crash.log", &err_msg);
         let mut stderr = std::io::stderr();
         let _ = stderr.write_all(err_msg.as_bytes());
-        let _ = stderr.write_all(b"Press Enter to close...\r\n");
+        let _ = stderr.write_all(msg.crash_press_enter.as_bytes());
+        let _ = stderr.write_all(b"\r\n");
         let _ = stderr.flush();
         let mut s = String::new();
         let _ = std::io::stdin().read_line(&mut s);
     }));
 
-    let args = CliArgs::parse();
+    let args = args::parse_cli(prescan_language());
     #[cfg(windows)]
     let has_vt = {
         extern "system" {
@@ -279,15 +348,25 @@ async fn main() {
     let mut lang = if args.lang == "auto" {
         Language::autodetect()
     } else {
-        Language::from_code(&args.lang).unwrap_or(Language::En)
+        match Language::from_code(&args.lang) {
+            Some(lang) => lang,
+            None => {
+                if !args.json {
+                    let en = get_messages(Language::En);
+                    eprintln!("{}", en.warn_unknown_lang.replace("{}", &args.lang));
+                }
+                Language::En
+            }
+        }
     };
     let mut msg = get_messages(lang);
+    PANIC_LANG.store(lang_code(lang), std::sync::atomic::Ordering::Relaxed);
 
     // Validators (mirror argparse errors)
     if let Some(ref t) = args.tests {
         let valid = !t.is_empty()
-            && t.chars().all(|c| ('0'..='6').contains(&c) || c == ',' || c == ' ')
-            && t.chars().any(|c| ('0'..='6').contains(&c));
+            && t.chars().all(|c| ('0'..='7').contains(&c) || c == ',' || c == ' ')
+            && t.chars().any(|c| ('0'..='7').contains(&c));
         if !valid {
             eprintln!("{}", msg.invalid_tests_flag.replace("{}", t));
             std::process::exit(2);
@@ -375,11 +454,15 @@ async fn main() {
         println_out(&format!("\x1b[1;33m{}\x1b[0m {}", msg.config_load_error_label, e));
     }
     for w in &cfg.config_warnings {
-        println_out(&format!("\x1b[33m{}\x1b[0m {}", msg.config_warning_label, w));
+        println_out(&format!(
+            "\x1b[33m{}\x1b[0m {}",
+            msg.config_warning_label,
+            msg.config_warning(w)
+        ));
     }
 
     if args.legend {
-        print_legend(lang, &msg);
+        print_out(&legend_text(lang, &msg));
         return;
     }
 
@@ -416,38 +499,18 @@ async fn main() {
             None
         };
         let reason = if !std::io::stdin().is_terminal() {
-            "stdin is not a terminal (pipe or redirection)"
+            msg.tui_reason_stdin.to_string()
         } else if let Some(ref e) = raw_err {
-            e.as_str()
+            e.clone()
         } else {
-            "terminal does not support raw mode"
+            msg.tui_reason_raw_mode.to_string()
         };
-        let notice = if lang == Language::Ru {
-            format!(
-                "\r\nИнтерактивное меню (TUI) недоступно в этом терминале [{}].\r\n\
-                 Запустите диагностику с параметрами:\r\n\
-                 \x1b[36m  dpi-detector -t 1\x1b[0m       — проверка DNS-серверов\r\n\
-                 \x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — базовые тесты (DNS + сайты + TCP16)\r\n\
-                 \x1b[36m  dpi-detector -t 12345\x1b[0m   — все тесты\r\n\
-                 \x1b[36m  dpi-detector --help\x1b[0m     — список всех параметров\r\n\r\n",
-                reason
-            )
-        } else {
-            format!(
-                "\r\nInteractive menu (TUI) is unavailable in this terminal [{}].\r\n\
-                 Run diagnostics using command-line arguments:\r\n\
-                 \x1b[36m  dpi-detector -t 1\x1b[0m       — DNS servers test\r\n\
-                 \x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — basic tests (DNS + sites + TCP16)\r\n\
-                 \x1b[36m  dpi-detector -t 12345\x1b[0m   — all tests\r\n\
-                 \x1b[36m  dpi-detector --help\x1b[0m     — full list of options\r\n\r\n",
-                reason
-            )
-        };
+        let notice = msg.tui_unavailable.replace("{}", &reason);
         print_out(&clean_output(&notice));
         return;
     }
     let mut tests_str = if let Some(ref t) = args.tests {
-        t.chars().filter(|c| ('0'..='6').contains(c)).collect::<String>()
+        t.chars().filter(|c| ('0'..='7').contains(c)).collect::<String>()
     } else if !args.domain.is_empty() || args.domains.is_some() {
         "2".to_string()
     } else if args.tcp16.is_some() {
@@ -457,6 +520,7 @@ async fn main() {
     };
     let mut concurrency = cfg.max_concurrent;
     let mut ip_version = cfg.ip_version.clone();
+    let mut tls_fingerprint = cfg.fingerprint();
 
     // Initial badge: wait up to 4 s only in non-interactive mode
     let mut badge = msg.checking_updates.to_string();
@@ -494,6 +558,7 @@ async fn main() {
                 tests_str = sel.selected_tests;
                 concurrency = sel.concurrency;
                 ip_version = sel.ip_version;
+                tls_fingerprint = sel.tls_fingerprint;
                 lang = sel.language;
                 msg = get_messages(lang);
             }
@@ -521,11 +586,11 @@ async fn main() {
             msg.menu_ip_version, ip_version, msg.menu_concurrency, concurrency
         ));
         if let Some(p) = cfg.effective_proxy() {
-            let proxy_label = if lang == Language::Ru { "Используется прокси" } else { "Proxy in use" };
+            let proxy_label = msg.proxy_in_use;
             println_out(&format!("\x1b[2m{}: \x1b[33m{}\x1b[0m", proxy_label, mask_proxy(p)));
         }
     }
-    let (_, _, _, _, _, _, _, only_legend) = selection_flags(&tests_str);
+    let (_, _, _, _, _, _, _, _, only_legend) = selection_flags(&tests_str);
     if only_legend {
         match legend_loop(lang, &msg) {
             MenuAction::Quit => return,
@@ -537,6 +602,7 @@ async fn main() {
                             tests_str = sel.selected_tests;
                             concurrency = sel.concurrency;
                             ip_version = sel.ip_version;
+                            tls_fingerprint = sel.tls_fingerprint;
                             lang = sel.language;
                             msg = get_messages(lang);
                         }
@@ -545,7 +611,7 @@ async fn main() {
                 }
             }
         }
-        let (_, _, _, _, _, _, _, only_legend) = selection_flags(&tests_str);
+        let (_, _, _, _, _, _, _, _, only_legend) = selection_flags(&tests_str);
         if only_legend {
             return;
         }
@@ -557,11 +623,61 @@ async fn main() {
         return;
     }
     cfg.ip_version = ip_version.clone();
+    // Precedence: CLI flag > menu selection > config.yml value.
+    cfg.tls_fingerprint = tls_fingerprint.code().to_string();
+    if let Some(f) = &args.fingerprint {
+        match TlsFingerprint::parse(f) {
+            Some(fp) => cfg.tls_fingerprint = fp.code().to_string(),
+            None => {
+                if !args.json {
+                    eprintln!(
+                        "{}",
+                        msg.warn_unknown_fingerprint
+                            .replacen("{}", f, 1)
+                            .replacen("{}", &cfg.tls_fingerprint, 1)
+                    );
+                }
+            }
+        }
+    }
+    if !args.json {
+        println_out(&render_fingerprint_header(cfg.fingerprint(), &msg));
+    }
 
+    let mut burst_plan = burst_plan_from_cli(&args, &domains, &msg);
     let mut result_path = args.output.clone();
     let mut selection = tests_str.clone();
 
     loop {
+        // Test 7 is destructive for its targets, so it asks for its own settings
+        // screen before it runs instead of starting with guesses: cancelling the
+        // screen drops test 7 from the selection and runs the rest. The screen
+        // belongs to the test itself, so an explicit `-t 7` on a terminal gets it
+        // too, not only the menu path; where raw mode is unavailable (pipes,
+        // legacy consoles) the CLI flags stand in for it and the test still runs.
+        if !args.json && selection.contains('7') && tui_available() {
+            // The screen always opens with an empty field: prefilling the last
+            // target made a fresh run append to it, so an edited domain looked
+            // ignored. Empty means "the CLI/config list", and the count of that
+            // list is printed under the field.
+            match burst_settings_menu(lang, &burst_plan.settings, burst_plan.targets.len()).await {
+                Some(choice) => {
+                    burst_plan.settings = choice.settings;
+                    if let Some(domain) = choice.domain {
+                        burst_plan.targets = vec![domain];
+                    }
+                }
+                None => {
+                    selection = selection.replace('7', "");
+                    if selection.is_empty() {
+                        // Test 7 was the only selection and its settings were
+                        // cancelled: leave instead of printing an empty report.
+                        println_out("");
+                        return;
+                    }
+                }
+            }
+        }
         let mut emitter = Emitter { report: String::new(), json_mode: args.json };
         let stats = run_test_suite(
             &selection,
@@ -571,6 +687,7 @@ async fn main() {
             &domains,
             &tcp_items,
             &whitelist_sni,
+            &burst_plan,
             &msg,
             profile,
             lang,
@@ -631,12 +748,13 @@ async fn main() {
                             selection = sel.selected_tests;
                             concurrency = sel.concurrency;
                             cfg.ip_version = sel.ip_version.clone();
+                            cfg.tls_fingerprint = sel.tls_fingerprint.code().to_string();
                             lang = sel.language;
                             msg = get_messages(lang);
                         }
                         MenuResult::Quit => return,
                     }
-                    let (_, _, _, _, _, _, _, only) = selection_flags(&selection);
+                    let (_, _, _, _, _, _, _, _, only) = selection_flags(&selection);
                     if only {
                         match legend_loop(lang, &msg) {
                             MenuAction::Quit => return,
@@ -719,6 +837,44 @@ fn timeout_family() -> NetFamilyInfo {
     }
 }
 
+/// Everything test 7 needs: the burst shape and the hosts to fire it at.
+struct BurstPlan {
+    settings: BurstSettings,
+    targets: Vec<String>,
+}
+
+/// Builds test 7's plan from the CLI. An unknown profile name is reported (the
+/// test then runs the profiles it did understand) rather than silently swapped
+/// for a different set.
+fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Messages) -> BurstPlan {
+    let (profiles, unknown) = match &args.burst_profiles {
+        Some(value) => TlsFingerprint::parse_list(value),
+        None => (TlsFingerprint::ALL.to_vec(), Vec::new()),
+    };
+    if !args.json {
+        for token in unknown {
+            let fallback = profiles.iter().map(|f| f.token()).collect::<Vec<_>>().join(", ");
+            eprintln!(
+                "{}",
+                msg.warn_unknown_fingerprint.replacen("{}", &token, 1).replacen("{}", &fallback, 1)
+            );
+        }
+    }
+    let settings = BurstSettings::clamped(
+        args.burst.unwrap_or(BURST_DEFAULT_ATTEMPTS),
+        args.burst_timeout.unwrap_or(BURST_DEFAULT_TIMEOUT_SECS),
+        profiles,
+    );
+    // `-d` picks the targets, exactly as it does for test 2; without it the
+    // configured list is used.
+    let targets = if args.domain.is_empty() {
+        domains.to_vec()
+    } else {
+        args.domain.clone()
+    };
+    BurstPlan { settings, targets }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_test_suite(
     tests_str: &str,
@@ -728,6 +884,7 @@ async fn run_test_suite(
     domains: &[String],
     tcp_items: &[dpi_core::config::Tcp16Target],
     whitelist_sni: &[(String, usize)],
+    burst: &BurstPlan,
     msg: &Messages,
     profile: RegionProfile,
     lang: Language,
@@ -735,7 +892,7 @@ async fn run_test_suite(
     banner_done: bool,
     emitter: &mut Emitter,
 ) -> HashMap<String, serde_json::Value> {
-    let (run_net, run_dns, run_dom, run_tcp, run_sni, run_tg, run_legend, _) =
+    let (run_net, run_dns, run_dom, run_tcp, run_sni, run_tg, run_burst, run_legend, _) =
         selection_flags(tests_str);
 
     let mut json_results: HashMap<String, serde_json::Value> = HashMap::new();
@@ -750,13 +907,29 @@ async fn run_test_suite(
     let live = LiveProgress::new();
     let phases: Option<PhaseProgress> = if !args.json && std::io::stderr().is_terminal() {
         let live_c = Arc::clone(&live);
+        let live_b = Arc::clone(&live);
         let msg_copy = *msg;
         Some(PhaseProgress {
-            on_phase: Arc::new(move |phase: dpi_core::PhaseId, total: usize, parens: bool| {
+            on_phase: Arc::new(move |phase: dpi_core::PhaseId, total: usize| {
+                // Stages of test 2 share one line, so a new stage advances its
+                // own counter instead of starting a line of its own.
+                if let Some(block) = phase.stage_block() {
+                    live_c.set_total(block, total);
+                    let tick_c = Arc::clone(&live_c);
+                    let tick: ProgressTick = Arc::new(move || tick_c.bump(block));
+                    return tick;
+                }
                 let desc = msg_copy.phase_text(phase);
-                live_c.set(desc, total, parens);
+                live_c.set(desc, total);
                 let tick_c = Arc::clone(&live_c);
                 let tick: ProgressTick = Arc::new(move || tick_c.tick());
+                tick
+            }),
+            on_blocks: Arc::new(move |phase: dpi_core::PhaseId, blocks: &[(dpi_core::ProgressBlock, usize)]| {
+                let desc = msg_copy.phase_text(phase);
+                live_b.set_blocks(desc, blocks);
+                let tick_c = Arc::clone(&live_b);
+                let tick: dpi_core::BlockTick = Arc::new(move |block| tick_c.bump(block));
                 tick
             }),
         })
@@ -779,10 +952,15 @@ async fn run_test_suite(
     let mut dom_stats = None;
     let mut tcp_summary = None;
     let mut tg_full = None;
+    let mut burst_summary = None;
 
     // ── Test 0: network & system ──
     if run_net {
         let spinner = (!args.json).then(|| Spinner::start(msg.fetching_net_info));
+        // The cap must clear the inner budgets (3.5 s public-IP race then 5 s
+        // Cymru, both bounding their whole fetch): with a smaller one a slow
+        // but working network would print "network information unavailable"
+        // instead of the panel with its red timeout rows.
         let net_data = tokio::time::timeout(Duration::from_secs(10), async {
             let ips = fetch_public_ips(
                 &cfg.ip4_lookup_urls,
@@ -914,7 +1092,7 @@ async fn run_test_suite(
                 emitter.emit(msg.dns_servers_empty_skip);
             }
         } else {
-            let report = check_dns_availability(cfg, phases.clone()).await;
+            let report = check_dns_availability(cfg, phases.clone(), concurrency).await;
             live.finish();
             if !args.json {
                 emitter.emit(&render_dns_endpoints(&report, msg));
@@ -941,11 +1119,13 @@ async fn run_test_suite(
     if run_dom {
         if !args.json {
             emitter.emit(&format!(
-                "\n{}  {}: {} | IP: {} | timeout: {}s\n\n",
+                "\n{}  {}: {} | {}: {} | {}: {}s\n\n",
                 msg.domains_check_header,
                 msg.targets_label,
                 domains.len(),
+                msg.ip_col,
                 if cfg.ip_version == "ipv6" { "IPv6" } else { "IPv4" },
+                msg.timeout_label,
                 cfg.connect_timeout
             ));
         }
@@ -957,24 +1137,23 @@ async fn run_test_suite(
         .await
         .unwrap_or_default();
 
+        // All four stages are on the road from the first second (test 1
+        // style), so the run reads as one progressing line rather than four
+        // headers that scroll away.
         if !args.json {
-            emitter.emit(&format!("{}\n", msg.phase_dns));
+            live.begin_stages(
+                msg.stages_label.to_string(),
+                &[
+                    (dpi_core::ProgressBlock::DomainDns, domains.len()),
+                    (dpi_core::ProgressBlock::DomainTls13, domains.len()),
+                    (dpi_core::ProgressBlock::DomainTls12, domains.len()),
+                    (dpi_core::ProgressBlock::DomainHttp, domains.len()),
+                ],
+            );
         }
         let mut entries = resolve_all(domains, family, &stub_ips, &sem, phases.clone()).await;
-        live.finish();
-        if !args.json {
-            emitter.emit(&format!("{}\n", msg.phase_tls13));
-        }
         check_tls_all(&mut entries, false, cfg, &sem, phases.clone()).await;
-        live.finish();
-        if !args.json {
-            emitter.emit(&format!("{}\n", msg.phase_tls12));
-        }
         check_tls_all(&mut entries, true, cfg, &sem, phases.clone()).await;
-        live.finish();
-        if !args.json {
-            emitter.emit(&format!("{}\n", msg.phase_http));
-        }
         check_http_all(&mut entries, cfg, &stub_ips, &sem, phases.clone()).await;
         live.finish();
 
@@ -1007,10 +1186,11 @@ async fn run_test_suite(
     if run_tcp {
         if !args.json {
             emitter.emit(&format!(
-                "\n{}  {}: {} | timeout: {}s\n",
+                "\n{}  {}: {} | {}: {}s\n",
                 msg.tcp16_check_title,
                 msg.targets_label,
                 tcp_items.len(),
+                msg.timeout_label,
                 cfg.fat_connect_timeout
             ));
             emitter.emit(&format!("{}\n", msg.checking_status));
@@ -1018,7 +1198,7 @@ async fn run_test_suite(
         let mut rows: Vec<TcpRow> = Vec::new();
         let tcp_tick = phases
             .as_ref()
-            .map(|p| (p.on_phase)(dpi_core::PhaseId::Tcp16, tcp_items.len(), true));
+            .map(|p| (p.on_phase)(dpi_core::PhaseId::Tcp16, tcp_items.len()));
         let mut handles = Vec::new();
         for item in tcp_items {
             let item = item.clone();
@@ -1032,14 +1212,10 @@ async fn run_test_suite(
                     item.sni.clone().unwrap_or_else(|| cfg_c.fat_default_sni.clone())
                 };
                 let t0 = Instant::now();
-                let (_alive, status, detail, _rtt) =
+                let (status, detail, _rtt) =
                     check_tcp_16_20(&item.ip, port, &sni, &cfg_c, &sem_c, None).await;
                 let elapsed = t0.elapsed().as_secs_f64();
-                let detail = if detail.is_empty() {
-                    format!("{:.1}s", elapsed)
-                } else {
-                    format!("{} | {:.1}s", detail, elapsed)
-                };
+                let detail = tcp16_detail(detail, elapsed);
                 let asn_raw = item.asn.trim().to_string();
                 let asn_str = if asn_raw.is_empty() {
                     "-".to_string()
@@ -1055,10 +1231,11 @@ async fn run_test_suite(
         let mut blocked = 0;
         let mut mixed = 0;
         for h in handles {
+            let done = h.await;
             if let Some(t) = tcp_tick.as_ref() {
                 t();
             }
-            if let Ok((id, asn, provider, status, detail)) = h.await {
+            if let Ok((id, asn, provider, status, detail)) = done {
                 let label = status.display_label();
                 if label.contains("OK") {
                     ok += 1;
@@ -1104,11 +1281,13 @@ async fn run_test_suite(
                     asns.insert(if k.is_empty() { t.ip.clone() } else { k });
                 }
                 emitter.emit(&format!(
-                    "\n{}  AS: {} | IP: {} | SNI: {} | batch: {}\n",
+                    "\n{}  AS: {} | {}: {} | SNI: {} | {}: {}\n",
                     msg.menu_test_sni,
                     asns.len(),
+                    msg.ip_col,
                     port443.len(),
                     whitelist_sni.len(),
+                    msg.batch_label,
                     cfg.sni_batch_size
                 ));
                 emitter.emit(&format!("{}\n", msg.phase_sni_base));
@@ -1156,9 +1335,114 @@ async fn run_test_suite(
         tg_full = Some(rep);
     }
 
+    // ── Test 7: fingerprint stress (simultaneous handshakes) ──
+    if run_burst {
+        let settings = &burst.settings;
+        if !args.json {
+            let profile_label = if settings.profiles.len() == TlsFingerprint::ALL.len() {
+                msg.burst_profiles_all.to_string()
+            } else {
+                settings.profiles.iter().map(|f| f.token()).collect::<Vec<_>>().join(", ")
+            };
+            emitter.emit(&format!(
+                "\n{}  {}: {} | {}: {} | {}: {}s | {}: {}\n\n",
+                msg.burst_title,
+                msg.targets_label,
+                burst.targets.len(),
+                msg.burst_attempts_label,
+                settings.attempts,
+                msg.timeout_label,
+                settings.timeout.as_secs(),
+                msg.burst_field_profiles.trim_end_matches(':'),
+                profile_label,
+            ));
+        }
+        let spinner = (!args.json).then(|| Spinner::start(msg.burst_title));
+        // One host per task, the shared semaphore decides how many hosts are in
+        // flight: the simultaneity the test measures is *within* a host (its N
+        // handshakes all leave together), so hosts may overlap like any other
+        // phase of the suite.
+        let mut handles = Vec::with_capacity(burst.targets.len());
+        for domain in &burst.targets {
+            let domain = domain.clone();
+            let cfg_c = cfg.clone();
+            let settings_c = settings.clone();
+            let sem_c = Arc::clone(&sem);
+            handles.push(tokio::spawn(async move {
+                let permit = sem_c.acquire().await;
+                let report = burst_domain(&cfg_c, &domain, None, &settings_c).await;
+                drop(permit);
+                report
+            }));
+        }
+        let mut slots: Vec<Option<BurstReport>> = (0..burst.targets.len()).map(|_| None).collect();
+        for (index, handle) in handles.into_iter().enumerate() {
+            slots[index] = handle.await.ok();
+        }
+        let reports: Vec<BurstReport> = slots
+            .into_iter()
+            .enumerate()
+            .map(|(index, slot)| {
+                slot.unwrap_or_else(|| BurstReport {
+                    domain: burst.targets[index].clone(),
+                    resolved: None,
+                    profiles: Vec::new(),
+                })
+            })
+            .collect();
+        if let Some(spinner) = spinner {
+            spinner.finish();
+        }
+
+        let answered: usize = reports.iter().map(|r| r.answered()).sum();
+        let total: usize = reports.iter().map(|r| r.total()).sum();
+        let lossy = reports.iter().filter(|r| r.has_losses()).count();
+        burst_summary = Some((answered, total, lossy));
+
+        if !args.json {
+            emitter.emit(&render_burst_table(&reports, settings, msg));
+        } else {
+            let domains_json: Vec<serde_json::Value> = reports
+                .iter()
+                .map(|report| {
+                    let profiles: serde_json::Map<String, serde_json::Value> = report
+                        .profiles
+                        .iter()
+                        .map(|profile| {
+                            let failed = profile.attempts.iter().find(|a| !a.status.is_ok_status());
+                            (
+                                profile.fingerprint.code().to_string(),
+                                json!({
+                                    "answered": profile.answered(),
+                                    "attempts": profile.attempts.len(),
+                                    "statuses": profile.attempts.iter().map(|a| a.status.as_str()).collect::<Vec<_>>(),
+                                    "detail": failed.map(|a| a.detail.clone()).unwrap_or_default(),
+                                }),
+                            )
+                        })
+                        .collect();
+                    json!({
+                        "domain": report.domain,
+                        "resolved": report.resolved.map(|ip| ip.to_string()),
+                        "profiles": profiles,
+                    })
+                })
+                .collect();
+            json_results.insert(
+                "fingerprint_burst".to_string(),
+                json!({
+                    "attempts": settings.attempts,
+                    "timeout_secs": settings.timeout.as_secs(),
+                    "profiles": settings.profiles.iter().map(|f| f.code()).collect::<Vec<_>>(),
+                    "domains": domains_json,
+                }),
+            );
+        }
+    }
+
     // ── Test 6: legend ──
     if run_legend && !args.json {
-        print_legend(lang, msg);
+        print_out(&legend_text(lang, msg));
     }
 
     // ── Summary ──
@@ -1169,6 +1453,7 @@ async fn run_test_suite(
                 dns: dns_stats.as_ref(),
                 domains: dom_stats.as_ref(),
                 tcp: tcp_summary,
+                burst: burst_summary,
                 run_telegram: run_tg,
                 telegram: tg_full.as_ref(),
             },
@@ -1184,6 +1469,7 @@ async fn run_test_suite(
             "schema_version": 1,
             "version": env!("CARGO_PKG_VERSION"),
             "profile": profile.code(),
+            "tls_fingerprint": cfg.fingerprint().code(),
             "results": json_results,
         });
         let text = serde_json::to_string_pretty(&payload).unwrap_or_default();
@@ -1200,10 +1486,28 @@ async fn run_test_suite(
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_cdn_detail_keeps_the_time_only_when_there_is_no_error() {
+        use dpi_core::classify::{
+            DET_AT_KB_MARKER, DET_KB_SUFFIX, DET_TCP_ABORTED, DET_TCP_SYN_TIMEOUT, DET_TLS_HANDSHAKE_TIMEOUT,
+        };
+        // Clean pass: the row is the duration.
+        assert_eq!(tcp16_detail(String::new(), 3.25), "3.2s");
+        // Drop/RST/timeout: the classifier detail stands alone, the KB offset it
+        // carries included, and no `| 12.5s` is glued to it.
+        let killed = format!("{DET_TCP_ABORTED}{DET_AT_KB_MARKER}16{DET_KB_SUFFIX}");
+        assert_eq!(tcp16_detail(killed.clone(), 12.5), killed);
+        assert_eq!(tcp16_detail(DET_TCP_SYN_TIMEOUT.to_string(), 5.0), DET_TCP_SYN_TIMEOUT);
+        assert_eq!(
+            tcp16_detail(DET_TLS_HANDSHAKE_TIMEOUT.to_string(), 8.4),
+            DET_TLS_HANDSHAKE_TIMEOUT
+        );
+    }
+
     /// Mirrors Python `tests/test_helpers.py::test_selection_flags`.
     #[test]
     fn test_selection_flags() {
-        let (run_net, run_dns, run_dom, run_tcp, run_wl, run_tg, run_leg, only_leg) =
+        let (run_net, run_dns, run_dom, run_tcp, run_wl, run_tg, run_burst, run_leg, only_leg) =
             selection_flags("123");
         assert!(!run_net);
         assert!(run_dns);
@@ -1211,14 +1515,20 @@ mod tests {
         assert!(run_tcp);
         assert!(!run_wl);
         assert!(!run_tg);
+        assert!(!run_burst);
         assert!(!run_leg);
         assert!(!only_leg);
 
-        let (_, _, _, _, _, _, run_leg, only_leg) = selection_flags("6");
+        let (_, _, _, _, _, _, run_burst, run_leg, only_leg) = selection_flags("67");
+        assert!(run_burst);
+        assert!(run_leg);
+        assert!(!only_leg);
+
+        let (_, _, _, _, _, _, _, run_leg, only_leg) = selection_flags("6");
         assert!(run_leg);
         assert!(only_leg);
 
-        let (run_net, _, _, _, _, _, run_leg, only_leg) = selection_flags("06");
+        let (run_net, _, _, _, _, _, _, run_leg, only_leg) = selection_flags("06");
         assert!(run_net);
         assert!(run_leg);
         assert!(!only_leg);
@@ -1227,8 +1537,8 @@ mod tests {
     #[test]
     fn test_selection_flags_with_commas_and_spaces() {
         let raw = "1, 2, 3";
-        let normalized: String = raw.chars().filter(|c| ('0'..='6').contains(c)).collect();
-        let (run_net, run_dns, run_dom, run_tcp, _, _, _, _) = selection_flags(&normalized);
+        let normalized: String = raw.chars().filter(|c| ('0'..='7').contains(c)).collect();
+        let (run_net, run_dns, run_dom, run_tcp, _, _, _, _, _) = selection_flags(&normalized);
         assert!(!run_net);
         assert!(run_dns);
         assert!(run_dom);
