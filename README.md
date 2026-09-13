@@ -150,18 +150,25 @@ curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install
 crates/
 ├── dpi-core/          # движок: протоколы, зондирование, классификация
 │   ├── classify/      #   DpiProbeStream и вердикты: код ОС/TLS + стадия -> DpiStatus
-│   ├── dns/           #   RFC 1035 wire, UDP, DoH, DoT, SOCKS5 UDP relay, тест 1
-│   ├── net/           #   TCP/TLS-примитивы, отпечатки ClientHello (JA3/JA4, PQ),
-│   │                  #   запросы к системе (адаптеры, маршруты, DNS, публичный IP)
+│   │                  #   detail.rs -- Detail: вердикт как значение, а не проза
+│   ├── dns/           #   RFC 1035 wire, UDP, DoH, DoT, SOCKS5 UDP relay
+│   ├── net/           #   TCP/TLS-примитивы (TlsProfile), отпечатки ClientHello
+│   │                  #   (JA3/JA4, PQ), http_client, sysinfo (адаптеры, DNS)
 │   ├── probe/         #   7 диагностических тестов и их общие примитивы
 │   ├── config.rs      #   загрузка и нормализация config.yml
-│   ├── profile/       #   региональные профили цензуры (ru, ir, cn, global)
-│   └── i18n/          #   все тексты интерфейса (En, Ru, Zh, Fa)
+│   └── profile/       #   региональные профили цензуры (ru, ir, cn, global)
 └── dpi-detector/      # CLI: аргументы, TUI, таблицы, машинный вывод
+    ├── i18n/          #   все тексты интерфейса (En, Ru, Zh, Fa) + переводы detail
+    ├── tui/           #   backend (VT/Win32), widgets (рамки, ширина, frame_repaint),
+    │                  #   progress, input, screens/* (меню)
+    ├── views/         #   по файлу на отчёт теста (banner, netinfo, dns, ..., summary)
+    ├── json.rs        #   схема --json одним набором структур
+    └── update.rs      #   проверка обновлений через GitHub Releases
 ```
 
-Движок ничего не знает об интерфейсе: он возвращает типизированные отчёты и
-канонические токены вердиктов, а тексты, таблицы и JSON собирает бинарник.
+Движок ничего не знает об интерфейсе: он возвращает типизированные отчёты,
+`DpiStatus` и `Detail` с их машинными кодами, а тексты, таблицы и JSON собирает
+бинарник.
 
 ## 🏗️ Сборка из исходников
 
