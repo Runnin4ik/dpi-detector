@@ -1,10 +1,10 @@
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dpi_core::classify::*;
 use dpi_core::config::AppConfig;
-use dpi_core::dns::availability::{
+use dpi_core::probe::dns_avail::{
     known_resolver, net24, org_label, subst_counts, DnsAvailReport, ProbeKind,
 };
-use dpi_core::dns::availability::DnsAnswer;
+use dpi_core::probe::dns_avail::DnsAnswer;
 use dpi_core::i18n::{
     detail_lines, detail_text, fingerprint_label, fmt_size, fmt_speed, format_bidi, Messages,
 };
@@ -1514,7 +1514,7 @@ fn dns_latency_lines(
 ) -> Vec<(String, Color)> {
     let mut lines = Vec::new();
     for a in addrs {
-        let key = dpi_core::dns::availability::ProbeKey {
+        let key = dpi_core::probe::dns_avail::ProbeKey {
             kind,
             addr: a.clone(),
             name: name.to_string(),
@@ -1629,7 +1629,7 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
         // Egress cell
         let mut egress_lines: Vec<(String, Option<Color>)> = Vec::new();
         for a in &udp_addrs {
-            let key = dpi_core::dns::availability::ProbeKey { kind: ProbeKind::Udp, addr: a.clone(), name: name.clone() };
+            let key = dpi_core::probe::dns_avail::ProbeKey { kind: ProbeKind::Udp, addr: a.clone(), name: name.clone() };
             let alive = report.raw.get(&key).map(|dm| {
                 report.allowed.iter().any(|d| dm.get(d).copied().flatten().is_some())
             }).unwrap_or(false);
@@ -1676,7 +1676,7 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
                 // FakeIP check
                 let mut fake_n = 0;
                 for d in &report.forbidden {
-                    let key = dpi_core::dns::availability::ProbeKey { kind: ProbeKind::Udp, addr: a.clone(), name: name.clone() };
+                    let key = dpi_core::probe::dns_avail::ProbeKey { kind: ProbeKind::Udp, addr: a.clone(), name: name.clone() };
                     if let Some(DnsAnswer::Ips(ips)) = report.udp_answers.get(&(key, d.clone())) {
                         if !ips.is_empty() && ips.iter().any(|ip| dpi_core::probe::domains::fake_ip_type(ip) == dpi_core::probe::domains::FakeIpType::FakeIp) {
                             fake_n += 1;
@@ -2212,7 +2212,7 @@ fn frac_color(ok: usize, total: usize) -> &'static str {
 
 pub struct SummaryData<'a> {
     pub run_dns: bool,
-    pub dns: Option<&'a dpi_core::dns::availability::DnsAvailStats>,
+    pub dns: Option<&'a dpi_core::probe::dns_avail::DnsAvailStats>,
     pub domains: Option<&'a DomainStats>,
     pub tcp: Option<(usize, usize, usize, usize)>, // ok, blocked, mixed, total
     pub run_telegram: bool,
@@ -2559,7 +2559,7 @@ mod tests {
     /// the name column spanning ("Google", "Google #2").
     #[test]
     fn dns_table_cells_are_per_endpoint() {
-        use dpi_core::dns::availability::{DnsAnswer, DnsAvailReport, ProbeKey, ProbeKind};
+        use dpi_core::probe::dns_avail::{DnsAnswer, DnsAvailReport, ProbeKey, ProbeKind};
         use std::collections::HashMap;
 
         let mut report = DnsAvailReport {
@@ -2875,7 +2875,7 @@ mod tests {
     /// itself - otherwise it pushes the right border off the line.
     #[test]
     fn summary_wraps_a_long_value_inside_the_box() {
-        use dpi_core::dns::availability::DnsAvailStats;
+        use dpi_core::probe::dns_avail::DnsAvailStats;
         use dpi_core::i18n::{get_messages, Language};
         let msg = get_messages(Language::Ru);
         let brands: Vec<String> = [

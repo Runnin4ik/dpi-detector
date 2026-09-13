@@ -13,7 +13,7 @@ use dpi_core::config::{
     embedded_whitelist_sni, load_domains_from_file, load_tcp16_targets_from_file, load_whitelist_sni,
     resource_path, AppConfig, Tcp16Target,
 };
-use dpi_core::dns::availability::check_dns_availability;
+use dpi_core::probe::dns_avail::check_dns_availability;
 use dpi_core::dns::parse_socks_proxy;
 use dpi_core::dns::udp::probe_udp_dns;
 use dpi_core::i18n::{legend_text, Language, Messages};

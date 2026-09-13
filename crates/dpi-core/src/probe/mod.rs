@@ -1,4 +1,5 @@
 pub mod connector;
+pub mod dns_avail;
 pub mod tcp16;
 pub mod domains;
 pub mod burst;

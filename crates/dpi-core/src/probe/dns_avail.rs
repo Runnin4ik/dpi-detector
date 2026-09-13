@@ -17,10 +17,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Semaphore};
 
-use super::doh::DohSession;
-use super::dot::DotSession;
-use super::socks::SocksProxyConfig;
-use super::types::DnsError;
+use crate::dns::doh::DohSession;
+use crate::dns::dot::DotSession;
+use crate::dns::socks::SocksProxyConfig;
+use crate::dns::types::DnsError;
 use crate::config::AppConfig;
 use crate::{PhaseProgress, ProgressBlock};
 use crate::net::netinfo::fetch_ip_cymru;
@@ -247,7 +247,7 @@ fn spawn_udp_queries(
         let tx = tx.clone();
         handles.push(tokio::spawn(async move {
             let _p = gate.acquire().await.unwrap();
-            let r = super::udp::probe_udp_dns(server, &d, timeout_dur, socks_proxy.as_ref()).await;
+            let r = crate::dns::udp::probe_udp_dns(server, &d, timeout_dur, socks_proxy.as_ref()).await;
             match tx {
                 Some(tx) => {
                     let _ = tx.send((d, r)).await;
@@ -274,7 +274,7 @@ async fn probe_egress(
     let mut egress_ip = None;
     for attempt in 0..2 {
         let window = if attempt == 0 { timeout_dur.min(FIRST_ATTEMPT) } else { timeout_dur };
-        match super::udp::probe_udp_dns(server, "whoami.akamai.net", window, socks_proxy).await {
+        match crate::dns::udp::probe_udp_dns(server, "whoami.akamai.net", window, socks_proxy).await {
             Ok((ips, _)) => {
                 if let Some(ip) = ips.first() {
                     egress_ip = Some(*ip);
@@ -390,7 +390,7 @@ pub async fn check_dns_availability(
     let proxy_raw = cfg.effective_proxy().map(|s| s.to_string());
     let mut socks_proxy: Option<SocksProxyConfig> = None;
     if let Some(ref p) = proxy_raw {
-        match super::socks::parse_socks_proxy(p) {
+        match crate::dns::socks::parse_socks_proxy(p) {
             Ok(c) => socks_proxy = Some(c),
             Err(_) => report.non_socks_proxy_warn = true,
         }
@@ -634,7 +634,7 @@ pub async fn check_dns_availability(
                     // Same backstop as the DoH probe: stop before the cap so the
                     // answers already collected survive.
                     let started = Instant::now();
-                    let (host, mut ep_port) = super::dot::split_dot_endpoint(&addr);
+                    let (host, mut ep_port) = crate::dns::dot::split_dot_endpoint(&addr);
                     if port != 853 {
                         ep_port = port;
                     }
@@ -1108,7 +1108,7 @@ mod tests {
     /// Each staged fault surfaces as the classifier's label for that stage.
     #[test]
     fn test_connect_fail_label() {
-        use super::super::types::DnsError;
+        use crate::dns::types::DnsError;
         assert_eq!(connect_fail_label(&DnsError::Timeout), "TIMEOUT");
         let fault = |stage: &'static str, detail: &str| DnsError::ConnectFault {
             stage,

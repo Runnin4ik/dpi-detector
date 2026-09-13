@@ -1,4 +1,3 @@
-pub mod availability;
 pub mod socks;
 pub mod doh;
 pub mod dot;
