@@ -652,10 +652,15 @@ async fn main() {
         // Test 7 is destructive for its targets, so it asks for its own settings
         // screen before it runs instead of starting with guesses: cancelling the
         // screen drops test 7 from the selection and runs the rest. The screen
-        // belongs to the test itself, so an explicit `-t 7` on a terminal gets it
-        // too, not only the menu path; where raw mode is unavailable (pipes,
-        // legacy consoles) the CLI flags stand in for it and the test still runs.
-        if !args.json && selection.contains('7') && tui_available() {
+        // belongs to the test itself, so an explicit `-t 7` gets it too — but
+        // only on a terminal at both ends: with stdin or stdout redirected there
+        // is nobody to answer the screen, and the CLI flags stand in for it.
+        let settings_screen = !args.json
+            && selection.contains('7')
+            && std::io::stdin().is_terminal()
+            && std::io::stdout().is_terminal()
+            && tui_available();
+        if settings_screen {
             // The screen always opens with an empty field: prefilling the last
             // target made a fresh run append to it, so an edited domain looked
             // ignored. Empty means "the CLI/config list", and the count of that
