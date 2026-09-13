@@ -527,11 +527,18 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<Config
 impl AppConfig {
     /// Parses `config.yml` content. Unknown keys and mistyped values produce
     /// warnings; a parse error or a non-mapping root is recorded instead.
+    /// A configuration with every field at its serde default. Every field of
+    /// this struct carries a default, so an empty mapping parses — a failure
+    /// here would be a bug in the struct definition, not in the input.
+    fn defaults() -> Self {
+        serde_yaml::from_str("{}").expect("an empty mapping parses into the serde defaults")
+    }
+
     pub fn from_yaml_str(content: &str) -> Self {
         let value: serde_yaml::Value = match serde_yaml::from_str(content) {
             Ok(v) => v,
             Err(e) => {
-                let mut cfg: Self = serde_yaml::from_str("{}").unwrap();
+                let mut cfg = Self::defaults();
                 cfg.config_load_error = Some(format!("config.yml parse error: {}", e));
                 return cfg;
             }
@@ -539,7 +546,7 @@ impl AppConfig {
         let mut mapping = match value.as_mapping() {
             Some(m) => m.clone(),
             None => {
-                let mut cfg: Self = serde_yaml::from_str("{}").unwrap();
+                let mut cfg = Self::defaults();
                 cfg.config_load_error = Some("config.yml root is not a mapping".to_string());
                 return cfg;
             }
@@ -589,7 +596,7 @@ impl AppConfig {
             }
         }
         let mut cfg: Self = serde_yaml::from_value(serde_yaml::Value::Mapping(norm))
-            .unwrap_or_else(|_| serde_yaml::from_str("{}").unwrap());
+            .unwrap_or_else(|_| Self::defaults());
         cfg.config_warnings = warnings;
         cfg.clamp();
         cfg

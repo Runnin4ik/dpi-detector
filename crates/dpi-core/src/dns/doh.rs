@@ -17,7 +17,7 @@ use super::types::{DnsError, DnsRecord};
 use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
 use crate::config::AppConfig;
 use crate::net::tcp::set_no_delay;
-use crate::net::tls::create_verifying_doh_tls_config;
+use crate::net::tls::{create_tls_config, TlsProfile};
 
 pub enum DohSender {
     H1(hyper::client::conn::http1::SendRequest<Full<Bytes>>),
@@ -80,7 +80,10 @@ pub async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Result<(D
         })?;
     set_no_delay(&tcp);
 
-    let tls_config = create_verifying_doh_tls_config();
+    // DoH (RFC 8484) over the system roots, offering h2 first, then http/1.1.
+    let tls_config = create_tls_config(
+        &TlsProfile::verifying().alpn(vec![b"h2".to_vec(), b"http/1.1".to_vec()]),
+    );
     let connector = TlsConnector::from(tls_config);
     let server_name = ServerName::try_from(host.clone())
         .map_err(|e| DnsError::Io(format!("invalid TLS server name '{}': {}", host, e)))?;

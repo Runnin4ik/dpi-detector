@@ -1,4 +1,14 @@
+use tokio::sync::{Semaphore, SemaphorePermit};
+
+/// Takes one permit from a concurrency gate. `acquire` only fails when the
+/// semaphore has been closed, and nothing in this crate ever closes one — the
+/// gates live for the whole run and are dropped when it ends.
+pub(crate) async fn permit(sem: &Semaphore) -> SemaphorePermit<'_> {
+    sem.acquire().await.expect("concurrency gate is never closed")
+}
+
 pub mod connector;
+pub mod cymru;
 pub mod dns_avail;
 pub mod tcp16;
 pub mod domains;

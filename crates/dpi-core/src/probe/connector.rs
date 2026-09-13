@@ -6,7 +6,7 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 
 use crate::classify::DpiProbeStream;
-use crate::net::fingerprint::TlsFingerprint;
+use crate::net::tls::{create_tls_config, TlsProfile};
 
 /// Pluggable TLS connector trait.
 /// Probes interact only with this interface, allowing drop-in browser TLS impersonation (rama)
@@ -24,37 +24,11 @@ pub(crate) struct RustlsConnector {
     connector: TlsConnector,
 }
 
-impl RustlsConnector {
-    /// TLS 1.3-pinned connector presenting the given ClientHello profile.
-    pub(crate) fn new_insecure_tls13_with(fingerprint: TlsFingerprint) -> Self {
-        use crate::net::tls::create_insecure_dpi_tls_config_tls13_with;
+impl From<TlsProfile> for RustlsConnector {
+    /// The rustls connector presenting `profile`.
+    fn from(profile: TlsProfile) -> Self {
         Self {
-            connector: TlsConnector::from(create_insecure_dpi_tls_config_tls13_with(fingerprint)),
-        }
-    }
-
-    /// TLS 1.2-pinned connector presenting the given ClientHello profile.
-    pub(crate) fn new_insecure_tls12_with(fingerprint: TlsFingerprint) -> Self {
-        use crate::net::tls::create_insecure_dpi_tls_config_tls12_with;
-        Self {
-            connector: TlsConnector::from(create_insecure_dpi_tls_config_tls12_with(fingerprint)),
-        }
-    }
-
-    /// A version-pinned connector that offers `alpn` instead of the profile's own
-    /// list (`None` keeps it). Test 7 asks for one protocol per run this way.
-    pub(crate) fn new_insecure_versioned_with(
-        fingerprint: TlsFingerprint,
-        tls12_only: bool,
-        alpn: Option<Vec<Vec<u8>>>,
-    ) -> Self {
-        use crate::net::tls::create_insecure_dpi_tls_config_versioned_with;
-        Self {
-            connector: TlsConnector::from(create_insecure_dpi_tls_config_versioned_with(
-                fingerprint,
-                tls12_only,
-                alpn,
-            )),
+            connector: TlsConnector::from(create_tls_config(&profile)),
         }
     }
 }

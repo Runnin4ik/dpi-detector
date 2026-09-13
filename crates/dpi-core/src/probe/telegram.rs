@@ -24,7 +24,7 @@ use crate::classify::Detail;
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
 use crate::net::tcp::set_no_delay;
-use crate::net::tls::create_insecure_dpi_tls_config;
+use crate::net::tls::{create_tls_config, TlsProfile};
 use crate::PhaseProgress;
 
 #[derive(Debug, Clone)]
@@ -192,7 +192,7 @@ async fn tls_get(host: &str, path: &str, user_agent: &str) -> Option<(impl Body<
     let addr = resolve_host(host, 443, Duration::from_secs(10)).await.ok()?.into_iter().next()?;
     let tcp = TcpStream::connect(addr).await.ok()?;
     set_no_delay(&tcp);
-    let connector = TlsConnector::from(create_insecure_dpi_tls_config());
+    let connector = TlsConnector::from(create_tls_config(&TlsProfile::default()));
     let server_name = ServerName::try_from(host.to_string()).ok()?;
     let tls = connector.connect(server_name, tcp).await.ok()?;
     let io = TokioIo::new(tls);
@@ -383,7 +383,7 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
         }
     };
     // SNI = IP → rustls sends no SNI extension (raw TLS stall probe)
-    let connector = TlsConnector::from(create_insecure_dpi_tls_config());
+    let connector = TlsConnector::from(create_tls_config(&TlsProfile::default()));
     let server_name = ServerName::IpAddress(rustls::pki_types::IpAddr::from(addr.ip()));
     let tls = match timeout(Duration::from_secs_f64(8.0), connector.connect(server_name, tcp)).await {
         Ok(Ok(s)) => s,

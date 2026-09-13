@@ -20,15 +20,11 @@
 //! reject (that is how the GREASE-ECH problem and the certificate-compression
 //! problem were found).
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::net::{ja3, ja4};
-use dpi_core::net::tls::{
-    create_insecure_dpi_tls_config_tls12_with, create_insecure_dpi_tls_config_tls13_with,
-    create_insecure_dpi_tls_config_with,
-};
+use dpi_core::net::tls::{create_tls_config, TlsProfile};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -68,10 +64,10 @@ async fn main() {
 fn client_hello(fingerprint: TlsFingerprint) -> Vec<u8> {
     // Same factory the probes use, so the dump reflects the real wire shape
     // (including the baseline compression policy) rather than a hand-built config.
-    let config = (*create_insecure_dpi_tls_config_with(fingerprint)).clone();
+    let config = create_tls_config(&TlsProfile::insecure(fingerprint));
 
     let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
-    let mut conn = rustls::ClientConnection::new(Arc::new(config), name).expect("client conn");
+    let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
     let mut buf = Vec::new();
     conn.write_tls(&mut buf).expect("write ClientHello");
     buf
@@ -96,9 +92,9 @@ fn dump(fingerprint: TlsFingerprint) {
 
 async fn live(fingerprint: TlsFingerprint, hosts: &[String], tls12: bool) {
     let config = if tls12 {
-        create_insecure_dpi_tls_config_tls12_with(fingerprint)
+        create_tls_config(&TlsProfile::insecure(fingerprint).tls12())
     } else {
-        create_insecure_dpi_tls_config_tls13_with(fingerprint)
+        create_tls_config(&TlsProfile::insecure(fingerprint).tls13())
     };
     println!(
         "profile   = {} ({})",

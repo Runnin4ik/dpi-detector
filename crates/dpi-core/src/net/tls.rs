@@ -1,4 +1,5 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
+
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme};
@@ -40,46 +41,100 @@ pub fn crypto_provider_with_pq() -> Arc<rustls::crypto::CryptoProvider> {
     PROVIDER.clone()
 }
 
-/// Creates a standard verifying TLS ClientConfig backed by system/webpki roots.
-///
-/// Built once: assembling the WebPKI roots (hundreds of anchors plus the
-/// verifier's name index) is per-connection work that a DoT/DoH probe would
-/// otherwise repeat on every dial, and a `ClientConfig` is immutable once built,
-/// which is why it is handed out as an `Arc`.
-pub fn create_verifying_tls_config() -> Arc<ClientConfig> {
-    static CONFIG: LazyLock<Arc<ClientConfig>> = LazyLock::new(|| {
-        let mut root_store = RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-        let config = ClientConfig::builder_with_provider(crypto_provider())
-            .with_safe_default_protocol_versions()
-            .expect("safe default protocol versions")
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-
-        Arc::new(config)
-    });
-    CONFIG.clone()
+/// The protocol versions a profile offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TlsVersion {
+    /// Every version the provider supports: TLS 1.3 and 1.2.
+    #[default]
+    Any,
+    /// TLS 1.2 only.
+    Tls12,
+    /// TLS 1.3 only.
+    Tls13,
 }
 
-/// Creates a verifying TLS ClientConfig for DoH (RFC 8484) with ALPN h2 / http/1.1.
-/// Cached like [`create_verifying_tls_config`]; the ALPN list is part of the
-/// cached config and is never mutated afterwards.
-pub fn create_verifying_doh_tls_config() -> Arc<ClientConfig> {
-    static CONFIG: LazyLock<Arc<ClientConfig>> = LazyLock::new(|| {
-        let mut root_store = RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+/// One description of the TLS client shape a probe presents.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TlsProfile {
+    /// The ClientHello shape: cipher suites, extension order, groups, ALPN.
+    pub fingerprint: TlsFingerprint,
+    /// The protocol versions the hello offers.
+    pub version: TlsVersion,
+    /// An ALPN list to offer instead of the profile's own.
+    ///
+    /// `None` offers the profile's list (browsers send `h2, http/1.1`), `Some`
+    /// replaces it — test 7 uses that to ask one protocol per run, which changes
+    /// the ClientHello only in the ALPN extension's body and in JA4's ALPN field.
+    pub alpn: Option<Vec<Vec<u8>>>,
+    /// Verify the server certificate against the system roots instead of
+    /// accepting any certificate.
+    pub verify: bool,
+}
 
-        let mut config = ClientConfig::builder_with_provider(crypto_provider())
-            .with_safe_default_protocol_versions()
-            .expect("safe default protocol versions")
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+impl TlsProfile {
+    /// An insecure shape presenting `fingerprint`: every version the provider
+    /// supports, the profile's own ALPN, any certificate accepted.
+    ///
+    /// STRICTLY for DPI probe testing (SNI checks on arbitrary IPs), NEVER for
+    /// general HTTPS traffic — the certificate is the DPI signal here, not a
+    /// trust decision. Use [`TlsProfile::verifying`] for traffic that has to be
+    /// trusted.
+    pub fn insecure(fingerprint: TlsFingerprint) -> Self {
+        Self { fingerprint, ..Self::default() }
+    }
 
-        Arc::new(config)
-    });
-    CONFIG.clone()
+    /// Offer TLS 1.3 only.
+    ///
+    /// Pinning the version is visible in the hello and is deliberate: rustls
+    /// writes `supported_versions` from the config, so a pinned browser profile
+    /// advertises `[GREASE, 0x0304]` where the Chrome 107 it imitates sends
+    /// `[GREASE, 0x0304, 0x0303]` (Firefox, which does not grease, sends
+    /// `[0x0304]` against a browser's `[0x0304, 0x0303]`).
+    ///
+    /// One version per hello is the price of test 2's two columns: a hello
+    /// offering both lets the server choose, and the "TLS 1.3" column would
+    /// silently carry a TLS 1.2 result. It stays a fingerprintable deviation —
+    /// JA3 and JA4 cannot see it (extension codes, and the maximum version, are
+    /// all they hash), but a middlebox that reads the body can, which is why
+    /// `net::fingerprint::tests::grease_version_leads_supported_versions` pins
+    /// both lists for both phases.
+    pub fn tls13(mut self) -> Self {
+        self.version = TlsVersion::Tls13;
+        self
+    }
+
+    /// Offer TLS 1.2 only. Pinned the same way, and the same deviation:
+    /// `[GREASE, 0x0303]` instead of a browser's `[GREASE, 0x0304, 0x0303]` —
+    /// see [`TlsProfile::tls13`].
+    pub fn tls12(mut self) -> Self {
+        self.version = TlsVersion::Tls12;
+        self
+    }
+
+    /// Offer `alpn` instead of the profile's own list.
+    pub fn alpn(mut self, alpn: Vec<Vec<u8>>) -> Self {
+        self.alpn = Some(alpn);
+        self
+    }
+
+    /// Check the server certificate against the system (webpki) roots.
+    ///
+    /// The certificate is not the signal here: DoT, DoH and the HTTPS fetches
+    /// have to reach a real server, so their configs verify.
+    pub fn verifying() -> Self {
+        Self { verify: true, ..Self::default() }
+    }
+
+    /// The protocol versions this profile asks the provider for.
+    fn versions(&self) -> &'static [&'static rustls::SupportedProtocolVersion] {
+        const TLS12_ONLY: &[&rustls::SupportedProtocolVersion] = &[&rustls::version::TLS12];
+        const TLS13_ONLY: &[&rustls::SupportedProtocolVersion] = &[&rustls::version::TLS13];
+        match self.version {
+            TlsVersion::Any => rustls::DEFAULT_VERSIONS,
+            TlsVersion::Tls12 => TLS12_ONLY,
+            TlsVersion::Tls13 => TLS13_ONLY,
+        }
+    }
 }
 
 /// A verifier that accepts any server certificate: the certificate is the DPI
@@ -133,20 +188,20 @@ impl ServerCertVerifier for InsecureDpiCertVerifier {
     }
 }
 
-/// Creates an insecure TLS ClientConfig that ignores certificate validation.
-/// STRICTLY for DPI probe testing (SNI checks on arbitrary IPs), NEVER for general HTTPS traffic.
-pub fn create_insecure_dpi_tls_config() -> Arc<ClientConfig> {
-    create_insecure_dpi_tls_config_with(TlsFingerprint::Rustls)
-}
-
-/// Insecure DPI config restricted to TLS 1.3, default fingerprint.
-pub fn create_insecure_dpi_tls_config_tls13() -> Arc<ClientConfig> {
-    create_insecure_dpi_tls_config_tls13_with(TlsFingerprint::Rustls)
-}
-
-/// Insecure DPI config restricted to TLS 1.2, default fingerprint.
-pub fn create_insecure_dpi_tls_config_tls12() -> Arc<ClientConfig> {
-    create_insecure_dpi_tls_config_tls12_with(TlsFingerprint::Rustls)
+/// The client config every TLS connection in this crate is built from.
+///
+/// The profile carries the whole shape: the ClientHello fingerprint, the
+/// protocol versions, the ALPN offer, and whether the certificate is verified.
+/// Verifying profiles are built once per shape and shared ([`verifying_config`]);
+/// insecure ones are built per call, because they cost no root store and a
+/// private resumption store per config is what keeps one probe's session ticket
+/// out of the next probe's ClientHello.
+pub fn create_tls_config(profile: &TlsProfile) -> Arc<ClientConfig> {
+    if profile.verify {
+        verifying_config(profile)
+    } else {
+        Arc::new(build_config(profile))
+    }
 }
 
 /// Providers for a fingerprint: the hybrid group is offered only where the
@@ -159,52 +214,75 @@ fn provider_for(fingerprint: TlsFingerprint) -> Arc<rustls::crypto::CryptoProvid
     }
 }
 
-fn insecure_builder(
-    fingerprint: TlsFingerprint,
-    versions: Option<&[&'static rustls::SupportedProtocolVersion]>,
-    alpn: Option<Vec<Vec<u8>>>,
-) -> ClientConfig {
-    let provider = provider_for(fingerprint);
-    let builder = match versions {
-        Some(v) => ClientConfig::builder_with_provider(provider)
-            .with_protocol_versions(v)
-            .expect("protocol versions supported by the provider"),
-        None => ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
-            .expect("safe default protocol versions"),
+/// The verifying cache: one entry per shape [`create_tls_config`] was asked for.
+type VerifyingCache = Mutex<Vec<(TlsProfile, Arc<ClientConfig>)>>;
+
+/// A verifying config for `profile`, built once and shared.
+///
+/// Assembling the WebPKI roots (hundreds of anchors plus the verifier's name
+/// index) is per-config work that a DoT/DoH probe would otherwise repeat on
+/// every dial, and a `ClientConfig` is immutable once built, which is why these
+/// are handed out as an `Arc`. The cache is only ever reached by the profiles
+/// this build actually asks for (the plain one and DoH's).
+fn verifying_config(profile: &TlsProfile) -> Arc<ClientConfig> {
+    static CACHE: LazyLock<VerifyingCache> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+    let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, config)) = cache.iter().find(|(shape, _)| shape == profile) {
+        return config.clone();
+    }
+    let config = Arc::new(build_config(profile));
+    cache.push((profile.clone(), config.clone()));
+    config
+}
+
+/// Builds the config `profile` describes: provider, versions, verifier, shape.
+fn build_config(profile: &TlsProfile) -> ClientConfig {
+    // `with_protocol_versions` rejects only a version the provider has no cipher
+    // suite (with a matching key-exchange group) for, and this provider always
+    // ships TLS 1.3 and 1.2; rustls has no non-`Result` form of the call.
+    let builder = ClientConfig::builder_with_provider(provider_for(profile.fingerprint))
+        .with_protocol_versions(profile.versions())
+        .expect("the built-in provider serves TLS 1.3 and 1.2");
+
+    let mut config = if profile.verify {
+        let mut root_store = RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        builder.with_root_certificates(root_store).with_no_client_auth()
+    } else {
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(InsecureDpiCertVerifier))
+            .with_no_client_auth()
     };
-    let mut config = builder
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(InsecureDpiCertVerifier))
-        .with_no_client_auth();
-    apply_fingerprint(&mut config, fingerprint, alpn);
+    apply_profile(&mut config, profile);
     config
 }
 
 /// Installs the profile and keeps the baseline wire shape intact.
 ///
-/// `alpn` replaces the profile's own list when the caller pins one (test 7 asks
-/// for one protocol per run). It has to be set in both places at once: the
-/// hello's `alpn` extension is written from the *profile*, while rustls
+/// `profile.alpn` replaces the profile's own list when the caller pins one (test
+/// 7 asks for one protocol per run). It has to be set in both places at once:
+/// the hello's `alpn` extension is written from the *profile*, while rustls
 /// validates the server's selection against `ClientConfig::alpn_protocols` — a
 /// profile that offered http/1.1 while the config offered nothing made every
 /// server answer `SelectedUnofferedApplicationProtocol`.
-fn apply_fingerprint(config: &mut ClientConfig, fingerprint: TlsFingerprint, alpn: Option<Vec<Vec<u8>>>) {
+fn apply_profile(config: &mut ClientConfig, profile: &TlsProfile) {
     // The decompressor list is what makes rustls set `offered_cert_compression`,
     // and that is what puts extension 27 into the hello; the *offered algorithm
     // list* is the profile's. A profile that must not send the extension keeps
     // rustls's empty default, the shape this tool has always had.
-    if crate::net::fingerprint::advertises_cert_compression(fingerprint) {
+    if crate::net::fingerprint::advertises_cert_compression(profile.fingerprint) {
         config.cert_decompressors = crate::net::cert_compression::decompressors();
     }
-    crate::net::fingerprint::apply(config, fingerprint);
-    match alpn {
+    crate::net::fingerprint::apply(config, profile.fingerprint);
+    match &profile.alpn {
         Some(alpn) => {
             config.alpn_protocols = alpn.clone();
             if let Some(profile) = config.hello_profile.as_mut() {
                 // Copy-on-write: the shared profile is only cloned for a caller
                 // that asked for a different offer.
-                Arc::make_mut(profile).alpn = Some(alpn);
+                Arc::make_mut(profile).alpn = Some(alpn.clone());
             }
         }
         None => {
@@ -215,59 +293,4 @@ fn apply_fingerprint(config: &mut ClientConfig, fingerprint: TlsFingerprint, alp
             }
         }
     }
-}
-
-/// [`create_insecure_dpi_tls_config`] with a ClientHello profile.
-pub fn create_insecure_dpi_tls_config_with(fingerprint: TlsFingerprint) -> Arc<ClientConfig> {
-    Arc::new(insecure_builder(fingerprint, None, None))
-}
-
-/// [`create_insecure_dpi_tls_config_tls13`] with a ClientHello profile.
-///
-/// Pinning the version is visible in the hello and is deliberate: rustls writes
-/// `supported_versions` from the config, so a pinned browser profile advertises
-/// `[GREASE, 0x0304]` where the Chrome 107 it imitates sends
-/// `[GREASE, 0x0304, 0x0303]` (Firefox, which does not grease, sends `[0x0304]`
-/// against a browser's `[0x0304, 0x0303]`).
-///
-/// One version per hello is the price of test 2's two columns: a hello offering
-/// both lets the server choose, and the "TLS 1.3" column would silently carry a
-/// TLS 1.2 result. It stays a fingerprintable deviation — JA3 and JA4 cannot see
-/// it (extension codes, and the maximum version, are all they hash), but a
-/// middlebox that reads the body can, which is why
-/// `net::fingerprint::tests::grease_version_leads_supported_versions` pins both
-/// lists for both phases.
-pub fn create_insecure_dpi_tls_config_tls13_with(
-    fingerprint: TlsFingerprint,
-) -> Arc<ClientConfig> {
-    Arc::new(insecure_builder(fingerprint, Some(&[&rustls::version::TLS13]), None))
-}
-
-/// [`create_insecure_dpi_tls_config_tls12`] with a ClientHello profile. Pinned
-/// the same way, and the same deviation: `[GREASE, 0x0303]` instead of a
-/// browser's `[GREASE, 0x0304, 0x0303]` — see
-/// [`create_insecure_dpi_tls_config_tls13_with`].
-pub fn create_insecure_dpi_tls_config_tls12_with(
-    fingerprint: TlsFingerprint,
-) -> Arc<ClientConfig> {
-    Arc::new(insecure_builder(fingerprint, Some(&[&rustls::version::TLS12]), None))
-}
-
-/// A version-pinned config whose ALPN list replaces the profile's own.
-///
-/// `alpn` is what the probe offers: `None` keeps the profile's list (browsers
-/// send `h2, http/1.1`), `Some` overrides it — test 7 uses that to ask one
-/// protocol on purpose, which changes the ClientHello only in the ALPN
-/// extension's body and in JA4's ALPN field.
-pub fn create_insecure_dpi_tls_config_versioned_with(
-    fingerprint: TlsFingerprint,
-    tls12_only: bool,
-    alpn: Option<Vec<Vec<u8>>>,
-) -> Arc<ClientConfig> {
-    let versions: &[&'static rustls::SupportedProtocolVersion] = if tls12_only {
-        &[&rustls::version::TLS12]
-    } else {
-        &[&rustls::version::TLS13]
-    };
-    Arc::new(insecure_builder(fingerprint, Some(versions), alpn))
 }

@@ -1,6 +1,6 @@
 //! DoT (DNS over TLS, RFC 7858) probing.
 //!
-//! Strict CA validation (`create_verifying_tls_config`), one TLS connection
+//! Strict CA validation (`TlsProfile::verifying`), one TLS connection
 //! per server, sequential queries with the 2-byte length prefix.
 
 use std::net::{IpAddr, SocketAddr};
@@ -15,7 +15,7 @@ use super::resolve::resolve_host;
 use super::types::DnsError;
 use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
 use crate::net::tcp::set_no_delay;
-use crate::net::tls::create_verifying_tls_config;
+use crate::net::tls::{create_tls_config, TlsProfile};
 
 /// Splits a DoT endpoint `'host[:port]'` (default 853). Supports IPv6 literals.
 pub fn split_dot_endpoint(addr: &str) -> (String, u16) {
@@ -100,7 +100,7 @@ impl DotSession {
                 detail: e.to_string(),
             })?;
         set_no_delay(&tcp);
-        let connector = TlsConnector::from(create_verifying_tls_config());
+        let connector = TlsConnector::from(create_tls_config(&TlsProfile::verifying()));
         let server_name = ServerName::try_from(host.to_string())
             .or_else(|_| {
                 host.parse::<IpAddr>()

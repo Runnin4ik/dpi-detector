@@ -4,5 +4,8 @@ pub mod pq_kx;
 pub mod fingerprint;
 pub mod ja3;
 pub mod ja4;
+pub mod http_client;
 pub mod netinfo;
+pub mod public_ip;
+pub mod sysinfo;
 pub mod tcp;

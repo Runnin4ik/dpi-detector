@@ -23,7 +23,7 @@ use crate::dns::socks::SocksProxyConfig;
 use crate::dns::types::DnsError;
 use crate::config::AppConfig;
 use crate::{PhaseProgress, ProgressBlock};
-use crate::net::netinfo::fetch_ip_cymru;
+use crate::probe::cymru::fetch_ip_cymru;
 use crate::probe::domains::fake_ip_type;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -246,7 +246,7 @@ fn spawn_udp_queries(
         let socks_proxy = socks_proxy.cloned();
         let tx = tx.clone();
         handles.push(tokio::spawn(async move {
-            let _p = gate.acquire().await.unwrap();
+            let _p = crate::probe::permit(&gate).await;
             let r = crate::dns::udp::probe_udp_dns(server, &d, timeout_dur, socks_proxy.as_ref()).await;
             match tx {
                 Some(tx) => {
@@ -436,7 +436,7 @@ pub async fn check_dns_availability(
                     let egress_sem = Arc::clone(&egress_sem);
                     let tick = block_tick.clone();
                     tokio::spawn(async move {
-                        let _e = egress_sem.acquire().await.unwrap();
+                        let _e = crate::probe::permit(&egress_sem).await;
                         let ip = probe_egress(server, timeout_dur, socks_proxy.as_ref()).await;
                         if let Some(t) = &tick {
                             t(ProgressBlock::Egress);
@@ -448,7 +448,7 @@ pub async fn check_dns_availability(
                 let mut lat: HashMap<String, Option<f64>> = HashMap::new();
                 let mut answers: Vec<((ProbeKey, String), DnsAnswer)> = Vec::new();
                 {
-                    let _g = gate.acquire().await.unwrap();
+                    let _g = crate::probe::permit(&gate).await;
 
                     // Phase A: trusted domains, fanned out per server. Phase B
                     // fires as soon as ANY trusted domain answers — liveness is
@@ -528,7 +528,7 @@ pub async fn check_dns_availability(
             let doh_sem = Arc::new(Semaphore::new(dns_gate));
             let block_tick = block_tick.clone();
             handles.push(tokio::spawn(async move {
-                let _g = gate.acquire().await.unwrap();
+                let _g = crate::probe::permit(&gate).await;
                 let key = ProbeKey { kind: ProbeKind::DohWire, addr: addr.clone(), name: name.clone() };
                 // Outer cap: twice the query window plus 3 s of slack.
                 let cap = Duration::from_secs_f64(timeout_dur.as_secs_f64() * 2.0 + 3.0);
@@ -573,7 +573,7 @@ pub async fn check_dns_availability(
                             lat.insert(d.clone(), None);
                             continue;
                         }
-                        let _p = doh_sem.acquire().await.unwrap();
+                        let _p = crate::probe::permit(&doh_sem).await;
                         // One retry after a jittered 0.3–1.0 s pause, unless the
                         // connection is closed or the window no longer fits.
                         let mut res = session.query(d, timeout_dur).await;
@@ -625,7 +625,7 @@ pub async fn check_dns_availability(
             let gate = Arc::clone(&probe_gate);
             let block_tick = block_tick.clone();
             handles.push(tokio::spawn(async move {
-                let _g = gate.acquire().await.unwrap();
+                let _g = crate::probe::permit(&gate).await;
                 let key = ProbeKey { kind: ProbeKind::Dot, addr: addr.clone(), name: name.clone() };
                 // Outer cap: twice the query window plus 3 s of slack.
                 let cap = Duration::from_secs_f64(timeout_dur.as_secs_f64() * 2.0 + 3.0);
@@ -716,8 +716,8 @@ pub async fn check_dns_availability(
                 let budget = Arc::clone(&probe_gate);
                 let cymru = cfg.cymru_doh_servers.clone();
                 tokio::spawn(async move {
-                    let _p = asn_sem.acquire().await.unwrap();
-                    let _b = budget.acquire().await.unwrap();
+                    let _p = crate::probe::permit(&asn_sem).await;
+                    let _b = crate::probe::permit(&budget).await;
                     let info = fetch_ip_cymru(&ip, &cymru, Duration::from_secs(5)).await;
                     (ip, info.and_then(|i| i.org).unwrap_or_default())
                 })

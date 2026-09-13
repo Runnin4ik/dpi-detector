@@ -37,6 +37,7 @@ use crate::net::fingerprint::TlsFingerprint;
 use crate::probe::connector::{DpiTlsConnector, RustlsConnector};
 use crate::probe::domains::{resolve_ip, IpFamily};
 use crate::net::tcp::{dial_tcp, DialError};
+use crate::net::tls::TlsProfile;
 
 /// Port every attempt dials (the probes' TLS column uses the same one).
 pub const BURST_PORT: u16 = 443;
@@ -438,11 +439,15 @@ pub async fn burst_profile(
     // Phase 2 — the handshakes start together. Only the connections that came up
     // join the barrier, so one refused dial cannot deadlock the rest.
     if !connected.is_empty() {
-        let connector = Arc::new(RustlsConnector::new_insecure_versioned_with(
-            fingerprint,
-            settings.tls == BurstTlsVersion::Tls12,
-            settings.alpn.offered(),
-        ));
+        let mut profile = if settings.tls == BurstTlsVersion::Tls12 {
+            TlsProfile::insecure(fingerprint).tls12()
+        } else {
+            TlsProfile::insecure(fingerprint).tls13()
+        };
+        if let Some(alpn) = settings.alpn.offered() {
+            profile = profile.alpn(alpn);
+        }
+        let connector = Arc::new(RustlsConnector::from(profile));
         let gate = Arc::new(Barrier::new(connected.len()));
         let mut handshakes = JoinSet::new();
         for (index, stream, tracker) in connected {
@@ -657,7 +662,8 @@ mod tests {
     /// through the vendored profile), so only the cipher list is stable enough to
     /// name a shape arriving at a stand.
     fn hello_ciphers(fingerprint: TlsFingerprint) -> String {
-        let config = crate::net::tls::create_insecure_dpi_tls_config_tls13_with(fingerprint);
+        let config =
+            crate::net::tls::create_tls_config(&TlsProfile::insecure(fingerprint).tls13());
         let name = ServerName::try_from("example.com").expect("valid name");
         let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
         let mut buf = Vec::new();

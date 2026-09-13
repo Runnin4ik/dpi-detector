@@ -22,6 +22,7 @@ use crate::classify::{
 use crate::config::AppConfig;
 use crate::probe::http::{hyper_err_info, negotiated_h2, HttpRequest, HttpSender};
 use crate::net::tcp::{dial_tcp, DialError};
+use crate::net::tls::{create_tls_config, TlsProfile};
 
 fn random_pool(size: usize) -> Vec<u8> {
     // xorshift64* — deterministic PRNG, no extra deps, ASCII alphanumerics
@@ -71,9 +72,10 @@ async fn connect_fat_target(
                 Err(_) => ServerName::IpAddress(rustls::pki_types::IpAddr::from(target_ip)),
             }
         };
+        let profile = TlsProfile::insecure(cfg.fingerprint());
         let tls_stream = match timeout(
             Duration::from_secs_f64(cfg.fat_connect_timeout),
-            TlsConnector::from(create_tls_config(cfg.fingerprint())).connect(server_name, tcp),
+            TlsConnector::from(create_tls_config(&profile)).connect(server_name, tcp),
         )
         .await
         {
@@ -293,12 +295,6 @@ pub async fn probe_tcp_16_20(
     (DpiStatus::Ok, Detail::None, measured_rtt)
 }
 
-fn create_tls_config(
-    fingerprint: crate::net::fingerprint::TlsFingerprint,
-) -> std::sync::Arc<rustls::ClientConfig> {
-    crate::net::tls::create_insecure_dpi_tls_config_with(fingerprint)
-}
-
 /// Semaphore-gated wrapper: takes one permit per probe, then runs `probe_tcp_16_20`.
 pub async fn check_tcp_16_20(
     ip: &str,
@@ -308,7 +304,7 @@ pub async fn check_tcp_16_20(
     sem: &Semaphore,
     hint_rtt: Option<f64>,
 ) -> (DpiStatus, Detail, Option<f64>) {
-    let _permit = sem.acquire().await.unwrap();
+    let _permit = crate::probe::permit(sem).await;
     probe_tcp_16_20(ip, port, sni, cfg, hint_rtt).await
 }
 

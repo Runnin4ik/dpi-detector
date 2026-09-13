@@ -609,6 +609,8 @@ const EXT_APPLICATION_SETTINGS: u16 = 17513;
 mod tests {
     use super::*;
 
+    use crate::net::tls::{create_tls_config, TlsProfile};
+
     /// Pinned from the `curl-impersonate v2.2.2` bundle (see
     /// [`tests::bundle_versions_match_their_ja4`]).
     const CHROME_107_JA4: &str = "t13d1516h2_8daaf6152771_e5627efa2ab1";
@@ -754,9 +756,9 @@ mod tests {
     /// JA3, the hello size, and JA4.
     fn client_hello_full(fingerprint: TlsFingerprint, tls13_only: bool) -> (String, usize, String) {
         let config = if tls13_only {
-            crate::net::tls::create_insecure_dpi_tls_config_tls13_with(fingerprint)
+            create_tls_config(&TlsProfile::insecure(fingerprint).tls13())
         } else {
-            crate::net::tls::create_insecure_dpi_tls_config_with(fingerprint)
+            create_tls_config(&TlsProfile::insecure(fingerprint))
         };
         let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
         let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
@@ -850,11 +852,15 @@ mod tests {
     #[test]
     fn pinned_tls_version_and_alpn_reach_the_hello() {
         let hello = |tls12_only: bool, alpn: Option<Vec<Vec<u8>>>| {
-            let config = crate::net::tls::create_insecure_dpi_tls_config_versioned_with(
-                TlsFingerprint::Chrome,
-                tls12_only,
-                alpn,
-            );
+            let mut profile = if tls12_only {
+                TlsProfile::insecure(TlsFingerprint::Chrome).tls12()
+            } else {
+                TlsProfile::insecure(TlsFingerprint::Chrome).tls13()
+            };
+            if let Some(alpn) = alpn {
+                profile = profile.alpn(alpn);
+            }
+            let config = create_tls_config(&profile);
             let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
             let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
             let mut buf = Vec::new();
@@ -894,16 +900,19 @@ mod tests {
     /// The list also carries one *version*, where a browser sends two (1.3 and
     /// 1.2). That is the pinning of test 2's two columns, asserted here so it
     /// cannot drift by accident: `0x0304` for the TLS 1.3 phase, `0x0303` for
-    /// the TLS 1.2 one — see `net::tls::create_insecure_dpi_tls_config_tls13_with`
+    /// the TLS 1.2 one — see `net::tls::TlsProfile::tls13`
     /// for why the deviation is accepted.
     #[test]
     fn grease_version_leads_supported_versions() {
         // The `supported_versions` body of a hello, and the `maybe_grease`-th
         // entry of it (0 = first).
         let versions = |fp: TlsFingerprint, tls12_only: bool| {
-            let config = crate::net::tls::create_insecure_dpi_tls_config_versioned_with(
-                fp, tls12_only, None,
-            );
+            let profile = if tls12_only {
+                TlsProfile::insecure(fp).tls12()
+            } else {
+                TlsProfile::insecure(fp).tls13()
+            };
+            let config = create_tls_config(&profile);
             let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
             let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
             let mut buf = Vec::new();
@@ -972,7 +981,7 @@ mod tests {
             ("Chrome", TlsFingerprint::Chrome, 2),
             ("Safari", TlsFingerprint::Safari, 2),
         ] {
-            let config = crate::net::tls::create_insecure_dpi_tls_config_tls13_with(fingerprint);
+            let config = create_tls_config(&TlsProfile::insecure(fingerprint).tls13());
             assert_eq!(
                 config.cert_decompressors.len(),
                 decompressors,

@@ -19,13 +19,12 @@ use dpi_core::dns::parse_socks_proxy;
 use dpi_core::dns::udp::probe_udp_dns;
 use dpi_core::i18n::{legend_text, Language, Messages};
 use dpi_core::net::fingerprint::TlsFingerprint;
-use dpi_core::net::netinfo::{
-    detect_bypass_tools, fetch_ip_cymru, fetch_public_ips, get_system_dns, is_tun_name, IpCymruInfo,
-};
+use dpi_core::net::netinfo::{detect_bypass_tools, fetch_public_ips, get_system_dns, is_tun_name};
 use dpi_core::probe::burst::{
     burst_targets, BurstAlpn, BurstObserver, BurstSettings, BurstTarget, BurstTlsVersion,
     BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_TIMEOUT_SECS,
 };
+use dpi_core::probe::cymru::{fetch_ip_cymru, IpCymruInfo};
 use dpi_core::probe::domains::{
     check_http_all, check_tls_all, collect_stub_ips, domain_stats, resolve_all, IpFamily,
 };

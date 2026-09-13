@@ -30,6 +30,7 @@ use crate::probe::connector::RustlsConnector;
 use crate::probe::http::{hyper_err_info, negotiated_h2, HttpRequest, HttpSender};
 use crate::probe::connector::DpiTlsConnector;
 use crate::net::tcp::{dial_tcp, DialError};
+use crate::net::tls::TlsProfile;
 
 const BODY_CAP: usize = 64 * 1024;
 
@@ -275,11 +276,12 @@ pub async fn check_domain_tls(
         // TLS handshake (version-pinned client)
         *stage.lock() = "tls_handshake".to_string();
         let fingerprint = cfg.fingerprint();
-        let rustls_conn = if tls12_only {
-            RustlsConnector::new_insecure_tls12_with(fingerprint)
+        let profile = if tls12_only {
+            TlsProfile::insecure(fingerprint).tls12()
         } else {
-            RustlsConnector::new_insecure_tls13_with(fingerprint)
+            TlsProfile::insecure(fingerprint).tls13()
         };
+        let rustls_conn = RustlsConnector::from(profile);
         let server_name = match ServerName::try_from(domain.to_string()) {
             Ok(n) => n,
             Err(e) => {
@@ -488,7 +490,9 @@ pub async fn check_http_injection(
             .header(ACCEPT, "*/*")
             .header("Connection", "close")
             .body(http_body_util::Full::new(Bytes::new()))
-            .expect("valid request");
+            // The method, URI, headers and body above are all constant: this
+            // request cannot fail to build.
+            .expect("constant HEAD request");
 
         let resp = match timeout(Duration::from_secs_f64(cfg.read_timeout), sender.send_request(req)).await {
             Ok(Ok(r)) => r,
@@ -582,7 +586,7 @@ pub async fn resolve_all(
         let sem = Arc::clone(sem);
         let stub_ips = stub_ips.clone();
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let _permit = crate::probe::permit(&sem).await;
             let clean_domain = parse_host(&domain);
             let resolved = resolve_ip(&clean_domain, family).await;
             // IPv6 mode: IPv4 fallback distinguishes NXDOMAIN from no-v6
@@ -661,11 +665,12 @@ pub async fn check_tls_all(
             continue;
         }
         let domain = e.domain.clone();
-        let target = e.resolved.unwrap();
+        // The loop above skips every entry whose DNS answer is missing or fake.
+        let Some(target) = e.resolved else { continue };
         let cfg = cfg.clone();
         let sem = Arc::clone(sem);
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let _permit = crate::probe::permit(&sem).await;
             let r = check_domain_tls(&domain, target, tls12_only, &cfg).await;
             (idx, r)
         }));
@@ -709,7 +714,7 @@ pub async fn check_http_all(
         let sem = Arc::clone(sem);
         let stub_ips = stub_ips.clone();
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let _permit = crate::probe::permit(&sem).await;
             let r = check_http_injection(&domain, target, &cfg, &stub_ips).await;
             (idx, r)
         }));
