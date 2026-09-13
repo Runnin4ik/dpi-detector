@@ -18,7 +18,7 @@ use dpi_core::net::version::{version_badge_lang, ReleaseInfo};
 use dpi_core::profile::RegionProfile;
 
 use crate::render::{
-    asc, ascii_mode, box_chars, clean_output, frame_home, frame_repaint, output_str, panel_to_string,
+    asc, ascii_mode, clean_output, frame_home, frame_repaint, output_str, panel_to_string,
     plain_mode, render_banner, strip_ansi_len, BOX_WIDTH,
 };
 use crate::{print_out, println_out, selection_flags};
@@ -451,29 +451,14 @@ fn draw_menu(
         let content = format_bidi(label, current_lang);
         lines.push(format!("{}{}", prefix, content));
     }
-    // Glyph-safe content first: widths are measured after replacement.
-    let lines: Vec<String> = lines.into_iter().map(|l| asc(&l)).collect();
-
-    let title_clean = format!(" {} ", asc(&format_bidi(msg.menu_title, current_lang)));
-    let title_len = strip_ansi_len(&title_clean);
-    let border_total = BOX_WIDTH.saturating_sub(title_len + 3);
-    let (tl, tr, bl, br, hb, vb) = box_chars();
-
-    let top_border = format!(
-        "\x1b[1;36m{}{}\x1b[1;36m{}\x1b[1;36m{}\x1b[1;36m{}\x1b[0m",
-        tl, hb, title_clean, hb.repeat(border_total), tr
+    // The box comes from the shared panel helper: border glyphs, title padding
+    // and the per-row pad to the right edge live in one place, the same one the
+    // legend and netinfo panels are drawn with.
+    rows.extend(
+        panel_to_string(&format_bidi(msg.menu_title, current_lang), &lines)
+            .lines()
+            .map(clean_output),
     );
-    rows.push(clean_output(&top_border));
-
-    for line in &lines {
-        let plain_len = strip_ansi_len(line);
-        let pad = BOX_WIDTH.saturating_sub(plain_len + 3);
-        let row = format!("\x1b[1;36m{}\x1b[0m {}{}\x1b[1;36m{}\x1b[0m", vb, line, " ".repeat(pad), vb);
-        rows.push(clean_output(&row));
-    }
-
-    let bot_border = format!("\x1b[1;36m{}{}{}\x1b[0m", bl, hb.repeat(BOX_WIDTH - 2), br);
-    rows.push(clean_output(&bot_border));
 
     rows.push(clean_output(&asc(&hotkey_row(msg, current_lang, plain_mode()))));
 
@@ -545,17 +530,13 @@ pub fn sorted_selection(selected: &HashSet<char>) -> String {
 }
 
 
+/// The menu's test rows in digit order. The labels come from [`Messages`], which
+/// is where the digit-to-test mapping lives; the table here is only its order.
 fn get_test_options(msg: &Messages) -> [(char, &'static str); 8] {
-    [
-        ('0', msg.menu_test_netinfo),
-        ('1', msg.menu_test_dns),
-        ('2', msg.menu_test_domains),
-        ('3', msg.menu_test_tcp),
-        ('4', msg.menu_test_sni),
-        ('5', msg.menu_test_telegram),
-        ('6', msg.menu_test_burst),
-        ('7', msg.menu_test_legend),
-    ]
+    std::array::from_fn(|i| {
+        let digit = char::from(b'0' + i as u8);
+        (digit, msg.menu_test_label(digit))
+    })
 }
 
 /// What the settings screen hands back to the runner.
@@ -912,26 +893,13 @@ fn burst_settings_rows(
         None => profiles.iter().map(|f| f.display_label()).collect::<Vec<_>>().join(", "),
     };
     lines.push(field(BURST_ROW_PROFILES, msg.burst_field_profiles, profile_value));
-    let lines: Vec<String> = lines.into_iter().map(|l| asc(&l)).collect();
 
-    let mut rows: Vec<String> = Vec::with_capacity(12);
-    let title_clean = format!(" {} ", asc(&format_bidi(msg.burst_settings_title, lang)));
-    let title_len = strip_ansi_len(&title_clean);
-    let border_total = BOX_WIDTH.saturating_sub(title_len + 3);
-    let (tl, tr, bl, br, hb, vb) = box_chars();
-    rows.push(clean_output(&format!(
-        "\x1b[1;36m{}{}\x1b[1;36m{}\x1b[1;36m{}\x1b[1;36m{}\x1b[0m",
-        tl, hb, title_clean, hb.repeat(border_total), tr
-    )));
-    for line in &lines {
-        let plain_len = strip_ansi_len(line);
-        let pad = BOX_WIDTH.saturating_sub(plain_len + 3);
-        rows.push(clean_output(&format!(
-            "\x1b[1;36m{}\x1b[0m {}{}\x1b[1;36m{}\x1b[0m",
-            vb, line, " ".repeat(pad), vb
-        )));
-    }
-    rows.push(clean_output(&format!("\x1b[1;36m{}{}{}\x1b[0m", bl, hb.repeat(BOX_WIDTH - 2), br)));
+    // Same shared box as the menu: the settings screen used to carry its own
+    // copy of the border, the title pad and the per-row pad.
+    let mut rows: Vec<String> = panel_to_string(&format_bidi(msg.burst_settings_title, lang), &lines)
+        .lines()
+        .map(clean_output)
+        .collect();
     rows.push(clean_output(&asc(&burst_hotkey_row(msg, lang, plain_mode()))));
     rows
 }
