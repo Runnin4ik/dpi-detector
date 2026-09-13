@@ -40,7 +40,9 @@ mod menu;
 mod render;
 
 use args::CliArgs;
-use menu::{burst_settings_menu, run_interactive_menu, tui_available, MenuResult, VersionSlot};
+use menu::{
+    burst_settings_menu, run_interactive_menu, tui_available, MenuResult, MenuSelection, VersionSlot,
+};
 use render::{
     asc, clean_output, output_str, panel_to_string, plain_mode, render_banner, render_burst_table,
     render_dns_availability,
@@ -234,6 +236,37 @@ fn legend_loop(lang: Language, msg: &Messages) -> MenuAction {
 enum MenuAction {
     Menu,
     Quit,
+}
+
+/// The interactive menu, and then the legend screen for as long as the selection
+/// is only the legend.
+///
+/// A legend-only selection has nothing to run, so the legend text stands in for
+/// the run. It used to be printed once and its own menu key was answered by
+/// running the (empty) selection again: the screen came back with the post-run
+/// panel and only the *second* press opened the menu. The key now does what it
+/// says, and the screen ends when the selection can actually run.
+async fn menu_until_something_to_run(
+    lang: Language,
+    profile: RegionProfile,
+    cfg: &AppConfig,
+    badge: &str,
+    version_slot: &VersionSlot,
+) -> Option<MenuSelection> {
+    loop {
+        let chosen = match run_interactive_menu(lang, profile, cfg, badge, version_slot).await {
+            MenuResult::Run(chosen) => chosen,
+            MenuResult::Quit => return None,
+        };
+        let (_, _, _, _, _, _, _, _, only_legend) = selection_flags(&chosen.selected_tests);
+        if !only_legend {
+            return Some(chosen);
+        }
+        match legend_loop(chosen.language, &get_messages(chosen.language)) {
+            MenuAction::Menu => continue,
+            MenuAction::Quit => return None,
+        }
+    }
 }
 
 /// Language of the run, for the panic hook (which has no access to state).
@@ -594,28 +627,24 @@ async fn main() {
     }
     let (_, _, _, _, _, _, _, _, only_legend) = selection_flags(&tests_str);
     if only_legend {
+        // Only `-t 7`, or the menu picking the legend and nothing else, gets
+        // here. The screen's menu key leads back into the menu; without a
+        // terminal to answer it, the legend is the whole program.
         match legend_loop(lang, &msg) {
-            MenuAction::Quit => return,
-            MenuAction::Menu => {
-                // Re-enter interactive menu once, then run
-                if is_interactive {
-                    match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot).await {
-                        MenuResult::Run(sel) => {
-                            tests_str = sel.selected_tests;
-                            concurrency = sel.concurrency;
-                            ip_version = sel.ip_version;
-                            tls_fingerprint = sel.tls_fingerprint;
-                            lang = sel.language;
-                            msg = get_messages(lang);
-                        }
-                        MenuResult::Quit => return,
+            MenuAction::Menu if is_interactive => {
+                match menu_until_something_to_run(lang, profile, &cfg, &badge, &version_slot).await {
+                    Some(chosen) => {
+                        tests_str = chosen.selected_tests;
+                        concurrency = chosen.concurrency;
+                        ip_version = chosen.ip_version;
+                        tls_fingerprint = chosen.tls_fingerprint;
+                        lang = chosen.language;
+                        msg = get_messages(lang);
                     }
+                    None => return,
                 }
             }
-        }
-        let (_, _, _, _, _, _, _, _, only_legend) = selection_flags(&tests_str);
-        if only_legend {
-            return;
+            _ => return,
         }
     }
 
@@ -763,23 +792,16 @@ async fn main() {
                             badge = version_badge_lang(latest.as_ref(), lang);
                         }
                     }
-                    match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot).await {
-                        MenuResult::Run(sel) => {
-                            selection = sel.selected_tests;
-                            concurrency = sel.concurrency;
-                            cfg.ip_version = sel.ip_version.clone();
-                            cfg.tls_fingerprint = sel.tls_fingerprint.code().to_string();
-                            lang = sel.language;
+                    match menu_until_something_to_run(lang, profile, &cfg, &badge, &version_slot).await {
+                        Some(chosen) => {
+                            selection = chosen.selected_tests;
+                            concurrency = chosen.concurrency;
+                            cfg.ip_version = chosen.ip_version.clone();
+                            cfg.tls_fingerprint = chosen.tls_fingerprint.code().to_string();
+                            lang = chosen.language;
                             msg = get_messages(lang);
                         }
-                        MenuResult::Quit => return,
-                    }
-                    let (_, _, _, _, _, _, _, _, only) = selection_flags(&selection);
-                    if only {
-                        match legend_loop(lang, &msg) {
-                            MenuAction::Quit => return,
-                            MenuAction::Menu => {}
-                        }
+                        None => return,
                     }
                     should_repeat = true;
                 }
