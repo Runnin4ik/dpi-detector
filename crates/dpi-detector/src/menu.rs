@@ -14,7 +14,7 @@ use dpi_core::probe::burst::{
 };
 use dpi_core::i18n::{fingerprint_label, format_bidi, get_messages, legend_text, Language, Messages};
 use dpi_core::net::netinfo::ipv6_supported;
-use dpi_core::net::version::{version_badge_lang, ReleaseInfo};
+use crate::update::{version_badge_lang, ReleaseInfo};
 use dpi_core::profile::RegionProfile;
 
 use crate::render::{

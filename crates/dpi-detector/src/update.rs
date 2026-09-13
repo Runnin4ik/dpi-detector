@@ -1,15 +1,16 @@
-use crate::i18n::Language;
+use dpi_core::i18n::Language;
 
 use std::time::Duration;
 
-use super::netinfo::http_get_text;
+use dpi_core::net::netinfo::http_get_text;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const GITHUB_REPO: &str = "Runnin4ik/dpi-detector";
 
+/// The part of a GitHub release the update check cares about: its version with
+/// the `v` prefix stripped, which is what `is_newer` compares.
 #[derive(Debug, Clone, Default)]
 pub struct ReleaseInfo {
-    pub tag: String,
     pub version: String,
 }
 
@@ -130,12 +131,11 @@ pub async fn fetch_latest_version() -> Option<ReleaseInfo> {
 
 /// One release object -> `ReleaseInfo`, or `None` when it carries no tag.
 fn release_from(release: &serde_json::Value) -> Option<ReleaseInfo> {
-    let tag = release.get("tag_name")?.as_str()?.to_string();
-    if tag.is_empty() {
+    let version = release.get("tag_name")?.as_str()?.trim_start_matches(['v', 'V']);
+    if version.is_empty() {
         return None;
     }
-    let version = tag.trim_start_matches(['v', 'V']).to_string();
-    Some(ReleaseInfo { tag, version })
+    Some(ReleaseInfo { version: version.to_string() })
 }
 
 /// Highest version among release objects. The list arrives newest-created
@@ -150,14 +150,9 @@ fn newest_release(releases: &[serde_json::Value]) -> Option<ReleaseInfo> {
         .map(|(_, info)| info)
 }
 
-/// Banner badge text in the default language (Russian).
-pub fn version_badge(latest: Option<&ReleaseInfo>) -> String {
-    version_badge_lang(latest, Language::Ru)
-}
-
 /// Localized banner badge text.
 pub fn version_badge_lang(latest: Option<&ReleaseInfo>, lang: Language) -> String {
-    let msg = crate::i18n::get_messages(lang);
+    let msg = dpi_core::i18n::get_messages(lang);
     match latest {
         None => msg.update_failed.to_string(),
         Some(info) if !info.version.is_empty() && is_newer(&info.version, CURRENT_VERSION) => {
@@ -219,7 +214,7 @@ mod tests {
             serde_json::json!({ "tag_name": "v4.9.0" }),
             serde_json::json!({ "tag_name": "v5.0.0" }),
         ];
-        assert_eq!(newest_release(&stable).unwrap().tag, "v5.0.0");
+        assert_eq!(newest_release(&stable).unwrap().version, "5.0.0");
     }
 
     #[test]
@@ -227,7 +222,6 @@ mod tests {
         // The stable channel consumes one `/releases/latest` object.
         let v = serde_json::json!({ "tag_name": "v4.2.4" });
         let info = release_from(&v).unwrap();
-        assert_eq!(info.tag, "v4.2.4");
         assert_eq!(info.version, "4.2.4");
         assert!(release_from(&serde_json::json!({ "tag_name": "" })).is_none());
         assert!(release_from(&serde_json::json!({})).is_none());
@@ -235,10 +229,11 @@ mod tests {
 
     #[test]
     fn test_version_badge() {
-        assert_eq!(version_badge(None), "× Не удалось проверить обновления");
-        let info = ReleaseInfo { tag: "v9.9.9".into(), version: "9.9.9".into() };
-        assert!(version_badge(Some(&info)).starts_with("↑"));
-        let same = ReleaseInfo { tag: format!("v{}", CURRENT_VERSION), version: CURRENT_VERSION.into() };
-        assert_eq!(version_badge(Some(&same)), "✓ Актуальная версия");
+        let ru = Language::Ru;
+        assert_eq!(version_badge_lang(None, ru), "× Не удалось проверить обновления");
+        let info = ReleaseInfo { version: "9.9.9".into() };
+        assert!(version_badge_lang(Some(&info), ru).starts_with("↑"));
+        let same = ReleaseInfo { version: CURRENT_VERSION.into() };
+        assert_eq!(version_badge_lang(Some(&same), ru), "✓ Актуальная версия");
     }
 }

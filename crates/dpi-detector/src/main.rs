@@ -6,7 +6,7 @@ use dpi_core::config::{
 };
 use dpi_core::i18n::{get_messages, legend_text, Language};
 use dpi_core::net::fingerprint::TlsFingerprint;
-use dpi_core::net::version::{fetch_latest_version, version_badge_lang};
+use crate::update::{fetch_latest_version, version_badge_lang};
 use dpi_core::profile::RegionProfile;
 
 mod args;
@@ -14,6 +14,7 @@ mod menu;
 mod render;
 mod runner;
 mod terminal;
+mod update;
 
 use menu::{
     burst_settings_menu, export_report, legend_loop, menu_until_something_to_run,
