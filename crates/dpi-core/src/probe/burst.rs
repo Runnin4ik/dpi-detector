@@ -11,6 +11,12 @@
 //! the act of asking N times change the answer", which needs the attempts to be
 //! indistinguishable except for their simultaneity — hence the barrier, the
 //! fresh session per attempt, and no HTTP request on top.
+//!
+//! Profiles are fired **one at a time over the whole target list**: every host
+//! is probed with the first shape to the end before any host sees the second.
+//! Hosts inside one shape may overlap (bounded by the caller), but two shapes
+//! are never in flight together — a block one shape triggers would otherwise be
+//! read into the other shape's column.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -18,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
-use tokio::sync::Barrier;
+use tokio::sync::{Barrier, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 
@@ -50,9 +56,28 @@ pub const BURST_DEFAULT_TIMEOUT_SECS: u64 = 8;
 pub struct BurstSettings {
     pub attempts: usize,
     pub timeout: Duration,
-    /// One round per profile, run one after another (never interleaved, so a
-    /// block triggered by one profile cannot be read as the next one's).
+    /// One round per profile over the whole target list, in this order: the
+    /// shapes are never interleaved, so a block triggered by one of them cannot
+    /// be read as the next one's.
     pub profiles: Vec<TlsFingerprint>,
+}
+
+/// One host of a run: what goes into the SNI, and the address to dial when it is
+/// already known (the suite's earlier phases, or a test stand).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BurstTarget {
+    pub domain: String,
+    pub address: Option<SocketAddr>,
+}
+
+impl BurstTarget {
+    /// A host that still has to be resolved when the run starts.
+    pub fn new(domain: impl Into<String>) -> Self {
+        Self {
+            domain: domain.into(),
+            address: None,
+        }
+    }
 }
 
 impl Default for BurstSettings {
@@ -181,42 +206,93 @@ impl BurstReport {
     }
 }
 
-/// Fires every profile at one host, in the order given.
+/// Fires every profile at every target, one profile at a time.
 ///
-/// `target` lets the caller reuse the address test 2 already resolved (and the
-/// stub-IP decision that came with it); without it the host is resolved here.
-pub async fn burst_domain(
+/// The outer loop is the profile: all targets are probed with the first shape,
+/// then all of them with the second, and so on. Targets inside one shape run
+/// concurrently, `concurrency` at a time like the rest of the suite, so a round
+/// takes about as long as its slowest host — what must not happen is two shapes
+/// being in flight together, because a block one of them triggers would then be
+/// read as the other's result.
+pub async fn burst_targets(
     cfg: &AppConfig,
-    domain: &str,
-    target: Option<IpAddr>,
+    targets: &[BurstTarget],
     settings: &BurstSettings,
-) -> BurstReport {
-    let resolved = match target {
-        Some(ip) => Some(ip),
-        None => resolve_ip(domain, IpFamily::from_config(&cfg.ip_version)).await,
-    };
-    let Some(ip) = resolved else {
-        return BurstReport {
-            domain: domain.to_string(),
-            resolved: None,
+    concurrency: usize,
+) -> Vec<BurstReport> {
+    let gate = Arc::new(Semaphore::new(concurrency.max(1)));
+    let addresses = resolve_targets(cfg, targets, &gate).await;
+    let mut reports: Vec<BurstReport> = targets
+        .iter()
+        .zip(&addresses)
+        .map(|(target, address)| BurstReport {
+            domain: target.domain.clone(),
+            resolved: address.map(|address| address.ip()),
             profiles: Vec::new(),
-        };
-    };
-    let addr = SocketAddr::new(ip, BURST_PORT);
-    let mut profiles = Vec::with_capacity(settings.profiles.len());
+        })
+        .collect();
+
     for &fingerprint in &settings.profiles {
-        profiles.push(burst_profile(&addr, domain, fingerprint, settings).await);
+        let mut rounds = JoinSet::new();
+        for (index, target) in targets.iter().enumerate() {
+            let Some(address) = addresses[index] else {
+                continue;
+            };
+            let domain = target.domain.clone();
+            let settings = settings.clone();
+            let gate = Arc::clone(&gate);
+            rounds.spawn(async move {
+                let _permit = gate.acquire().await;
+                let report = burst_profile(&address, &domain, fingerprint, &settings).await;
+                (index, report)
+            });
+        }
+        while let Some(joined) = rounds.join_next().await {
+            if let Ok((index, report)) = joined {
+                reports[index].profiles.push(report);
+            }
+        }
     }
-    BurstReport {
-        domain: domain.to_string(),
-        resolved: Some(ip),
-        profiles,
+
+    reports
+}
+
+/// Resolves every target that came without an address, so the profile rounds
+/// share one lookup per host instead of repeating it for every shape.
+async fn resolve_targets(
+    cfg: &AppConfig,
+    targets: &[BurstTarget],
+    gate: &Arc<Semaphore>,
+) -> Vec<Option<SocketAddr>> {
+    let mut addresses: Vec<Option<SocketAddr>> = vec![None; targets.len()];
+    let mut lookups = JoinSet::new();
+    for (index, target) in targets.iter().enumerate() {
+        if let Some(address) = target.address {
+            addresses[index] = Some(address);
+            continue;
+        }
+        let domain = target.domain.clone();
+        let cfg = cfg.clone();
+        let gate = Arc::clone(gate);
+        lookups.spawn(async move {
+            let _permit = gate.acquire().await;
+            let address = resolve_ip(&domain, IpFamily::from_config(&cfg.ip_version))
+                .await
+                .map(|ip| SocketAddr::new(ip, BURST_PORT));
+            (index, address)
+        });
     }
+    while let Some(joined) = lookups.join_next().await {
+        if let Ok((index, address)) = joined {
+            addresses[index] = address;
+        }
+    }
+    addresses
 }
 
 /// One profile's round against one address: connect every attempt, then release
 /// the handshakes together.
-async fn burst_profile(
+pub async fn burst_profile(
     addr: &SocketAddr,
     domain: &str,
     fingerprint: TlsFingerprint,
@@ -357,8 +433,12 @@ async fn handshake_attempt(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use parking_lot::Mutex;
     use tokio::net::TcpListener;
+
+    use super::*;
 
     fn settings(attempts: usize, timeout_ms: u64, profiles: Vec<TlsFingerprint>) -> BurstSettings {
         BurstSettings {
@@ -446,6 +526,137 @@ mod tests {
             assert_eq!(attempt.status, first, "{:?}", report.attempts);
         }
         assert!(elapsed < Duration::from_secs(3), "round took {elapsed:?}");
+    }
+
+    /// The JA3 of the hello a profile writes through the connector test 7 uses.
+    ///
+    /// Extension order is not part of the comparison: rustls shuffles it on
+    /// every handshake (the Firefox/Chrome/Safari shapes pin their own order
+    /// through the vendored profile), so only the cipher list is stable enough to
+    /// name a shape arriving at a stand.
+    fn hello_ciphers(fingerprint: TlsFingerprint) -> String {
+        let config = crate::net::tls::create_insecure_dpi_tls_config_tls13_with(fingerprint);
+        let name = ServerName::try_from("example.com").expect("valid name");
+        let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
+        let mut buf = Vec::new();
+        conn.write_tls(&mut buf).expect("write ClientHello");
+        let ja3 = crate::net::ja3::client_hello_ja3(&buf);
+        ja3.split(',').nth(1).expect("cipher list").to_string()
+    }
+
+    /// What the stands see: which shapes are open right now (keyed by stand and
+    /// connection, since every stand numbers its own), whether two of them were
+    /// ever open together, and any hello that was neither of the two (which would
+    /// mean the stand is not looking at what the test thinks it is).
+    #[derive(Clone, Default)]
+    struct Witness {
+        open: Arc<Mutex<Vec<((usize, usize), TlsFingerprint)>>>,
+        overlapped: Arc<AtomicBool>,
+        unexpected: Arc<Mutex<Vec<String>>>,
+    }
+
+    /// Accepts `count` ClientHellos, names each shape by its cipher list and
+    /// holds it open for `hold`. Two of these with different holds are how the
+    /// ordering test makes one target's round outlast the other's.
+    async fn stand(
+        tag: usize,
+        listener: TcpListener,
+        count: usize,
+        hold: Duration,
+        ciphers: (String, String),
+        witness: Witness,
+    ) {
+        use tokio::io::AsyncReadExt;
+
+        for connection in 0..count {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut record = vec![0u8; 5];
+            if stream.read_exact(&mut record).await.is_err() {
+                continue;
+            }
+            let length = u16::from_be_bytes([record[3], record[4]]) as usize;
+            record.resize(5 + length, 0);
+            if stream.read_exact(&mut record[5..]).await.is_err() {
+                continue;
+            }
+            let ja3 = crate::net::ja3::client_hello_ja3(&record);
+            let sent = ja3.split(',').nth(1).unwrap_or_default();
+            let profile = if sent == ciphers.0 {
+                TlsFingerprint::Rustls
+            } else if sent == ciphers.1 {
+                TlsFingerprint::Chrome
+            } else {
+                witness.unexpected.lock().push(ja3);
+                continue;
+            };
+            {
+                let mut open = witness.open.lock();
+                if open.iter().any(|(_, other)| *other != profile) {
+                    witness.overlapped.store(true, Ordering::SeqCst);
+                }
+                open.push(((tag, connection), profile));
+            }
+            tokio::time::sleep(hold).await;
+            witness.open.lock().retain(|((open_tag, open_connection), _)| {
+                (*open_tag, *open_connection) != (tag, connection)
+            });
+        }
+    }
+
+    /// Two shapes must never be in flight at the same time, however many targets
+    /// a run has: every target is probed with the first shape before any target
+    /// sees the second.
+    ///
+    /// The stands are what makes the property observable: the first target holds
+    /// every connection it accepts, the second closes at once, so a run that let
+    /// hosts drift apart would put the fast target on the second shape while the
+    /// slow one is still on the first — which is exactly what `overlapped`
+    /// records (and what the previous host-major loop did).
+    #[tokio::test]
+    async fn profiles_are_fired_one_after_another_across_targets() {
+        let slow_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let fast_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let slow_addr = slow_listener.local_addr().expect("addr");
+        let fast_addr = fast_listener.local_addr().expect("addr");
+
+        let ciphers = (hello_ciphers(TlsFingerprint::Rustls), hello_ciphers(TlsFingerprint::Chrome));
+        let witness = Witness::default();
+        let slow = tokio::spawn(stand(
+            0,
+            slow_listener,
+            4,
+            Duration::from_millis(300),
+            ciphers.clone(),
+            witness.clone(),
+        ));
+        let fast = tokio::spawn(stand(1, fast_listener, 4, Duration::from_millis(5), ciphers, witness.clone()));
+
+        let targets = vec![
+            BurstTarget { domain: "slow.example".to_string(), address: Some(slow_addr) },
+            BurstTarget { domain: "fast.example".to_string(), address: Some(fast_addr) },
+        ];
+        let plan = settings(2, 4000, vec![TlsFingerprint::Rustls, TlsFingerprint::Chrome]);
+        let reports = burst_targets(&AppConfig::default(), &targets, &plan, 4).await;
+
+        slow.await.expect("slow stand");
+        fast.await.expect("fast stand");
+
+        assert!(
+            witness.unexpected.lock().is_empty(),
+            "unexpected ClientHellos: {:?}",
+            witness.unexpected.lock()
+        );
+        assert!(!witness.overlapped.load(Ordering::SeqCst), "two shapes were in flight at the same time");
+        assert_eq!(reports.len(), 2);
+        for report in &reports {
+            let shapes: Vec<TlsFingerprint> = report.profiles.iter().map(|p| p.fingerprint).collect();
+            assert_eq!(shapes, vec![TlsFingerprint::Rustls, TlsFingerprint::Chrome], "{report:?}");
+            for profile in &report.profiles {
+                assert_eq!(profile.attempts.len(), 2);
+            }
+        }
     }
 
     #[test]

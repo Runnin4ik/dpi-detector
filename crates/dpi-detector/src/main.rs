@@ -25,7 +25,7 @@ use dpi_core::probe::domains::{
 };
 use dpi_core::probe::telegram::run_telegram_full;
 use dpi_core::probe::burst::{
-    burst_domain, BurstReport, BurstSettings, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_TIMEOUT_SECS,
+    burst_targets, BurstSettings, BurstTarget, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_TIMEOUT_SECS,
 };
 use dpi_core::probe::whitelist::run_whitelist_sni;
 use dpi_core::probe::{check_tcp_16_20, domains};
@@ -1363,38 +1363,13 @@ async fn run_test_suite(
             ));
         }
         let spinner = (!args.json).then(|| Spinner::start(msg.burst_title));
-        // One host per task, the shared semaphore decides how many hosts are in
-        // flight: the simultaneity the test measures is *within* a host (its N
-        // handshakes all leave together), so hosts may overlap like any other
-        // phase of the suite.
-        let mut handles = Vec::with_capacity(burst.targets.len());
-        for domain in &burst.targets {
-            let domain = domain.clone();
-            let cfg_c = cfg.clone();
-            let settings_c = settings.clone();
-            let sem_c = Arc::clone(&sem);
-            handles.push(tokio::spawn(async move {
-                let permit = sem_c.acquire().await;
-                let report = burst_domain(&cfg_c, &domain, None, &settings_c).await;
-                drop(permit);
-                report
-            }));
-        }
-        let mut slots: Vec<Option<BurstReport>> = (0..burst.targets.len()).map(|_| None).collect();
-        for (index, handle) in handles.into_iter().enumerate() {
-            slots[index] = handle.await.ok();
-        }
-        let reports: Vec<BurstReport> = slots
-            .into_iter()
-            .enumerate()
-            .map(|(index, slot)| {
-                slot.unwrap_or_else(|| BurstReport {
-                    domain: burst.targets[index].clone(),
-                    resolved: None,
-                    profiles: Vec::new(),
-                })
-            })
-            .collect();
+        // Profile-major: `burst_targets` probes every target with the first
+        // shape to the end before the next shape starts, so a block one shape
+        // triggers can never be read as the other's result. The simultaneity the
+        // test measures is *within* a host (its N handshakes all leave together);
+        // hosts inside one shape overlap like any other phase of the suite.
+        let targets: Vec<BurstTarget> = burst.targets.iter().map(BurstTarget::new).collect();
+        let reports = burst_targets(cfg, &targets, settings, concurrency).await;
         if let Some(spinner) = spinner {
             spinner.finish();
         }
