@@ -779,11 +779,15 @@ mod tests {
             );
         }
 
-        // BoringSSL pads a browser hello to 512 bytes; the padding extension is
-        // part of the JA3s above, so a lost pad shows up as a missing "-21".
+        // BoringSSL pads a browser hello to exactly 512 bytes — the
+        // `curl-impersonate v2.2.2` chrome107/safari155 hellos measure 512 — and
+        // the padding extension is part of the JA3s above, so both the size and a
+        // lost pad are checked here.
         for fingerprint in [TlsFingerprint::Chrome, TlsFingerprint::Safari] {
-            let (_, length) = client_hello_of(fingerprint, true);
-            assert!((512..768).contains(&length), "{fingerprint} hello: {length} bytes");
+            for tls13_only in [true, false] {
+                let (_, length) = client_hello_of(fingerprint, tls13_only);
+                assert_eq!(length, 512, "{fingerprint} hello (tls13_only={tls13_only})");
+            }
         }
     }
 

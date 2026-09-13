@@ -1187,13 +1187,13 @@ impl<'a> Codec<'a> for ClientExtensions<'a> {
             if item == ExtensionType::Padding && self.padding_to.is_some() {
                 // dpi-detector patch: pad the hello the way browsers do
                 // (RFC 7685), so extension 21 is present in JA3/JA4 exactly as
-                // it is for Chrome and Firefox. `+ 9` is the TLS record header
-                // (5) and the handshake header (4) that precede this payload when
-                // rustls writes a record; being a few bytes off for a hello
-                // re-encoded into a bare buffer (ECH inner, HRR) only changes the
-                // pad size, never whether the extension is present.
-                let len = (self.padding_to.unwrap_or(0) as usize + 9)
-                    .saturating_sub(body.buf.len() + 4);
+                // it is for Chrome. The target is the *handshake message*: the
+                // `curl-impersonate v2.2.2` chrome107/safari155 hellos measure
+                // exactly 512 bytes on the wire (record 517), and an earlier
+                // `+ 9` here — meant to account for the handshake and record
+                // headers — overshot by nine bytes (message 521, record 526),
+                // which any length-based matcher can see.
+                let len = (self.padding_to.unwrap_or(0) as usize).saturating_sub(body.buf.len() + 4);
                 if len > 0 {
                     item.encode(body.buf);
                     (len as u16).encode(body.buf);
