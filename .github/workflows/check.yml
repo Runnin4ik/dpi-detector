@@ -1,0 +1,44 @@
+name: Check
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Test & lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The crates are pure Rust (no C toolchain is needed), so the default
+      # stable host toolchain builds the whole workspace.
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # `--locked` keeps CI honest about Cargo.lock; the tree is CRLF, so no
+      # formatting check runs here (rustfmt would rewrite nearly every file).
+      - name: Build
+        run: cargo build --workspace --locked
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
