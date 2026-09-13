@@ -3,11 +3,12 @@
 //! document. Split out of `main` so the CLI/TUI shell and the run logic do not
 //! share one 1700-line file.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use dpi_core::classify::Detail;
 use dpi_core::config::{
     clean_domain, default_tcp16_targets, embedded_domains, embedded_tcp16_targets,
     embedded_whitelist_sni, load_domains_from_file, load_tcp16_targets_from_file, load_whitelist_sni,
@@ -33,7 +34,6 @@ use dpi_core::probe::whitelist::run_whitelist_sni;
 use dpi_core::probe::{check_tcp_16_20, domains};
 use dpi_core::profile::RegionProfile;
 use dpi_core::{PhaseProgress, ProgressTick};
-use serde_json::json;
 use tokio::sync::Semaphore;
 
 use crate::args::CliArgs;
@@ -283,11 +283,11 @@ pub(crate) async fn run_test_suite(
     badge: &str,
     banner_done: bool,
     emitter: &mut Emitter,
-) -> HashMap<String, serde_json::Value> {
+) {
     let (run_net, run_dns, run_dom, run_tcp, run_sni, run_tg, run_burst, run_legend, _) =
         selection_flags(tests_str);
 
-    let mut json_results: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut results = crate::json::Results::default();
 
     if !args.json && !banner_done {
         emitter.emit(&render_banner(msg, profile, badge));
@@ -465,21 +465,22 @@ pub(crate) async fn run_test_suite(
                         tun.push(n.clone());
                     }
                 }
-                json_results.insert(
-                    "network_info".to_string(),
-                    json!({
-                        "ipv4": ips.v4.map(|(ip, lat)| json!({"ip": ip.to_string(), "latency_ms": lat})),
-                        "ipv6": ips.v6.map(|(ip, lat)| json!({"ip": ip.to_string(), "latency_ms": lat})),
-                        "v4_asn": v4_extra.as_ref().map(|c| &c.asn),
-                        "v4_org": v4_extra.as_ref().and_then(|c| c.org.as_ref()),
-                        "v4_cc": v4_extra.as_ref().and_then(|c| c.country.as_ref()),
-                        "upstream": dns_info.upstream,
-                        "system_dns": dns_info.nameservers.iter().map(|ip| ip.to_string()).collect::<Vec<_>>(),
-                        "gateway": dns_info.gateway.map(|g| g.to_string()),
-                        "tun": tun,
-                        "bypass_tools": bypass,
-                    }),
-                );
+                let endpoint = |ip: Option<IpAddr>, latency_ms: Option<u64>| {
+                    ip.zip(latency_ms)
+                        .map(|(ip, latency_ms)| crate::json::Endpoint { ip: ip.to_string(), latency_ms })
+                };
+                results.network_info = Some(crate::json::NetworkInfo {
+                    ipv4: endpoint(ips.v4.map(|(ip, _)| IpAddr::V4(ip)), ips.v4.map(|(_, lat)| lat)),
+                    ipv6: endpoint(ips.v6.map(|(ip, _)| IpAddr::V6(ip)), ips.v6.map(|(_, lat)| lat)),
+                    v4_asn: v4_extra.as_ref().map(|c| c.asn.clone()),
+                    v4_org: v4_extra.as_ref().and_then(|c| c.org.clone()),
+                    v4_cc: v4_extra.as_ref().and_then(|c| c.country.clone()),
+                    upstream: dns_info.upstream.clone(),
+                    system_dns: dns_info.nameservers.iter().map(|ip| ip.to_string()).collect(),
+                    gateway: dns_info.gateway.map(|g| g.to_string()),
+                    tun,
+                    bypass_tools: bypass,
+                });
             }
         } else if !args.json {
             emitter.emit(msg.net_info_unavailable);
@@ -500,17 +501,18 @@ pub(crate) async fn run_test_suite(
                 emitter.emit(&render_dns_availability(&report, cfg, msg));
             } else {
                 let s = &report.stats;
-                json_results.insert(
-                    "dns_availability".to_string(),
-                    json!({
-                        "doh_ok": s.doh_ok, "doh_total": s.doh_total,
-                        "dot_ok": s.dot_ok, "dot_total": s.dot_total,
-                        "udp_ok": s.udp_ok, "udp_total": s.udp_total,
-                        "hijacked_brands": s.hijacked_brands,
-                        "resolvers_total": s.resolvers_total,
-                        "subst_sub": s.subst_sub, "subst_total": s.subst_total,
-                    }),
-                );
+                results.dns_availability = Some(crate::json::DnsAvailability {
+                    doh_ok: s.doh_ok,
+                    doh_total: s.doh_total,
+                    dot_ok: s.dot_ok,
+                    dot_total: s.dot_total,
+                    udp_ok: s.udp_ok,
+                    udp_total: s.udp_total,
+                    hijacked_brands: s.hijacked_brands.clone(),
+                    resolvers_total: s.resolvers_total,
+                    subst_sub: s.subst_sub,
+                    subst_total: s.subst_total,
+                });
             }
             dns_stats = Some(report.stats.clone());
         }
@@ -563,22 +565,21 @@ pub(crate) async fn run_test_suite(
             emitter.emit(&render_domain_table(&entries, msg));
             emitter.emit(&render_dns_resolve_notes(&entries, msg));
         } else {
-            let list: Vec<_> = entries
-                .iter()
-                .map(|e| {
-                    json!({
-                        "domain": e.domain,
-                        "resolved": e.resolved.map(|ip| ip.to_string()),
-                        "http": e.http.status.as_str(),
-                        "http_detail": e.http.detail,
-                        "tls12": e.t12.status.as_str(),
-                        "tls12_detail": e.t12.detail,
-                        "tls13": e.t13.status.as_str(),
-                        "tls13_detail": e.t13.detail,
+            results.domain_inspection = Some(
+                entries
+                    .iter()
+                    .map(|e| crate::json::DomainRow {
+                        domain: e.domain.clone(),
+                        resolved: e.resolved.map(|ip| ip.to_string()),
+                        http: e.http.status.as_str(),
+                        http_detail: e.http.detail.clone(),
+                        tls12: e.t12.status.as_str(),
+                        tls12_detail: e.t12.detail.clone(),
+                        tls13: e.t13.status.as_str(),
+                        tls13_detail: e.t13.detail.clone(),
                     })
-                })
-                .collect();
-            json_results.insert("domain_inspection".to_string(), json!(list));
+                    .collect(),
+            );
         }
         dom_stats = Some(stats);
     }
@@ -646,16 +647,7 @@ pub(crate) async fn run_test_suite(
         if !args.json {
             emitter.emit(&render_tcp_table(&rows, msg));
         } else {
-            let list: Vec<_> = rows
-                .iter()
-                .map(|r| {
-                    json!({
-                        "id": r.id, "asn": r.asn, "provider": r.provider,
-                        "status": r.status.as_str(), "detail": r.detail,
-                    })
-                })
-                .collect();
-            json_results.insert("tcp16".to_string(), json!(list));
+            results.tcp16 = Some(rows.clone());
         }
         let _ = socks_proxy;
     }
@@ -698,13 +690,10 @@ pub(crate) async fn run_test_suite(
                 }
                 emitter.emit(&render_whitelist(&report, port443.len(), msg));
             } else {
-                json_results.insert(
-                    "whitelist_sni".to_string(),
-                    json!({
-                        "detected_as": report.detected_as,
-                        "found_as": report.found_as,
-                    }),
-                );
+                results.whitelist_sni = Some(crate::json::WhitelistSni {
+                    detected_as: report.detected_as,
+                    found_as: report.found_as,
+                });
             }
         }
     }
@@ -716,15 +705,20 @@ pub(crate) async fn run_test_suite(
         if !args.json {
             emitter.emit(&render_telegram(&rep, msg));
         } else {
-            json_results.insert(
-                "telegram".to_string(),
-                json!({
-                    "verdict": rep.verdict,
-                    "download": {"status": rep.download.status, "avg_bps": rep.download.avg_bps, "peak_bps": rep.download.peak_bps, "bytes": rep.download.bytes_total, "drop_at_sec": rep.download.drop_at_sec},
-                    "upload": {"status": rep.upload.status, "avg_bps": rep.upload.avg_bps, "peak_bps": rep.upload.peak_bps, "bytes": rep.upload.bytes_total, "drop_at_sec": rep.upload.drop_at_sec},
-                    "dc_reachable": rep.dc_reachable, "dc_total": rep.dc_total,
-                }),
-            );
+            let transfer = |t: &dpi_core::probe::telegram::TransferStats| crate::json::Transfer {
+                status: t.status.clone(),
+                avg_bps: t.avg_bps,
+                peak_bps: t.peak_bps,
+                bytes: t.bytes_total,
+                drop_at_sec: t.drop_at_sec,
+            };
+            results.telegram = Some(crate::json::Telegram {
+                verdict: rep.verdict.clone(),
+                download: transfer(&rep.download),
+                upload: transfer(&rep.upload),
+                dc_reachable: rep.dc_reachable,
+                dc_total: rep.dc_total,
+            });
         }
         tg_full = Some(rep);
     }
@@ -755,43 +749,35 @@ pub(crate) async fn run_test_suite(
         if !args.json {
             emitter.emit(&render_burst_table(&reports, settings, msg));
         } else {
-            let domains_json: Vec<serde_json::Value> = reports
+            let domains_wire: Vec<crate::json::BurstDomain> = reports
                 .iter()
-                .map(|report| {
-                    let profiles: serde_json::Map<String, serde_json::Value> = report
+                .map(|report| crate::json::BurstDomain {
+                    domain: report.domain.clone(),
+                    resolved: report.resolved.map(|ip| ip.to_string()),
+                    profiles: report
                         .profiles
                         .iter()
                         .map(|profile| {
                             let failed = profile.attempts.iter().find(|a| !a.status.is_ok_status());
-                            (
-                                profile.fingerprint.code().to_string(),
-                                json!({
-                                    "answered": profile.answered(),
-                                    "attempts": profile.attempts.len(),
-                                    "statuses": profile.attempts.iter().map(|a| a.status.as_str()).collect::<Vec<_>>(),
-                                    "detail": failed.map(|a| a.detail.clone()).unwrap_or_default(),
-                                }),
-                            )
+                            let stat = crate::json::BurstProfile {
+                                answered: profile.answered(),
+                                attempts: profile.attempts.len(),
+                                statuses: profile.attempts.iter().map(|a| a.status.as_str()).collect(),
+                                detail: failed.map(|a| a.detail.clone()).unwrap_or(Detail::None),
+                            };
+                            (profile.fingerprint.code().to_string(), stat)
                         })
-                        .collect();
-                    json!({
-                        "domain": report.domain,
-                        "resolved": report.resolved.map(|ip| ip.to_string()),
-                        "profiles": profiles,
-                    })
+                        .collect(),
                 })
                 .collect();
-            json_results.insert(
-                "fingerprint_burst".to_string(),
-                json!({
-                    "attempts": settings.attempts,
-                    "tls": settings.tls.code(),
-                    "alpn": settings.alpn.token(),
-                    "timeout_secs": settings.timeout.as_secs(),
-                    "profiles": settings.profiles.iter().map(|f| f.code()).collect::<Vec<_>>(),
-                    "domains": domains_json,
-                }),
-            );
+            results.fingerprint_burst = Some(crate::json::FingerprintBurst {
+                attempts: settings.attempts,
+                tls: settings.tls.code().to_string(),
+                alpn: settings.alpn.token().to_string(),
+                timeout_secs: settings.timeout.as_secs(),
+                profiles: settings.profiles.iter().map(|f| f.code().to_string()).collect(),
+                domains: domains_wire,
+            });
         }
     }
 
@@ -819,20 +805,18 @@ pub(crate) async fn run_test_suite(
     }
 
     if args.json {
-        let payload = json!({
-            "schema_version": 1,
-            "version": env!("CARGO_PKG_VERSION"),
-            "profile": profile.code(),
-            "tls_fingerprint": cfg.fingerprint().code(),
-            "results": json_results,
-        });
+        let payload = crate::json::Report {
+            schema_version: crate::json::SCHEMA_VERSION,
+            version: env!("CARGO_PKG_VERSION"),
+            profile: profile.code(),
+            tls_fingerprint: cfg.fingerprint().code().to_string(),
+            results,
+        };
         let text = serde_json::to_string_pretty(&payload).unwrap_or_default();
         println!("{}", text);
         if let Some(ref out_path) = args.output {
             let _ = std::fs::write(out_path, &text);
         }
     }
-
-    json_results
 }
 

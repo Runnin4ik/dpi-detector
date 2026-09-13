@@ -1979,6 +1979,7 @@ pub fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) -> Stri
 
 // ─── Test 3: TCP ──────────────────────────────────────────────────────────────
 
+#[derive(Clone, serde::Serialize)]
 pub struct TcpRow {
     pub id: String,
     pub asn: String,

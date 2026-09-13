@@ -10,6 +10,7 @@ use crate::update::{fetch_latest_version, version_badge_lang};
 use dpi_core::profile::RegionProfile;
 
 mod args;
+mod json;
 mod menu;
 mod render;
 mod runner;
@@ -465,7 +466,7 @@ async fn main() {
             }
         }
         let mut emitter = Emitter { report: String::new(), json_mode: args.json };
-        let stats = run_test_suite(
+        run_test_suite(
             &selection,
             concurrency,
             &args,
@@ -482,7 +483,6 @@ async fn main() {
             &mut emitter,
         )
         .await;
-        let _ = stats;
         banner_done = true;
 
         if !args.json {
