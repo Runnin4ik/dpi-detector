@@ -55,6 +55,23 @@ impl RustlsConnector {
             connector: TlsConnector::from(create_insecure_dpi_tls_config_tls12_with(fingerprint)),
         }
     }
+
+    /// A version-pinned connector that offers `alpn` instead of the profile's own
+    /// list (`None` keeps it). Test 7 asks for one protocol per run this way.
+    pub fn new_insecure_versioned_with(
+        fingerprint: TlsFingerprint,
+        tls12_only: bool,
+        alpn: Option<Vec<Vec<u8>>>,
+    ) -> Self {
+        use crate::net::tls::create_insecure_dpi_tls_config_versioned_with;
+        Self {
+            connector: TlsConnector::from(create_insecure_dpi_tls_config_versioned_with(
+                fingerprint,
+                tls12_only,
+                alpn,
+            )),
+        }
+    }
     pub fn new_verifying() -> Self {
         let config = create_verifying_tls_config();
         Self {

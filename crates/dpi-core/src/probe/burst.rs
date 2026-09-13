@@ -50,12 +50,93 @@ pub const BURST_MIN_TIMEOUT_SECS: u64 = 1;
 pub const BURST_MAX_TIMEOUT_SECS: u64 = 60;
 pub const BURST_DEFAULT_TIMEOUT_SECS: u64 = 8;
 
-/// What to fire: how many simultaneous handshakes, how long each may take, and
-/// with which ClientHello shapes.
+/// The TLS version the burst handshakes are pinned to.
+///
+/// Pinned, not negotiated: the column of the report answers "does this shape get
+/// answered over TLS 1.2 / over TLS 1.3", so the config offers exactly one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BurstTlsVersion {
+    #[default]
+    Tls13,
+    Tls12,
+}
+
+impl BurstTlsVersion {
+    /// Canonical token for the report and the screen (rule 4, never translated).
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Tls13 => "TLS 1.3",
+            Self::Tls12 => "TLS 1.2",
+        }
+    }
+
+    /// Machine value for the JSON payload and the CLI.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Tls13 => "1.3",
+            Self::Tls12 => "1.2",
+        }
+    }
+
+    /// Parses a CLI/config value. `None` for anything unknown.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().trim_start_matches("tls").trim_start_matches(['v', ' ']) {
+            "1.3" | "13" => Some(Self::Tls13),
+            "1.2" | "12" => Some(Self::Tls12),
+            _ => None,
+        }
+    }
+}
+
+/// What the burst offers in ALPN.
+///
+/// `Http2` is the browsers' own list (`h2, http/1.1`), `Http11` asks for
+/// HTTP/1.1 alone. The handshake is all test 7 sends, so this shapes the
+/// ClientHello (and JA4's ALPN field) without a request following it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BurstAlpn {
+    #[default]
+    Http2,
+    Http11,
+}
+
+impl BurstAlpn {
+    /// Canonical token for the report and the screen (rule 4, never translated).
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Http2 => "h2",
+            Self::Http11 => "http/1.1",
+        }
+    }
+
+    /// The ALPN list this choice offers, `None` meaning "the profile's own".
+    pub fn offered(self) -> Option<Vec<Vec<u8>>> {
+        match self {
+            Self::Http2 => None,
+            Self::Http11 => Some(vec![b"http/1.1".to_vec()]),
+        }
+    }
+
+    /// Parses a CLI/screen value. `None` for anything unknown.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "h2" | "http2" | "http/2" => Some(Self::Http2),
+            "http1.1" | "http/1.1" | "h1" | "http" => Some(Self::Http11),
+            _ => None,
+        }
+    }
+}
+
+/// What to fire: how many simultaneous handshakes, how long each may take, which
+/// TLS version and ALPN they offer, and with which ClientHello shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BurstSettings {
     pub attempts: usize,
     pub timeout: Duration,
+    /// Pinned TLS version of every handshake in the run.
+    pub tls: BurstTlsVersion,
+    /// ALPN list the run offers.
+    pub alpn: BurstAlpn,
     /// One round per profile over the whole target list, in this order: the
     /// shapes are never interleaved, so a block triggered by one of them cannot
     /// be read as the next one's.
@@ -85,6 +166,8 @@ impl Default for BurstSettings {
         Self {
             attempts: BURST_DEFAULT_ATTEMPTS,
             timeout: Duration::from_secs(BURST_DEFAULT_TIMEOUT_SECS),
+            tls: BurstTlsVersion::default(),
+            alpn: BurstAlpn::default(),
             profiles: TlsFingerprint::ALL.to_vec(),
         }
     }
@@ -92,10 +175,18 @@ impl Default for BurstSettings {
 
 impl BurstSettings {
     /// Clamps interactive input into the range the test stays meaningful in.
-    pub fn clamped(attempts: usize, timeout_secs: u64, profiles: Vec<TlsFingerprint>) -> Self {
+    pub fn clamped(
+        attempts: usize,
+        timeout_secs: u64,
+        tls: BurstTlsVersion,
+        alpn: BurstAlpn,
+        profiles: Vec<TlsFingerprint>,
+    ) -> Self {
         Self {
             attempts: attempts.clamp(BURST_MIN_ATTEMPTS, BURST_MAX_ATTEMPTS),
             timeout: Duration::from_secs(timeout_secs.clamp(BURST_MIN_TIMEOUT_SECS, BURST_MAX_TIMEOUT_SECS)),
+            tls,
+            alpn,
             profiles: if profiles.is_empty() {
                 TlsFingerprint::ALL.to_vec()
             } else {
@@ -320,7 +411,11 @@ pub async fn burst_profile(
     // Phase 2 — the handshakes start together. Only the connections that came up
     // join the barrier, so one refused dial cannot deadlock the rest.
     if !connected.is_empty() {
-        let connector = Arc::new(RustlsConnector::new_insecure_tls13_with(fingerprint));
+        let connector = Arc::new(RustlsConnector::new_insecure_versioned_with(
+            fingerprint,
+            settings.tls == BurstTlsVersion::Tls12,
+            settings.alpn.offered(),
+        ));
         let gate = Arc::new(Barrier::new(connected.len()));
         let mut handshakes = JoinSet::new();
         for (index, stream, tracker) in connected {
@@ -445,6 +540,7 @@ mod tests {
             attempts,
             timeout: Duration::from_millis(timeout_ms),
             profiles,
+            ..BurstSettings::default()
         }
     }
 
@@ -661,13 +757,61 @@ mod tests {
 
     #[test]
     fn settings_are_clamped_into_the_meaningful_range() {
-        assert_eq!(BurstSettings::clamped(0, 0, vec![]).attempts, BURST_MIN_ATTEMPTS);
-        assert_eq!(BurstSettings::clamped(99, 999, vec![]).attempts, BURST_MAX_ATTEMPTS);
-        assert_eq!(BurstSettings::clamped(4, 0, vec![]).timeout, Duration::from_secs(BURST_MIN_TIMEOUT_SECS));
-        assert_eq!(BurstSettings::clamped(4, 999, vec![]).timeout, Duration::from_secs(BURST_MAX_TIMEOUT_SECS));
+        let axes = (BurstTlsVersion::Tls13, BurstAlpn::Http2);
+        assert_eq!(BurstSettings::clamped(0, 0, axes.0, axes.1, vec![]).attempts, BURST_MIN_ATTEMPTS);
+        assert_eq!(BurstSettings::clamped(99, 999, axes.0, axes.1, vec![]).attempts, BURST_MAX_ATTEMPTS);
+        assert_eq!(
+            BurstSettings::clamped(4, 0, axes.0, axes.1, vec![]).timeout,
+            Duration::from_secs(BURST_MIN_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            BurstSettings::clamped(4, 999, axes.0, axes.1, vec![]).timeout,
+            Duration::from_secs(BURST_MAX_TIMEOUT_SECS)
+        );
         // An empty profile set means "no preference", not "run nothing".
-        assert_eq!(BurstSettings::clamped(4, 8, vec![]).profiles, TlsFingerprint::ALL.to_vec());
+        assert_eq!(
+            BurstSettings::clamped(4, 8, axes.0, axes.1, vec![]).profiles,
+            TlsFingerprint::ALL.to_vec()
+        );
+        // The axes survive clamping untouched.
+        let kept = BurstSettings::clamped(4, 8, BurstTlsVersion::Tls12, BurstAlpn::Http11, vec![]);
+        assert_eq!((kept.tls, kept.alpn), (BurstTlsVersion::Tls12, BurstAlpn::Http11));
         assert_eq!(BurstSettings::default().attempts, BURST_DEFAULT_ATTEMPTS);
+        // Defaults keep what the probes send today: TLS 1.3 and the profile's own
+        // `h2, http/1.1`.
+        let default = BurstSettings::default();
+        assert_eq!((default.tls, default.alpn), (BurstTlsVersion::Tls13, BurstAlpn::Http2));
+        assert!(default.alpn.offered().is_none());
+    }
+
+    /// The two axes are what the screen and the CLI offer, so both spellings of
+    /// each value must parse — and nothing else may.
+    #[test]
+    fn burst_axes_parse_their_values() {
+        for value in ["1.3", "13", "tls1.3", "TLS 1.3"] {
+            assert_eq!(BurstTlsVersion::parse(value), Some(BurstTlsVersion::Tls13), "{value}");
+        }
+        for value in ["1.2", "12", "tls1.2", "TLS 1.2"] {
+            assert_eq!(BurstTlsVersion::parse(value), Some(BurstTlsVersion::Tls12), "{value}");
+        }
+        assert_eq!(BurstTlsVersion::parse("1.1"), None);
+        assert_eq!(BurstTlsVersion::parse(""), None);
+
+        for value in ["h2", "http2", "HTTP/2"] {
+            assert_eq!(BurstAlpn::parse(value), Some(BurstAlpn::Http2), "{value}");
+        }
+        for value in ["http/1.1", "http1.1", "h1", "http"] {
+            assert_eq!(BurstAlpn::parse(value), Some(BurstAlpn::Http11), "{value}");
+        }
+        assert_eq!(BurstAlpn::parse("h3"), None);
+        assert_eq!(BurstAlpn::parse(""), None);
+
+        // The HTTP/1.1 choice is the one that has to replace the profile's list.
+        assert_eq!(BurstAlpn::Http11.offered(), Some(vec![b"http/1.1".to_vec()]));
+        assert_eq!(BurstAlpn::Http2.token(), "h2");
+        assert_eq!(BurstAlpn::Http11.token(), "http/1.1");
+        assert_eq!(BurstTlsVersion::Tls13.code(), "1.3");
+        assert_eq!(BurstTlsVersion::Tls12.token(), "TLS 1.2");
     }
 
     #[test]

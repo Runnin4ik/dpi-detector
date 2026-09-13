@@ -28,6 +28,10 @@ pub struct CliArgs {
     pub burst_timeout: Option<u64>,
     /// Test 7: `all` or a comma list of profile codes/names.
     pub burst_profiles: Option<String>,
+    /// Test 7: pinned TLS version, `1.2` or `1.3`.
+    pub burst_tls: Option<String>,
+    /// Test 7: ALPN to offer, `h2` or `http/1.1`.
+    pub burst_alpn: Option<String>,
 }
 
 /// Builds the CLI definition with `msg`'s language: `about`, per-argument help
@@ -162,6 +166,20 @@ pub fn command(msg: &Messages) -> Command {
                 .help(msg.cli_burst_profiles),
         )
         .arg(
+            Arg::new("burst-tls")
+                .long("burst-tls")
+                .value_name("VERSION")
+                .help_heading(msg.cli_options_heading)
+                .help(msg.cli_burst_tls),
+        )
+        .arg(
+            Arg::new("burst-alpn")
+                .long("burst-alpn")
+                .value_name("PROTOCOL")
+                .help_heading(msg.cli_options_heading)
+                .help(msg.cli_burst_alpn),
+        )
+        .arg(
             Arg::new("help")
                 .short('h')
                 .long("help")
@@ -201,5 +219,7 @@ pub fn parse_cli(lang: Language) -> CliArgs {
         burst: m.get_one::<usize>("burst").copied(),
         burst_timeout: m.get_one::<u64>("burst-timeout").copied(),
         burst_profiles: m.get_one::<String>("burst-profiles").cloned(),
+        burst_tls: m.get_one::<String>("burst-tls").cloned(),
+        burst_alpn: m.get_one::<String>("burst-alpn").cloned(),
     }
 }

@@ -150,6 +150,7 @@ fn provider_for(fingerprint: TlsFingerprint) -> Arc<rustls::crypto::CryptoProvid
 fn insecure_builder(
     fingerprint: TlsFingerprint,
     versions: Option<&[&'static rustls::SupportedProtocolVersion]>,
+    alpn: Option<Vec<Vec<u8>>>,
 ) -> ClientConfig {
     let provider = provider_for(fingerprint);
     let builder = match versions {
@@ -164,23 +165,38 @@ fn insecure_builder(
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(InsecureDpiCertVerifier))
         .with_no_client_auth();
-    apply_fingerprint(&mut config, fingerprint);
+    apply_fingerprint(&mut config, fingerprint, alpn);
     config
 }
 
 /// Installs the profile and keeps the baseline wire shape intact.
-fn apply_fingerprint(config: &mut ClientConfig, fingerprint: TlsFingerprint) {
+///
+/// `alpn` replaces the profile's own list when the caller pins one (test 7 asks
+/// for one protocol per run). It has to be set in both places at once: the
+/// hello's `alpn` extension is written from the *profile*, while rustls
+/// validates the server's selection against `ClientConfig::alpn_protocols` — a
+/// profile that offered http/1.1 while the config offered nothing made every
+/// server answer `SelectedUnofferedApplicationProtocol`.
+fn apply_fingerprint(config: &mut ClientConfig, fingerprint: TlsFingerprint, alpn: Option<Vec<Vec<u8>>>) {
     if !crate::net::fingerprint::advertises_cert_compression(fingerprint) {
         keep_baseline_wire_shape(config);
     }
     crate::net::fingerprint::apply(config, fingerprint);
-    // rustls validates the server's ALPN selection against `config.alpn_protocols`,
-    // not against what the profile wrote into the extension. A profile that
-    // offered http/1.1 while the config offered nothing made every server answer
-    // `SelectedUnofferedApplicationProtocol`, so the two must agree.
-    if let Some(profile) = &config.hello_profile {
-        if let Some(alpn) = &profile.alpn {
+    match alpn {
+        Some(alpn) => {
             config.alpn_protocols = alpn.clone();
+            if let Some(profile) = config.hello_profile.as_mut() {
+                // Copy-on-write: the shared profile is only cloned for a caller
+                // that asked for a different offer.
+                Arc::make_mut(profile).alpn = Some(alpn);
+            }
+        }
+        None => {
+            if let Some(profile) = &config.hello_profile {
+                if let Some(profile_alpn) = &profile.alpn {
+                    config.alpn_protocols = profile_alpn.clone();
+                }
+            }
         }
     }
 }
@@ -194,19 +210,38 @@ fn keep_baseline_wire_shape(config: &mut ClientConfig) {
 
 /// [`create_insecure_dpi_tls_config`] with a ClientHello profile.
 pub fn create_insecure_dpi_tls_config_with(fingerprint: TlsFingerprint) -> Arc<ClientConfig> {
-    Arc::new(insecure_builder(fingerprint, None))
+    Arc::new(insecure_builder(fingerprint, None, None))
 }
 
 /// [`create_insecure_dpi_tls_config_tls13`] with a ClientHello profile.
 pub fn create_insecure_dpi_tls_config_tls13_with(
     fingerprint: TlsFingerprint,
 ) -> Arc<ClientConfig> {
-    Arc::new(insecure_builder(fingerprint, Some(&[&rustls::version::TLS13])))
+    Arc::new(insecure_builder(fingerprint, Some(&[&rustls::version::TLS13]), None))
 }
 
 /// [`create_insecure_dpi_tls_config_tls12`] with a ClientHello profile.
 pub fn create_insecure_dpi_tls_config_tls12_with(
     fingerprint: TlsFingerprint,
 ) -> Arc<ClientConfig> {
-    Arc::new(insecure_builder(fingerprint, Some(&[&rustls::version::TLS12])))
+    Arc::new(insecure_builder(fingerprint, Some(&[&rustls::version::TLS12]), None))
+}
+
+/// A version-pinned config whose ALPN list replaces the profile's own.
+///
+/// `alpn` is what the probe offers: `None` keeps the profile's list (browsers
+/// send `h2, http/1.1`), `Some` overrides it — test 7 uses that to ask one
+/// protocol on purpose, which changes the ClientHello only in the ALPN
+/// extension's body and in JA4's ALPN field.
+pub fn create_insecure_dpi_tls_config_versioned_with(
+    fingerprint: TlsFingerprint,
+    tls12_only: bool,
+    alpn: Option<Vec<Vec<u8>>>,
+) -> Arc<ClientConfig> {
+    let versions: &[&'static rustls::SupportedProtocolVersion] = if tls12_only {
+        &[&rustls::version::TLS12]
+    } else {
+        &[&rustls::version::TLS13]
+    };
+    Arc::new(insecure_builder(fingerprint, Some(versions), alpn))
 }

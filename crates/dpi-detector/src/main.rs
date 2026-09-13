@@ -25,7 +25,8 @@ use dpi_core::probe::domains::{
 };
 use dpi_core::probe::telegram::run_telegram_full;
 use dpi_core::probe::burst::{
-    burst_targets, BurstSettings, BurstTarget, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_TIMEOUT_SECS,
+    burst_targets, BurstAlpn, BurstSettings, BurstTarget, BurstTlsVersion, BURST_DEFAULT_ATTEMPTS,
+    BURST_DEFAULT_TIMEOUT_SECS,
 };
 use dpi_core::probe::whitelist::run_whitelist_sni;
 use dpi_core::probe::{check_tcp_16_20, domains};
@@ -848,6 +849,22 @@ struct BurstPlan {
     targets: Vec<String>,
 }
 
+/// Reports an unknown test 7 axis value (TLS version, ALPN) and keeps the
+/// default, the way an unknown profile name is reported rather than swapped
+/// silently.
+fn warn_unknown_axis(msg: &Messages, args: &CliArgs, flag: &str, value: &str, fallback: &str) {
+    if args.json {
+        return;
+    }
+    eprintln!(
+        "{}",
+        msg.warn_unknown_burst_axis
+            .replacen("{}", flag, 1)
+            .replacen("{}", value, 1)
+            .replacen("{}", fallback, 1)
+    );
+}
+
 /// Builds test 7's plan from the CLI. An unknown profile name is reported (the
 /// test then runs the profiles it did understand) rather than silently swapped
 /// for a different set.
@@ -865,9 +882,25 @@ fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Messages) -> Bu
             );
         }
     }
+    let tls = match &args.burst_tls {
+        Some(value) => BurstTlsVersion::parse(value).unwrap_or_else(|| {
+            warn_unknown_axis(msg, args, "--burst-tls", value, BurstTlsVersion::default().code());
+            BurstTlsVersion::default()
+        }),
+        None => BurstTlsVersion::default(),
+    };
+    let alpn = match &args.burst_alpn {
+        Some(value) => BurstAlpn::parse(value).unwrap_or_else(|| {
+            warn_unknown_axis(msg, args, "--burst-alpn", value, BurstAlpn::default().token());
+            BurstAlpn::default()
+        }),
+        None => BurstAlpn::default(),
+    };
     let settings = BurstSettings::clamped(
         args.burst.unwrap_or(BURST_DEFAULT_ATTEMPTS),
         args.burst_timeout.unwrap_or(BURST_DEFAULT_TIMEOUT_SECS),
+        tls,
+        alpn,
         profiles,
     );
     // `-d` picks the targets, exactly as it does for test 2; without it the
@@ -1350,7 +1383,7 @@ async fn run_test_suite(
                 settings.profiles.iter().map(|f| f.token()).collect::<Vec<_>>().join(", ")
             };
             emitter.emit(&format!(
-                "\n{}  {}: {} | {}: {} | {}: {}s | {}: {}\n\n",
+                "\n{}  {}: {} | {}: {} | {}: {}s | {}: {} | {}: {} | {}: {}\n\n",
                 msg.burst_title,
                 msg.targets_label,
                 burst.targets.len(),
@@ -1358,6 +1391,10 @@ async fn run_test_suite(
                 settings.attempts,
                 msg.timeout_label,
                 settings.timeout.as_secs(),
+                msg.burst_field_tls.trim_end_matches(':'),
+                settings.tls.token(),
+                msg.burst_field_http.trim_end_matches(':'),
+                settings.alpn.token(),
                 msg.burst_field_profiles.trim_end_matches(':'),
                 profile_label,
             ));
@@ -1412,6 +1449,8 @@ async fn run_test_suite(
                 "fingerprint_burst".to_string(),
                 json!({
                     "attempts": settings.attempts,
+                    "tls": settings.tls.code(),
+                    "alpn": settings.alpn.token(),
                     "timeout_secs": settings.timeout.as_secs(),
                     "profiles": settings.profiles.iter().map(|f| f.code()).collect::<Vec<_>>(),
                     "domains": domains_json,

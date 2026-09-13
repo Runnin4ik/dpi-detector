@@ -8,7 +8,8 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dpi_core::config::AppConfig;
 use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::probe::burst::{
-    BurstSettings, BURST_MAX_ATTEMPTS, BURST_MAX_TIMEOUT_SECS, BURST_MIN_ATTEMPTS, BURST_MIN_TIMEOUT_SECS,
+    BurstAlpn, BurstSettings, BurstTlsVersion, BURST_MAX_ATTEMPTS, BURST_MAX_TIMEOUT_SECS,
+    BURST_MIN_ATTEMPTS, BURST_MIN_TIMEOUT_SECS,
 };
 use dpi_core::i18n::{fingerprint_label, format_bidi, get_messages, Language, Messages};
 use dpi_core::net::netinfo::ipv6_supported;
@@ -614,8 +615,10 @@ pub struct BurstChoice {
 /// Rows of the settings screen, in cursor order.
 const BURST_ROW_ATTEMPTS: usize = 0;
 const BURST_ROW_TIMEOUT: usize = 1;
-const BURST_ROW_DOMAIN: usize = 2;
-const BURST_ROW_PROFILES: usize = 3;
+const BURST_ROW_TLS: usize = 2;
+const BURST_ROW_HTTP: usize = 3;
+const BURST_ROW_DOMAIN: usize = 4;
+const BURST_ROW_PROFILES: usize = 5;
 /// Label column of the settings screen: wide enough for the longest label at
 /// the widest language, so the values line up in one column.
 const BURST_LABEL_WIDTH: usize = 24;
@@ -665,6 +668,8 @@ async fn burst_settings_loop(
     let mut cursor = BURST_ROW_ATTEMPTS;
     let mut attempts = initial.attempts;
     let mut timeout_secs = initial.timeout.as_secs();
+    let mut tls = initial.tls;
+    let mut alpn = initial.alpn;
     let mut text = String::new();
     let mut editing = false;
     let mut profiles = initial.profiles.clone();
@@ -675,8 +680,8 @@ async fn burst_settings_loop(
 
     loop {
         draw_burst_settings(
-            msg, lang, cursor, attempts, timeout_secs, &text, editing, &profiles, profile_index, domain_count,
-            &mut prev_max, &mut drawn,
+            msg, lang, cursor, attempts, timeout_secs, tls, alpn, &text, editing, &profiles,
+            profile_index, domain_count, &mut prev_max, &mut drawn,
         );
 
         let Some(Ok(Event::Key(KeyEvent { code, modifiers, kind, .. }))) = reader.next().await else {
@@ -725,7 +730,7 @@ async fn burst_settings_loop(
                     }
                 };
                 return Some(BurstChoice {
-                    settings: BurstSettings::clamped(attempts, timeout_secs, profiles),
+                    settings: BurstSettings::clamped(attempts, timeout_secs, tls, alpn, profiles),
                     domain,
                 });
             }
@@ -734,6 +739,9 @@ async fn burst_settings_loop(
             KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('A') if !editing => match cursor {
                 BURST_ROW_ATTEMPTS => attempts = attempts.saturating_sub(1).max(BURST_MIN_ATTEMPTS),
                 BURST_ROW_TIMEOUT => timeout_secs = timeout_secs.saturating_sub(1).max(BURST_MIN_TIMEOUT_SECS),
+                // Two-valued axes: either direction flips them.
+                BURST_ROW_TLS => tls = flip_tls(tls),
+                BURST_ROW_HTTP => alpn = flip_alpn(alpn),
                 BURST_ROW_PROFILES => {
                     let next = profile_index.map(|i| (i + PROFILE_CHOICES - 1) % PROFILE_CHOICES).unwrap_or(0);
                     profile_index = Some(next);
@@ -746,6 +754,8 @@ async fn burst_settings_loop(
                 BURST_ROW_DOMAIN => editing = true,
                 BURST_ROW_ATTEMPTS => attempts = (attempts + 1).min(BURST_MAX_ATTEMPTS),
                 BURST_ROW_TIMEOUT => timeout_secs = (timeout_secs + 1).min(BURST_MAX_TIMEOUT_SECS),
+                BURST_ROW_TLS => tls = flip_tls(tls),
+                BURST_ROW_HTTP => alpn = flip_alpn(alpn),
                 BURST_ROW_PROFILES => {
                     let next = profile_index.map(|i| (i + 1) % PROFILE_CHOICES).unwrap_or(0);
                     profile_index = Some(next);
@@ -780,6 +790,8 @@ fn draw_burst_settings(
     cursor: usize,
     attempts: usize,
     timeout_secs: u64,
+    tls: BurstTlsVersion,
+    alpn: BurstAlpn,
     text: &str,
     editing: bool,
     profiles: &[TlsFingerprint],
@@ -789,7 +801,8 @@ fn draw_burst_settings(
     drawn: &mut u16,
 ) {
     let rows = burst_settings_rows(
-        msg, lang, cursor, attempts, timeout_secs, text, editing, profiles, profile_index, domain_count,
+        msg, lang, cursor, attempts, timeout_secs, tls, alpn, text, editing, profiles, profile_index,
+        domain_count,
     );
     frame_home(*drawn);
     output_str(&frame_repaint(&rows, prev_max));
@@ -806,6 +819,8 @@ fn burst_settings_rows(
     cursor: usize,
     attempts: usize,
     timeout_secs: u64,
+    tls: BurstTlsVersion,
+    alpn: BurstAlpn,
     text: &str,
     editing: bool,
     profiles: &[TlsFingerprint],
@@ -833,6 +848,9 @@ fn burst_settings_rows(
     let mut lines: Vec<String> = Vec::with_capacity(6);
     lines.push(field(BURST_ROW_ATTEMPTS, msg.burst_field_attempts, steer(BURST_ROW_ATTEMPTS, attempts.to_string())));
     lines.push(field(BURST_ROW_TIMEOUT, msg.burst_field_timeout, steer(BURST_ROW_TIMEOUT, timeout_secs.to_string())));
+    // Canonical protocol tokens, never translated (rule 4).
+    lines.push(field(BURST_ROW_TLS, msg.burst_field_tls, steer(BURST_ROW_TLS, tls.token().to_string())));
+    lines.push(field(BURST_ROW_HTTP, msg.burst_field_http, steer(BURST_ROW_HTTP, alpn.token().to_string())));
 
     // Domain: a grey input box. Right makes it active (caret, letters become
     // text), Left returns it to grey; what an empty field means is spelled out
@@ -913,6 +931,21 @@ fn burst_settings_rows(
     rows
 }
 
+/// Either direction flips a two-valued axis.
+fn flip_tls(tls: BurstTlsVersion) -> BurstTlsVersion {
+    match tls {
+        BurstTlsVersion::Tls13 => BurstTlsVersion::Tls12,
+        BurstTlsVersion::Tls12 => BurstTlsVersion::Tls13,
+    }
+}
+
+fn flip_alpn(alpn: BurstAlpn) -> BurstAlpn {
+    match alpn {
+        BurstAlpn::Http2 => BurstAlpn::Http11,
+        BurstAlpn::Http11 => BurstAlpn::Http2,
+    }
+}
+
 /// Choices of the profile cycler: `all`, then one per profile — the same shape
 /// as the main menu's fingerprint row.
 const PROFILE_CHOICES: usize = TlsFingerprint::ALL.len() + 1;
@@ -972,7 +1005,7 @@ mod tests {
         let msg = get_messages(Language::Ru);
         let all = TlsFingerprint::ALL.to_vec();
 
-        let empty = burst_settings_rows(&msg, Language::Ru, 2, 4, 8, "", false, &all, Some(0), 35);
+        let empty = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13, BurstAlpn::Http2, "", false, &all, Some(0), 35);
         // The last row is the footer, which lives outside the box.
         for row in empty.iter().take(empty.len() - 1) {
             assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{row:?}");
@@ -994,7 +1027,7 @@ mod tests {
 
         // Typing replaces the prompt; the caret marks the active field, and the
         // row still fits the box.
-        let typed = burst_settings_rows(&msg, Language::Ru, 2, 4, 8, "www.google.com", true, &all, Some(0), 35);
+        let typed = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13, BurstAlpn::Http11, "www.google.com", true, &all, Some(0), 35);
         for row in typed.iter().take(typed.len() - 1) {
             assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{row:?}");
         }
@@ -1006,7 +1039,7 @@ mod tests {
         // position counts the `all` entry, so CHROME is the fourth of five.
         let chrome = [TlsFingerprint::Chrome];
         let single = burst_settings_rows(
-            &msg, Language::Ru, 3, 4, 8, "", false, &chrome, profile_index_of(&chrome), 35,
+            &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12, BurstAlpn::Http2, "", false, &chrome, profile_index_of(&chrome), 35,
         );
         assert!(strip_ansi(&single.join("\n")).contains("CHROME [4/5]"));
     }

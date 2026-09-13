@@ -110,6 +110,18 @@ pub struct ClientHelloProfile {
 pub const GREASE_EXTENSION_MARKER: u16 = 0x0a0a;
 
 impl ClientHelloProfile {
+    /// The GREASE group value this profile greases with, if it greases at all.
+    ///
+    /// The `grease` flag already puts this value at the head of
+    /// `supported_groups`; a caller that emits key shares uses the same value, so
+    /// the share list opens with the group list's first entry exactly as a
+    /// browser's does.
+    pub(crate) fn grease_group(&self, seed: u16) -> Option<NamedGroup> {
+        self.grease.then(|| NamedGroup::from(grease_value(seed, 1)))
+    }
+}
+
+impl ClientHelloProfile {
     /// Applies the profile to a freshly built ClientHello.
     ///
     /// `grease_seed` selects the GREASE values (mirrors the per-connection

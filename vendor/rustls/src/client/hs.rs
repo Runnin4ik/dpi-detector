@@ -393,6 +393,17 @@ fn emit_client_hello_for_retry(
             grease_seed,
             supported_versions.tls13,
         );
+        // dpi-detector patch: a browser that greases also offers a key share for
+        // the GREASE group — Chrome opens its share list with it, one dummy byte
+        // — and `curl_chrome107`/`curl_safari155` send exactly that. The group is
+        // the same value the profile puts at the head of `supported_groups`, and
+        // RFC 8701 requires servers to ignore it (a share for a group the server
+        // did not offer cannot be selected).
+        if let Some(group) = profile.grease_group(grease_seed) {
+            if let Some(shares) = exts.key_shares.as_mut() {
+                shares.insert(0, KeyShareEntry::new(group, vec![0u8]));
+            }
+        }
     }
 
     let mut chp_payload = ClientHelloPayload {

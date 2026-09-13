@@ -596,6 +596,8 @@ mod tests {
     /// Pinned from the `curl-impersonate v2.2.2` bundle (see
     /// [`tests::bundle_versions_match_their_ja4`]).
     const CHROME_107_JA4: &str = "t13d1516h2_8daaf6152771_e5627efa2ab1";
+    const CHROME_107_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-\
+             49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513-21,29-23-24,0";
     const SAFARI_155_JA4: &str = "t13d2014h2_a09f3c656075_14788d8d241b";
     const FIREFOX_133_JA4_LESS_ECH: &str = "t13d1715h2_5b57614c22b0_8fb63dbc839a";
 
@@ -749,8 +751,7 @@ mod tests {
     /// extension in the very column the probes use.
     #[test]
     fn bundle_versions_match_their_ja3() {
-        const CHROME_107: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-\
-             49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513-21,29-23-24,0";
+        const CHROME_107: &str = CHROME_107_JA3;
         const SAFARI_155: &str = "771,4865-4866-4867-49196-49195-52393-49200-49199-52392-49162-\
              49161-49172-49171-157-156-53-47-49160-49170-10,\
              0-23-65281-10-11-16-5-13-18-51-45-43-27-21,29-23-24-25,0";
@@ -810,6 +811,46 @@ mod tests {
             let (_, _, firefox) = client_hello_full(TlsFingerprint::Custom, tls13_only);
             assert_eq!(firefox, FIREFOX_133_JA4_LESS_ECH, "firefox (tls13_only={tls13_only})");
         }
+    }
+
+    /// Test 7 pins the TLS version and the ALPN it offers, and both have to
+    /// reach the wire: the pinned JA4 shows the version field (`t12`/`t13`) and
+    /// the ALPN field (`h2`/`h1`), while JA3 is unaffected by either.
+    #[test]
+    fn pinned_tls_version_and_alpn_reach_the_hello() {
+        let hello = |tls12_only: bool, alpn: Option<Vec<Vec<u8>>>| {
+            let config = crate::net::tls::create_insecure_dpi_tls_config_versioned_with(
+                TlsFingerprint::Chrome,
+                tls12_only,
+                alpn,
+            );
+            let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
+            let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
+            let mut buf = Vec::new();
+            conn.write_tls(&mut buf).expect("write ClientHello");
+            (crate::net::ja3::client_hello_ja3(&buf), crate::net::ja4::client_hello_ja4(&buf))
+        };
+
+        let (ja3_default, ja4_default) = hello(false, None);
+        assert!(ja4_default.starts_with("t13d1516h2_"), "{ja4_default}");
+        assert_eq!(ja3_default, CHROME_107_JA3.replace("-65037", ""));
+
+        // HTTP/1.1 alone: same hello except the ALPN extension's body, so JA4
+        // keeps its counts and hashes and changes only the ALPN field.
+        let (ja3_http11, ja4_http11) = hello(false, Some(vec![b"http/1.1".to_vec()]));
+        assert!(ja4_http11.starts_with("t13d1516h1_"), "{ja4_http11}");
+        assert_eq!(
+            ja4_http11.splitn(2, '_').nth(1),
+            ja4_default.splitn(2, '_').nth(1),
+            "h2 and http/1.1 differ in the ALPN field only"
+        );
+        assert_eq!(ja3_http11, ja3_default, "JA3 hashes types, not ALPN values");
+
+        // TLS 1.2: the version field follows the pinned version, and the hello
+        // offers no post-quantum group or key share (the profile's TLS 1.3-only
+        // extensions drop out with it).
+        let (_, ja4_tls12) = hello(true, None);
+        assert!(ja4_tls12.starts_with("t12d"), "{ja4_tls12}");
     }
 
     /// The curl shapes predate post-quantum key exchange, so they must not be
