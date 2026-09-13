@@ -320,7 +320,7 @@ pub fn panel_to_string(title: &str, lines: &[String]) -> String {
 /// Banner titles are left-aligned cyan; the netinfo panel's is centered and dim.
 pub fn panel_with(title: &str, lines: &[String], width: usize, centered: bool, border: &str) -> String {
     // Glyph-safe content first: widths are measured after replacement.
-    let title_bidi = dpi_core::i18n::format_bidi_str(title);
+    let title_bidi = crate::i18n::format_bidi_str(title);
     let title_clean = format!(" {} ", asc(&title_bidi));
     let lines: Vec<String> = lines.iter().map(|l| asc(l)).collect();
     let mut out = String::new();
@@ -546,8 +546,8 @@ mod tests {
     /// cell colour survives `asc()` in ASCII mode.
     #[test]
     fn foreign_redirect_cell_is_red() {
-        use dpi_core::i18n::Language;
-        use dpi_core::i18n::get_messages;
+        use crate::i18n::Language;
+        use crate::i18n::get_messages;
         for lang in Language::ALL {
             let msg = get_messages(lang);
             let cell = |s: DpiStatus| cell_color(s.display_label(), status_color(s));

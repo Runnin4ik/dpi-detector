@@ -3,7 +3,7 @@
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dpi_core::config::AppConfig;
-use dpi_core::i18n::{Messages, format_bidi};
+use crate::i18n::{Messages, format_bidi};
 use dpi_core::probe::dns_avail::{
     DnsAnswer, DnsAvailReport, ProbeKind, known_resolver, net24, org_label, subst_counts,
 };
@@ -443,7 +443,7 @@ mod tests {
         );
         report.org_names.insert("8.8.4.4".to_string(), "GOOGLE - Google LLC".to_string());
         let cfg = AppConfig::default();
-        let out = render_dns_availability(&report, &cfg, &dpi_core::i18n::get_messages(dpi_core::i18n::Language::Ru));
+        let out = render_dns_availability(&report, &cfg, &crate::i18n::get_messages(crate::i18n::Language::Ru));
         // One line per endpoint, full success shows no fraction.
         assert!(out.contains("Google #2"), "name spans tallest cell");
         assert!(!out.contains("1/5"), "no addr/domain count mix-up");

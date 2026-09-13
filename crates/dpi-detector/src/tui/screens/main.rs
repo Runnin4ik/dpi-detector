@@ -5,7 +5,7 @@ use crossterm::execute;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dpi_core::config::AppConfig;
-use dpi_core::i18n::{Language, Messages, fingerprint_label, format_bidi, get_messages};
+use crate::i18n::{Language, Messages, fingerprint_label, format_bidi, get_messages};
 use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::net::netinfo::ipv6_supported;
 use dpi_core::profile::RegionProfile;

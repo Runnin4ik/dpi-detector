@@ -1,4 +1,4 @@
-use dpi_core::i18n::Language;
+use crate::i18n::Language;
 
 use std::time::Duration;
 
@@ -152,7 +152,7 @@ fn newest_release(releases: &[serde_json::Value]) -> Option<ReleaseInfo> {
 
 /// Localized banner badge text.
 pub fn version_badge_lang(latest: Option<&ReleaseInfo>, lang: Language) -> String {
-    let msg = dpi_core::i18n::get_messages(lang);
+    let msg = crate::i18n::get_messages(lang);
     match latest {
         None => msg.update_failed.to_string(),
         Some(info) if !info.version.is_empty() && is_newer(&info.version, CURRENT_VERSION) => {

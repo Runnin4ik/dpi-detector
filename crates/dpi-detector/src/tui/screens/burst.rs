@@ -5,7 +5,7 @@ use crossterm::execute;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dpi_core::config::clean_domain;
-use dpi_core::i18n::{Language, Messages, format_bidi, get_messages};
+use crate::i18n::{Language, Messages, format_bidi, get_messages};
 use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::probe::burst::{
     BURST_MAX_ATTEMPTS, BURST_MAX_TIMEOUT_SECS, BURST_MIN_ATTEMPTS, BURST_MIN_TIMEOUT_SECS,

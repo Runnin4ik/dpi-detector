@@ -1,6 +1,6 @@
 //! Test 4: SNI discovery per autonomous system.
 
-use dpi_core::i18n::Messages;
+use crate::i18n::Messages;
 use dpi_core::probe::whitelist::{AsVerdict, NO_SNI_TAG, WhitelistReport};
 
 use crate::tui::widgets::{asc, warn_mark};
@@ -101,7 +101,7 @@ mod tests {
     /// goes monochrome on Windows 7.
     #[test]
     fn whitelist_rows_carry_their_status_colors() {
-        use dpi_core::i18n::{get_messages, Language};
+        use crate::i18n::{get_messages, Language};
         use dpi_core::probe::whitelist::AsRow;
         let msg = get_messages(Language::Ru);
         let report = WhitelistReport {

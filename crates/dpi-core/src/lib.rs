@@ -6,7 +6,6 @@ pub mod config;
 pub mod dns;
 pub mod net;
 pub mod probe;
-pub mod i18n;
 pub mod profile;
 
 /// Completion tick for live progress lines: called once per finished unit.

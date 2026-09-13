@@ -2,7 +2,7 @@
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use dpi_core::i18n::Messages;
+use crate::i18n::Messages;
 use std::io::{Write, stdout};
 
 use crate::println_out;

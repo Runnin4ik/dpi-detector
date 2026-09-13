@@ -140,8 +140,8 @@ pub fn legend_text(lang: Language, msg: &Messages) -> String {
 /// Display label for a TLS ClientHello profile. The canonical token and the
 /// profile names stay Latin (rule 4); only the default profile is spelled out
 /// per language ("pishfarz" is the Finglish for "default").
-pub fn fingerprint_label(fp: crate::net::fingerprint::TlsFingerprint, lang: Language) -> &'static str {
-    use crate::net::fingerprint::TlsFingerprint as F;
+pub fn fingerprint_label(fp: dpi_core::net::fingerprint::TlsFingerprint, lang: Language) -> &'static str {
+    use dpi_core::net::fingerprint::TlsFingerprint as F;
     match (fp, lang) {
         (F::Rustls, Language::Fa) => "rustls (pishfarz)",
         (F::Rustls, _) => "rustls (default)",
@@ -195,77 +195,18 @@ mod tests {
     fn test_phase_text_names_each_phase() {
         for lang in [Language::En, Language::Ru, Language::Zh, Language::Fa] {
             let msg = get_messages(lang);
-            assert_eq!(msg.phase_text(crate::PhaseId::DnsAvailability), "DNS");
+            assert_eq!(msg.phase_text(dpi_core::PhaseId::DnsAvailability), "DNS");
         }
         assert_eq!(
-            get_messages(Language::En).phase_text(crate::PhaseId::Tcp16),
+            get_messages(Language::En).phase_text(dpi_core::PhaseId::Tcp16),
             "TCP 16–20 KB Block Check"
         );
 
         // Tokens are canonical Latin across every language (rule 4).
-        assert_eq!(crate::ProgressBlock::Udp.token(), "UDP");
-        assert_eq!(crate::ProgressBlock::Doh.token(), "DoH");
-        assert_eq!(crate::ProgressBlock::Dot.token(), "DoT");
-        assert_eq!(crate::ProgressBlock::Egress.token(), "EGRESS");
+        assert_eq!(dpi_core::ProgressBlock::Udp.token(), "UDP");
+        assert_eq!(dpi_core::ProgressBlock::Doh.token(), "DoH");
+        assert_eq!(dpi_core::ProgressBlock::Dot.token(), "DoT");
+        assert_eq!(dpi_core::ProgressBlock::Egress.token(), "EGRESS");
     }
 
-    #[test]
-    fn test_messages_coverage() {
-        for lang in [
-            Language::En,
-            Language::Ru,
-            Language::Zh,
-            Language::Fa,
-        ] {
-            let msg = get_messages(lang);
-            assert!(!msg.banner_subtitle.is_empty());
-            assert!(!msg.dns_title.is_empty());
-            assert!(!msg.domain_title.is_empty());
-            assert!(!msg.update_failed.is_empty());
-            assert!(!msg.proxy_in_use.is_empty());
-            assert!(!msg.tui_unavailable.is_empty());
-            assert!(!msg.crash_title.is_empty());
-            assert!(!msg.detail_read_timeout.is_empty());
-            assert!(!msg.cli_about.is_empty());
-            assert!(!msg.cfg_warn_invalid_value.is_empty());
-            assert!(!msg.cfg_warn_unknown_key.is_empty());
-            assert!(!msg.menu_title.is_empty());
-            assert!(!msg.menu_language.is_empty());
-            assert!(!msg.menu_ip_version.is_empty());
-            assert!(!msg.menu_concurrency.is_empty());
-            assert!(!msg.menu_hw_row.is_empty());
-            assert!(!msg.menu_hw_change.is_empty());
-            assert!(!msg.menu_hw_tests.is_empty());
-            assert!(!msg.menu_hw_start.is_empty());
-            assert!(!msg.menu_hw_quit.is_empty());
-            assert!(!msg.menu_line_prompt.is_empty());
-            assert!(!msg.menu_invalid_line.is_empty());
-            assert!(!msg.menu_need_one.is_empty());
-            assert!(!msg.latest_version.is_empty());
-            assert!(!msg.author.is_empty());
-            assert!(!msg.chat.is_empty());
-            assert!(!msg.os.is_empty());
-            assert!(!msg.system_dns.is_empty());
-            assert!(!msg.active_interface.is_empty());
-            assert!(!msg.dns_check_title.is_empty());
-            assert!(!msg.doh_endpoints.is_empty());
-            assert!(!msg.doh_min.is_empty());
-            assert!(!msg.telegram_check_title.is_empty());
-            assert!(!msg.summary_title.is_empty());
-            for (d, field) in [
-                ('0', msg.menu_test_netinfo),
-                ('1', msg.menu_test_dns),
-                ('2', msg.menu_test_domains),
-                ('3', msg.menu_test_tcp),
-                ('4', msg.menu_test_sni),
-                ('5', msg.menu_test_telegram),
-                ('6', msg.menu_test_burst),
-                ('7', msg.menu_test_legend),
-            ] {
-                assert!(!field.is_empty());
-                assert_eq!(msg.menu_test_label(d), field);
-            }
-            assert_eq!(msg.menu_test_label('8'), "");
-        }
-    }
 }

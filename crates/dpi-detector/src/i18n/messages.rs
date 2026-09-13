@@ -5,23 +5,16 @@ use super::Language;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Messages {
-    pub banner_subtitle: &'static str,
     pub netinfo_title: &'static str,
-    pub dns_title: &'static str,
     pub domain_title: &'static str,
     pub summary_title: &'static str,
     pub status: &'static str,
     pub available: &'static str,
     pub blocked: &'static str,
     pub domain: &'static str,
-    pub stage: &'static str,
-    pub bytes: &'static str,
-    pub duration: &'static str,
     pub detail: &'static str,
     pub provider: &'static str,
     pub region: &'static str,
-    pub bypass_tools: &'static str,
-    pub gateway: &'static str,
 
 
 
@@ -35,8 +28,6 @@ pub struct Messages {
     pub menu_hw_tests: &'static str,
     pub menu_hw_start: &'static str,
     pub menu_hw_quit: &'static str,
-    pub menu_line_prompt: &'static str,
-    pub menu_invalid_line: &'static str,
     pub menu_need_one: &'static str,
     pub menu_test_netinfo: &'static str,
     pub menu_test_dns: &'static str,
@@ -68,7 +59,6 @@ pub struct Messages {
     pub legend_title: &'static str,
 
     // Banner & Version
-    pub latest_version: &'static str,
     pub author: &'static str,
     pub chat: &'static str,
     pub update_failed: &'static str,
@@ -217,8 +207,6 @@ pub struct Messages {
     pub invalid_proxy_err: &'static str,
     pub dns_servers_empty_skip: &'static str,
     pub no_sni_label: &'static str,
-    pub detail_read_timeout: &'static str,
-    pub detail_write_timeout: &'static str,
     pub detail_at: &'static str,
 
     pub detail_isp_stub: &'static str,
@@ -252,26 +240,26 @@ pub struct Messages {
 }
 
 impl Messages {
-    pub fn phase_text(&self, phase: crate::PhaseId) -> String {
+    pub fn phase_text(&self, phase: dpi_core::PhaseId) -> String {
         match phase {
             // Test 1 labels itself with the block tokens UDP/DoH/DoT/EGRESS,
             // which say more than any translation of "checking" would.
-            crate::PhaseId::DnsAvailability => "DNS".to_string(),
+            dpi_core::PhaseId::DnsAvailability => "DNS".to_string(),
             // Test 2 stages label themselves with their canonical token: they
             // share one line, where a sentence per stage would not fit.
-            crate::PhaseId::DomainDns => crate::ProgressBlock::DomainDns.token().to_string(),
-            crate::PhaseId::DomainTls13 => crate::ProgressBlock::DomainTls13.token().to_string(),
-            crate::PhaseId::DomainTls12 => crate::ProgressBlock::DomainTls12.token().to_string(),
-            crate::PhaseId::DomainHttp => crate::ProgressBlock::DomainHttp.token().to_string(),
-            crate::PhaseId::Tcp16 => self.tcp16_check_title.to_string(),
-            crate::PhaseId::SniBase => self.phase_sni_base.to_string(),
-            crate::PhaseId::SniParallel { detected_as, batch, top_n } => {
+            dpi_core::PhaseId::DomainDns => dpi_core::ProgressBlock::DomainDns.token().to_string(),
+            dpi_core::PhaseId::DomainTls13 => dpi_core::ProgressBlock::DomainTls13.token().to_string(),
+            dpi_core::PhaseId::DomainTls12 => dpi_core::ProgressBlock::DomainTls12.token().to_string(),
+            dpi_core::PhaseId::DomainHttp => dpi_core::ProgressBlock::DomainHttp.token().to_string(),
+            dpi_core::PhaseId::Tcp16 => self.tcp16_check_title.to_string(),
+            dpi_core::PhaseId::SniBase => self.phase_sni_base.to_string(),
+            dpi_core::PhaseId::SniParallel { detected_as, batch, top_n } => {
                 self.phase_sni_parallel
                     .replacen("{}", &detected_as.to_string(), 1)
                     .replacen("{}", &batch.to_string(), 1)
                     .replacen("{}", &top_n.to_string(), 1)
             }
-            crate::PhaseId::Telegram => self.phase_telegram.to_string(),
+            dpi_core::PhaseId::Telegram => self.phase_telegram.to_string(),
         }
     }
 }
@@ -293,9 +281,9 @@ impl Messages {
 }
 
 impl Messages {
-    /// Text for a recoverable configuration problem (see [`crate::config::ConfigWarning`]).
-    pub fn config_warning(&self, warning: &crate::config::ConfigWarning) -> String {
-        use crate::config::ConfigWarning as W;
+    /// Text for a recoverable configuration problem (see [`dpi_core::config::ConfigWarning`]).
+    pub fn config_warning(&self, warning: &dpi_core::config::ConfigWarning) -> String {
+        use dpi_core::config::ConfigWarning as W;
         match warning {
             W::UnknownKey { key } => self.cfg_warn_unknown_key.replace("{}", key),
             W::InvalidValue { key } => self.cfg_warn_invalid_value.replace("{}", key),

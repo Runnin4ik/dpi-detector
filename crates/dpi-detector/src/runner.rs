@@ -17,7 +17,7 @@ use dpi_core::config::{
 use dpi_core::probe::dns_avail::check_dns_availability;
 use dpi_core::dns::parse_socks_proxy;
 use dpi_core::dns::udp::probe_udp_dns;
-use dpi_core::i18n::{legend_text, Language, Messages};
+use crate::i18n::{legend_text, Language, Messages};
 use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::net::netinfo::{detect_bypass_tools, fetch_public_ips, get_system_dns, is_tun_name};
 use dpi_core::probe::burst::{

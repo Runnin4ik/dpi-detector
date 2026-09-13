@@ -1,6 +1,6 @@
 //! Test 0: network and system - public IP, TTLB, ASN/org, system DNS, bypass tools.
 
-use dpi_core::i18n::Messages;
+use crate::i18n::Messages;
 use dpi_core::net::netinfo::{SystemDnsInfo, is_tun_name};
 use dpi_core::probe::domains::{FakeIpType, fake_ip_type};
 use std::collections::{HashMap, HashSet};
@@ -384,8 +384,8 @@ mod tests {
 
     #[test]
     fn netinfo_panel_matches_expected_rows() {
-        use dpi_core::i18n::get_messages;
-        use dpi_core::i18n::Language;
+        use crate::i18n::get_messages;
+        use crate::i18n::Language;
         let (data, dns, bypass) = netinfo_fixture();
         let out = render_netinfo_panel(&data, &dns, &bypass, &get_messages(Language::Ru));
         assert!(out.contains("IPv4: \x1b[36m203.0.113.7\x1b[0m  Subnet: \x1b[36m203.0.113.0/24\x1b[0m  TTLB: \x1b[2m701 мс\x1b[0m"));
@@ -401,8 +401,8 @@ mod tests {
 
     #[test]
     fn netinfo_panel_renders_english_and_chinese() {
-        use dpi_core::i18n::get_messages;
-        use dpi_core::i18n::Language;
+        use crate::i18n::get_messages;
+        use crate::i18n::Language;
         let (data, dns, bypass) = netinfo_fixture();
 
         let out_en = render_netinfo_panel(&data, &dns, &bypass, &get_messages(Language::En));
@@ -426,8 +426,8 @@ mod tests {
 
     #[test]
     fn netinfo_timeout_rows_are_red() {
-        use dpi_core::i18n::get_messages;
-        use dpi_core::i18n::Language;
+        use crate::i18n::get_messages;
+        use crate::i18n::Language;
         let t = || "timeout".to_string();
         let data = NetInfoData {
             v4: Some(NetFamilyInfo {
@@ -448,8 +448,8 @@ mod tests {
 
     #[test]
     fn netinfo_filters_amnezia_without_warp() {
-        use dpi_core::i18n::get_messages;
-        use dpi_core::i18n::Language;
+        use crate::i18n::get_messages;
+        use crate::i18n::Language;
         let (data, dns, _) = netinfo_fixture();
         let bypass = vec!["AmneziaWG".to_string(), "xray".to_string()];
         let out = render_netinfo_panel(&data, &dns, &bypass, &get_messages(Language::Ru));

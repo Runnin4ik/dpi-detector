@@ -2,7 +2,7 @@
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dpi_core::classify::*;
-use dpi_core::i18n::{Language, Messages, detail_text, format_bidi};
+use crate::i18n::{Language, Messages, detail_text, format_bidi};
 use dpi_core::probe::domains::{DetailLine, DomainEntry};
 
 use crate::tui::widgets::{cell_color, status_color, table_preset};

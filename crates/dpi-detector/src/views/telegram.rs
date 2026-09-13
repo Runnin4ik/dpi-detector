@@ -1,7 +1,7 @@
 //! Test 5: the Telegram full report.
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
-use dpi_core::i18n::{Messages, detail_text, fmt_size, fmt_speed, format_bidi};
+use crate::i18n::{Messages, detail_text, fmt_size, fmt_speed, format_bidi};
 use dpi_core::probe::telegram::TelegramFullReport;
 
 use crate::tui::widgets::{cell_color, table_preset};

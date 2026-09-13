@@ -1,9 +1,9 @@
 //! What a probe observed, as a value instead of a string.
 //!
 //! Classification used to compare Russian prose (`detail.contains(" at ")`) and
-//! `i18n` re-derived it by parsing markers out of the string. A detail is now an
+//! the renderer re-derived it by parsing markers out of the string. A detail is now an
 //! enum: classification matches variants, `code()` is the machine token that
-//! `--json` carries, and `i18n::detail_text` renders it through an exhaustive
+//! `--json` carries, and the interface layer renders it through an exhaustive
 //! `match` (a missing translation is a compile error, not a test failure).
 //!
 //! Codes are snake_case, and the composed details keep their shape:
@@ -15,8 +15,8 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize, Serializer};
 
-/// A diagnostic detail. Unit variants carry only prose (their tables live in
-/// [`crate::i18n`]); the rest carry the measurement they describe.
+/// A diagnostic detail. Unit variants carry only prose (rendered by the
+/// binary's `i18n::detail_text`); the rest carry the measurement they describe.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Detail {
     /// Nothing to report: the probe passed, or the check did not run.
@@ -206,7 +206,7 @@ fn kb_token(kb: f64) -> String {
 
 /// Same rule as [`kb_token`], for display text: the unit is a protocol unit and
 /// stays `KB` in every language (Rule 4).
-pub(crate) fn kb_display(kb: f64) -> String {
+pub fn kb_display(kb: f64) -> String {
     if kb.fract() == 0.0 {
         format!("{}KB", kb as u64)
     } else {

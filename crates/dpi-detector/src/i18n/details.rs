@@ -7,7 +7,7 @@
 //! (`ClientHello`, `TLS`, `SNI`, `KB`) stay Latin in every language (Rule 4).
 
 use super::{get_messages, Language};
-use crate::classify::detail::{kb_display, Detail};
+use dpi_core::classify::detail::{kb_display, Detail};
 
 /// The same wording in four languages: `ru` is the canonical Russian text.
 fn t4(lang: Language, ru: &str, en: &str, zh: &str, fa: &str) -> String {

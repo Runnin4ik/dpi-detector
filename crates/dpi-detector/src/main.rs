@@ -4,12 +4,13 @@ use std::time::{Duration, Instant};
 use dpi_core::config::{
     base_dir, load_config,
 };
-use dpi_core::i18n::{get_messages, legend_text, Language};
+use crate::i18n::{get_messages, legend_text, Language};
 use dpi_core::net::fingerprint::TlsFingerprint;
 use crate::update::{fetch_latest_version, version_badge_lang};
 use dpi_core::profile::RegionProfile;
 
 mod args;
+mod i18n;
 mod json;
 mod menu;
 mod render;

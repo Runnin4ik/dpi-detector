@@ -1,6 +1,6 @@
 //! The banner and the fingerprint header: what a report opens with.
 
-use dpi_core::i18n::{Messages, fingerprint_label};
+use crate::i18n::{Messages, fingerprint_label};
 use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::profile::RegionProfile;
 
@@ -53,7 +53,7 @@ mod tests {
     use super::*;
     #[test]
     fn fingerprint_header_never_repeats_the_profile_code() {
-        use dpi_core::i18n::{get_messages, Language};
+        use crate::i18n::{get_messages, Language};
         let en = get_messages(Language::En);
         // The default label ("rustls (default)") carried the token as well, so
         // the header read "RUSTLS (rustls (default))".

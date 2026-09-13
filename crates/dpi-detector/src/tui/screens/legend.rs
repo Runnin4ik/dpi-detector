@@ -1,6 +1,6 @@
 //! The legend screen: prints the legend and answers its own key menu.
 
-use dpi_core::i18n::{Language, Messages, legend_text};
+use crate::i18n::{Language, Messages, legend_text};
 use std::io::{IsTerminal, Write, stdout};
 
 use crate::{print_out, println_out};

@@ -325,8 +325,8 @@ pub struct AppConfig {
     pub config_warnings: Vec<ConfigWarning>,
 }
 
-/// A recoverable `config.yml` problem. The user-facing text lives in the i18n
-/// layer ([`crate::i18n::Messages::config_warning`]) so warnings follow `--lang`.
+/// A recoverable `config.yml` problem. The core reports the fact; the wording
+/// lives in the binary's `i18n` layer, so warnings follow `--lang`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigWarning {
     /// Key rejected by the type/shape check.

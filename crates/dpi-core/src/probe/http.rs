@@ -117,6 +117,8 @@ fn build_request(req: HttpRequest<'_>, h2: bool) -> Request<Full<Bytes>> {
         }
         builder = builder.header(name, value);
     }
+    // Method, URI and every header above are already-validated constants and
+    // caller strings, so the request cannot fail to build.
     builder.body(Full::new(Bytes::new())).expect("valid request")
 }
 

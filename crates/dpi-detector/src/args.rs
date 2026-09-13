@@ -1,5 +1,5 @@
 use clap::{Arg, ArgAction, Command};
-use dpi_core::i18n::{get_messages, Language, Messages};
+use crate::i18n::{get_messages, Language, Messages};
 
 /// Parsed command line.
 ///

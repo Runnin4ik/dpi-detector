@@ -104,6 +104,8 @@ const SPECS: [Spec; 4] = [
 ];
 
 impl TlsFingerprint {
+    /// The spec table below lists every variant: a missing row would be a bug in
+    /// this file, not something the caller can trigger.
     fn spec(self) -> &'static Spec {
         SPECS
             .iter()

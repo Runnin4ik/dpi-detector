@@ -1,6 +1,6 @@
 //! Summary panel: one row per tested area with its counters.
 
-use dpi_core::i18n::{Messages, fmt_size, fmt_speed};
+use crate::i18n::{Messages, fmt_size, fmt_speed};
 use dpi_core::probe::domains::DomainStats;
 use dpi_core::probe::telegram::TelegramFullReport;
 
@@ -174,7 +174,7 @@ mod tests {
     /// the column.
     #[test]
     fn summary_rows_align_their_values_into_two_columns() {
-        use dpi_core::i18n::{get_messages, Language};
+        use crate::i18n::{get_messages, Language};
         let msg = get_messages(Language::Ru);
         let out = render_summary(
             &SummaryData {
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn summary_wraps_a_long_value_inside_the_box() {
         use dpi_core::probe::dns_avail::DnsAvailStats;
-        use dpi_core::i18n::{get_messages, Language};
+        use crate::i18n::{get_messages, Language};
         let msg = get_messages(Language::Ru);
         let brands: Vec<String> = [
             "Cloudflare IP 2", "Google", "Level 3", "Level 3 2", "MSK-IX", "OpenDNS", "XboxDNS",
