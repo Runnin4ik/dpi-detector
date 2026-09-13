@@ -29,6 +29,12 @@ pub async fn dial_tcp(addr: &SocketAddr, timeout_dur: Duration) -> Result<TcpStr
         Ok(Err(e)) => return Err(DialError::Io(e)),
         Err(_) => return Err(DialError::Timeout),
     };
-    let _ = stream.set_nodelay(true);
+    set_no_delay(&stream);
     Ok(stream)
+}
+
+/// Turns Nagle off on a dialed stream. See [`dial_tcp`] for why every probe wants
+/// this — it is a requirement of the exchange, not a tuning knob.
+pub(crate) fn set_no_delay(stream: &TcpStream) {
+    let _ = stream.set_nodelay(true);
 }

@@ -16,6 +16,7 @@ use super::resolve::resolve_host;
 use super::types::{DnsError, DnsRecord};
 use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
 use crate::config::AppConfig;
+use crate::net::tcp::set_no_delay;
 use crate::net::tls::create_verifying_doh_tls_config;
 
 pub enum DohSender {
@@ -77,7 +78,7 @@ pub async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Result<(D
             stage: "tcp_connect",
             detail: e.to_string(),
         })?;
-    let _ = tcp.set_nodelay(true);
+    set_no_delay(&tcp);
 
     let tls_config = create_verifying_doh_tls_config();
     let connector = TlsConnector::from(tls_config);

@@ -23,6 +23,7 @@ use tokio_rustls::TlsConnector;
 use crate::classify::DET_SYN_TIMEOUT_SHORT;
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
+use crate::net::tcp::set_no_delay;
 use crate::net::tls::create_insecure_dpi_tls_config;
 use crate::PhaseProgress;
 
@@ -69,7 +70,8 @@ pub async fn probe_telegram_dc(dc: &TelegramDc, timeout_dur: Duration) -> Telegr
     match addr_str.parse::<SocketAddr>() {
         Ok(sock_addr) => {
             match timeout(timeout_dur, TcpStream::connect(sock_addr)).await {
-                Ok(Ok(_stream)) => {
+                Ok(Ok(stream)) => {
+                    set_no_delay(&stream);
                     let latency = start.elapsed().as_millis() as u64;
                     TelegramDcResult {
                         name: dc.name.to_string(),
@@ -189,6 +191,7 @@ fn split_url(url: &str) -> Option<(String, String)> {
 async fn tls_get(host: &str, path: &str, user_agent: &str) -> Option<(impl Body<Data = Bytes, Error = hyper::Error> + Unpin, impl FnOnce() + Send)> {
     let addr = resolve_host(host, 443, Duration::from_secs(10)).await.ok()?.into_iter().next()?;
     let tcp = TcpStream::connect(addr).await.ok()?;
+    set_no_delay(&tcp);
     let connector = TlsConnector::from(create_insecure_dpi_tls_config());
     let server_name = ServerName::try_from(host.to_string()).ok()?;
     let tls = connector.connect(server_name, tcp).await.ok()?;
@@ -371,7 +374,10 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
         cfg.telegram_upload_port,
     );
     let tcp = match timeout(Duration::from_secs_f64(8.0), TcpStream::connect(&addr)).await {
-        Ok(Ok(s)) => s,
+        Ok(Ok(s)) => {
+            set_no_delay(&s);
+            s
+        }
         _ => {
             return TransferStats { status: "blocked".into(), duration: t0.elapsed().as_secs_f64(), ..Default::default() };
         }

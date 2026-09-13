@@ -19,6 +19,7 @@ use tokio_rustls::TlsConnector;
 use url::Url;
 
 use crate::dns::query_doh_txt;
+use crate::net::tcp::set_no_delay;
 use crate::net::tls::create_verifying_tls_config;
 
 #[derive(Debug, Clone, Default)]
@@ -149,6 +150,7 @@ async fn http_get_once(url: &Url, timeout_dur: Duration) -> Result<(u16, Option<
         let tcp = TcpStream::connect(&addr)
             .await
             .map_err(|e| format!("Connect to {} failed: {}", addr, e))?;
+        set_no_delay(&tcp);
 
         let req = Request::builder()
             .method(Method::GET)

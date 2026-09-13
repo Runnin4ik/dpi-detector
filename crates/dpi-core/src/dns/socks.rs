@@ -4,6 +4,7 @@ use tokio::net::TcpStream;
 use url::Url;
 
 use super::types::DnsError;
+use crate::net::tcp::set_no_delay;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SocksProxyConfig {
@@ -110,6 +111,7 @@ pub async fn associate_socks5_udp(
     let mut tcp = TcpStream::connect(&addr)
         .await
         .map_err(|e| DnsError::Socks5(format!("TCP connect to {} failed: {}", addr, e)))?;
+    set_no_delay(&tcp);
 
     // 1. Handshake
     if proxy.username.is_some() && proxy.password.is_some() {

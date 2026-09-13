@@ -14,6 +14,7 @@ use tokio_rustls::TlsConnector;
 use super::resolve::resolve_host;
 use super::types::DnsError;
 use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
+use crate::net::tcp::set_no_delay;
 use crate::net::tls::create_verifying_tls_config;
 
 /// Splits a DoT endpoint `'host[:port]'` (default 853). Supports IPv6 literals.
@@ -98,7 +99,7 @@ impl DotSession {
                 stage: "tcp_connect",
                 detail: e.to_string(),
             })?;
-        let _ = tcp.set_nodelay(true);
+        set_no_delay(&tcp);
         let connector = TlsConnector::from(create_verifying_tls_config());
         let server_name = ServerName::try_from(host.to_string())
             .or_else(|_| {
