@@ -1,15 +1,14 @@
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
-use http_body_util::{BodyExt, Full};
-use hyper::body::Bytes;
-use hyper::header::{HOST, USER_AGENT};
-use hyper::{Method, Request};
+use http_body_util::BodyExt;
+use hyper::Method;
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 use super::connector::{DpiTlsConnector, RustlsConnector};
+use super::http::{negotiated_h2, HttpRequest, HttpSender};
 use crate::classify::{
     classify_connect_error, classify_tls_error, ConnectionStage, DpiProbeStream, DpiProbeTracker,
     DpiStatus, ProbeMetrics,
@@ -98,34 +97,25 @@ pub async fn probe_tls_domain<C: DpiTlsConnector>(
 
         // Send minimal HTTP GET /
         tracker.set_stage(ConnectionStage::HttpPayload);
+        let alpn_h2 = negotiated_h2(&tls_stream);
         let io = TokioIo::new(tls_stream);
-        let (mut sender, connection) = match hyper::client::conn::http1::handshake(io).await {
-            Ok(res) => res,
+        let mut sender = match HttpSender::handshake(io, alpn_h2).await {
+            Ok(sender) => sender,
             Err(err) => {
                 tracker.record_error(DpiStatus::Unknown, format!("HTTP handshake failed: {}", err));
                 return Err(err.to_string());
             }
         };
 
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-
-        let req = match Request::builder()
-            .method(Method::GET)
-            .uri("/")
-            .header(HOST, domain)
-            .header(USER_AGENT, DEFAULT_USER_AGENT)
-            .body(Full::new(Bytes::new()))
-        {
-            Ok(r) => r,
-            Err(err) => {
-                tracker.record_error(DpiStatus::Unknown, err.to_string());
-                return Err(err.to_string());
-            }
+        let req = HttpRequest {
+            method: Method::GET,
+            host: domain,
+            path: "/",
+            user_agent: DEFAULT_USER_AGENT,
+            headers: Vec::new(),
         };
 
-        let resp = match sender.send_request(req).await {
+        let resp = match sender.send(req).await {
             Ok(r) => r,
             Err(err) => {
                 tracker.record_error(DpiStatus::Unknown, format!("HTTP request failed: {}", err));

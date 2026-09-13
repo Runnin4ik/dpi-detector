@@ -102,10 +102,10 @@ curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install
       --domains <PATH>         Путь к файлу со списком доменов
       --tcp16 <PATH>           Путь к файлу целей TCP16
       --ascii                  Только ASCII для старых консолей (без Unicode-глифов и рамок)
-      --fingerprint <PROFILE>  Профиль отпечатка TLS ClientHello (rustls|custom|chrome|safari)
+      --fingerprint <PROFILE>  Профиль отпечатка TLS ClientHello (rustls|custom|chrome|safari). custom — форма Firefox 133, chrome — Chrome 107 / Edge 99-101, safari — Safari 15.5-18.4 из curl-impersonate; все предлагают h2
       --burst <N>              Тест 7: одновременных рукопожатий за раунд [по умолчанию: 4]
       --burst-timeout <SECONDS>  Тест 7: таймаут одного рукопожатия, секунды [по умолчанию: 8]
-      --burst-profiles <LIST>  Тест 7: отпечатки (all|rustls,custom,chrome,safari) [по умолчанию: all]
+      --burst-profiles <LIST>  Отпечатки для теста 7: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [по умолчанию: all]
   -h, --help                   Показать справку
   -V, --version                Показать версию
 ```

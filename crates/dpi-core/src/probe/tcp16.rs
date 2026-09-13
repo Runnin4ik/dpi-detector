@@ -9,9 +9,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 use http_body_util::BodyExt;
 
-use hyper::body::Bytes;
-use hyper::header::{HOST, USER_AGENT};
-use hyper::{Method, Request};
+use hyper::Method;
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
@@ -24,6 +22,7 @@ use crate::classify::{
     DET_KB_SUFFIX, DET_READ_TIMEOUT_WORD_CAPS, DET_WRITE_TIMEOUT_WORD,
 };
 use crate::config::AppConfig;
+use crate::probe::http::{negotiated_h2, HttpRequest, HttpSender};
 
 fn random_pool(size: usize) -> Vec<u8> {
     // xorshift64* — deterministic PRNG, no extra deps, ASCII alphanumerics
@@ -66,7 +65,7 @@ async fn connect_fat_target(
     sni: &str,
     use_tls: bool,
     cfg: &AppConfig,
-) -> Result<hyper::client::conn::http1::SendRequest<http_body_util::Full<Bytes>>, (DpiStatus, String)> {
+) -> Result<HttpSender, (DpiStatus, String)> {
     let connect_stage = "tcp_connect";
     let tcp = match timeout(Duration::from_secs_f64(cfg.fat_connect_timeout), TcpStream::connect(&addr)).await {
         Ok(Ok(s)) => {
@@ -108,14 +107,10 @@ async fn connect_fat_target(
                 return Err((DpiStatus::TlsDropped, "TLS Handshake timeout".into()));
             }
         };
+        let alpn_h2 = negotiated_h2(&tls_stream);
         let io = TokioIo::new(tls_stream);
-        match hyper::client::conn::http1::handshake(io).await {
-            Ok((sender, conn)) => {
-                tokio::spawn(async move {
-                    let _ = conn.await;
-                });
-                Ok(sender)
-            }
+        match HttpSender::handshake(io, alpn_h2).await {
+            Ok(sender) => Ok(sender),
             Err(e) => {
                 let (msg, os_code, os_kind) = hyper_info(&e);
                 let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, "tls_connected");
@@ -124,13 +119,9 @@ async fn connect_fat_target(
         }
     } else {
         let io = TokioIo::new(tcp);
-        match hyper::client::conn::http1::handshake(io).await {
-            Ok((sender, conn)) => {
-                tokio::spawn(async move {
-                    let _ = conn.await;
-                });
-                Ok(sender)
-            }
+        // No TLS, so no ALPN: HTTP/1.1 is the only protocol on the wire here.
+        match HttpSender::handshake(io, false).await {
+            Ok(sender) => Ok(sender),
             Err(e) => {
                 let (msg, os_code, os_kind) = hyper_info(&e);
                 let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, "tcp_connect");
@@ -218,24 +209,28 @@ pub async fn probe_tcp_16_20(
             None
         };
 
-        let make_req = |pad: Option<&str>| -> Request<http_body_util::Full<Bytes>> {
-            let mut b = Request::builder()
-                .method(Method::HEAD)
-                .uri("/")
-                .header(HOST, &host_val)
-                .header(USER_AGENT, cfg.user_agent.as_str())
-                .header("Connection", "keep-alive");
+        let make_req = |pad: Option<&str>| -> HttpRequest<'_> {
+            let mut headers = vec![
+                ("Connection", "keep-alive".to_string()),
+                ("Accept-Encoding", "identity".to_string()),
+            ];
             if let Some(p) = pad {
-                b = b.header("X-Pad", p);
+                headers.push(("X-Pad", p.to_string()));
             }
-            b.body(http_body_util::Full::new(Bytes::new())).unwrap()
+            HttpRequest {
+                method: Method::HEAD,
+                host: &host_val,
+                path: "/",
+                user_agent: cfg.user_agent.as_str(),
+                headers,
+            }
         };
 
         let req = make_req(pad_str.as_deref());
         let read_timeout = dynamic_timeout.unwrap_or(cfg.fat_read_timeout);
         let t0 = Instant::now();
 
-        let mut res = timeout(Duration::from_secs_f64(read_timeout), sender.send_request(req)).await;
+        let mut res = timeout(Duration::from_secs_f64(read_timeout), sender.send(req)).await;
 
         // If connection was closed concurrently between requests, reconnect and retry this chunk once
         if let Ok(Err(ref e)) = res {
@@ -244,7 +239,7 @@ pub async fn probe_tcp_16_20(
                 if let Ok(new_sender) = connect_fat_target(addr, target_ip, sni, use_tls, cfg).await {
                     sender = new_sender;
                     let retry_req = make_req(pad_str.as_deref());
-                    res = timeout(Duration::from_secs_f64(read_timeout), sender.send_request(retry_req)).await;
+                    res = timeout(Duration::from_secs_f64(read_timeout), sender.send(retry_req)).await;
                 }
             }
         }

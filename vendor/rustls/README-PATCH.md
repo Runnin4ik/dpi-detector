@@ -120,13 +120,14 @@ advertising `compress_certificate`.
 Findings worth keeping in mind when editing the profile — each one was a real
 failing handshake or a real mismatched fingerprint, not a theoretical concern:
 
-* **Padding is part of the fingerprint.** Chrome and Firefox pad the ClientHello
-  to 512 bytes (RFC 7685), so extension 21 appears in their JA3. The profile
-  therefore names `21` in its extension order and sets `padding_to`, and rustls
-  computes the body length — `ClientConfig`-level post-processing cannot, because
-  only the encoder knows how long the message is. The extension is omitted when
-  the hello is already that large, as BoringSSL does. Reproducing the
-  `curl-impersonate` chrome/safari JA3s exactly depends on this.
+* **Padding is part of the fingerprint.** Chrome pads the ClientHello to 512
+  bytes (RFC 7685), so extension 21 appears in its JA3; Firefox 133 sends no
+  padding extension and the Firefox profile sets `padding_to: None`. For the
+  padded profiles rustls computes the body length — `ClientConfig`-level
+  post-processing cannot, because only the encoder knows how long the message is.
+  The extension is omitted when the hello is already that large, as BoringSSL
+  does. Reproducing the `curl-impersonate` chrome/safari JA3s exactly depends on
+  this.
 * **GREASE extensions need positions, not just a flag.** The `grease` flag adds a
   GREASE cipher and group, but a GREASE *extension* has to sit at an exact spot in
   the order (Chrome opens and closes its list with one), and its value is drawn
@@ -159,16 +160,29 @@ failing handshake or a real mismatched fingerprint, not a theoretical concern:
   put it back into a 1.2-only hello (RFC 8879), which is exactly the hello the
   probes' TLS 1.2 column sends.
 
-* **ALPN is http/1.1 only, not Firefox's `[h2, http/1.1]`.** The probes speak
-  HTTP/1.1; offering h2 makes every h2-capable server select it and the request
-  then dies, which the report would show as censorship that is really our own
-  protocol mismatch. rustls also validates the server's selection against
-  `ClientConfig::alpn_protocols`, so a profile that offers ALPN must mirror it
-  into the config (see `apply_fingerprint` in `crates/dpi-core/src/net/tls.rs`).
-  JA3 is unaffected — it hashes extension *types*, not ALPN values — so the
-  extension-16 entry still matches Firefox. JA4's ALPN field reads `h1`
-  (`t13d1714h1_…`) instead of `h2`; restoring that needs h2-capable probe paths,
-  not another profile.
+* **ALPN offers `h2, http/1.1`, and the probes speak both.** The profiles
+  reproduce browsers, which all offer h2 first, so a probe that could only speak
+  HTTP/1.1 would fail on every h2-capable site and report its own protocol
+  mismatch as censorship. `crates/dpi-core/src/probe/http.rs` starts a hyper
+  HTTP/2 client when the handshake negotiated `h2` and an HTTP/1.1 client
+  otherwise, and builds the request for the protocol in use (absolute URI and no
+  connection-specific headers for h2). rustls validates the server's selection
+  against `ClientConfig::alpn_protocols`, so a profile that offers ALPN must
+  mirror it into the config (see `apply_fingerprint` in
+  `crates/dpi-core/src/net/tls.rs`).
+
+* **GREASE ECH (extension 65037) is left out, and the patch cannot fix that.**
+  uTLS — and therefore `curl_firefox133` — builds its GREASE ECH payload by
+  encrypting a fake inner hello with a freshly generated HPKE key, so the bytes
+  are a well-formed HPKE ciphertext that no server can decrypt. rustls can only
+  produce that with an HPKE provider, and this build's provider
+  (`rustls-rustcrypto`) has none. Every hand-built substitute tried (three
+  bodies, `config_id` 0, 1, 255, 0xa7) made Cloudflare, Google and `dns.google`
+  answer `fatal alert: DecodeError` — those servers parse the extension strictly
+  and abort. Since Google and Cloudflare front much of what this tool probes,
+  the Firefox profile omits the extension rather than shipping a hello that
+  fails on most of the internet; the cost is one extension of fidelity (16 vs 17
+  in a JA4 count, the JA3 string loses its trailing `-65037`).
 
 * **Certificate compression is advertised only if it can be decoded.** The
   profile asks for `compress_certificate` (extension 27) because a browser sends
@@ -177,8 +191,3 @@ failing handshake or a real mismatched fingerprint, not a theoretical concern:
   `CompressedCertificate` we cannot read and the handshake dies — i.e. the probe
   would report its own bug as censorship. The features must stay on: they are
   what separates "our profile is broken" from a real verdict.
-* **GREASE ECH (extension 65037) is deliberately omitted.** A synthesized body,
-  well formed per draft-ietf-tls-esni with `config_id` tried at 0, 1 and 255,
-  makes Cloudflare, Google and `dns.google` answer `fatal alert: DecodeError`:
-  those servers implement ECH and only tolerate a payload they can decrypt. The
-  cost is one extension of fidelity (JA4 shows 14 where Firefox 148 sends 15).

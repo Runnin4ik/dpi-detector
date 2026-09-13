@@ -116,21 +116,30 @@ impl TlsFingerprint {
     /// warn and fall back instead of silently changing what gets measured.
     ///
     /// The forum that reported the TSPU fingerprints names them after the
-    /// `curl-impersonate` profile (`curl_chrome116`, `curl_safari184`, …), so a
-    /// `curl_*` name is accepted and mapped to the family whose JA3 it sends —
-    /// `chrome99..116` and `edge99,101` are one JA3, `safari15.5..18.4` another.
+    /// `curl-impersonate` profile, so those names are accepted — but only the
+    /// ones whose shape this build actually reproduces: `curl_chrome99..107` and
+    /// `curl_edge99,101` are one JA3, `curl_safari155..184` another, and
+    /// `curl_firefox133` is the Firefox one. `curl_chrome110+` (shuffled
+    /// extension order), `curl_safari260` (post-quantum group) and
+    /// `curl_firefox135+` (signed certificate timestamps) describe shapes no
+    /// profile here sends, so they are rejected rather than mapped to a
+    /// neighbouring one.
     pub fn parse(value: &str) -> Option<Self> {
         let value = value.trim().to_ascii_lowercase();
-        if value.starts_with("curl_chrome") || value.starts_with("curl_edge") {
-            return Some(Self::Chrome);
+        if let Some(version) = curl_version(&value, "curl_chrome").or_else(|| curl_version(&value, "curl_edge"))
+        {
+            return (version <= 107).then_some(Self::Chrome);
         }
-        if value.starts_with("curl_safari") {
-            return Some(Self::Safari);
+        if let Some(version) = curl_version(&value, "curl_safari") {
+            return matches!(version, 155 | 170 | 172 | 180 | 184).then_some(Self::Safari);
+        }
+        if let Some(version) = curl_version(&value, "curl_firefox") {
+            return (version == 133).then_some(Self::Custom);
         }
         match value.as_str() {
             "rustls" | "default" | "none" => Some(Self::Rustls),
-            "custom" | "firefox" | "firefox-like" => Some(Self::Custom),
-            "chrome" | "chrome99" | "chrome116" => Some(Self::Chrome),
+            "custom" | "firefox" | "firefox-like" | "firefox133" => Some(Self::Custom),
+            "chrome" | "chrome99" | "chrome107" => Some(Self::Chrome),
             "safari" | "safari155" | "safari184" => Some(Self::Safari),
             _ => None,
         }
@@ -212,6 +221,16 @@ pub fn safari_profile() -> Arc<ClientHelloProfile> {
     PROFILE.clone()
 }
 
+/// The numeric version in a `curl_*` profile name, if it has one.
+///
+/// `curl_chrome107` → 107, `curl_safari184_ios` → 184, `curl_edge99` → 99,
+/// `curl_chrome` → `None` (a name without a version is not a profile).
+fn curl_version(value: &str, prefix: &str) -> Option<u16> {
+    let rest = value.strip_prefix(prefix)?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
+}
+
 /// True when the profile needs the post-quantum provider, so the advertised
 /// group list and the actual key share agree.
 ///
@@ -245,19 +264,33 @@ pub fn apply(config: &mut ClientConfig, fingerprint: TlsFingerprint) {
     };
 }
 
-/// Firefox 148's extension list minus `encrypted_client_hello` (65037).
+/// Firefox 133's extension list, as `curl_firefox133` of curl-impersonate
+/// v2.2.2 sends it.
 ///
-/// Measured 2026-09-10: a synthesized GREASE ECH body — well formed per
-/// draft-ietf-tls-esni with self-consistent lengths, `config_id` tried at 0, 1
-/// and 255 — makes `cloudflare.com`, `www.google.com` and `dns.google` answer
-/// `fatal alert: DecodeError`: those servers implement ECH and only tolerate a
-/// payload they can decrypt. Since a probe that cannot complete a handshake with
-/// Google would report its own artifact as censorship, the extension is left out.
-/// The price is one extension of fidelity — JA4 shows 14 extensions where a real
-/// Firefox 148 sends 15.
+/// Where rustls already emits an extension the profile only fixes its position;
+/// where rustls has no field for it (secure renegotiation, delegated
+/// credentials, record size limit, session ticket, GREASE ECH) the body is
+/// supplied verbatim.
+///
+/// This used to follow uTLS `HelloFirefox_148` (the Xray/REALITY parrot). The
+/// pinned version is now the one this repository's reference bundle
+/// (`curl-impersonate v2.2.2`) actually sends, which differs from the uTLS
+/// parrot in three extensions: 133 carries `session_ticket` (35) and
+/// `psk_key_exchange_modes` (45), which uTLS's Firefox does not, and it has no
+/// `signed_certificate_timestamp` (18). See `bundle_versions_match_their_ja3`.
+///
+/// One deliberate deviation remains: `encrypted_client_hello` (65037) is left
+/// out. uTLS's own GREASE ECH encrypts a fake inner hello with a fresh HPKE key,
+/// and this build has no HPKE provider; every hand-built body tried so far — the
+/// current one included, placed last exactly where Firefox puts it — makes
+/// `cloudflare.com`, `www.google.com` and `dns.google` answer
+/// `fatal alert: DecodeError` (`tls_fingerprint live custom`). Since Google and
+/// Cloudflare front much of what this tool probes, sending a hello they abort
+/// would report our own artifact as censorship. JA4 therefore shows 15
+/// extensions where `curl_firefox133` sends 16.
 fn firefox_like() -> ClientHelloProfile {
     ClientHelloProfile {
-        // Firefox 148 order, GREASE-free (Firefox does not grease).
+        // Firefox 133 order, GREASE-free (Firefox does not grease).
         cipher_suites: Some(vec![
             0x1301, // TLS_AES_128_GCM_SHA256
             0x1303, // TLS_CHACHA20_POLY1305_SHA256
@@ -292,13 +325,14 @@ fn firefox_like() -> ClientHelloProfile {
             EXT_RENEGOTIATION_INFO,
             EXT_SUPPORTED_GROUPS,
             EXT_EC_POINT_FORMATS,
+            EXT_SESSION_TICKET,
             EXT_ALPN,
             EXT_STATUS_REQUEST,
             EXT_DELEGATED_CREDENTIALS,
-            EXT_SCT,
             EXT_KEY_SHARE,
             EXT_SUPPORTED_VERSIONS,
             EXT_SIGNATURE_ALGORITHMS,
+            EXT_PSK_KEY_EXCHANGE_MODES,
             EXT_RECORD_SIZE_LIMIT,
             EXT_COMPRESS_CERTIFICATE,
         ]),
@@ -307,17 +341,18 @@ fn firefox_like() -> ClientHelloProfile {
             (EXT_RENEGOTIATION_INFO, vec![0x00]),
             // delegated_credentials: signature-scheme list, ECDSA only.
             (EXT_DELEGATED_CREDENTIALS, vec![0x00, 0x08, 0x04, 0x03, 0x05, 0x03, 0x06, 0x03, 0x02, 0x03]),
-            // signed_certificate_timestamp in the ClientHello is empty.
-            (EXT_SCT, Vec::new()),
             // record_size_limit: RFC 8449, 0x4001 as Firefox sends it.
             (EXT_RECORD_SIZE_LIMIT, vec![0x40, 0x01]),
             // ec_point_formats fallback: rustls derives it from the provider's
             // groups, which need not include every advertised curve.
             (EXT_EC_POINT_FORMATS, vec![0x01, 0x00]),
+            // session_ticket: empty in a fresh session, and rustls omits the
+            // extension entirely from a TLS 1.3-only hello — Firefox sends it in
+            // both, so the profile supplies it.
+            (EXT_SESSION_TICKET, Vec::new()),
         ],
-        // rustls sends these two; Firefox 148 does not. Without suppressing
-        // them the extension set — and with it the JA4 count and hash — differs.
-        suppress_extensions: vec![EXT_SESSION_TICKET, EXT_PSK_KEY_EXCHANGE_MODES],
+        // Nothing suppressed: 35 and 45 are part of Firefox 133's shape.
+        suppress_extensions: Vec::new(),
         signature_schemes: Some(vec![
             0x0403, // ECDSA P-256 SHA-256
             0x0503, // ECDSA P-384 SHA-384
@@ -331,42 +366,34 @@ fn firefox_like() -> ClientHelloProfile {
             0x0203, // ECDSA SHA-1
             0x0201, // RSA-PKCS1 SHA-1
         ]),
-        // Deliberately http/1.1 only, not Firefox's `[h2, http/1.1]`.
-        // The probes speak HTTP/1.1 (hyper's http1 client): offering h2 makes
-        // every h2-capable server select it and the request then dies, which the
-        // report would show as censorship that is really our own protocol
-        // mismatch. JA3 is unaffected — it hashes extension *types*, not ALPN
-        // values, so the extension-16 entry still matches Firefox. JA4's ALPN
-        // field reads "h1" instead of "h2"; restoring that needs an h2-capable
-        // probe path, not a different profile.
-        alpn: Some(vec![b"http/1.1".to_vec()]),
+        // `h2, http/1.1`, exactly what Firefox offers. The probes speak both:
+        // they branch on the negotiated ALPN (see `probe::tls`).
+        alpn: Some(vec![b"h2".to_vec(), b"http/1.1".to_vec()]),
         // zlib, brotli — the two this build can actually decompress (`zstd` is
         // not a rustls feature; advertising it would invite a CompressedCertificate
         // we cannot read). The algorithm *list* is not part of JA3/JA4, only the
         // presence of extension 27 is.
         cert_compression: Some(vec![1, 2]),
         grease: false,
-        // uTLS's Firefox hello carries no padding extension; the live JA3 this
-        // profile was verified against (peet.ws, 14 extensions) has none either.
+        // Firefox sends no padding; the JA3 this profile is pinned to has none.
         padding_to: None,
     }
 }
 
-/// The `curl_chrome99..116` / `curl_edge99,101` shape.
+/// The `curl_chrome107` shape — Chrome 107 / Edge 99–101.
 ///
-/// Taken from `tests/signatures/chrome_116.0.5845.180_win10.yaml` of
-/// `lexiforest/curl-impersonate` — the fixture that project verifies its own
-/// builds against. All ten of those profiles emit the *same* JA3, so one profile
-/// reproduces the whole deterministic half of the fingerprint list the forum
-/// report attributes to TSPU; `chrome119..131` emit the same extension *set*
-/// with the order shuffled, which is why those are reported as blocking only
-/// ~8–30% of the time.
+/// Taken from the `curl-impersonate v2.2.2` bundle this repository measures
+/// against (`.bat` wrapper `curl_chrome107`), and identical to what
+/// `curl_chrome99..104` and `curl_edge99,101` send: those emit the *same* JA3,
+/// so one profile reproduces the whole deterministic half of the fingerprint
+/// list the forum report attributes to TSPU. `chrome110` and later permute the
+/// extension order (`--tls-permute-extensions`), and `chrome119+` add ECH, which
+/// is why those are reported as blocking only ~8–30% of the time.
 ///
-/// Deliberate deviations: ALPN is `http/1.1` instead of `h2, http/1.1` (the
-/// probes speak HTTP/1.1, and JA3 hashes extension types, not ALPN values — see
-/// [`firefox_like`]), there is no ECH (Chrome 116 predates it) and no GREASE
-/// *version* entry (rustls builds `supported_versions` from the config, and
-/// versions are not hashed).
+/// Deliberate deviations: no GREASE *version* entry (rustls builds
+/// `supported_versions` from the config, and versions are not hashed) and no
+/// `encrypted_client_hello` (Chrome 107 predates it). See
+/// `bundle_versions_match_their_ja3`.
 fn chrome_like() -> ClientHelloProfile {
     ClientHelloProfile {
         cipher_suites: Some(vec![
@@ -428,6 +455,11 @@ fn chrome_like() -> ClientHelloProfile {
             (EXT_EC_POINT_FORMATS, vec![0x01, 0x00]),
             // signed_certificate_timestamp in the ClientHello is empty.
             (EXT_SCT, Vec::new()),
+            // session_ticket: empty in a fresh session. rustls drops the
+            // extension from a TLS 1.3-only hello, Chrome sends it in both, so
+            // the profile supplies it — without this the TLS 1.3 column and test
+            // 7 sent a Chrome hello with one extension less than Chrome's.
+            (EXT_SESSION_TICKET, Vec::new()),
             // ALPS: one protocol, h2.
             (EXT_APPLICATION_SETTINGS, vec![0x00, 0x03, 0x02, b'h', b'2']),
             // Padding: rustls computes the body so the hello reaches 512 bytes,
@@ -437,8 +469,9 @@ fn chrome_like() -> ClientHelloProfile {
         // Chrome sends session_ticket and psk_key_exchange_modes, so nothing is
         // suppressed — the difference from rustls' defaults is additive.
         suppress_extensions: Vec::new(),
-        // Deliberately http/1.1 only, as in [`firefox_like`].
-        alpn: Some(vec![b"http/1.1".to_vec()]),
+        // `h2, http/1.1`, exactly what Chrome offers; the probes branch on the
+        // negotiated protocol (see `probe::tls`).
+        alpn: Some(vec![b"h2".to_vec(), b"http/1.1".to_vec()]),
         // brotli, exactly what Chrome 116 advertises.
         cert_compression: Some(vec![2]),
         grease: true,
@@ -446,14 +479,15 @@ fn chrome_like() -> ClientHelloProfile {
     }
 }
 
-/// The `curl_safari15.5..18.4` shape.
+/// The `curl_safari155` shape — Safari 15.5, and 15.5–18.4 alike.
 ///
-/// Taken from `tests/signatures/safari_18.4_macOS.yaml` of
-/// `lexiforest/curl-impersonate`. All seven Safari profiles in the reported
-/// trigger list emit this same JA3. Safari differs from Chrome in ways a profile
-/// has to reproduce: 20 ciphers (CBC-heavy), five groups, a duplicated
-/// `RSA-PSS SHA-384` signature scheme, no `session_ticket`, no ALPS, and zlib
-/// rather than brotli for certificate compression.
+/// Taken from the `curl-impersonate v2.2.2` bundle (`.bat` wrapper
+/// `curl_safari155`); `curl_safari170`, `curl_safari172_ios`, `curl_safari180`,
+/// `curl_safari180_ios`, `curl_safari184` and `curl_safari184_ios` all send the
+/// identical JA3. Safari differs from Chrome in ways a profile has to
+/// reproduce: 20 ciphers (CBC-heavy), four groups, a duplicated `RSA-PSS
+/// SHA-384` signature scheme, no `session_ticket`, no ALPS, and zlib rather than
+/// brotli for certificate compression. See `bundle_versions_match_their_ja3`.
 fn safari_like() -> ClientHelloProfile {
     ClientHelloProfile {
         cipher_suites: Some(vec![
@@ -522,8 +556,9 @@ fn safari_like() -> ClientHelloProfile {
         ],
         // rustls sends session_ticket; Safari does not.
         suppress_extensions: vec![EXT_SESSION_TICKET],
-        // Deliberately http/1.1 only, as in [`firefox_like`].
-        alpn: Some(vec![b"http/1.1".to_vec()]),
+        // `h2, http/1.1`, exactly what Safari offers; the probes branch on the
+        // negotiated protocol (see `probe::tls`).
+        alpn: Some(vec![b"h2".to_vec(), b"http/1.1".to_vec()]),
         // zlib, exactly what Safari advertises.
         cert_compression: Some(vec![1]),
         grease: true,
@@ -572,9 +607,10 @@ mod tests {
         assert_eq!(TlsFingerprint::parse(" firefox "), Some(TlsFingerprint::Custom));
         assert_eq!(TlsFingerprint::parse("chrome"), Some(TlsFingerprint::Chrome));
         assert_eq!(TlsFingerprint::parse("safari"), Some(TlsFingerprint::Safari));
-        // The names the fingerprint-blocking report uses are accepted directly.
+        // The names the fingerprint-blocking report uses are accepted when the
+        // shape is the one a profile here reproduces, and rejected otherwise.
         assert_eq!(
-            TlsFingerprint::parse("curl_chrome116"),
+            TlsFingerprint::parse("curl_chrome107"),
             Some(TlsFingerprint::Chrome)
         );
         assert_eq!(
@@ -582,10 +618,23 @@ mod tests {
             Some(TlsFingerprint::Chrome)
         );
         assert_eq!(
+            TlsFingerprint::parse("curl_safari155"),
+            Some(TlsFingerprint::Safari)
+        );
+        assert_eq!(
             TlsFingerprint::parse("curl_safari184_ios"),
             Some(TlsFingerprint::Safari)
         );
+        assert_eq!(
+            TlsFingerprint::parse("curl_firefox133"),
+            Some(TlsFingerprint::Custom)
+        );
+        // Shapes no profile sends: shuffled extension order, post-quantum
+        // group, signed certificate timestamps.
+        assert_eq!(TlsFingerprint::parse("curl_chrome116"), None);
+        assert_eq!(TlsFingerprint::parse("curl_safari260"), None);
         assert_eq!(TlsFingerprint::parse("curl_firefox147"), None);
+        assert_eq!(TlsFingerprint::parse("curl_firefox144"), None);
         assert_eq!(TlsFingerprint::parse(""), None);
     }
 
@@ -600,7 +649,7 @@ mod tests {
             TlsFingerprint::parse_list("chrome, safari").0,
             vec![TlsFingerprint::Chrome, TlsFingerprint::Safari]
         );
-        assert_eq!(TlsFingerprint::parse_list("curl_chrome116").0, vec![TlsFingerprint::Chrome]);
+        assert_eq!(TlsFingerprint::parse_list("curl_chrome107").0, vec![TlsFingerprint::Chrome]);
         // Duplicates collapse, order is kept.
         assert_eq!(
             TlsFingerprint::parse_list("safari safari rustls").0,
@@ -617,71 +666,106 @@ mod tests {
         assert!(TlsFingerprint::parse_list("all").1.is_empty());
     }
 
-    /// The profile must describe Firefox 148: 17 ciphers, its extension order
-    /// (minus the omitted ECH grease), the hybrid group first, and rustls'
-    /// extras suppressed.
+    /// The profile must describe Firefox 133: 17 ciphers, the hybrid group
+    /// first, its extension order (session_ticket and psk_key_exchange_modes in,
+    /// signed_certificate_timestamp out), and nothing suppressed.
     #[test]
-    fn custom_profile_matches_firefox_148_shape() {
+    fn custom_profile_matches_firefox_133_shape() {
         let profile = custom_profile();
 
         assert_eq!(profile.cipher_suites.as_ref().map(|c| c.len()), Some(17));
         assert_eq!(profile.groups.as_ref().and_then(|g| g.first()), Some(&4588));
 
         let order = profile.extension_order.as_ref().expect("extension order");
-        assert_eq!(order.len(), 14);
+        assert_eq!(order.len(), 15);
         assert_eq!(order.first(), Some(&EXT_SERVER_NAME));
         assert_eq!(order.last(), Some(&EXT_COMPRESS_CERTIFICATE));
         assert!(order.contains(&EXT_RENEGOTIATION_INFO));
         assert!(order.contains(&EXT_DELEGATED_CREDENTIALS));
-        assert!(order.contains(&EXT_SCT));
+        assert!(order.contains(&EXT_RECORD_SIZE_LIMIT));
+        assert!(order.contains(&EXT_SESSION_TICKET));
+        assert!(order.contains(&EXT_PSK_KEY_EXCHANGE_MODES));
+        assert!(!order.contains(&EXT_SCT), "Firefox 133 sends no SCT");
+        // 65037 is the one extension curl_firefox133 has and this profile does
+        // not: every hand-built GREASE ECH body was rejected by the ECH-aware
+        // servers (see `firefox_like`).
+        assert_eq!(order.iter().filter(|ext| **ext == 65037).count(), 0);
 
-        assert!(profile.suppress_extensions.contains(&EXT_SESSION_TICKET));
-        assert!(profile.suppress_extensions.contains(&EXT_PSK_KEY_EXCHANGE_MODES));
+        assert!(profile.suppress_extensions.is_empty());
         assert!(!profile.grease);
-
-        // Probes speak HTTP/1.1; offering h2 would make servers select a
-        // protocol the probe client cannot speak. JA3 hashes extension types,
-        // so this does not affect JA3 parity.
-        assert_eq!(profile.alpn.as_deref(), Some(&[b"http/1.1".to_vec()][..]));
+        // Firefox offers both protocols, and so must the profile now that the
+        // probes speak HTTP/2 as well.
+        assert_eq!(
+            profile.alpn.as_deref(),
+            Some(&[b"h2".to_vec(), b"http/1.1".to_vec()][..])
+        );
     }
 
-    /// The JA3 (and size) of the hello a profile actually writes.
-    fn client_hello_of(fingerprint: TlsFingerprint) -> (String, usize) {
-        let config = (*crate::net::tls::create_insecure_dpi_tls_config_with(fingerprint)).clone();
+    /// The JA3 (and size) of the hello a profile writes, on the builder the
+    /// caller asks for: `tls13_only` is what the probes and test 7 use, the
+    /// general one is what the tools and the earlier measurements used.
+    fn client_hello_of(fingerprint: TlsFingerprint, tls13_only: bool) -> (String, usize) {
+        let config = if tls13_only {
+            crate::net::tls::create_insecure_dpi_tls_config_tls13_with(fingerprint)
+        } else {
+            crate::net::tls::create_insecure_dpi_tls_config_with(fingerprint)
+        };
         let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
-        let mut conn = rustls::ClientConnection::new(Arc::new(config), name).expect("client conn");
+        let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
         let mut buf = Vec::new();
         conn.write_tls(&mut buf).expect("write ClientHello");
         (crate::net::ja3::client_hello_ja3(&buf), buf.len() - 5)
     }
 
-    /// The two curl families must send exactly the JA3 the report attributes to
-    /// TSPU's trigger list, computed here from the `curl-impersonate` fixtures
-    /// (`tests/signatures/*.yaml`): all ten blocked chrome/edge profiles carry
-    /// the first string, all seven safari profiles the second.
+    /// The three profiles must send exactly the JA3 their pinned
+    /// `curl-impersonate` version sends, measured from the v2.2.2 bundle with a
+    /// local ClientHello sniffer (`curl_chrome107`, `curl_safari155`,
+    /// `curl_firefox133`).
     ///
     /// Anything that changes these — an extension added or dropped, a cipher
     /// reordered, the padding extension lost — makes the profile stop
-    /// reproducing the fingerprint the censor is reported to match on.
+    /// reproducing the fingerprint the censor is reported to match on. Both
+    /// builders are checked because they used to disagree: rustls drops
+    /// `session_ticket` from a TLS 1.3-only hello, which cost Chrome an
+    /// extension in the very column the probes use.
     #[test]
-    fn curl_family_profiles_match_their_reported_ja3() {
-        let (chrome_ja3, chrome_len) = client_hello_of(TlsFingerprint::Chrome);
-        assert_eq!(
-            chrome_ja3,
-            "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,\
-             0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513-21,29-23-24,0"
-        );
-        // BoringSSL pads a browser hello to 512 bytes; the padding extension is
-        // part of the JA3 above, so a lost pad shows up as a missing "-21".
-        assert!((512..768).contains(&chrome_len), "chrome hello: {chrome_len} bytes");
+    fn bundle_versions_match_their_ja3() {
+        const CHROME_107: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-\
+             49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513-21,29-23-24,0";
+        const SAFARI_155: &str = "771,4865-4866-4867-49196-49195-52393-49200-49199-52392-49162-\
+             49161-49172-49171-157-156-53-47-49160-49170-10,\
+             0-23-65281-10-11-16-5-13-18-51-45-43-27-21,29-23-24-25,0";
+        // `curl_firefox133` sends `...,28-27-65037` — the profile stops at 27,
+        // because a GREASE ECH body this build writes is rejected by every
+        // ECH-aware server (see `firefox_like`).
+        const FIREFOX_133: &str = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49162-\
+             49161-49171-49172-156-157-47-53,\
+             0-23-65281-10-11-35-16-5-34-51-43-13-45-28-27,4588-29-23-24-25-256-257,0";
 
-        let (safari_ja3, safari_len) = client_hello_of(TlsFingerprint::Safari);
-        assert_eq!(
-            safari_ja3,
-            "771,4865-4866-4867-49196-49195-52393-49200-49199-52392-49162-49161-49172-49171-\
-             157-156-53-47-49160-49170-10,0-23-65281-10-11-16-5-13-18-51-45-43-27-21,29-23-24-25,0"
-        );
-        assert!((512..768).contains(&safari_len), "safari hello: {safari_len} bytes");
+        for tls13_only in [true, false] {
+            assert_eq!(
+                client_hello_of(TlsFingerprint::Chrome, tls13_only).0,
+                CHROME_107,
+                "chrome (tls13_only={tls13_only})"
+            );
+            assert_eq!(
+                client_hello_of(TlsFingerprint::Safari, tls13_only).0,
+                SAFARI_155,
+                "safari (tls13_only={tls13_only})"
+            );
+            assert_eq!(
+                client_hello_of(TlsFingerprint::Custom, tls13_only).0,
+                FIREFOX_133,
+                "firefox (tls13_only={tls13_only})"
+            );
+        }
+
+        // BoringSSL pads a browser hello to 512 bytes; the padding extension is
+        // part of the JA3s above, so a lost pad shows up as a missing "-21".
+        for fingerprint in [TlsFingerprint::Chrome, TlsFingerprint::Safari] {
+            let (_, length) = client_hello_of(fingerprint, true);
+            assert!((512..768).contains(&length), "{fingerprint} hello: {length} bytes");
+        }
     }
 
     /// The curl shapes predate post-quantum key exchange, so they must not be

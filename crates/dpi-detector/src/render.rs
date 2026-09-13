@@ -2821,8 +2821,8 @@ mod tests {
         assert_eq!(render_fingerprint_header(TlsFingerprint::Rustls, &fa), "Fingerprint: RUSTLS (pishfarz)");
         // A label that does not repeat the code keeps the full parenthetical.
         let custom = render_fingerprint_header(TlsFingerprint::Custom, &en);
-        assert!(custom.starts_with("Fingerprint: FIREFOX (firefox 148)"), "{custom}");
-        assert!(custom.contains("The FIREFOX profile"), "the caveat still follows");
+        assert!(custom.starts_with("Fingerprint: FIREFOX (firefox 133)"), "{custom}");
+        assert!(custom.contains("FIREFOX = firefox133"), "the caveat still follows");
     }
 
     /// The summary is a two-column table (label, value), as in the Python

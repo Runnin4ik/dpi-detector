@@ -32,6 +32,7 @@ use crate::config::AppConfig;
 use crate::dns::resolve_host;
 use crate::PhaseProgress;
 use crate::probe::connector::RustlsConnector;
+use crate::probe::http::{negotiated_h2, HttpRequest, HttpSender};
 use crate::probe::DpiTlsConnector;
 
 const BODY_CAP: usize = 64 * 1024;
@@ -340,31 +341,30 @@ pub async fn check_domain_tls(
         };
 
         *stage.lock() = "tls_connected".to_string();
+        let alpn_h2 = negotiated_h2(&tls_stream);
         let io = TokioIo::new(tls_stream);
-        let (mut sender, conn) = match hyper::client::conn::http1::handshake(io).await {
-            Ok(v) => v,
+        let mut sender = match HttpSender::handshake(io, alpn_h2).await {
+            Ok(sender) => sender,
             Err(e) => {
                 let (s, d) = inner_hyper(&e, "tls_connected", 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
                 return (s, d, 0usize);
             }
         };
-        tokio::spawn(async move {
-            let _ = conn.await;
-        });
 
         // GET with Host = domain, fresh socket per probe (Connection: close)
-        let req = Request::builder()
-            .method(Method::GET)
-            .uri("/")
-            .header(HOST, domain)
-            .header(USER_AGENT, cfg.user_agent.as_str())
-            .header("Accept-Encoding", "identity")
-            .header("Connection", "close")
-            .body(http_body_util::Full::new(Bytes::new()))
-            .expect("valid request");
+        let req = HttpRequest {
+            method: Method::GET,
+            host: domain,
+            path: "/",
+            user_agent: cfg.user_agent.as_str(),
+            headers: vec![
+                ("Accept-Encoding", "identity".to_string()),
+                ("Connection", "close".to_string()),
+            ],
+        };
 
         *stage.lock() = "sending_data".to_string();
-        let resp = match timeout(Duration::from_secs_f64(cfg.read_timeout), sender.send_request(req)).await {
+        let resp = match timeout(Duration::from_secs_f64(cfg.read_timeout), sender.send(req)).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
                 let st = stage.lock().clone();

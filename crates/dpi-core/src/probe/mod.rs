@@ -6,6 +6,7 @@ pub mod burst;
 pub mod telegram;
 pub mod whitelist;
 pub use connector::{DpiTlsConnector, RustlsConnector};
+pub mod http;
 pub use burst::{burst_targets, BurstAttempt, BurstProfileReport, BurstReport, BurstSettings, BurstTarget};
 pub use tcp16::{check_tcp_16_20, probe_tcp16};
 pub use tls::{is_suspicious_redirect, probe_tls_domain, probe_tls_domain_default};
