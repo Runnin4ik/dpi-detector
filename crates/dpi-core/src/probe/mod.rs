@@ -4,7 +4,6 @@ pub mod domains;
 pub mod burst;
 pub mod telegram;
 pub mod whitelist;
-pub use connector::{DpiTlsConnector, RustlsConnector};
 pub mod http;
 pub use burst::{burst_targets, BurstAttempt, BurstProfileReport, BurstReport, BurstSettings, BurstTarget};
 pub use tcp16::{check_tcp_16_20, probe_tcp16};

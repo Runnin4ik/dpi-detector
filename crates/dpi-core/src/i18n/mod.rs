@@ -48,28 +48,6 @@ impl Language {
         }
     }
 
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::En => "en",
-            Self::Ru => "ru",
-            Self::Zh => "zh",
-            Self::Fa => "fa",
-        }
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::En => "English",
-            Self::Ru => "Русский",
-            Self::Zh => "简体中文",
-            Self::Fa => "Farsi",
-        }
-    }
-
-    pub fn is_rtl(&self) -> bool {
-        false
-    }
-
     /// Autodetects system language from environment variables (LANG, LC_ALL, LC_MESSAGES).
     pub fn autodetect() -> Self {
         for var in &["LC_ALL", "LANG", "LC_MESSAGES"] {

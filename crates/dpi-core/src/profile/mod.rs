@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -69,84 +68,6 @@ impl RegionProfile {
             ],
         }
     }
-
-    /// Primary DNS resolvers (local national + global) to probe for poisoning and availability.
-    pub fn default_resolvers(&self) -> Vec<(&'static str, SocketAddr)> {
-        match self {
-            Self::Ru => vec![
-                ("Yandex (77.88.8.8)", "77.88.8.8:53".parse().unwrap()),
-                ("NSDI (195.208.4.1)", "195.208.4.1:53".parse().unwrap()),
-                ("Cloudflare (1.1.1.1)", "1.1.1.1:53".parse().unwrap()),
-                ("Google (8.8.8.8)", "8.8.8.8:53".parse().unwrap()),
-            ],
-            Self::Ir => vec![
-                ("Shecan (178.22.122.100)", "178.22.122.100:53".parse().unwrap()),
-                ("Electro (78.157.42.101)", "78.157.42.101:53".parse().unwrap()),
-                ("Cloudflare (1.1.1.1)", "1.1.1.1:53".parse().unwrap()),
-                ("Google (8.8.8.8)", "8.8.8.8:53".parse().unwrap()),
-            ],
-            Self::Cn => vec![
-                ("114DNS (114.114.114.114)", "114.114.114.114:53".parse().unwrap()),
-                ("AliDNS (223.5.5.5)", "223.5.5.5:53".parse().unwrap()),
-                ("Cloudflare (1.1.1.1)", "1.1.1.1:53".parse().unwrap()),
-                ("Google (8.8.8.8)", "8.8.8.8:53".parse().unwrap()),
-            ],
-            Self::Global => vec![
-                ("Cloudflare (1.1.1.1)", "1.1.1.1:53".parse().unwrap()),
-                ("Google (8.8.8.8)", "8.8.8.8:53".parse().unwrap()),
-                ("Quad9 (9.9.9.9)", "9.9.9.9:53".parse().unwrap()),
-            ],
-        }
-    }
-
-    /// DoH resolver endpoints to probe.
-    pub fn default_doh(&self) -> Vec<(&'static str, &'static str)> {
-        match self {
-            Self::Cn => vec![
-                ("AliDNS DoH", "https://dns.alidns.com/dns-query"),
-                ("Cloudflare DoH", "https://1.1.1.1/dns-query"),
-            ],
-            _ => vec![
-                ("Cloudflare DoH", "https://1.1.1.1/dns-query"),
-                ("Google DoH", "https://dns.google/dns-query"),
-            ],
-        }
-    }
-
-    /// Signatures of regional blockpages and censorship redirect pages.
-    pub fn blockpage_signatures(&self) -> &'static [&'static str] {
-        match self {
-            Self::Ru => &[
-                "warning.rt.ru",
-                "blocked.rt.ru",
-                "block.mts.ru",
-                "eais.rkn.gov.ru",
-                "blackhole",
-                "zapret",
-                "megafon.ru/blocked",
-                "beeline.ru/blocked",
-            ],
-            Self::Ir => &[
-                "10.10.34.34",
-                "10.10.34.35",
-                "peyvandha.ir",
-                "filternet",
-                "filter",
-            ],
-            Self::Cn => &[
-                "127.0.0.1",
-                "0.0.0.0",
-                "block",
-                "notice",
-            ],
-            Self::Global => &[
-                "blocked",
-                "blockpage",
-                "access denied",
-                "captive",
-            ],
-        }
-    }
 }
 
 #[cfg(test)]
@@ -160,15 +81,5 @@ mod tests {
         assert_eq!(RegionProfile::from_code("cn"), Some(RegionProfile::Cn));
         assert_eq!(RegionProfile::from_code("global"), Some(RegionProfile::Global));
         assert_eq!(RegionProfile::from_code("unknown"), None);
-    }
-
-    #[test]
-    fn test_profile_domains_not_empty() {
-        for p in [RegionProfile::Ru, RegionProfile::Ir, RegionProfile::Cn, RegionProfile::Global] {
-            assert!(!p.default_domains().is_empty());
-            assert!(!p.default_resolvers().is_empty());
-            assert!(!p.default_doh().is_empty());
-            assert!(!p.blockpage_signatures().is_empty());
-        }
     }
 }

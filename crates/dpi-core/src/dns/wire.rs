@@ -4,11 +4,7 @@ use url::Host;
 use super::types::{DnsError, DnsRecord, DnsResponse};
 
 pub const QTYPE_A: u16 = 1;
-pub const QTYPE_NS: u16 = 2;
 pub const QTYPE_CNAME: u16 = 5;
-pub const QTYPE_SOA: u16 = 6;
-pub const QTYPE_PTR: u16 = 12;
-pub const QTYPE_MX: u16 = 15;
 pub const QTYPE_TXT: u16 = 16;
 pub const QTYPE_AAAA: u16 = 28;
 

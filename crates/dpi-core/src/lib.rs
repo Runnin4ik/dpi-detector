@@ -1,3 +1,4 @@
+#![warn(unreachable_pub)]
 //! dpi-core: high-performance, memory-efficient DPI detection engine
 
 pub mod classify;

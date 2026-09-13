@@ -72,17 +72,6 @@ impl<S> DpiProbeStream<S> {
         Self { inner, tracker }
     }
 
-    pub fn into_inner(self) -> S {
-        self.inner
-    }
-
-    pub fn get_ref(&self) -> &S {
-        &self.inner
-    }
-
-    pub fn get_mut(&mut self) -> &mut S {
-        &mut self.inner
-    }
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for DpiProbeStream<S> {

@@ -31,7 +31,7 @@ use crate::dns::resolve_host;
 use crate::PhaseProgress;
 use crate::probe::connector::RustlsConnector;
 use crate::probe::http::{hyper_err_info, negotiated_h2, HttpRequest, HttpSender};
-use crate::probe::DpiTlsConnector;
+use crate::probe::connector::DpiTlsConnector;
 use crate::net::tcp::{dial_tcp, DialError};
 
 const BODY_CAP: usize = 64 * 1024;

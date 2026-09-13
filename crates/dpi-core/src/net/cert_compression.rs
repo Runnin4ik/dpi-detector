@@ -29,15 +29,18 @@ pub fn decompressors() -> Vec<&'static dyn CertDecompressor> {
     vec![BROTLI, ZLIB]
 }
 
+/// `brotli` (RFC 7932), the algorithm Chrome advertises.
 /// True when `algorithm` is one of [`decompressors`], i.e. readable at all.
 ///
 /// A profile must not advertise an algorithm this returns `false` for: the server
 /// may then compress its certificate with something the handshake cannot read.
-pub fn covers(algorithm: CertificateCompressionAlgorithm) -> bool {
+/// Test-only: the ClientHello profiles are checked against it, nothing calls it
+/// on a live connection.
+#[cfg(test)]
+pub(crate) fn covers(algorithm: CertificateCompressionAlgorithm) -> bool {
     decompressors().iter().any(|d| d.algorithm() == algorithm)
 }
 
-/// `brotli` (RFC 7932), the algorithm Chrome advertises.
 pub const BROTLI: &dyn CertDecompressor = &Brotli;
 
 /// `zlib` (RFC 1950), the algorithm Safari and Firefox advertise.
