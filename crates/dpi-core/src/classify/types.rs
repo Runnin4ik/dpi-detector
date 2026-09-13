@@ -25,17 +25,15 @@ impl ConnectionStage {
     }
 }
 
-/// Canonical probe statuses. `display_label()` mirrors the Python
-/// `ProbeStatus` badges 1:1 (Latin uppercase, never translated).
-/// `as_str()` is the stable machine-readable snake_case contract for --json.
+/// Probe statuses. `display_label()` is the Latin uppercase badge (Rule 4 — the
+/// same in every language), `as_str()` is the snake_case token `--json` carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DpiStatus {
     Ok,
-    /// Redirect (301/302) to a foreign host: red `REDIR`, not ok. Python has one
-    /// `ProbeStatus.REDIR` badge whose color depends on the target host
-    /// (`core/tls_scanner.py:207-213`), and the `--json` token stays the frozen
-    /// `redir` (Rule 5) — never the internal variant name.
+    /// Redirect (301/302) to a foreign host: red `REDIR`, not ok — the badge
+    /// colour depends on the target host, and the `--json` token is `redir`
+    /// (Rule 5), never the internal variant name.
     #[serde(rename = "redir")]
     RedirSuspect,
     Blocked,
@@ -163,8 +161,7 @@ impl DpiStatus {
         }
     }
 
-    /// Mirrors Python `ProbeStatus.is_ok` (`utils/error_classifier.py:30-42`):
-    /// only a plain `OK` counts. A redirect to the same host/subdomain is
+    /// True only for a plain `OK`. A redirect to the same host/subdomain is
     /// classified `Ok` at the probe; a foreign one lands here as `RedirSuspect`
     /// (red `REDIR`) and is not ok.
     pub fn is_ok_status(&self) -> bool {
@@ -225,17 +222,16 @@ impl Default for ProbeMetrics {
 mod tests {
     use super::*;
 
-    /// Rule 5: the `--json` status tokens are frozen. A redirect to a foreign
-    /// host keeps the historical `redir` token — the internal variant name must
-    /// never reach the wire — and both directions of the mapping agree with
-    /// `as_str()`.
+    /// Rule 5: the `--json` token of a redirect to a foreign host is `redir` —
+    /// the internal variant name never reaches the wire — and both directions of
+    /// the mapping agree with `as_str()`.
     #[test]
-    fn foreign_redirect_keeps_the_frozen_redir_token() {
+    fn foreign_redirect_serializes_as_redir() {
         assert_eq!(DpiStatus::RedirSuspect.as_str(), "redir");
         assert_eq!(serde_json::to_string(&DpiStatus::RedirSuspect).unwrap(), "\"redir\"");
         assert_eq!(serde_json::from_str::<DpiStatus>("\"redir\"").unwrap(), DpiStatus::RedirSuspect);
         // Badge stays canonical Latin (Rule 4); a suspect redirect is neither
-        // ok (mirrors `ProbeStatus.is_ok`) nor a censorship verdict.
+        // ok nor a censorship verdict.
         assert_eq!(DpiStatus::RedirSuspect.display_label(), "REDIR");
         assert!(!DpiStatus::RedirSuspect.is_ok_status());
         assert!(!DpiStatus::RedirSuspect.is_blocked());

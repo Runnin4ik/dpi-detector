@@ -12,11 +12,12 @@
 [![Release](https://img.shields.io/badge/Release-v5.0.0--alpha.11-blue.svg)](https://github.com/Runnin4ik/dpi-detector/releases)
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0.svg?logo=telegram&logoColor=white)](https://t.me/DPI_detector)
 
-Полностью переписанный нативный инструмент для анализа цензуры и блокировок трафика на **чистом Rust**:
-* **0 зависимостей**: Никакого Python, C/C++ библиотек или системного OpenSSL. Собрано на `rustls`, `ring` и `RustCrypto`.
-* **Легковесный**: Размер бинарника всего **~3.2 МБ**, потребление оперативной памяти в работе — **3–6 МБ RAM**.
-* **Максимальная кросс-платформенность**: Нативная поддержка роутеров (MIPS, ARM), Windows (от Windows 7 до 11), Linux musl и macOS.
-* **Интерактивный TUI + Batch**: Полноценное стрелочное меню в терминале и быстрый тихий запуск при передаче аргументов командной строки.
+Нативный инструмент для анализа цензуры и блокировок трафика на **чистом Rust**:
+
+* **Никаких внешних зависимостей**: без сторонних рантаймов, без C/C++ библиотек и системного OpenSSL — только `rustls`, `ring` и `RustCrypto`.
+* **Легковесный**: статический бинарник ≈3.9 МБ (4–6 МБ на роутерных сборках, UPX — ≈1.4 МБ), потребление оперативной памяти в работе — **3–6 МБ RAM**.
+* **Максимальная кросс-платформенность**: нативная поддержка роутеров (MIPS, ARM), Windows (от Windows 7 до 11), Linux musl, macOS и Android (Termux).
+* **Интерактивный TUI + Batch**: полноценное стрелочное меню в терминале и быстрый тихий запуск при передаче аргументов командной строки.
 
 ---
 
@@ -89,37 +90,37 @@ curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install
 Использование: dpi-detector [ОПЦИИ]
 
 Опции:
-  -t, --tests <TESTS>          Номера тестов ('012', '1', '2' или "1,2,3")
-      --json                   Вывод в машиночитаемом JSON
-  -v, --verbose                Подробное / отладочное логирование
-  -l, --lang <LANG>            Язык интерфейса (ru, en, zh, fa, auto). По умолчанию auto
-      --profile <PROFILE>      Региональный профиль цензуры (ru, ir, cn, global)
-      --legend                 Показать легенду статусов и выйти
-  -p, --proxy <URL>            URL SOCKS5-прокси (socks5://127.0.0.1:1080)
-  -c, --concurrency <N>        Лимит параллельных запросов
-  -d, --domain <DOMAIN>        Тестируемый домен (флаг можно повторять)
-  -o, --output <PATH>          Путь к файлу отчёта
-      --domains <PATH>         Путь к файлу со списком доменов
-      --tcp16 <PATH>           Путь к файлу целей TCP16
-      --ascii                  Только ASCII для старых консолей (без Unicode-глифов и рамок)
-      --fingerprint <PROFILE>  Профиль отпечатка TLS ClientHello (rustls|custom|chrome|safari). custom — форма Firefox 133, chrome — Chrome 107 / Edge 99-101, safari — Safari 15.5-18.4 из curl-impersonate; все предлагают h2
-      --burst <N>              Fingerprint/Сибирская блокировка (тест 6): одновременных запросов за раунд [по умолчанию: 4]
+  -t, --tests <TESTS>            Строка выбора тестов (например, '012', '1', '2')
+      --json                     Вывод в машиночитаемом JSON
+  -v, --verbose                  Подробное / отладочное логирование
+  -l, --lang <LANG>              Язык интерфейса (ru, en, zh, fa, auto). По умолчанию auto
+      --profile <PROFILE>        Региональный профиль цензуры (ru, ir, cn, global) [по умолчанию: ru]
+      --legend                   Показать легенду статусов и выйти
+  -p, --proxy <URL>              URL SOCKS5-прокси (socks5://127.0.0.1:1080)
+  -c, --concurrency <N>          Лимит параллельных запросов
+  -d, --domain <DOMAIN>          Конкретные домены для проверки (флаг можно повторять: -d vk.com -d ya.ru)
+  -o, --output <PATH>            Путь к файлу отчёта
+      --domains <PATH>           Путь к файлу со списком доменов
+      --tcp16 <PATH>             Путь к файлу целей TCP16
+      --ascii                    Только ASCII для старых консолей (без Unicode-глифов и рамок)
+      --fingerprint <PROFILE>    Профиль отпечатка TLS ClientHello (rustls|custom|chrome|safari). custom — форма Firefox 133, chrome — Chrome 107 / Edge 99-101, safari — Safari 15.5-18.4 из curl-impersonate; все предлагают h2
+      --burst <N>                Fingerprint/Сибирская блокировка (тест 6): одновременных запросов за раунд [по умолчанию: 4]
       --burst-timeout <SECONDS>  Тест 6: таймаут одного рукопожатия, секунды [по умолчанию: 8]
-      --burst-profiles <LIST>  Fingerprint для теста 6: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [по умолчанию: all]
-      --burst-tls <VERSION>    Версия TLS для теста 6: 1.2|1.3 [по умолчанию: 1.3]
-      --burst-alpn <PROTOCOL>  ALPN для теста 6: h2 (предлагает h2 с откатом на http/1.1)|http/1.1 (только http/1.1) [по умолчанию: h2]
-  -h, --help                   Показать справку
-  -V, --version                Показать версию
+      --burst-profiles <LIST>    Fingerprint для теста 6: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [по умолчанию: all]
+      --burst-tls <VERSION>      Версия TLS для теста 6: 1.2|1.3 [по умолчанию: 1.3]
+      --burst-alpn <PROTOCOL>    ALPN для теста 6: h2 (предлагает h2 с откатом на http/1.1)|http/1.1 (только http/1.1) [по умолчанию: h2]
+  -h, --help                     Показать справку
+  -V, --version                  Показать версию
 ```
 
-Справка и все сообщения локализованы: `dpi-detector --lang en --help`, `--lang zh --help`, `--lang fa --help`. Любой другой текст интерфейса - таблицы, легенда, предупреждения - тоже следует за `--lang`; `--json` не зависит от языка (ключи и значения `detail` остаются каноническими).
+Справка и все сообщения локализованы: `dpi-detector --lang en --help`, `--lang zh --help`, `--lang fa --help`. Любой другой текст интерфейса — таблицы, легенда, предупреждения — тоже следует за `--lang`. Машинный вывод `--json` от языка не зависит: ключи и значения `detail` не переводятся.
 
 ### Локализация (`crates/dpi-core/src/i18n`)
 
 * `Messages` - по одному полю на строку, четыре блока (`En`, `Ru`, `Zh`, `Fa`); шаблоны используют `{}`.
-* `legend_sections*()` - таблицы `--legend`; `details.rs` - перевод канонических деталей `DET_*` (русский - исходный язык, выводится как есть).
+* `legend_sections*()` - таблицы `--legend`; `details.rs` - текст для деталей `DET_*` (в русском блоке строка выводится как есть).
 * Язык Farsi рендерится **Finglish** (латиница, без персидской графики и диакритики).
-* Статусные бейджи и протоколы (`OK`, `BLOCKED`, `TLS RST`, `SNI`, `ClientHello`) не переводятся никогда.
+* Статусные бейджи и имена протоколов (`OK`, `BLOCKED`, `TLS RST`, `SNI`, `ClientHello`) остаются латиницей в любом языке — так цифры, IP-адреса и строки логов читаются одинаково во всех локалях.
 
 ### Номера доступных тестов:
 * `0` — **Информация о сети и системе** (внешний IP, провайдер, AS, страна, тип NAT)
@@ -139,9 +140,28 @@ curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install
 
 Во время прогона печатается одна живая строка `Тестируем: CHROME 107 3/4  12/35 · 00:04` — какая форма сейчас в эфире, который это раунд из скольких, сколько хостов раунда готово и сколько идёт время. Отдельной шапки с настройками и блок «Итог» тест не выводит: отпечаток с версией и так виден в колонках таблицы, а пустой итог не рисуется.
 
-Из неинтерактивного запуска настройки задаются флагами `--burst`, `--burst-timeout`, `--burst-profiles`, `--burst-tls`, `--burst-alpn`; в `--json` результат лежит в аддитивном ключе `results.fingerprint_burst` (вместе с `tls` и `alpn` этого прогона).
+Из неинтерактивного запуска настройки задаются флагами `--burst`, `--burst-timeout`, `--burst-profiles`, `--burst-tls`, `--burst-alpn`; в `--json` результат лежит в ключе `results.fingerprint_burst` (вместе с `tls` и `alpn` этого прогона).
 
 ---
+
+## 🧩 Структура проекта
+
+```text
+crates/
+├── dpi-core/          # движок: протоколы, зондирование, классификация
+│   ├── classify/      #   DpiProbeStream и вердикты: код ОС/TLS + стадия -> DpiStatus
+│   ├── dns/           #   RFC 1035 wire, UDP, DoH, DoT, SOCKS5 UDP relay, тест 1
+│   ├── net/           #   TCP/TLS-примитивы, отпечатки ClientHello (JA3/JA4, PQ),
+│   │                  #   запросы к системе (адаптеры, маршруты, DNS, публичный IP)
+│   ├── probe/         #   7 диагностических тестов и их общие примитивы
+│   ├── config.rs      #   загрузка и нормализация config.yml
+│   ├── profile/       #   региональные профили цензуры (ru, ir, cn, global)
+│   └── i18n/          #   все тексты интерфейса (En, Ru, Zh, Fa)
+└── dpi-detector/      # CLI: аргументы, TUI, таблицы, машинный вывод
+```
+
+Движок ничего не знает об интерфейсе: он возвращает типизированные отчёты и
+канонические токены вердиктов, а тексты, таблицы и JSON собирает бинарник.
 
 ## 🏗️ Сборка из исходников
 
@@ -158,4 +178,11 @@ cargo build --release -p dpi-detector
 Для статической сборки под Windows без внешних зависимостей CRT:
 ```bash
 RUSTFLAGS="-C target-feature=+crt-static" cargo build --release -p dpi-detector
+```
+
+Перед коммитом прогоняются обе проверки репозитория:
+
+```bash
+cargo test --workspace
+cargo clippy --workspace --all-targets
 ```
