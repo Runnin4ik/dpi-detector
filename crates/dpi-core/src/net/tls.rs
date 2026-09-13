@@ -222,13 +222,30 @@ pub fn create_insecure_dpi_tls_config_with(fingerprint: TlsFingerprint) -> Arc<C
 }
 
 /// [`create_insecure_dpi_tls_config_tls13`] with a ClientHello profile.
+///
+/// Pinning the version is visible in the hello and is deliberate: rustls writes
+/// `supported_versions` from the config, so a pinned browser profile advertises
+/// `[GREASE, 0x0304]` where the Chrome 107 it imitates sends
+/// `[GREASE, 0x0304, 0x0303]` (Firefox, which does not grease, sends `[0x0304]`
+/// against a browser's `[0x0304, 0x0303]`).
+///
+/// One version per hello is the price of test 2's two columns: a hello offering
+/// both lets the server choose, and the "TLS 1.3" column would silently carry a
+/// TLS 1.2 result. It stays a fingerprintable deviation — JA3 and JA4 cannot see
+/// it (extension codes, and the maximum version, are all they hash), but a
+/// middlebox that reads the body can, which is why
+/// `net::fingerprint::tests::grease_version_leads_supported_versions` pins both
+/// lists for both phases.
 pub fn create_insecure_dpi_tls_config_tls13_with(
     fingerprint: TlsFingerprint,
 ) -> Arc<ClientConfig> {
     Arc::new(insecure_builder(fingerprint, Some(&[&rustls::version::TLS13]), None))
 }
 
-/// [`create_insecure_dpi_tls_config_tls12`] with a ClientHello profile.
+/// [`create_insecure_dpi_tls_config_tls12`] with a ClientHello profile. Pinned
+/// the same way, and the same deviation: `[GREASE, 0x0303]` instead of a
+/// browser's `[GREASE, 0x0304, 0x0303]` — see
+/// [`create_insecure_dpi_tls_config_tls13_with`].
 pub fn create_insecure_dpi_tls_config_tls12_with(
     fingerprint: TlsFingerprint,
 ) -> Arc<ClientConfig> {

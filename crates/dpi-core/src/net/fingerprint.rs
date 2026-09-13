@@ -890,6 +890,12 @@ mod tests {
     ///
     /// Firefox greases nothing, so its list must stay plain: adding the value
     /// there would deviate from `curl_firefox133` rather than approach it.
+    ///
+    /// The list also carries one *version*, where a browser sends two (1.3 and
+    /// 1.2). That is the pinning of test 2's two columns, asserted here so it
+    /// cannot drift by accident: `0x0304` for the TLS 1.3 phase, `0x0303` for
+    /// the TLS 1.2 one — see `net::tls::create_insecure_dpi_tls_config_tls13_with`
+    /// for why the deviation is accepted.
     #[test]
     fn grease_version_leads_supported_versions() {
         // The `supported_versions` body of a hello, and the `maybe_grease`-th
