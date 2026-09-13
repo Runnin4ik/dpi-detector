@@ -6,3 +6,5 @@
 .idea/
 .vscode/
 AGENTS.md
+/vendor/*/target/
+/vendor/*/Cargo.lock

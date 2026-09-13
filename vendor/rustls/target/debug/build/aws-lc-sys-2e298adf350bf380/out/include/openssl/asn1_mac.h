@@ -1,7 +1,0 @@
-// Copyright (c) 2016, Google Inc.
-// SPDX-License-Identifier: ISC
-
-/* This header is provided in order to make compiling against code that expects
-   OpenSSL easier. */
-
-#include "asn1.h"
