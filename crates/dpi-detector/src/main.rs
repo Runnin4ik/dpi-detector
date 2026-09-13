@@ -28,7 +28,7 @@ use render::{
     asc, clean_output, output_str, plain_mode, render_banner, render_fingerprint_header, set_ascii_mode,
     set_has_vt, set_plain_mode, strip_ansi,
 };
-/// Splits a test selection string into per-test flags (mirrors `_selection_flags`).
+/// Splits a test selection string into per-test flags.
 /// Tests: 0 netinfo, 1 DNS, 2 domains, 3 TCP, 4 white-SNI, 5 Telegram,
 /// 6 fingerprint/burst, 7 legend.
 pub(crate) fn selection_flags(selection: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool) {
@@ -178,7 +178,7 @@ async fn main() {
     let mut msg = get_messages(lang);
     PANIC_LANG.store(lang_code(lang), std::sync::atomic::Ordering::Relaxed);
 
-    // Validators (mirror argparse errors)
+    // Validators: an invalid flag prints its message and exits with status 2.
     if let Some(ref t) = args.tests {
         let valid = !t.is_empty()
             && t.chars().all(|c| ('0'..='7').contains(&c) || c == ',' || c == ' ')
@@ -211,11 +211,11 @@ async fn main() {
     };
     let _ = tracing_subscriber::fmt().with_max_level(level).try_init();
 
-    // Domains / TCP targets / whitelist (mirror dpi_detector.py loading)
+    // Domains / TCP targets / whitelist, loaded from the CLI args and the config.
     let domains = load_domains(&args, &cfg, profile);
     let tcp_items = load_tcp16_targets(&args, &cfg);
     let whitelist_sni = load_whitelist_sni_list(&cfg);
-    // Mirrors Python: test 4 is unavailable without any SNI list.
+    // Test 4 is unavailable without an SNI list, so warn when the list is empty.
     if whitelist_sni.is_empty() && !args.json {
         print_out(&format!("\x1b[33m{}\x1b[0m", msg.whitelist_skipped));
     }
@@ -236,7 +236,7 @@ async fn main() {
         return;
     }
 
-    // Background version check (4 s budget, mirrors init_header_state)
+    // Background version check (4 s budget), spawned so the header does not wait on it.
     let started = Instant::now();
     let version_slot: VersionSlot = Arc::new(Mutex::new(None));
     {
@@ -343,13 +343,13 @@ async fn main() {
     }
     let mut banner_done = is_interactive;
 
-    // Banner first in non-interactive runs, then the config line (mirrors header order).
+    // Non-interactive runs print the banner first, then the config line.
     if !args.json && !banner_done {
         print_out(&render_banner(&msg, profile, &badge));
         banner_done = true;
     }
 
-    // Selection info line (mirrors dpi_detector.py)
+    // Selection info line: IP version and concurrency, dim label with cyan value.
     if !args.json {
         println_out(&format!(
             "\x1b[2m{}: \x1b[36m{}\x1b[0m\x1b[2m | {}: \x1b[36m{}\x1b[0m",
@@ -493,8 +493,8 @@ async fn main() {
             break;
         }
 
-        // Post-test actions (mirrors the HORIZONTALS panel: dim rules, no title
-        // or side borders, full console width, white-on-color keycaps).
+        // Post-test actions: dim rules at full console width, no panel title or
+        // side borders, white-on-color keycaps.
         println!();
         let cols = crossterm::terminal::size().map(|(c, _)| c as usize).unwrap_or(80);
         let rule = asc(&"─".repeat(cols.max(8)));
@@ -621,7 +621,8 @@ mod tests {
         );
     }
 
-    /// Mirrors Python `tests/test_helpers.py::test_selection_flags`.
+    /// Test digits map to per-test flags: "123" runs DNS, domains and TCP, while
+    /// "7" alone is a legend-only run.
     #[test]
     fn test_selection_flags() {
         let (run_net, run_dns, run_dom, run_tcp, run_wl, run_tg, run_burst, run_leg, only_leg) =

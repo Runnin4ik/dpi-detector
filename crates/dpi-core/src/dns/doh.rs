@@ -32,8 +32,8 @@ impl DohSender {
     }
 }
 
-/// Opens one verifying-TLS HTTPS (HTTP/2 with HTTP/1.1 fallback) connection to a DoH endpoint
-/// (mirrors the single-client-per-server DoH Wire design).
+/// Opens one verifying-TLS HTTPS (HTTP/2 with HTTP/1.1 fallback) connection to a DoH endpoint.
+/// The caller keeps that single connection for every query to the server.
 pub async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Result<(DohSender, String, String), DnsError> {
     let url = Url::parse(endpoint_url)
         .map_err(|e| DnsError::Io(format!("invalid DoH URL: {}", e)))?;
@@ -44,8 +44,8 @@ pub async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Result<(D
         .to_string();
     let port = url.port().unwrap_or(443);
 
-    // Per-stage timeouts (mirrors httpx per-operation timeout + trace stages):
-    // a stall surfaces as its stage token (SYN DROP / TLS DROP), not a flat timeout.
+    // Per-stage timeouts: each connection step gets the full window, so a stall
+    // surfaces as its stage token (SYN DROP / TLS DROP), not a flat timeout.
     let addrs: Vec<std::net::SocketAddr> = timeout(timeout_dur, resolve_host(&host, port, timeout_dur))
         .await
         .map_err(|_| DnsError::ConnectFault {
@@ -56,7 +56,8 @@ pub async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Result<(D
             stage: "resolve",
             detail: e.to_string(),
         })?;
-    // Prefer IPv4 unless user specifically requested IPv6 (mirrors Python get_resolved_ip)
+    // Prefer IPv4 unless the user specifically requested IPv6; otherwise
+    // take the first resolved address.
     let addr = addrs
         .iter()
         .find(|a| a.is_ipv4())
@@ -146,7 +147,7 @@ async fn send_doh(
     query_data: &[u8],
     user_agent: &str,
 ) -> Result<Bytes, DnsError> {
-    // POST first (mirrors _probe_doh_wire)
+    // POST first; a non-2xx status falls through to the GET form below.
     let full_uri = if path.starts_with("http://") || path.starts_with("https://") {
         path.to_string()
     } else {
@@ -181,7 +182,8 @@ async fn send_doh(
     }
     let post_status = resp.status().as_u16();
 
-    // GET ?dns= fallback (mirrors the Python POST→GET retry)
+    // GET ?dns= fallback with the unpadded base64url query; if this one also
+    // fails, the error carries the status the POST returned.
     let b64 = URL_SAFE_NO_PAD.encode(query_data);
     let full_get_uri = if path.starts_with("http://") || path.starts_with("https://") {
         format!("{}?dns={}", path, b64)
@@ -217,7 +219,7 @@ async fn send_doh(
     Ok(body)
 }
 /// A reused DoH connection to one resolver (one TLS connection, sequential
-/// queries — mirrors the single-client `_probe_doh_wire` design).
+/// queries).
 pub struct DohSession {
     sender: DohSender,
     host: String,

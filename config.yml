@@ -345,7 +345,7 @@ TELEGRAM_DCS:
   - ["149.154.167.91", "DC4"]
   - ["91.108.56.130", "DC5"]
 
-# === Кэш DNS-пининга (utils/network.py) ===
+# === Кэш DNS-пининга ===
 PIN_CACHE_MAX: 256         # максимум записей
 PIN_CACHE_TTL: 3600.0      # время жизни записи, сек
 
@@ -398,7 +398,7 @@ DNS_KNOWN_RESOLVER_NAMES:
   - "yandex"
   - "cisco"
   - "woodynet"
-  # Бренды резолверов, паритет с Python: белый org всегда зелёный.
+  # Бренды резолверов: белый org всегда зелёный.
   - "cloudflare"
   - "quad9"
   - "adguard"

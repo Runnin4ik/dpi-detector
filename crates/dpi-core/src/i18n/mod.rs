@@ -387,8 +387,7 @@ impl Messages {
     }
 }
 impl Messages {
-    /// Checkbox label for test digit '0'..='6' in the interactive menu
-    /// (mirrors Python `_MENU_OPTIONS`).
+    /// Checkbox label for test digit '0'..='6' in the interactive menu.
     pub fn menu_test_label(&self, digit: char) -> &'static str {
         match digit {
             '0' => self.menu_test_netinfo,
@@ -1338,7 +1337,7 @@ pub fn get_messages(lang: Language) -> Messages {
     }
 }
 
-/// Full diagnostic status legend as text (mirrors `cli/ui.py::print_legend`).
+/// Full diagnostic status legend as text.
 /// Terms stay Latin; descriptions follow the selected language (en/ru full,
 /// other languages fall back to English descriptions).
 ///

@@ -143,7 +143,7 @@ pub async fn run_telegram_test(timeout_dur: Duration) -> TelegramReport {
     }
 }
 
-// ─── Speed formatting (mirrors _fmt_speed / _fmt_size) ───────────────────────
+// ─── Transfer stats and outcome classification ───────────────────────────────
 
 #[derive(Debug, Clone, Default)]
 pub struct TransferStats {
@@ -211,7 +211,9 @@ async fn tls_get(host: &str, path: &str, user_agent: &str) -> Option<(impl Body<
     Some((body, noop))
 }
 
-/// Media download with stall detection (mirrors `_run_download`).
+/// Media download with stall detection: streams the configured media URL over TLS
+/// (1 s ticks for peak/average rate) and stops on the expected size, a
+/// `telegram_stall_timeout` gap without data, or `telegram_total_timeout` overall.
 pub async fn run_download(cfg: &AppConfig) -> TransferStats {
     let stall_timeout = cfg.telegram_stall_timeout;
     let total_timeout = cfg.telegram_total_timeout;
@@ -337,7 +339,9 @@ impl Body for UploadBody {
     }
 }
 
-/// 10 MB upload with stall detection (mirrors `_run_upload`).
+/// Upload with stall detection: POSTs `telegram_upload_size_mb` MB of filler to the
+/// configured IP/port over TLS (8 s connect/handshake), sampling the sent counter
+/// every 500 ms until the whole size is out, the stall gap hits, or the total cap does.
 pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
     let stall_timeout = cfg.telegram_stall_timeout;
     let total_timeout = cfg.telegram_total_timeout;
@@ -346,7 +350,7 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
     let sent = Arc::new(AtomicUsize::new(0));
     let stop = Arc::new(AtomicBool::new(false));
 
-    // High-entropy 16 KB chunk (xorshift, mirrors os.urandom usage)
+    // High-entropy 16 KB upload chunk from a xorshift64* PRNG, reused for every frame
     let mut chunk = vec![0u8; 16384];
     let mut state: u64 = 0x123456789ABCDEF;
     for b in chunk.iter_mut() {
@@ -500,7 +504,9 @@ pub struct TelegramFullReport {
     pub verdict: String,
 }
 
-/// Full Telegram test: download + upload + DC pings (mirrors run_telegram_test).
+/// Full Telegram test: runs download, upload and the DC pings concurrently, then
+/// folds the two transfers and the reachable-DC count into one verdict:
+/// "blocked" | "slow" | "partial" | "ok" | "error".
 pub async fn run_telegram_full(cfg: &AppConfig, phases: Option<PhaseProgress>) -> TelegramFullReport {
     let tick = phases
         .as_ref()

@@ -1,5 +1,4 @@
-//! DoT (DNS over TLS, RFC 7858) probing (mirrors the `_probe_dot` closure
-//! in `core/dns_scanner.py`).
+//! DoT (DNS over TLS, RFC 7858) probing.
 //!
 //! Strict CA validation (`create_verifying_tls_config`), one TLS connection
 //! per server, sequential queries with the 2-byte length prefix.
@@ -56,10 +55,10 @@ pub struct DotSession {
 
 impl DotSession {
     /// Connects with strict certificate validation (SNI = hostname,
-    /// IP-SAN for literals), like `ssl.create_default_context()`.
+    /// IP-SAN for literals) against the bundled WebPKI root store.
     pub async fn connect(host: &str, port: u16, timeout_dur: Duration) -> Result<Self, DnsError> {
-        // Resolve to the target IP first (mirrors get_resolved_ip); a resolve
-        // failure aborts the server like Python (DNS FAIL), no silent fallback.
+        // Resolve to the target IP first; a resolve failure aborts the server
+        // with DNS FAIL, no silent fallback to another address.
         let connect_host = if is_ip_literal(host) {
             host.to_string()
         } else {

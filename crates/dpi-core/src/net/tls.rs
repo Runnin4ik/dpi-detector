@@ -82,7 +82,8 @@ pub fn create_verifying_doh_tls_config() -> Arc<ClientConfig> {
     CONFIG.clone()
 }
 
-/// A verifier that accepts any server certificate (CERT_NONE equivalent for DPI testing).
+/// A verifier that accepts any server certificate: the certificate is the DPI
+/// signal here, not a trust decision.
 #[derive(Debug)]
 pub struct InsecureDpiCertVerifier;
 
@@ -138,12 +139,12 @@ pub fn create_insecure_dpi_tls_config() -> Arc<ClientConfig> {
     create_insecure_dpi_tls_config_with(TlsFingerprint::Rustls)
 }
 
-/// Insecure DPI config restricted to TLS 1.3 only (mirrors create_dpi_client("TLSv1.3")).
+/// Insecure DPI config restricted to TLS 1.3, default fingerprint.
 pub fn create_insecure_dpi_tls_config_tls13() -> Arc<ClientConfig> {
     create_insecure_dpi_tls_config_tls13_with(TlsFingerprint::Rustls)
 }
 
-/// Insecure DPI config restricted to TLS 1.2 only (mirrors create_dpi_client("TLSv1.2")).
+/// Insecure DPI config restricted to TLS 1.2, default fingerprint.
 pub fn create_insecure_dpi_tls_config_tls12() -> Arc<ClientConfig> {
     create_insecure_dpi_tls_config_tls12_with(TlsFingerprint::Rustls)
 }

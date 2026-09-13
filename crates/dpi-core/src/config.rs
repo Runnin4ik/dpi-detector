@@ -154,10 +154,10 @@ fn d_dns_known_resolver_names() -> Vec<String> {
         "google", "cloudflarenet", "i3dnet", "cdn77", "alibaba-cn-net",
         "as-vultr", "cdnext", "xtom", "tencent-net-ap-cn", "misaka-cis-as",
         "as-anexia", "ru-jsciot", "yandex", "cisco", "woodynet",
-        // Resolver-brand tokens, parity with Python _KNOWN_RESOLVER_NAME_TOKENS:
+        // Resolver-brand tokens, substring-matched against the egress ASN name:
         // a whitelisted org is always green, even if a sibling endpoint
         // of the same brand was hijacked elsewhere.
-        // NOTE: Python's "t2" token deliberately omitted (2-char substring
+        // NOTE: the "t2" token is deliberately omitted (2-char substring
         // matches too broadly and would whitelist hijacker ASNs).
         "cloudflare", "quad9", "adguard", "opendns", "cleanbrowsing",
         "nextdns", "controld", "mullvad", "dns0", "ahadns",
@@ -220,7 +220,7 @@ pub struct AppConfig {
     pub tls_fingerprint: String,
     #[serde(default)]
     pub proxy_url: Option<String>,
-    /// Legacy alias: CLI --proxy writes here; mirrors proxy_url.
+    /// Legacy alias: CLI --proxy writes here; holds the same value as proxy_url.
     #[serde(default)]
     pub proxy: Option<String>,
     #[serde(default = "d_connect_timeout")]
@@ -420,13 +420,14 @@ const KNOWN_KEYS: &[&str] = &[
     "IP6_LOOKUP_URLS", "IP_LOOKUP_URLS",
 ];
 
-/// Per-key type validation (mirrors Python VALIDATORS): a mistyped value is
-/// dropped so its default survives, and a warning names the key. Without
-/// this, one bad scalar fails the whole serde mapping and resets everything.
+/// Per-key type validation: a mistyped value is dropped so its default
+/// survives, and a warning names the key. Without this, one bad scalar fails
+/// the whole serde mapping and resets everything.
 fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<ConfigWarning>) {
     let is_uint = |v: &serde_yaml::Value| v.as_u64().is_some();
     let is_num = |v: &serde_yaml::Value| v.as_u64().is_some() || v.as_f64().is_some();
-    // Canonical key order is UPPER_SNAKE (mirrors config.yml).
+    // Keys are compared case-insensitively, so a lowercase spelling of a
+    // canonical UPPER_SNAKE key still matches its validator.
     let up = |k: &serde_yaml::Value| k.as_str().map(|s| s.to_uppercase());
     let mut drop_keys: Vec<serde_yaml::Value> = Vec::new();
     for (k, v) in mapping.iter_mut() {
@@ -486,8 +487,8 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<Config
                 }
                 _ => false,
             },
-            // String lists: keep string elements (mirrors Python comment
-            // stripping at load; a non-string element is ignored, not fatal).
+            // String lists: keep string elements only; a non-string element is
+            // dropped from the sequence, not treated as a fatal error.
             "DNS_CHECK_DOMAINS" | "DNS_AVAILABILITY_DOMAINS" | "DNS_KNOWN_RESOLVER_NAMES"
             | "CYMRU_DOH_SERVERS" | "IP4_LOOKUP_URLS" | "IP6_LOOKUP_URLS" | "IP_LOOKUP_URLS" => {
                 match v {
@@ -524,7 +525,8 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<Config
 }
 
 impl AppConfig {
-    /// Parses `config.yml` content. Unknown keys produce warnings (mirrors Python).
+    /// Parses `config.yml` content. Unknown keys and mistyped values produce
+    /// warnings; a parse error or a non-mapping root is recorded instead.
     pub fn from_yaml_str(content: &str) -> Self {
         let value: serde_yaml::Value = match serde_yaml::from_str(content) {
             Ok(v) => v,
@@ -553,9 +555,8 @@ impl AppConfig {
             }
         }
         sanitize_mapping(&mut mapping, &mut warnings);
-        // IP_LOOKUP_URLS compat (mirrors netinfo.py): v4 lookup falls back to
-        // the shared list when IP4_LOOKUP_URLS is absent. v6 keeps its own
-        // default, exactly like Python.
+        // IP_LOOKUP_URLS compat: the v4 lookup falls back to the shared list
+        // when IP4_LOOKUP_URLS is absent. v6 keeps its own default.
         let has_ip4 = mapping
             .keys()
             .any(|k| k.as_str().is_some_and(|s| s.eq_ignore_ascii_case("IP4_LOOKUP_URLS")));
@@ -726,7 +727,8 @@ const EMBEDDED_DOMAINS_TXT: &str = include_str!("../../../domains.txt");
 const EMBEDDED_TCP16_JSON: &str = include_str!("../../../tcp16.json");
 const EMBEDDED_WHITELIST_SNI_TXT: &str = include_str!("../../../whitelist_sni.txt");
 
-/// Locates config.yml: current dir first, then executable dir (mirrors get_config_path).
+/// Locates config.yml: current dir first, then executable dir; `None` when
+/// neither has one.
 pub fn find_config_file() -> Option<PathBuf> {
     let cwd = Path::new("config.yml");
     if cwd.exists() {
@@ -743,7 +745,8 @@ pub fn find_config_file() -> Option<PathBuf> {
     None
 }
 
-/// Loads config.yml if present, otherwise the embedded copy (mirrors load_config).
+/// Loads config.yml if present, otherwise the embedded copy. A file that cannot
+/// be read is reported through `config_load_error`.
 pub fn load_config() -> AppConfig {
     match find_config_file() {
         Some(path) => match fs::read_to_string(&path) {
@@ -758,7 +761,7 @@ pub fn load_config() -> AppConfig {
     }
 }
 
-/// Directory of the running binary (mirrors get_base_dir).
+/// Directory of the running binary, or `.` when it cannot be resolved.
 pub fn base_dir() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -781,8 +784,8 @@ pub fn resource_path(name: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Cleans a raw domain string (mirrors clean_hostname): strips scheme, path,
-/// port, brackets; lowercases. Returns None for empty input.
+/// Cleans a raw domain string: strips scheme, path, port, brackets; lowercases.
+/// Returns None for empty input.
 pub fn clean_domain(raw: &str) -> Option<String> {
     let mut s = raw.trim().to_lowercase();
     if s.is_empty() {
@@ -838,8 +841,8 @@ fn parse_domains(content: &str) -> Vec<String> {
         .collect()
 }
 
-/// Loads whitelist SNI entries (mirrors load_whitelist_sni): non-empty,
-/// non-comment lines with their 1-based file numbers.
+/// Loads whitelist SNI entries: non-empty, non-comment lines with their 1-based
+/// file numbers.
 pub fn load_whitelist_sni(path: impl AsRef<Path>) -> Vec<(String, usize)> {
     let content = fs::read_to_string(path).unwrap_or_default();
     parse_whitelist_sni(&content)
@@ -943,7 +946,7 @@ mod tests {
 
     #[test]
     fn test_config_defaults() {
-        // Mirrors Python `test_default_values_present` (+ threshold default).
+        // Shipped defaults for the fields asserted below (threshold included).
         let cfg = AppConfig::default();
         assert_eq!(cfg.max_concurrent, 50);
         assert_eq!(cfg.ip_version, "ipv4");
@@ -973,8 +976,8 @@ mod tests {
         assert_eq!(servers[1].port, 8853);
     }
 
-    /// Mirrors Python `test_type_and_range_validation_retains_default`:
-    /// each bad key keeps its default and is named in warnings.
+    /// A value of the wrong type or out of range is rejected: each bad key
+    /// keeps its default and is named in the warnings.
     #[test]
     fn test_invalid_values_retain_default() {
         let yaml = "MAX_CONCURRENT: \"one hundred\"\nIP_VERSION: \"ipv5\"\nCONNECT_TIMEOUT: -5.0\nUNKNOWN_SECRET_KEY: 12345\n";
@@ -989,7 +992,7 @@ mod tests {
         assert!(text.contains("UNKNOWN_SECRET_KEY"), "{text}");
     }
 
-    /// Mirrors Python `test_valid_custom_config_loads_successfully`.
+    /// A config whose every key is valid loads with no warnings.
     #[test]
     fn test_valid_custom_config() {
         let yaml = "MAX_CONCURRENT: 25\nIP_VERSION: \"ipv6\"\nCONNECT_TIMEOUT: 15.0\nDNS_STUB_THRESHOLD: 3\n";
@@ -1001,8 +1004,8 @@ mod tests {
         assert!(cfg.config_warnings.is_empty(), "{:?}", cfg.config_warnings);
     }
 
-    /// `IP_LOOKUP_URLS` compat (mirrors netinfo.py): v4 falls back to the
-    /// shared list, v6 keeps its own default.
+    /// `IP_LOOKUP_URLS` compat: v4 falls back to the shared list, v6 keeps its
+    /// own default, and an explicit `IP4_LOOKUP_URLS` wins over the fallback.
     #[test]
     fn test_ip_lookup_urls_compat() {
         let yaml = "IP_LOOKUP_URLS:\n  - \"https://example.com/v4\"\n";
@@ -1015,8 +1018,8 @@ mod tests {
         assert_eq!(cfg.ip4_lookup_urls, vec!["https://example.com/other".to_string()]);
     }
 
-    /// All test lists are 100% identical to the shipped config.yml shared
-    /// with the Python implementation: any drift fails here.
+    /// Every list parsed from the shipped config.yml matches the values
+    /// asserted below: any drift fails here.
     #[test]
     fn test_lists_match_shipped_config_yml() {
         let cfg = AppConfig::from_yaml_str(include_str!("../../../config.yml"));

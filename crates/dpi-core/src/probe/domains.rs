@@ -1,10 +1,9 @@
 //! Test 2: domain availability — DNS resolve + TLS 1.3 + TLS 1.2 + HTTP.
 //!
-//! Mirrors `core/tls_scanner.py` + `cli/runners.py::run_domains_test`:
-//! phase 0 resolves every domain (family from config), marks ISP stubs,
-//! phases 1–2 probe TLS 1.3 / TLS 1.2 with SNI pinned to the resolved IP,
+//! Phase 0 resolves every domain (family from config) and marks ISP stubs;
+//! phases 1–2 probe TLS 1.3 / TLS 1.2 with SNI pinned to the resolved IP;
 //! phase 3 checks plain-HTTP injection. Result rows are
-//! (domain, http, tls1.2, tls1.3, details) like the Python table.
+//! (domain, http, tls1.2, tls1.3, details).
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -53,8 +52,8 @@ impl IpFamily {
     }
 }
 
-/// Resolves a domain to one IP of the requested family (up to 2 attempts,
-/// mirrors `get_resolved_ip`).
+/// Resolves a domain to one IP of the requested family: up to 2 attempts
+/// (200 ms apart, 10 s timeout each), returning the first address of that family.
 pub async fn resolve_ip(domain: &str, family: IpFamily) -> Option<IpAddr> {
     // System resolver first, UDP bootstrap fallback (Android has no resolv.conf).
     const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -83,7 +82,7 @@ pub enum FakeIpType {
     Clean,
 }
 
-/// Mirrors `get_fake_ip_type`: 198.18.0.0/15 → fakeip, 100.64.0.0/10 → isp,
+/// Classifies a resolved address: 198.18.0.0/15 → fakeip, 100.64.0.0/10 → isp,
 /// loopback/private/link-local/unspecified → local.
 pub fn fake_ip_type(ip: &IpAddr) -> FakeIpType {
     match ip {
@@ -145,8 +144,8 @@ fn parse_host(url_or_host: &str) -> String {
     s.trim_matches(|c| c == '.' || c == '[' || c == ']').to_string()
 }
 
-/// Resolves a `Location` against the probe's base URL the way
-/// `urllib.parse.urljoin` does for the shapes a redirect uses, so the redirect
+/// Resolves a `Location` against the probe's base URL the way RFC 3986 relative
+/// reference resolution does for the shapes a redirect uses, so the redirect
 /// is judged against the host it really goes to:
 ///   `https://host/x`  - absolute, used as is;
 ///   `//host/x`        - protocol-relative: scheme from the base, host from the
@@ -168,8 +167,8 @@ fn resolve_location(base: &str, location: &str) -> String {
     }
 }
 
-/// Classifies an HTTP redirect (mirrors `_check_tls_single` /
-/// `check_http_injection` redirect branches).
+/// Classifies a redirect by host: same host or subdomain → OK (in the HTTP phase a
+/// same-host hop to https reads `301 → https`), a foreign host → REDIR with its short name.
 pub fn classify_redirect(
     domain: &str,
     base_url: &str,
@@ -250,8 +249,8 @@ fn inner_hyper(
     classify_connect_error_full(&msg, os_code, os_kind, bytes, stage)
 }
 
-/// Single TLS check against `target` with SNI/host = `domain`
-/// (mirrors `_check_tls_single`).
+/// Single TLS check against `target` with SNI/host = `domain`: TCP connect, a
+/// version-pinned handshake (TLS 1.2 or 1.3), then GET `/` reading up to 64 KB of body.
 pub async fn check_domain_tls(
     domain: &str,
     target: IpAddr,
@@ -430,8 +429,8 @@ pub async fn check_domain_tls(
 }
 
 
-/// Plain-HTTP injection check (mirrors `check_http_injection`): HEAD to
-/// port 80 of the resolved IP with Host = domain.
+/// Plain-HTTP injection check: HEAD to port 80 of the resolved IP with
+/// Host = domain; a known provider stub IP short-circuits to `IspPage`.
 pub async fn check_http_injection(
     domain: &str,
     target: Option<IpAddr>,
@@ -568,7 +567,8 @@ impl DomainEntry {
     }
 }
 
-/// Phase 0: resolve every domain (mirrors `_resolve_worker`).
+/// Phase 0: resolves every domain under the semaphore (IPv6 mode re-probes over IPv4
+/// to tell "IPv6 unsupported" from "domain not found") and records its IP and fake-IP class.
 pub async fn resolve_all(
     domains: &[String],
     family: IpFamily,
@@ -688,7 +688,8 @@ pub async fn check_tls_all(
     }
 }
 
-/// HTTP phase for all clean entries (mirrors `_http_worker`).
+/// HTTP phase: runs the plain-HTTP injection check for every entry that resolved to a
+/// clean IP (fake-IP and stub rows are skipped) and stores the result back into the row.
 pub async fn check_http_all(
     entries: &mut [DomainEntry],
     cfg: &AppConfig,
@@ -727,8 +728,9 @@ pub async fn check_http_all(
     }
 }
 
-/// Silently collects provider stub IPs (mirrors `collect_stub_ips_silently`):
-/// IPs returned for ≥ `threshold` distinct domains.
+/// Silently collects provider stub IPs: queries the configured UDP resolvers (2 s
+/// timeout each, stopping at the first that answers) and keeps the IPs returned
+/// for at least `max(dns_stub_threshold, 2)` distinct domains.
 pub async fn collect_stub_ips(
     cfg: &AppConfig,
 ) -> HashSet<IpAddr> {
@@ -819,7 +821,8 @@ pub fn domain_stats(entries: &[DomainEntry]) -> DomainStats {
     }
 }
 
-/// Builds the (http, t12, t13, details) cells (mirrors `build_domain_row`).
+/// Builds the (http, t12, t13, details) cells: each failing protocol contributes a
+/// detail (timeouts dropped), and two passing TLS columns collapse to the best time.
 pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, String) {
     let http_ok = col_ok(e.http.status);
     let t12_ok = col_ok_t12(e.t12.status);
@@ -969,8 +972,8 @@ mod tests {
     /// Same-host-or-subdomain redirects read as a plain `OK`, a redirect to
     /// another domain is a red `REDIR` (`RedirSuspect`, not counted as ok), and
     /// a protocol-relative `Location` belongs to the host it names - it is not a
-    /// path on the base host. Host resolution matches the Python original
-    /// (`urljoin` + `_strip_www` in `_check_tls_single` / `check_http_injection`).
+    /// path on the base host. Host comparison is case-insensitive and ignores a
+    /// leading `www.` on both sides.
     #[test]
     fn test_classify_redirect_matrix() {
         // (base, status, location, expected status, expected detail)

@@ -1,4 +1,4 @@
-//! Test 3: FAT-header TCP probe (mirrors `core/tcp16_scanner.py`).
+//! Test 3: FAT-header TCP probe.
 //!
 //! Opens one keep-alive connection per target and sends `fat_chunks_count`
 //! HEAD requests with a growing `X-Pad` header (`fat_chunk_size` bytes per
@@ -142,7 +142,8 @@ pub async fn probe_tcp_16_20(
     let min_detect_chunk =
         (cfg.tcp_block_min_kb * 1024).div_ceil(chunk_size as u64).max(1) as usize;
 
-    // Dynamic read timeout from known RTT (mirrors hint_rtt fast path)
+    // Dynamic read timeout: 3 × RTT clamped to 1.5 s..fat_read_timeout, seeded by the
+    // hint or, when there is none, by the slowest of the first two measured RTTs.
     let mut dynamic_timeout = hint_rtt.map(|r| (r * 3.0).max(1.5).min(cfg.fat_read_timeout));
     let mut measured_rtt = hint_rtt;
     let mut rtt_samples: Vec<f64> = Vec::new();
@@ -299,7 +300,7 @@ fn create_tls_config(
     crate::net::tls::create_insecure_dpi_tls_config_with(fingerprint)
 }
 
-/// Semaphore-gated wrapper (mirrors `check_tcp_16_20`).
+/// Semaphore-gated wrapper: takes one permit per probe, then runs `probe_tcp_16_20`.
 pub async fn check_tcp_16_20(
     ip: &str,
     port: u16,

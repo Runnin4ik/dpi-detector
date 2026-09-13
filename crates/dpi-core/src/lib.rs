@@ -8,7 +8,7 @@ pub mod probe;
 pub mod i18n;
 pub mod profile;
 
-/// Completion tick for live progress lines (mirrors rich `Progress.update`).
+/// Completion tick for live progress lines: called once per finished unit.
 /// The renderer lives in the binary; core only signals "one unit done".
 pub type ProgressTick = std::sync::Arc<dyn Fn() + Send + Sync>;
 

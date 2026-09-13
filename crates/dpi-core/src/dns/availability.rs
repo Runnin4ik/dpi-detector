@@ -1,5 +1,9 @@
-//! Test 1: DNS availability + hijack detection (mirrors
-//! `core/dns_scanner.py::check_dns_availability` + `core/dns/render.py`).
+//! Test 1: DNS availability + hijack detection.
+//!
+//! Three probe blocks run concurrently over disjoint server lists: UDP, the
+//! DoH `doh_wire` endpoints and DoT. UDP is what is being judged; the two
+//! encrypted transports measure the same forbidden domains over TLS to supply
+//! the truth its answers are compared against.
 //!
 //! Two-phase UDP scheme: phase A probes trusted domains (liveness + ping),
 //! phase B probes forbidden domains only on live servers and compares UDP
@@ -22,7 +26,7 @@ use crate::{PhaseProgress, ProgressBlock};
 use crate::net::netinfo::fetch_ip_cymru;
 use crate::probe::domains::fake_ip_type;
 
-// ─── Helpers (mirror core/dns/stubs.py + render.py) ──────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Window for the DoH warmup query. Its result is thrown away — it only opens
 /// the HTTP/2 stream — while on a server that answers nothing a full-budget
@@ -82,8 +86,9 @@ pub fn org_label(org: &str) -> String {
     org.split(" - ").next().unwrap_or(org).trim().to_string()
 }
 
-/// Maps a session/query error to a display token, mirroring Python
-/// `classify_connect_error` / `classify_read_error` stages.
+/// Maps a session/query error to a display token: a staged transport error
+/// surfaces as its classification label (SYN DROP / TLS DROP, …), a resolve
+/// failure or malformed request as DNS FAIL, and everything else as TIMEOUT.
 pub fn connect_fail_label(err: &DnsError) -> &'static str {
     match err {
         DnsError::Timeout => "TIMEOUT",
@@ -119,7 +124,8 @@ pub fn connect_fail_label(err: &DnsError) -> &'static str {
     }
 }
 
-/// First error wins (mirrors Python `_record_fail` / `setdefault`).
+/// First error wins: the earliest failure reason recorded for a key is kept,
+/// later ones for the same key are dropped.
 fn record_fail(report: &mut DnsAvailReport, key: &ProbeKey, label: &str) {
     report
         .fail_reasons
@@ -127,7 +133,8 @@ fn record_fail(report: &mut DnsAvailReport, key: &ProbeKey, label: &str) {
         .or_insert_with(|| label.to_string());
 }
 
-/// All-None latency map for an aborted server (mirrors `dict.fromkeys(...)`).
+/// All-None latency map for an aborted server: every domain is present with no
+/// timing recorded.
 fn lat_none(domains: &[String]) -> std::collections::HashMap<String, Option<f64>> {
     domains.iter().map(|d| (d.clone(), None)).collect()
 }
@@ -253,11 +260,11 @@ fn spawn_udp_queries(
     handles
 }
 
-/// Resolver egress fingerprint (`whoami.akamai.net`), one retry (mirrors
-/// Python `_probe_egress`). The first attempt uses a short window — the retry
-/// exists for a single lost packet, not for slow resolvers — while the retry
-/// keeps the full budget, so no answer that would have been captured is lost.
-/// A silent resolver therefore costs `2s + 0.2s + timeout` instead of `2*timeout`.
+/// Resolver egress fingerprint (`whoami.akamai.net`), one retry. The first
+/// attempt uses a short window — the retry exists for a single lost packet, not
+/// for slow resolvers — while the retry keeps the full budget, so no answer
+/// that would have been captured is lost. A silent resolver therefore costs
+/// `2s + 0.2s + timeout` instead of `2*timeout`.
 async fn probe_egress(
     server: SocketAddr,
     timeout_dur: Duration,
@@ -411,8 +418,8 @@ pub async fn check_dns_availability(
             let gate = Arc::clone(&probe_gate);
             let egress_sem = Arc::clone(&egress_sem);
             let socks_proxy = socks_proxy.clone();
-            // Per-server query gate (mirrors `_probe_udp` in core/dns_scanner.py):
-            // one server's queries never queue behind another server's probes.
+            // Per-server query gate: one server's queries never queue behind
+            // another server's probes.
             let udp_gate = Arc::new(Semaphore::new(dns_gate));
             let block_tick = block_tick.clone();
             handles.push(tokio::spawn(async move {
@@ -422,8 +429,8 @@ pub async fn check_dns_availability(
                 let key = ProbeKey { kind: ProbeKind::Udp, addr: addr.clone(), name: name.clone() };
 
                 // Egress fingerprint runs concurrently with phases A/B under its
-                // own gate (mirrors Python `_probe_egress_gated`): a silent
-                // resolver must not hold a probe slot for its whoami retries.
+                // own gate: a silent resolver must not hold a probe slot for its
+                // whoami retries.
                 let egress_task = {
                     let socks_proxy = socks_proxy.clone();
                     let egress_sem = Arc::clone(&egress_sem);
@@ -523,7 +530,7 @@ pub async fn check_dns_availability(
             handles.push(tokio::spawn(async move {
                 let _g = gate.acquire().await.unwrap();
                 let key = ProbeKey { kind: ProbeKind::DohWire, addr: addr.clone(), name: name.clone() };
-                // Outer cap (mirrors `wait_for(_do_probe(), timeout * 2 + 3.0)`).
+                // Outer cap: twice the query window plus 3 s of slack.
                 let cap = Duration::from_secs_f64(timeout_dur.as_secs_f64() * 2.0 + 3.0);
                 let cap_secs = cap.as_secs_f64();
                 let probe = async {
@@ -537,7 +544,7 @@ pub async fn check_dns_availability(
                             return (HashMap::new(), Vec::new(), Some(connect_fail_label(&e).to_string()));
                         }
                     };
-                    // Warmup is non-critical for DoH (mirrors Python: warms up HTTP/2
+                    // Warmup is non-critical for DoH (it only warms up the HTTP/2
                     // stream) and its answer is discarded, so on HTTP/2 it gets a
                     // short window of its own. On HTTP/1.1 the full window stays:
                     // dropping a request there kills the whole connection, so a
@@ -567,7 +574,8 @@ pub async fn check_dns_availability(
                             continue;
                         }
                         let _p = doh_sem.acquire().await.unwrap();
-                        // One retry with jitter (mirrors Python attempt loop)
+                        // One retry after a jittered 0.3–1.0 s pause, unless the
+                        // connection is closed or the window no longer fits.
                         let mut res = session.query(d, timeout_dur).await;
                         if res.is_err()
                             && !session.is_closed()
@@ -577,7 +585,8 @@ pub async fn check_dns_availability(
                             tokio::time::sleep(Duration::from_secs_f64(0.3 + jitter)).await;
                             res = session.query(d, timeout_dur).await;
                         }
-                        // First connection-class error wins (mirrors `_record_fail`).
+                        // First connection-class error wins; later ones do not
+                        // overwrite it.
                         if first_fail.is_none() {
                             if let Err(e) = &res {
                                 if matches!(e, DnsError::Timeout | DnsError::Io(_) | DnsError::ConnectFault { .. }) {
@@ -618,7 +627,7 @@ pub async fn check_dns_availability(
             handles.push(tokio::spawn(async move {
                 let _g = gate.acquire().await.unwrap();
                 let key = ProbeKey { kind: ProbeKind::Dot, addr: addr.clone(), name: name.clone() };
-                // Outer cap (mirrors `wait_for(_do_probe(), timeout * 2 + 3.0)`).
+                // Outer cap: twice the query window plus 3 s of slack.
                 let cap = Duration::from_secs_f64(timeout_dur.as_secs_f64() * 2.0 + 3.0);
                 let cap_secs = cap.as_secs_f64();
                 let probe = async {
@@ -635,10 +644,9 @@ pub async fn check_dns_availability(
                             return (HashMap::new(), Vec::new(), Some(connect_fail_label(&e).to_string()));
                         }
                     };
-                    // Warmup is fatal (mirrors Python: warmup + queries abort
-                    // the whole server with the first error recorded), so it
-                    // keeps the full window — shortening it would turn a slow
-                    // server into a dead one.
+                    // Warmup is fatal — its error aborts the whole server with
+                    // that error recorded — so it keeps the full window:
+                    // shortening it would turn a slow server into a dead one.
                     let warmup = forbidden.first().cloned().unwrap_or_else(|| "google.com".to_string());
                     if let Err(e) = session.query(&warmup).await {
                         return (HashMap::new(), Vec::new(), Some(connect_fail_label(&e).to_string()));
@@ -646,9 +654,9 @@ pub async fn check_dns_availability(
 
                     let mut lat = HashMap::new();
                     let mut answers = Vec::new();
-                    // Per-query errors stay silent (mirrors Python `_one`), but a
-                    // stream-level I/O error is terminal: the peer is gone, so
-                    // the remaining domains can only fail.
+                    // Per-query errors stay silent and only leave that domain
+                    // unanswered, but a stream-level I/O error is terminal: the
+                    // peer is gone, so the remaining domains can only fail.
                     let mut dead = false;
                     for d in &forbidden {
                         if dead {
@@ -913,8 +921,8 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
             let eip = report.egress.get(&(a.clone(), name.clone())).copied().flatten();
             if let Some(eip) = eip {
                 let org = report.org_names.get(&eip.to_string()).cloned().unwrap_or_default();
-                // NOTE: no domestic exemption (unlike Python): a hijacked
-                // MSK-IX/NSDI answer must be visible, not silently shielded.
+                // NOTE: no domestic exemption: a hijacked MSK-IX/NSDI
+                // answer must be visible, not silently shielded.
                 if is_hijacked(&eip)
                     && !known_resolver(&org_label(&org), &cfg.dns_known_resolver_names)
                 {
@@ -967,8 +975,8 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
             }
         }
     }
-    // Stub IPs are answers repeated across ≥ threshold resolvers (mirrors
-    // Python `DNS_STUB_THRESHOLD` in core/dns/stubs.py).
+    // Stub IPs are addresses that at least `dns_stub_threshold` resolvers hand
+    // out in place of the truth; only the most frequent one is reported.
     let stub_min = cfg.dns_stub_threshold.max(1) as usize;
     let top_stub = stub_counts
         .into_iter()
@@ -1097,7 +1105,7 @@ mod tests {
         assert!(fits_in_budget(Duration::ZERO, window, budget));
     }
 
-    /// Display tokens mirror Python `classify_connect_error` stages.
+    /// Each staged fault surfaces as the classifier's label for that stage.
     #[test]
     fn test_connect_fail_label() {
         use super::super::types::DnsError;

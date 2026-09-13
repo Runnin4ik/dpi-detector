@@ -10,8 +10,8 @@
 //! * the ALPN value, which is why the profiles offer `h2, http/1.1` and the
 //!   probes speak HTTP/2.
 //!
-//! The rules are FoxIO's reference implementation (`python/ja4.py` + `common.py`
-//! of the JA4 repository): GREASE is filtered everywhere, ciphers and extensions
+//! The rules follow FoxIO's JA4 reference implementation:
+//! GREASE is filtered everywhere, ciphers and extensions
 //! are sorted before hashing, `server_name` (0x0000) and `alpn` (0x0010) are
 //! removed from the extension hash but stay in the extension *count*, the
 //! signature algorithms are appended to the extension hash in wire order, each

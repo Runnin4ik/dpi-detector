@@ -485,7 +485,9 @@ fn warn_mark() -> &'static str {
 }
 pub const BOX_WIDTH: usize = 71;
 
-/// Maps a probe status to its table cell color (mirrors the Rich markup).
+/// Maps a probe status to its table cell color: green for OK, yellow for the
+/// "no TLS 1.3 / no CA / local IP / DNS fail / NXDOMAIN" outcomes, dark grey
+/// for Err, and red for the rest.
 pub fn status_color(s: DpiStatus) -> Color {
     match s {
         DpiStatus::Ok => Color::Green,
@@ -567,8 +569,7 @@ fn close_sgr(line: &mut String) {
 /// Splits a styled string at the last possible space so it fits `width` cells;
 /// a single token wider than the column is broken by character. Every line is
 /// self-contained: a style open at the break is re-armed on the next line, so
-/// the colour of a wrapped value survives the break (mirrors what Rich does
-/// when it wraps a table cell).
+/// the colour of a wrapped value survives the break.
 fn wrap_ansi(s: &str, width: usize) -> Vec<String> {
     let width = width.max(8);
     let mut lines: Vec<String> = Vec::new();
@@ -663,7 +664,7 @@ pub fn panel_to_string(title: &str, lines: &[String]) -> String {
 }
 
 /// Panel with explicit width, title alignment and border SGR code.
-/// Mirrors Rich: banner is left-titled cyan, netinfo centered dim.
+/// Banner titles are left-aligned cyan; the netinfo panel's is centered and dim.
 pub fn panel_with(title: &str, lines: &[String], width: usize, centered: bool, border: &str) -> String {
     // Glyph-safe content first: widths are measured after replacement.
     let title_bidi = dpi_core::i18n::format_bidi_str(title);
@@ -768,7 +769,7 @@ impl Refresher {
     }
 }
 
-/// Live one-line progress on stderr (mirrors rich transient `Progress`).
+/// Live one-line progress on stderr, redrawn in place while a phase runs.
 /// Draws only when stderr is a TTY; silent otherwise so pipes and the report
 /// file stay byte-clean.
 pub struct LiveProgress {
@@ -965,8 +966,8 @@ impl LiveProgress {
     }
 }
 
-/// Indeterminate spinner for phases without a total (mirrors
-/// `console.status(..., spinner="line")`, frames `- \ | /`).
+/// Indeterminate spinner for phases without a total: frames `- \ | /`,
+/// redrawn on stderr every 120 ms.
 pub struct Spinner {
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
@@ -1056,13 +1057,13 @@ pub fn render_fingerprint_header(fp: TlsFingerprint, msg: &Messages) -> String {
 
 // ─── Test 0: network & system ─────────────────────────────────────────────────
 
-/// TTLB cell (mirrors `_ttlb_str`).
+/// TTLB cell: the probe timed out, or a measured round-trip in milliseconds.
 #[derive(Debug, Clone)]
 pub enum NetTtlb {
     Timeout,
     Ms(u64),
 }
-/// Per-family network fact (mirrors the `info["v4"]` / `info["v6"]` dicts).
+/// Per-family network fact: address, TTLB, subnet, org, ASN and country code.
 #[derive(Debug, Clone)]
 pub struct NetFamilyInfo {
     pub ip: String,
@@ -1080,7 +1081,7 @@ pub struct NetInfoData {
     pub empty: bool,
 }
 
-/// Value color (mirrors `_v`): red "timeout", cyan otherwise.
+/// Value color: red for the literal "timeout", cyan for anything else.
 fn cyan_val(v: &str) -> String {
     if v == "timeout" {
         format!("\x1b[31m{}\x1b[0m", v)
@@ -1100,7 +1101,7 @@ fn ttlb_str(t: &NetTtlb, msg: &Messages) -> String {
     }
 }
 
-/// DNS block with 70-column wrap (mirrors `_dns_block_lines`).
+/// DNS block: label, comma-joined addresses in cyan and a tail, wrapped at 70 columns.
 /// Widths are char counts; the tail glues to the last chunk when it fits.
 fn dns_block_lines(label: &str, ips: &[String], tail: &str) -> Vec<String> {
     const W: usize = 70;
@@ -1388,8 +1389,8 @@ pub fn render_netinfo_panel(
         ));
     }
 
-    // Rich prefixes content lines with two spaces ("  " + l); the panel adds
-    // one padding space, so body rows start with three.
+    // Content lines get two leading spaces here; the panel adds one more
+    // padding space, so body rows start with three.
     let lines: Vec<String> = lines.iter().map(|l| format!("  {}", l)).collect();
     let mut width = BOX_WIDTH;
     for l in &lines {
@@ -1481,7 +1482,7 @@ pub fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> String {
 }
 
 fn fail_color(token: &str) -> Color {
-    // Mirrors Python label markup: DNS FAIL is yellow, the rest are red.
+    // Label color: DNS FAIL is yellow, every other fail token is red.
     match token {
         "DNS FAIL" => Color::Yellow,
         _ => Color::Red,
@@ -1524,8 +1525,7 @@ fn dns_latency_lines(
             .filter_map(|d| dm.and_then(|m| m.get(d)).copied().flatten())
             .collect();
         if vals.is_empty() {
-            // UDP shows a flat TIMEOUT (mirrors Python); DoH/DoT use the
-            // recorded fail label.
+            // A UDP miss reads TIMEOUT; DoH/DoT show the recorded fail label.
             let token = if udp {
                 "TIMEOUT".to_string()
             } else {
@@ -1600,7 +1600,7 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
     let mut partial_endpoints = Vec::new();
 
     for name in &report.all_names {
-        // DoH cell: one line per endpoint (mirrors Python).
+        // DoH cell: one line per endpoint.
         let doh_addrs = doh_by_name.get(name).cloned().unwrap_or_default();
         let doh_lines: Vec<(String, Color)> = if doh_addrs.is_empty() {
             vec![("—".to_string(), Color::DarkGrey)]
@@ -1980,7 +1980,7 @@ fn provider_group(provider: &str) -> String {
 
 pub fn render_tcp_table(rows: &[TcpRow], msg: &Messages) -> String {
     let mut out = String::new();
-    // Sort: provider group frequency desc, group name, id number (mirrors Python)
+    // Sort: provider group frequency desc, then group name, then id number.
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for r in rows {
         *counts.entry(provider_group(&r.provider)).or_insert(0) += 1;
@@ -2167,7 +2167,7 @@ pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
     }
     out.push_str(&format!("{}\n", table));
 
-    // Download / upload verdict lines (mirror display.finish rows)
+    // Download / upload verdict lines: label, status, peak, average, size, duration.
     for (label, t) in [(msg.download_label, &report.download), (msg.upload_label, &report.upload)] {
         let (st_text, color) = match t.status.as_str() {
             "ok" => ("OK", Color::Green),
@@ -2333,10 +2333,9 @@ pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
     if items.is_empty() {
         return String::new();
     }
-    // Two columns, as in the Python prototype (`cli/summary.py` uses a Rich table
-    // with `no_wrap` on the label column): pad the label column to its widest
-    // entry so every value starts at the same offset. Widths are measured after
-    // ANSI stripping, and per character, because CJK labels are two cells wide.
+    // Two columns: the label column never wraps, so pad it to its widest entry
+    // and every value starts at the same offset. Widths are measured after ANSI
+    // stripping, and per character, because CJK labels are two cells wide.
     let label_w = items.iter().map(|(label, _)| strip_ansi_len(label)).max().unwrap_or(0);
     // The value column: indent + label column + gap, and what is left of a row
     // once the borders and the single space around the content are taken out.
@@ -2348,7 +2347,7 @@ pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
         // `asc` widens glyphs in ASCII mode (`✓` becomes `[OK]`), so it has to run
         // before the width is measured; `panel_with` repeats it on the finished
         // line, which is idempotent.
-        let value = asc(&rich_to_ansi(&val));
+        let value = asc(&markup_to_ansi(&val));
         for (i, chunk) in wrap_ansi(&value, value_w).into_iter().enumerate() {
             if i == 0 {
                 lines.push(format!("  \x1b[1m{}{}\x1b[0m  {}", label, " ".repeat(pad), chunk));
@@ -2360,8 +2359,8 @@ pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
     panel_to_string(msg.summary_title, &lines)
 }
 
-/// Minimal Rich-markup → ANSI converter for summary values.
-fn rich_to_ansi(s: &str) -> String {
+/// Converts the summary's inline colour tags (`[green]` … `[/]`) into SGR sequences.
+fn markup_to_ansi(s: &str) -> String {
     s.replace("[green]", "\x1b[32m")
         .replace("[red]", "\x1b[31m")
         .replace("[yellow]", "\x1b[33m")
@@ -2556,7 +2555,7 @@ mod tests {
     }
 
     /// Regression: latency cells aggregated addr counts against domain counts
-    /// ("40.0мс 1/5"). Cells must be one line per endpoint like Python, with
+    /// ("40.0мс 1/5"). Cells must carry one line per endpoint, with
     /// the name column spanning ("Google", "Google #2").
     #[test]
     fn dns_table_cells_are_per_endpoint() {
@@ -2643,7 +2642,7 @@ mod tests {
     }
 
     #[test]
-    fn netinfo_panel_matches_python_rows() {
+    fn netinfo_panel_matches_expected_rows() {
         use dpi_core::i18n::get_messages;
         use dpi_core::i18n::Language;
         let (data, dns, bypass) = netinfo_fixture();
@@ -2706,9 +2705,9 @@ mod tests {
     }
 
     /// The domain table colors a foreign redirect red `REDIR` and a legitimate
-    /// response green `OK` (`status_color`; Python's `ProbeStatus.is_ok` counts a
-    /// red REDIR as not ok). The badge itself stays canonical Latin in every
-    /// language (Rule 4), and the cell colour survives `asc()` in ASCII mode.
+    /// response green `OK` (`status_color`; a red `REDIR` is not an ok status).
+    /// The badge itself stays canonical Latin in every language (Rule 4), and the
+    /// cell colour survives `asc()` in ASCII mode.
     #[test]
     fn foreign_redirect_cell_is_red() {
         use dpi_core::i18n::Language;
@@ -2829,9 +2828,9 @@ mod tests {
         assert!(custom.contains("FIREFOX = firefox133"), "the caveat still follows");
     }
 
-    /// The summary is a two-column table (label, value), as in the Python
-    /// prototype's Rich table: the label column is padded to its widest entry,
-    /// so a short label cannot pull its value out of the column.
+    /// The summary is a two-column table (label, value): the label column is
+    /// padded to its widest entry, so a short label cannot pull its value out of
+    /// the column.
     #[test]
     fn summary_rows_align_their_values_into_two_columns() {
         use dpi_core::i18n::{get_messages, Language};
@@ -2937,10 +2936,10 @@ mod tests {
         assert_eq!(list.join(" "), brands.join(", "), "wrapping loses no entry");
     }
 
-    /// The SNI discovery rows mirror the Rich markup of the Python original:
-    /// found is green, a ban is yellow, a miss is red, and every one of those
-    /// codes is what the legacy (non-VT) console translator maps onto a Win32
-    /// attribute — a row that loses its SGR goes monochrome on Windows 7.
+    /// The SNI discovery rows are colour-coded: found is green, a ban is yellow,
+    /// a miss is red, and every one of those codes is what the legacy (non-VT)
+    /// console translator maps onto a Win32 attribute — a row that loses its SGR
+    /// goes monochrome on Windows 7.
     #[test]
     fn whitelist_rows_carry_their_status_colors() {
         use dpi_core::i18n::{get_messages, Language};

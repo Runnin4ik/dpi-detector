@@ -15,7 +15,10 @@ fn is_tls_stage(stage: ConnectionStage) -> bool {
     )
 }
 
-/// Classifies an SSL/TLS error message (mirrors Python `classify_ssl_error`).
+/// Classifies an SSL/TLS error message into a status plus detail string: a
+/// handshake reset, a spoofed or garbled record, a fatal alert, a certificate
+/// failure, a premature EOF or a missing TLS 1.3. Anything unrecognised stays
+/// `Unknown` with the error text shortened.
 pub fn classify_ssl_error(
     err_msg: &str,
     bytes_read: usize,
@@ -152,9 +155,11 @@ fn timeout_at_stage(stage: &str) -> (DpiStatus, String) {
     }
 }
 
-/// Classifies a TCP connection error (mirrors Python `classify_connect_error`).
-/// `stage` uses Python stage names: "tcp_connect", "tls_handshake",
-/// "tls_connected", "sending_data", "reading_data".
+/// Classifies a TCP connection error: pool exhaustion, timeouts, DNS failures,
+/// TLS alerts surfacing inside connect errors, refusals, resets, aborts and
+/// unreachable hosts/routes.
+/// `stage` is one of "tcp_connect", "tls_handshake", "tls_connected",
+/// "sending_data", "reading_data" and picks the stage-specific verdict.
 pub fn classify_connect_error_full(
     err_msg: &str,
     raw_os_error: Option<i32>,
@@ -341,8 +346,8 @@ pub fn classify_tls_error(
     (status, detail)
 }
 
-/// Classifies HTTP-layer failures (mirrors Python `classify_read_error`
-/// for the reading_data stage). `raw_os_error`/`kind` come from the `io::Error`
+/// Classifies an HTTP-layer read failure, i.e. one raised while reading the
+/// response body ("reading_data"). `raw_os_error`/`kind` come from the `io::Error`
 /// at the end of the hyper error chain: Windows localizes that message
 /// ("Удаленный хост принудительно разорвал существующее подключение" is
 /// WSAECONNRESET), so the numeric code is the signal classification can trust.

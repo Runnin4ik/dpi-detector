@@ -112,8 +112,7 @@ pub(crate) fn mask_proxy(url: &str) -> String {
     }
 }
 
-/// Builds one per-family fact; missing Cymru fields become red "timeout"
-/// (mirrors the `update`/`setdefault` block in `fetch_network_panel`).
+/// Builds one per-family fact; missing Cymru fields become red "timeout".
 pub(crate) fn family_info(ip: Option<(IpAddr, u64)>, extra: Option<IpCymruInfo>) -> Option<NetFamilyInfo> {
     let (addr, ms) = ip?;
     let missing = || "timeout".to_string();
@@ -295,7 +294,7 @@ pub(crate) async fn run_test_suite(
     }
 
     let sem = Arc::new(Semaphore::new(concurrency.max(1)));
-    // Live progress lines on a TTY only (mirrors rich transient Progress);
+    // Live progress lines on a TTY only;
     // pipes and --json stay byte-clean.
     let live = LiveProgress::new();
     let phases: Option<PhaseProgress> = if !args.json && std::io::stderr().is_terminal() {
@@ -400,8 +399,7 @@ pub(crate) async fn run_test_suite(
         };
 
         if let Ok((ips, v4_extra, v6_extra)) = net_data {
-            // Upstream router / VPN relay: whoami.akamai.net via local candidates
-            // (mirrors fetch_network_panel).
+            // Upstream router / VPN relay: whoami.akamai.net via local candidates.
             let mut candidates: Vec<IpAddr> = Vec::new();
             for (ip_str, _) in &dns_info.active {
                 if let Ok(ip) = ip_str.parse::<IpAddr>() {
@@ -447,7 +445,7 @@ pub(crate) async fn run_test_suite(
             let v4 = family_info(ips.v4.map(|(ip, ms)| (IpAddr::V4(ip), ms)), v4_extra.clone());
             let v6 = ips.v6.map(|(ip, ms)| (IpAddr::V6(ip), ms));
             let v6 = family_info(v6, v6_extra);
-            // Both lookups dead: red "timeout" rows (mirrors fetch_network_panel).
+            // Both lookups dead: red "timeout" rows.
             let (v4, v6) = match (&v4, &v6) {
                 (None, None) => (Some(timeout_family()), Some(timeout_family())),
                 _ => (v4, v6),
@@ -532,7 +530,7 @@ pub(crate) async fn run_test_suite(
                 cfg.connect_timeout
             ));
         }
-        // Silent stub collection with timeout (mirrors STUB_IPS_TIMEOUT)
+        // Silent stub collection with its own timeout.
         let stub_ips: HashSet<IpAddr> = tokio::time::timeout(
             Duration::from_secs_f64(cfg.stub_ips_timeout),
             collect_stub_ips(cfg),

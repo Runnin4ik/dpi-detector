@@ -30,7 +30,7 @@ pub struct PublicIps {
 #[derive(Debug, Clone, Default)]
 pub struct IpCymruInfo {
     pub asn: String,
-    /// None = answer missing (renders red "timeout", mirrors setdefault).
+    /// None = answer missing (renders red "timeout").
     pub subnet: Option<String>,
     pub country: Option<String>,
     pub org: Option<String>,
@@ -38,10 +38,10 @@ pub struct IpCymruInfo {
 
 #[derive(Debug, Clone, Default)]
 pub struct SystemDnsInfo {
-    /// Flat active + other_static list (machine JSON contract; mirrors display order).
+    /// Flat active + other_static list (machine JSON contract), active entries first.
     pub nameservers: Vec<IpAddr>,
     pub gateway: Option<IpAddr>,
-    /// (server, "static"|"dhcp"|"wsl") on the active interface (mirrors `active`).
+    /// (server, "static"|"dhcp"|"wsl") on the active interface.
     pub active: Vec<(String, String)>,
     pub active_name: Option<String>,
     pub active_ip: Option<String>,
@@ -59,7 +59,7 @@ pub struct SystemDnsInfo {
     pub fallback: bool,
 }
 
-/// Two-letter country code → flag emoji (mirrors `_flag_emoji`).
+/// Two-letter country code → regional-indicator flag emoji; empty for anything else.
 pub fn flag_emoji(cc: &str) -> String {
     let cc = cc.trim().to_uppercase();
     if cc.len() != 2 || !cc.chars().all(|c| c.is_ascii_alphabetic()) {
@@ -70,7 +70,7 @@ pub fn flag_emoji(cc: &str) -> String {
         .collect()
 }
 
-/// True for TUN/VPN adapter names (mirrors `_is_tun_name`).
+/// True when the adapter name contains a known TUN/VPN marker.
 pub fn is_tun_name(name: &str) -> bool {
     let n = name.to_lowercase();
     ["tun", "xray", "sing-box", "singbox", "wireguard", "warp", "tailscale", "zerotier", "mullvad"]
@@ -116,7 +116,7 @@ pub async fn http_get_text(url_str: &str, timeout_dur: Duration) -> Result<Strin
     }
 }
 
-/// Follows redirects (mirrors httpx `follow_redirects=True` + status 200 check).
+/// Follows up to four redirect hops, then returns the body of a 200 response.
 async fn http_get_chain(url_str: &str, timeout_dur: Duration) -> Result<String, String> {
     let mut url = Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
     for _ in 0..4 {
@@ -212,8 +212,8 @@ where
 /// Fetches public IPv4 and IPv6 addresses concurrently with latency in milliseconds.
 /// Endpoint lists come from config (IP4/IP6_LOOKUP_URLS).
 pub async fn fetch_public_ips(v4_urls: &[String], v6_urls: &[String], timeout_dur: Duration) -> PublicIps {
-    /// Python `_lookup_first`: all endpoints race; first valid (right family,
-    /// non-private) wins; TTLB is measured from the shared start.
+    /// All endpoints race; the first valid (right family, non-private)
+    /// answer wins, and TTLB is measured from the shared start.
     async fn first_valid(urls: &[String], want_v6: bool, timeout_dur: Duration) -> Option<(IpAddr, u64)> {
         let t0 = Instant::now();
         let mut set = tokio::task::JoinSet::new();
@@ -256,7 +256,7 @@ pub async fn fetch_public_ips(v4_urls: &[String], v6_urls: &[String], timeout_du
     PublicIps { v4, v6 }
 }
 
-/// Mirrors `not ip_obj.is_private`: RFC1918 for v4, unique-local for v6.
+/// Private-address filter: RFC1918 for v4, unique-local (fc00::/7) for v6.
 fn is_private_lookup_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_private(),
@@ -286,7 +286,7 @@ async fn fetch_ip_cymru_chain(
     doh_servers: &[String],
     timeout_dur: Duration,
 ) -> Option<IpCymruInfo> {
-    // Try each configured Cymru DoH server until one answers (mirrors config fallback chain)
+    // Walk the configured Cymru DoH servers until one answers; Cloudflare is the fallback.
     let fallbacks = ["https://cloudflare-dns.com/dns-query".to_string()];
     let servers: Vec<&str> = if doh_servers.is_empty() {
         fallbacks.iter().map(|s| s.as_str()).collect()
@@ -313,7 +313,6 @@ fn collapse_ws(s: &str) -> String {
 }
 
 /// Cymru origin answer ("AS | subnet | CC | ...") -> (asn, subnet, cc).
-/// Mirrors the origin-query parsing in `_fetch_ip_info`.
 fn parse_cymru_origin(txt: &str) -> (String, Option<String>, Option<String>) {
     let parts = split_txt_fields(txt);
     let asn = parts.first().unwrap_or(&"").split_whitespace().next().unwrap_or("").to_string();
@@ -446,7 +445,7 @@ pub fn detect_bypass_tools(signatures: &[(String, Vec<String>)]) -> Vec<String> 
     detected
 }
 
-/// Registry bases (mirror `system_check.py`).
+/// Registry bases: IPv4 and IPv6 interface keys, plus the network-class GUID map.
 #[cfg(target_os = "windows")]
 const TCPIP_BASE: &str = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces";
 #[cfg(target_os = "windows")]
@@ -455,7 +454,7 @@ const TCPIP6_BASE: &str = r"SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\
 const NET_CLASS: &str =
     r"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}";
 
-/// Runs a helper process with a timeout (mirrors `subprocess.run(..., timeout=5)`).
+/// Runs a helper process and returns its stdout, or `None` when the timeout expires.
 fn run_cmd(program: &str, args: &[&str], timeout_dur: Duration) -> Option<String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let prog = program.to_string();
@@ -487,7 +486,7 @@ fn reg_strings(key: &RegKey, name: &str) -> Vec<String> {
     }
 }
 
-/// GUIDs of really existing adapters (mirrors `_live_adapter_guids`).
+/// Lowercased GUIDs of the adapters that exist in the network-class registry.
 #[cfg(target_os = "windows")]
 fn live_adapter_guids() -> HashSet<String> {
     let mut guids = HashSet::new();
@@ -499,7 +498,7 @@ fn live_adapter_guids() -> HashSet<String> {
     guids
 }
 
-/// GUID (lowercase) -> adapter name (mirrors `_adapter_names`).
+/// Lowercase GUID -> adapter name, from each adapter key's Connection subkey.
 #[cfg(target_os = "windows")]
 fn adapter_names() -> HashMap<String, String> {
     let mut names = HashMap::new();
@@ -517,7 +516,7 @@ fn adapter_names() -> HashMap<String, String> {
 }
 
 /// Real Windows build number via registry (`CurrentBuildNumber`).
-/// Never the manifest-masked API (mirrors `_windows_build`); 0 when unreadable.
+/// Never the manifest-masked API; 0 when unreadable.
 #[cfg(target_os = "windows")]
 fn windows_build() -> u32 {
     if let Ok(k) = hklm().open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion") {
@@ -535,7 +534,7 @@ fn windows_build() -> u32 {
     0
 }
 
-/// Windows marketing name by build (mirrors `_windows_version_name`).
+/// Windows marketing name for a build number.
 #[cfg(target_os = "windows")]
 fn windows_version_name(build: u32) -> &'static str {
     if build >= 22000 {
@@ -553,7 +552,9 @@ fn windows_version_name(build: u32) -> &'static str {
     }
 }
 
-/// System DoH map: server -> template (mirrors `_windows_doh`).
+/// System DoH map: resolver IP -> template URL, from the Dnscache interface
+/// settings ("doh" when the template is missing); empty below build 20348 or
+/// when the DNS-client policy disables DoH.
 #[cfg(target_os = "windows")]
 fn windows_doh(build: u32) -> HashMap<String, String> {
     let mut doh = HashMap::new();
@@ -602,7 +603,7 @@ fn split_list(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// DNS of one interface: [(server, "static"|"dhcp")] (mirrors `_read_dns_entries`).
+/// DNS of one interface: [(server, "static"|"dhcp")], from its IPv4 and IPv6 keys.
 #[cfg(target_os = "windows")]
 fn read_dns_entries(guid: &str) -> Vec<(String, String)> {
     let mut entries: Vec<(String, String)> = Vec::new();
@@ -643,7 +644,8 @@ fn read_dns_entries(guid: &str) -> Vec<(String, String)> {
     entries
 }
 
-/// Default route with the lowest metric: (gateway, iface_ip) (mirrors `_default_route`).
+/// Default route with the lowest metric: (gateway, iface_ip) from `route print`,
+/// or empty strings when there is none.
 #[cfg(target_os = "windows")]
 fn default_route() -> (String, String) {
     let out = match run_cmd("route", &["print", "0.0.0.0"], Duration::from_secs(5)) {
@@ -666,8 +668,7 @@ fn default_route() -> (String, String) {
     best.map_or((String::new(), String::new()), |b| (b.0, b.1))
 }
 
-/// GUID of the default-route owner via registry gateway/IP match
-/// (mirrors `_adapter_for_route`).
+/// GUID of the default-route owner via registry gateway/IP match.
 #[cfg(target_os = "windows")]
 fn adapter_for_route(gw: &str, iface_ip: &str, live: &HashSet<String>) -> String {
     if let Ok(key) = hklm().open_subkey(TCPIP_BASE) {
@@ -703,7 +704,7 @@ fn adapter_for_route(gw: &str, iface_ip: &str, live: &HashSet<String>) -> String
     String::new()
 }
 
-/// GUID of the active adapter (mirrors `_active_adapter_guid`).
+/// GUID of the active adapter.
 /// Registry match first; fallback scans live interfaces for a gateway value,
 /// preferring the route gateway. No netsh subprocess: the registry carries no
 /// per-interface metric, so ties break by sorted GUID (deterministic).
@@ -739,7 +740,7 @@ fn active_adapter_guid(live: &HashSet<String>, gw: &str, iface_ip: &str) -> Stri
     first
 }
 
-/// First gateway value of one interface (registry scan replacing `_netsh_sections`).
+/// First gateway value of one interface, read straight from its registry key.
 #[cfg(target_os = "windows")]
 fn interface_gateway(guid: &str) -> String {
     if let Ok(key) = hklm().open_subkey(TCPIP_BASE) {
@@ -771,7 +772,7 @@ fn flat_nameservers(info: &SystemDnsInfo) -> Vec<IpAddr> {
 }
 
 /// Discovers system DNS nameservers and default gateway.
-/// Mirrors `get_system_dns` (registry on Windows, resolv.conf elsewhere).
+/// Registry on Windows; resolv.conf, /proc/net/route and `.wslconfig` elsewhere.
 pub fn get_system_dns() -> SystemDnsInfo {
     #[cfg(target_os = "windows")]
     {
@@ -868,7 +869,8 @@ pub fn get_system_dns() -> SystemDnsInfo {
     }
 }
 
-/// `.wslconfig` network mode on the Windows side (mirrors `_wsl_net_mode`).
+/// `[wsl2]` networkingMode from the Windows-side `.wslconfig` ("nat" by default),
+/// with " + dnsTunneling" appended when that option is on.
 #[cfg(not(target_os = "windows"))]
 fn wsl_net_mode() -> String {
     let mut cfg = String::new();
@@ -960,7 +962,7 @@ mod tests {
         let (asn, sub, cc) = parse_cymru_origin("\"200 |  |  |\"");
         assert_eq!(asn, "200");
         assert_eq!((sub, cc), (None, None));
-        // last field of each kind wins, like the Python loop
+        // the last field of each kind wins
         let (_, sub, cc) = parse_cymru_origin("\"300 | 1.0.0.0/8 | XY | 2.0.0.0/8 | ZZ |\"");
         assert_eq!((sub.as_deref(), cc.as_deref()), (Some("2.0.0.0/8"), Some("ZZ")));
     }

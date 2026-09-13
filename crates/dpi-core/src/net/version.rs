@@ -89,7 +89,7 @@ impl PartialOrd for Ver {
     }
 }
 
-/// Semver compare: `latest > current` (mirrors `is_newer`). Tolerant of `v`,
+/// Semver compare: `latest > current`. Tolerant of `v`,
 /// build metadata and junk; prereleases order per semver, so a beta beats an
 /// alpha, `alpha.10` beats `alpha.9`, and the release beats its prereleases.
 pub fn is_newer(latest: &str, current: &str) -> bool {
@@ -150,7 +150,7 @@ fn newest_release(releases: &[serde_json::Value]) -> Option<ReleaseInfo> {
         .map(|(_, info)| info)
 }
 
-/// Banner badge text (mirrors `version_badge`).
+/// Banner badge text in the default language (Russian).
 pub fn version_badge(latest: Option<&ReleaseInfo>) -> String {
     version_badge_lang(latest, Language::Ru)
 }

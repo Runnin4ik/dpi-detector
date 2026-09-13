@@ -122,7 +122,7 @@ async fn run_menu_loop(
         .unwrap_or(0);
     let v6_supported = ipv6_supported();
 
-    let mut selected_tests: HashSet<char> = HashSet::new(); // empty by default, like Python
+    let mut selected_tests: HashSet<char> = HashSet::new(); // empty by default
 
     // Paint state: a full clear+redraw several times a second flickers, so
     // repaint only on the first paint, a keypress, or a badge/row change.
@@ -134,8 +134,8 @@ async fn run_menu_loop(
     // so the frame is redrawn where it is, not at the top of the buffer.
     let mut drawn = 0u16;
     let mut dirty = true;
-    // Empty-selection warning (mirrors Python "Выберите хотя бы один тест"):
-    // shown until the next keypress.
+    // Empty-selection warning ("Выберите хотя бы один тест"): shown until the
+    // next keypress.
     let mut notice: Option<String> = None;
     let mut reader = EventStream::new();
     loop {
@@ -314,7 +314,7 @@ async fn run_menu_loop(
                 | KeyCode::Char('g')
                 | KeyCode::Char('G') => {
                     if selected_tests.is_empty() {
-                        // Mirrors Python: refuse to run with no tests checked.
+                        // Refuse to run when no test is checked.
                         notice = Some(msg.menu_need_one.to_string());
                         continue;
                     }
@@ -515,7 +515,7 @@ fn pad_width(s: &str, target_width: usize) -> String {
 
 
 
-/// Toggles a test checkbox (mirrors Python `_toggle_test`).
+/// Toggles a test checkbox: the digit is added if absent, removed if present.
 pub fn toggle_test(selected: &mut HashSet<char>, digit: char) {
     if !selected.remove(&digit) {
         selected.insert(digit);
@@ -1118,7 +1118,8 @@ pub(crate) fn export_report(path: &str, content: &str, msg: &Messages) {
 }
 
 
-/// Legend-only interactive loop (mirrors `handle_legend_menu`).
+/// Legend-only interactive loop: shows the legend and its key menu until the user
+/// repeats it, goes back to the menu, or quits.
 pub(crate) fn legend_loop(lang: Language, msg: &Messages) -> MenuAction {
     loop {
         print_out(&legend_text(lang, msg));

@@ -1,5 +1,4 @@
-//! Test 4: white-SNI search per ASN (mirrors
-//! `cli/runners.py::run_whitelist_sni_test`).
+//! Test 4: white-SNI search per ASN.
 //!
 //! Algorithm:
 //! 1. Take all port-443 TCP targets.
