@@ -6,6 +6,7 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 
 use crate::classify::DpiProbeStream;
+use crate::net::fingerprint::TlsFingerprint;
 use crate::net::tls::{create_insecure_dpi_tls_config, create_verifying_tls_config};
 
 /// Pluggable TLS connector trait.
@@ -32,16 +33,26 @@ impl RustlsConnector {
         }
     }
     pub fn new_insecure_tls13() -> Self {
-        use crate::net::tls::create_insecure_dpi_tls_config_tls13;
+        Self::new_insecure_tls13_with(TlsFingerprint::Rustls)
+    }
+
+    /// TLS 1.3-pinned connector presenting the given ClientHello profile.
+    pub fn new_insecure_tls13_with(fingerprint: TlsFingerprint) -> Self {
+        use crate::net::tls::create_insecure_dpi_tls_config_tls13_with;
         Self {
-            connector: TlsConnector::from(create_insecure_dpi_tls_config_tls13()),
+            connector: TlsConnector::from(create_insecure_dpi_tls_config_tls13_with(fingerprint)),
         }
     }
 
     pub fn new_insecure_tls12() -> Self {
-        use crate::net::tls::create_insecure_dpi_tls_config_tls12;
+        Self::new_insecure_tls12_with(TlsFingerprint::Rustls)
+    }
+
+    /// TLS 1.2-pinned connector presenting the given ClientHello profile.
+    pub fn new_insecure_tls12_with(fingerprint: TlsFingerprint) -> Self {
+        use crate::net::tls::create_insecure_dpi_tls_config_tls12_with;
         Self {
-            connector: TlsConnector::from(create_insecure_dpi_tls_config_tls12()),
+            connector: TlsConnector::from(create_insecure_dpi_tls_config_tls12_with(fingerprint)),
         }
     }
     pub fn new_verifying() -> Self {

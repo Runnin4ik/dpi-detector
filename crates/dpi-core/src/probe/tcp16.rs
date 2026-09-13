@@ -88,7 +88,7 @@ async fn connect_fat_target(
         };
         let tls_stream = match timeout(
             Duration::from_secs_f64(cfg.fat_connect_timeout),
-            TlsConnector::from(create_tls_config()).connect(server_name, tcp),
+            TlsConnector::from(create_tls_config(cfg.fingerprint())).connect(server_name, tcp),
         )
         .await
         {
@@ -312,8 +312,10 @@ pub async fn probe_tcp_16_20(
     (alive, DpiStatus::Ok, String::new(), measured_rtt)
 }
 
-fn create_tls_config() -> std::sync::Arc<rustls::ClientConfig> {
-    crate::net::tls::create_insecure_dpi_tls_config()
+fn create_tls_config(
+    fingerprint: crate::net::fingerprint::TlsFingerprint,
+) -> std::sync::Arc<rustls::ClientConfig> {
+    crate::net::tls::create_insecure_dpi_tls_config_with(fingerprint)
 }
 
 /// Semaphore-gated wrapper (mirrors `check_tcp_16_20`).

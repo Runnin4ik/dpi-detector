@@ -281,9 +281,9 @@ pub async fn check_domain_tls(
         // TLS handshake (version-pinned client)
         *stage.lock() = "tls_handshake".to_string();
         let rustls_conn = if tls12_only {
-            RustlsConnector::new_insecure_tls12()
+            RustlsConnector::new_insecure_tls12_with(fingerprint)
         } else {
-            RustlsConnector::new_insecure_tls13()
+            RustlsConnector::new_insecure_tls13_with(fingerprint)
         };
         let server_name = match ServerName::try_from(domain.to_string()) {
             Ok(n) => n,
@@ -298,6 +298,7 @@ pub async fn check_domain_tls(
             rustls_conn.connect(server_name, probe_stream),
         )
         .await
+        let fingerprint = cfg.fingerprint();
         {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
