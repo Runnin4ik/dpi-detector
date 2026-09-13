@@ -15,7 +15,9 @@ mod menu;
 mod render;
 mod runner;
 mod terminal;
+mod tui;
 mod update;
+mod views;
 
 use dpi_core::classify::Detail;
 use menu::{
