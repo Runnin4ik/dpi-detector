@@ -27,8 +27,8 @@ use menu::{
     PostTestAction, VersionSlot,
 };
 use runner::{
-    burst_plan_from_cli, burst_targets_after_screen, load_domains, load_tcp16_targets,
-    load_whitelist_sni_list, mask_proxy, run_test_suite,
+    burst_plan_from_cli, burst_targets_after_screen, load_burst_domains, load_domains,
+    load_tcp16_targets, load_whitelist_sni_list, mask_proxy, run_test_suite,
 };
 use render::{
     asc, clean_output, output_str, plain_mode, render_banner, render_fingerprint_header, set_ascii_mode,
@@ -434,7 +434,11 @@ async fn main() {
         println_out(&render_fingerprint_header(cfg.fingerprint(), &msg));
     }
 
-    let mut burst_plan = burst_plan_from_cli(&args, &domains, &msg);
+    // Test 6 fires at its own shipped hosts: the two tests ask opposite questions
+    // of a domain, and a site that is already blocked cannot tell whether the
+    // connecting is what broke it.
+    let burst_plan_domains = load_burst_domains(&args, profile);
+    let mut burst_plan = burst_plan_from_cli(&args, &burst_plan_domains, &msg);
     // The configured list, kept apart from what a run actually probes: the
     // settings screen shows its size as the meaning of an empty box, and an
     // empty box has to go back to it instead of reusing the host typed into a
@@ -588,6 +592,7 @@ async fn main() {
 mod tests {
     use super::*;
     use crate::args::CliArgs;
+    use dpi_core::config::AppConfig;
 
     #[test]
     fn test_cdn_detail_keeps_the_time_only_when_there_is_no_error() {
@@ -603,6 +608,28 @@ mod tests {
             tcp16_detail(Detail::TlsHandshakeTimeout, 8.4),
             Detail::TlsHandshakeTimeout
         );
+    }
+
+    /// Test 6 must not inherit test 2's list. A `domains.txt` next to the binary
+    /// is the censored-sites list, and that is the one thing test 6 cannot be
+    /// fired at: a blocked host fails every attempt for a reason the test does
+    /// not measure, so a run at those hosts would blame the connecting for a
+    /// block that was always there.
+    #[test]
+    fn burst_targets_come_from_their_own_list() {
+        let args = CliArgs::default();
+        let burst = load_burst_domains(&args, RegionProfile::Ru);
+        assert!(burst.contains(&"reg.ru".to_string()), "{burst:?}");
+        assert!(burst.contains(&"info.paymaster.ru".to_string()), "{burst:?}");
+        let shared = load_domains(&args, &AppConfig::default(), RegionProfile::Ru);
+        assert!(!burst.is_empty() && !shared.is_empty());
+        assert!(!burst.iter().any(|d| shared.contains(d)), "the two lists ask different questions");
+        // `-d` still picks the hosts for a run, and picks them for this test too.
+        let picked = CliArgs {
+            domain: vec!["https://info.paymaster.ru/x?y=1".to_string()],
+            ..CliArgs::default()
+        };
+        assert_eq!(load_burst_domains(&picked, RegionProfile::Ru), vec!["info.paymaster.ru"]);
     }
 
     /// `-d` reaches test 6 through the same cleaner as everything else: a pasted

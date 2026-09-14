@@ -748,11 +748,12 @@ impl AppConfig {
 }
 
 /// Shipped lists embedded into the binary (workspace-root config.yml,
-/// domains.txt, tcp16.json, whitelist_sni.txt). External files (cwd, then exe
-/// dir) win when present; the embedded copies keep the standalone binary
-/// fully working from any directory, including routers.
+/// domains.txt, burst-domains.txt, tcp16.json, whitelist_sni.txt). External
+/// files (cwd, then exe dir) win when present; the embedded copies keep the
+/// standalone binary fully working from any directory, including routers.
 pub const EMBEDDED_CONFIG_YML: &str = include_str!("../../../config.yml");
 const EMBEDDED_DOMAINS_TXT: &str = include_str!("../../../domains.txt");
+const EMBEDDED_BURST_DOMAINS_TXT: &str = include_str!("../../../burst-domains.txt");
 const EMBEDDED_TCP16_JSON: &str = include_str!("../../../tcp16.json");
 const EMBEDDED_WHITELIST_SNI_TXT: &str = include_str!("../../../whitelist_sni.txt");
 
@@ -896,6 +897,16 @@ fn parse_whitelist_sni(content: &str) -> Vec<(String, usize)> {
 /// Domains shipped inside the binary (fallback when domains.txt is absent).
 pub fn embedded_domains() -> Vec<String> {
     parse_domains(EMBEDDED_DOMAINS_TXT)
+}
+
+/// Test 6's own shipped targets, fallback when burst-domains.txt is absent.
+///
+/// Separate from `embedded_domains` because the two tests ask opposite
+/// questions of a host: test 2 wants sites known to be censored, test 6 wants
+/// sites that answer normally until the connecting itself becomes the reason
+/// they stop. One list cannot be both.
+pub fn embedded_burst_domains() -> Vec<String> {
+    parse_domains(EMBEDDED_BURST_DOMAINS_TXT)
 }
 
 /// Whitelist SNI shipped inside the binary.
@@ -1135,6 +1146,18 @@ mod tests {
         assert_eq!(embedded_tcp16_targets(), file_targets);
         assert!(!embedded_tcp16_targets().is_empty());
         assert!(!embedded_whitelist_sni().is_empty());
+        // Test 6 ships its own short list of ordinary hosts: same invariant, and
+        // it is not the censored-sites list test 2 probes.
+        let burst = embedded_burst_domains();
+        assert!(!burst.is_empty(), "the fallback ships a list");
+        assert!(burst.contains(&"info.paymaster.ru".to_string()));
+        assert!(burst.contains(&"reg.ru".to_string()));
+        assert!(!burst.iter().any(|d| domains.contains(d)), "the two lists ask different questions");
+        let shipped_burst = EMBEDDED_BURST_DOMAINS_TXT
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+            .count();
+        assert_eq!(burst.len(), shipped_burst, "every shipped burst target survives cleaning");
         let cfg = AppConfig::from_yaml_str(EMBEDDED_CONFIG_YML);
         assert_eq!(cfg.availability_servers().len(), 121);
     }

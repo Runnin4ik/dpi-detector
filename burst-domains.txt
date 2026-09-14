@@ -1,0 +1,14 @@
+# Test 6 targets: ordinary sites, not the blocked ones test 2 measures.
+#
+# The burst test asks a different question — does the act of connecting to this
+# host N times in a row change the answer? — so it needs hosts that answer
+# normally on the first connection and are not censored by address or SNI. A
+# blocked site would fail every attempt for a reason the test does not measure.
+realmeteo.ru
+ezgame.su
+scpslgame.ru
+kyles.ru
+amserg.com
+smartape.ru
+reg.ru
+info.paymaster.ru

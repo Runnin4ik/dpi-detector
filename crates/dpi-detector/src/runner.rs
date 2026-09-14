@@ -10,9 +10,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use dpi_core::classify::Detail;
 use dpi_core::config::{
-    clean_domain, default_tcp16_targets, embedded_domains, embedded_tcp16_targets,
-    embedded_whitelist_sni, load_domains_from_file, load_tcp16_targets_from_file, load_whitelist_sni,
-    resource_path, AppConfig, Tcp16Target,
+    clean_domain, default_tcp16_targets, embedded_burst_domains, embedded_domains,
+    embedded_tcp16_targets, embedded_whitelist_sni, load_domains_from_file,
+    load_tcp16_targets_from_file, load_whitelist_sni, resource_path, AppConfig, Tcp16Target,
 };
 use dpi_core::probe::dns_avail::check_dns_availability;
 use dpi_core::dns::parse_socks_proxy;
@@ -48,17 +48,40 @@ use crate::{print_out, tcp16_detail, Emitter};
 /// then the embedded list, then the profile's own. A file that parses to nothing
 /// falls through rather than shrinking the run to zero.
 pub(crate) fn load_domains(args: &CliArgs, cfg: &AppConfig, profile: RegionProfile) -> Vec<String> {
+    load_domain_set(args, profile, &cfg.domains_file, embedded_domains())
+}
+
+/// Test 6's shipped target file. Deliberately not the configured `domains_file`:
+/// that one belongs to test 2, and a `domains.txt` sitting next to the binary
+/// would otherwise put the censored-sites list in front of test 6's own hosts.
+const BURST_DOMAINS_FILE: &str = "burst-domains.txt";
+
+/// Test 6's targets, by the same precedence with its own list.
+///
+/// `-d` and `--domains` still pick the hosts for a run — someone who wrote a
+/// list out means it. What this does not do is fall back to the censored sites
+/// test 2 measures: a host that is already blocked cannot say whether connecting
+/// to it N times is what broke it.
+pub(crate) fn load_burst_domains(args: &CliArgs, profile: RegionProfile) -> Vec<String> {
+    load_domain_set(args, profile, BURST_DOMAINS_FILE, embedded_burst_domains())
+}
+
+fn load_domain_set(
+    args: &CliArgs,
+    profile: RegionProfile,
+    file_name: &str,
+    embedded: Vec<String>,
+) -> Vec<String> {
     if !args.domain.is_empty() {
         return args.domain.iter().filter_map(|d| clean_domain(d)).collect();
     }
     if let Some(path) = &args.domains {
         return load_domains_from_file(path).unwrap_or_default();
     }
-    let from_file = load_domains_from_file(resource_path(&cfg.domains_file)).unwrap_or_default();
+    let from_file = load_domains_from_file(resource_path(file_name)).unwrap_or_default();
     if !from_file.is_empty() {
         return from_file;
     }
-    let embedded = embedded_domains();
     if !embedded.is_empty() {
         return embedded;
     }

@@ -22,7 +22,7 @@ pub struct CliArgs {
     pub tcp16: Option<String>,
     pub ascii: bool,
     pub fingerprint: Option<String>,
-    /// Test 6: simultaneous handshakes per round.
+    /// Test 6: connections fired at each host, one after another.
     pub burst: Option<usize>,
     /// Test 6: per-handshake timeout in seconds.
     pub burst_timeout: Option<u64>,

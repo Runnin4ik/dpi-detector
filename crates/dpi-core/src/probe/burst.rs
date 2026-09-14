@@ -1,12 +1,18 @@
-//! Test 6: simultaneous-attempt stress per SNI.
+//! Test 6: repeated-attempt stress per SNI.
 //!
-//! Reproduces the class of throttling where a handful of attempts with one
+//! Reproduces the class of throttling where a handful of connections with one
 //! fingerprint makes a site unreachable for a while: every attempt is its own
 //! TCP connection carrying a full (non-resumed) ClientHello of the selected
-//! profile, released together through a barrier so they are simultaneous rather
-//! than merely concurrent, and then one `GET /` over whatever protocol the
-//! handshake negotiated. What the test reports is how many of the N came back
-//! whole and the classified verdict of each that did not.
+//! profile, and then one `GET /` over whatever protocol the handshake
+//! negotiated. What the test reports is how many of the N came back whole and
+//! the classified verdict of each that did not.
+//!
+//! The attempts run **one at a time, in order**. Fired together they measure the
+//! wrong thing: a link that starts dropping after the third connection answers
+//! all N of a simultaneous round, so the block that round caused is only visible
+//! in the next run, as a domain that "suddenly" stopped answering. Sequential,
+//! the k-th attempt inherits whatever the first k−1 triggered, and the count of
+//! answers before the first refusal is the number the test is asked for.
 //!
 //! The handshake alone is not the whole story: a shape can be answered and then
 //! cut, redirected or blocked the moment the request goes out, which is the
@@ -15,9 +21,9 @@
 //! comparable.
 //!
 //! The probes of test 2 answer "is this site reachable"; this one answers "does
-//! the act of asking N times change the answer", which needs the attempts to be
-//! indistinguishable except for their simultaneity — hence the barrier and the
-//! fresh session per attempt.
+//! the act of asking N times change the answer", which needs a fresh session per
+//! attempt and the same request for every shape — the shape and the count of
+//! previous attempts must be the only differences between two attempts.
 //!
 //! Profiles are fired **one at a time over the whole target list**: every host
 //! is probed with the first shape to the end before any host sees the second.
@@ -32,7 +38,7 @@ use std::time::{Duration, Instant};
 use rustls::pki_types::ServerName;
 use rustls::ProtocolVersion;
 use tokio::net::TcpStream;
-use tokio::sync::{Barrier, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 
@@ -51,9 +57,10 @@ use crate::net::tls::TlsProfile;
 
 /// Port every attempt dials (the probes' TLS column uses the same one).
 pub const BURST_PORT: u16 = 443;
-/// Bounds of the simultaneous-request count. Two is the smallest number that
-/// can differ from a single probe; the upper bound keeps a stray keystroke from
-/// turning the test into a flood.
+/// Bounds of the per-round attempt count — the connections one shape fires at
+/// one host, one after another. Two is the smallest number that can differ from
+/// a single probe; the upper bound keeps a stray keystroke from turning the test
+/// into a flood.
 pub const BURST_MIN_ATTEMPTS: usize = 2;
 pub const BURST_MAX_ATTEMPTS: usize = 16;
 pub const BURST_DEFAULT_ATTEMPTS: usize = 4;
@@ -447,8 +454,14 @@ async fn resolve_targets(
     addresses
 }
 
-/// One profile's round against one address: connect every attempt, then release
-/// the handshakes together.
+/// One profile's round against one address: the attempts run one after another,
+/// each the whole connection — dial, handshake, request.
+///
+/// Sequencing is the measurement, not a rate limit. Together, the attempts of
+/// one round all take the same answer, so a host that stops answering after the
+/// third connection looks healthy in the run that broke it; one at a time, the
+/// k-th attempt is a question asked *after* the first k−1 were asked, and the
+/// count of answers before the first refusal is what the test reports.
 pub async fn burst_profile(
     addr: &SocketAddr,
     domain: &str,
@@ -456,62 +469,27 @@ pub async fn burst_profile(
     settings: &BurstSettings,
     cfg: &AppConfig,
 ) -> BurstProfileReport {
-    let attempts = settings.attempts;
-    let mut slots: Vec<Option<BurstAttempt>> = (0..attempts).map(|_| None).collect();
-
-    // Phase 1 — one TCP connection per attempt, dialled in parallel.
-    let mut connected: Vec<(usize, DpiProbeStream<TcpStream>, DpiProbeTracker)> = Vec::with_capacity(attempts);
-    let mut dials = JoinSet::new();
-    for index in 0..attempts {
-        let addr = *addr;
-        let limit = settings.timeout;
-        dials.spawn(async move { (index, connect_attempt(addr, limit).await) });
+    let mut profile = offer_for(settings.tls, fingerprint);
+    if let Some(alpn) = settings.alpn.offered() {
+        profile = profile.alpn(alpn);
     }
-    while let Some(joined) = dials.join_next().await {
-        if let Ok((index, Ok((stream, tracker)))) = joined {
-            connected.push((index, stream, tracker));
-        } else if let Ok((index, Err(attempt))) = joined {
-            slots[index] = Some(attempt);
-        }
-    }
-
-    // Phase 2 — the handshakes start together. Only the connections that came up
-    // join the barrier, so one refused dial cannot deadlock the rest.
-    if !connected.is_empty() {
-        let mut profile = offer_for(settings.tls, fingerprint);
-        if let Some(alpn) = settings.alpn.offered() {
-            profile = profile.alpn(alpn);
-        }
-        let connector = Arc::new(RustlsConnector::from(profile));
-        let gate = Arc::new(Barrier::new(connected.len()));
-        let mut handshakes = JoinSet::new();
-        for (index, stream, tracker) in connected {
-            let connector = Arc::clone(&connector);
-            let gate = Arc::clone(&gate);
-            let name = domain.to_string();
-            let limit = settings.timeout;
-            let round = Round { fingerprint, axis: settings.tls, cfg: cfg.clone() };
-            handshakes.spawn(async move {
-                (index, handshake_attempt(connector, name, stream, tracker, gate, limit, round).await)
-            });
-        }
-        while let Some(joined) = handshakes.join_next().await {
-            if let Ok((index, attempt)) = joined {
-                slots[index] = Some(attempt);
+    // Built once for the round: every attempt of one shape presents the same
+    // hello, and a per-attempt connector would add nothing but a copy.
+    let connector = RustlsConnector::from(profile);
+    let round = Round { fingerprint, axis: settings.tls, cfg: cfg.clone() };
+    let mut attempts = Vec::with_capacity(settings.attempts);
+    for _ in 0..settings.attempts {
+        let attempt = match connect_attempt(*addr, settings.timeout).await {
+            Ok((stream, tracker)) => {
+                handshake_attempt(&connector, domain, stream, tracker, settings.timeout, &round).await
             }
-        }
+            // A dial that never came up is this attempt's whole result: the next
+            // one still runs, since a refused connection says nothing about the
+            // host being done with us.
+            Err(attempt) => attempt,
+        };
+        attempts.push(attempt);
     }
-
-    let attempts = slots
-        .into_iter()
-        .map(|slot| {
-            slot.unwrap_or(BurstAttempt {
-                status: DpiStatus::Err,
-                detail: Detail::Other("attempt aborted".to_string()),
-                ms: 0,
-            })
-        })
-        .collect();
     BurstProfileReport { fingerprint, attempts }
 }
 
@@ -582,24 +560,23 @@ fn answered(axis: BurstTlsVersion, negotiated: Option<ProtocolVersion>) -> (DpiS
     }
 }
 
-/// Waits for the gate, then runs the attempt: the handshake, and — when it
-/// completes — the request under `cfg.read_timeout` ([`check_http`]). The clock
-/// starts at the gate, so the reported duration is the attempt itself, not the
-/// queueing in front of it.
+/// Runs the attempt: the handshake, and — when it completes — the request under
+/// `cfg.read_timeout` ([`check_http`]). The clock covers the whole attempt, dial
+/// excluded: what the reported duration compares across attempts is the answer
+/// the host gave, not how long the previous one took.
 async fn handshake_attempt(
-    connector: Arc<RustlsConnector>,
-    domain: String,
+    connector: &RustlsConnector,
+    domain: &str,
     stream: DpiProbeStream<TcpStream>,
     tracker: DpiProbeTracker,
-    gate: Arc<Barrier>,
     limit: Duration,
-    round: Round,
+    round: &Round,
 ) -> BurstAttempt {
     let Round { fingerprint, axis, cfg } = round;
-    gate.wait().await;
+    let (fingerprint, axis) = (*fingerprint, *axis);
     let started = Instant::now();
     let elapsed = |started: Instant| started.elapsed().as_millis() as u64;
-    let server_name = match ServerName::try_from(domain.clone()) {
+    let server_name = match ServerName::try_from(domain.to_string()) {
         Ok(name) => name,
         Err(e) => {
             return BurstAttempt {
@@ -618,7 +595,7 @@ async fn handshake_attempt(
             // request goes out, and that is exactly what the test is for.
             let http = match timeout(
                 Duration::from_secs_f64(cfg.read_timeout),
-                check_http(stream, &domain, &cfg, fingerprint, &stage),
+                check_http(stream, domain, cfg, fingerprint, &stage),
             )
             .await
             {
@@ -723,9 +700,12 @@ mod tests {
             assert_eq!(attempt.status, DpiStatus::TlsDropped, "{:?}", attempt);
             assert_eq!(attempt.detail, Detail::TlsHandshakeTimeout);
         }
-        // Both attempts spend their 400 ms at the same time: serialized, the
-        // round would need 800 ms, and that difference is the whole point.
-        assert!(elapsed < Duration::from_millis(700), "round took {elapsed:?}");
+        // Each attempt pays its own 400 ms, so two of them cannot come back in
+        // less — a round that fired them together would take about one. This is
+        // the sequencing the test exists for: the second attempt has to be asked
+        // *after* the first gave up, or a host that answers the first N
+        // connections and then stops would report as healthy.
+        assert!(elapsed >= Duration::from_millis(800), "round took {elapsed:?}");
     }
 
     /// Nothing answers the dial. Windows may either refuse the loopback SYN or
@@ -755,7 +735,10 @@ mod tests {
             // One local condition, one verdict: the attempts do not disagree.
             assert_eq!(attempt.status, first, "{:?}", report.attempts);
         }
-        assert!(elapsed < Duration::from_secs(3), "round took {elapsed:?}");
+        // The attempts run one after another, so the round's budget is the two
+        // dial timeouts plus the work around them — the assertion is that it ends,
+        // not that it ends fast.
+        assert!(elapsed < Duration::from_millis(5200), "round took {elapsed:?}");
     }
 
     /// The browser-offer axis sends the browser's own offer — both versions in
