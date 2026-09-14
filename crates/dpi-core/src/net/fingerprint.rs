@@ -570,6 +570,20 @@ pub fn apply(config: &mut ClientConfig, fingerprint: TlsFingerprint) {
 /// Cloudflare front much of what this tool probes, sending a hello they abort
 /// would report our own artifact as censorship. JA4 therefore shows 15
 /// extensions where `curl_firefox133` sends 16.
+///
+/// Two more deviations the byte comparison against the pinned bundle found, both
+/// in bodies no fingerprint hash covers (JA4 reads extension *types* and the
+/// signature-algorithms list, never a compression list or a key share):
+///
+/// * `compress_certificate` lists zlib and brotli, the bundle's three also list
+///   zstd — advertising it would mean decoding it, and this build has no
+///   decompressor for it;
+/// * the hello carries two key shares (X25519MLKEM768, X25519) where the
+///   bundle's `--tls-key-shares-limit 3` sends three, the third a P-256 share.
+///
+/// Both are invisible to `tls.peet.ws` (`ja3`, `ja4` and `peetprint` are equal
+/// outside the ECH above), which is why only a captured-byte comparison sees
+/// them.
 fn firefox_like() -> ClientHelloProfile {
     ClientHelloProfile {
         // Firefox 133 order, GREASE-free (Firefox does not grease).
