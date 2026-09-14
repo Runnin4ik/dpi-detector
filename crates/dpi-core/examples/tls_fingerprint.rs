@@ -59,6 +59,15 @@
 //!    what `tls.peet.ws` reports as the akamai fingerprint. A request *header*
 //!    that differs is not a fingerprint difference, and neither is a chosen ALPN
 //!    as long as both sides offer the same list.
+//! 7. Check that every handshake of the round is fresh. The session-ticket store
+//!    lives in the `ClientConfig`, so a client that reuses one config across
+//!    attempts resumes from the third one on: the hello grows by a
+//!    `pre_shared_key` and stops being the shape the round claims to measure.
+//!    Measured with the listener above, a round of five against a stand that
+//!    sends tickets: attempt 1 = 517 bytes / 18 extensions, attempts 2–5 = 788
+//!    bytes / 19 extensions with `pre_shared_key` (41). The bundle cannot show
+//!    this — one curl process makes one connection — so it is invisible in every
+//!    comparison against it.
 //!
 //! ## Comparing against an echo service (`live`, `tls.peet.ws`)
 //!

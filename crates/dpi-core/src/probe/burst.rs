@@ -494,16 +494,20 @@ pub async fn burst_profile(
     if let Some(alpn) = settings.alpn.offered() {
         profile = profile.alpn(alpn);
     }
-    // Built once for the round: every attempt of one shape presents the same
-    // hello, and a per-attempt connector would add nothing but a copy.
-    let connector = Arc::new(RustlsConnector::from(profile));
     let round = Arc::new(Round { fingerprint, axis: settings.tls, cfg: cfg.clone() });
 
     let mut launches = JoinSet::new();
     for index in 0..settings.attempts {
         let addr = *addr;
         let domain = domain.to_string();
-        let connector = Arc::clone(&connector);
+        // A connector per attempt, not per round. The `ClientConfig` owns the
+        // session-ticket store, so one shared connector lets the third attempt
+        // resume the session the first one opened — and a resumed hello carries a
+        // PSK and a different extension set, which is not the shape this round
+        // claims to measure. `create_tls_config` documents the same reasoning for
+        // the probes: a private store per connection is what keeps one probe's
+        // ticket out of the next probe's ClientHello.
+        let profile = profile.clone();
         let round = Arc::clone(&round);
         let limit = settings.timeout;
         launches.spawn(async move {
@@ -512,6 +516,7 @@ pub async fn burst_profile(
             if index > 0 {
                 tokio::time::sleep(BURST_LAUNCH_GAP * index as u32).await;
             }
+            let connector = RustlsConnector::from(profile);
             let attempt = match connect_attempt(addr, limit).await {
                 Ok((stream, tracker)) => {
                     handshake_attempt(&connector, &domain, stream, tracker, limit, &round).await
