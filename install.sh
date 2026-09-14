@@ -3,7 +3,7 @@ set -e
 
 main() {
   REPO="Runnin4ik/dpi-detector"
-  VERSION="${DPI_VERSION:-v5.0.0-alpha.14}"
+  VERSION="${DPI_VERSION:-v5.0.0-alpha.15}"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
