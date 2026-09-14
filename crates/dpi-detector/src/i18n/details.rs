@@ -55,10 +55,16 @@ pub fn detail_text(detail: &Detail, lang: Language) -> String {
         Detail::ReadTimeoutWord => t4(lang, "Read timeout", "Read timeout", "读取超时", "Mohlat-e khandan"),
         Detail::ReadTimeoutWordCaps => t4(lang, "Read Timeout", "Read timeout", "读取超时", "Mohlat-e khandan"),
         Detail::WriteTimeoutWord => t4(lang, "Write Timeout", "Write timeout", "写入超时", "Mohlat-e neveshtan"),
-        Detail::AlertHandshake => t4(lang, "Handshake alert", "Handshake alert", "握手警报", "Alert-e handshake"),
-        Detail::AlertSni => t4(lang, "SNI alert", "SNI alert", "SNI 警报", "Alert-e SNI"),
-        Detail::AlertVersion => t4(lang, "Version alert", "Version alert", "版本警报", "Alert-e version"),
-        Detail::AlertTls => t4(lang, "TLS alert", "TLS alert", "TLS 警报", "Alert-e TLS"),
+        Detail::Alert(kind) => {
+            let name = kind.code();
+            t4(
+                lang,
+                &format!("TLS-алерт ({name})"),
+                &format!("TLS alert ({name})"),
+                &format!("TLS 警报（{name}）"),
+                &format!("Alert-e TLS ({name})"),
+            )
+        }
         Detail::UnknownConnectionFailure => t4(lang, "Unknown connection failure", "Unknown connection failure", "未知连接错误", "Khata-ye nashenakhte dar ettesal"),
         Detail::DomainNotFound => t4(lang, "Домен не найден", "Domain not found", "域名未找到", "Domain peyda nashod"),
         Detail::DnsTimeoutUnavailable => t4(lang, "DNS таймаут/недоступен", "DNS timeout/unavailable", "DNS 超时/不可用", "DNS mohlat ya dar dastras nist"),
@@ -95,6 +101,7 @@ pub fn detail_text(detail: &Detail, lang: Language) -> String {
 mod tests {
     use super::*;
     use crate::i18n::Language::*;
+    use dpi_core::classify::detail::AlertKind;
 
     #[test]
     fn composed_details_keep_their_tokens() {
@@ -124,6 +131,21 @@ mod tests {
             let text = detail_text(&Detail::TlsHandshakeTimeout, lang);
             assert!(text.contains("TLS"), "{text}");
             assert!(!text.is_empty());
+        }
+    }
+
+    /// A named alert shows the description the peer sent, in every language,
+    /// and the description itself stays Latin (Rule 4).
+    #[test]
+    fn a_named_alert_shows_its_description() {
+        let alert = Detail::Alert(AlertKind::IllegalParameter);
+        assert_eq!(detail_text(&alert, Ru), "TLS-алерт (illegal_parameter)");
+        assert_eq!(detail_text(&alert, En), "TLS alert (illegal_parameter)");
+        assert_eq!(detail_text(&alert, Zh), "TLS 警报（illegal_parameter）");
+        assert_eq!(detail_text(&alert, Fa), "Alert-e TLS (illegal_parameter)");
+        for lang in [En, Ru, Zh, Fa] {
+            let text = detail_text(&alert, lang);
+            assert!(text.contains("TLS") && text.contains("illegal_parameter"), "{text}");
         }
     }
 }

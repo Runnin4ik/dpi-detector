@@ -46,10 +46,9 @@ pub enum Detail {
     DpiAlertHandshakeFailure,
     ProtocolVersionAlert,
     FakeTlsAlert,
-    AlertHandshake,
-    AlertSni,
-    AlertVersion,
-    AlertTls,
+    /// A peer alert that named its description: the code is
+    /// `alert_<description>` (`alert_illegal_parameter`).
+    Alert(AlertKind),
 
     // ─── Certificates ───
     NoRootCa,
@@ -117,6 +116,101 @@ pub enum Detail {
     Other(String),
 }
 
+/// One TLS alert description, as the peer that sent the alert named it.
+///
+/// A peer that refuses a handshake says *why* in the alert's description, and
+/// the difference is the diagnosis: `unrecognised_name` is the SNI itself being
+/// refused, `handshake_failure` a cipher or version mismatch, `illegal_parameter`
+/// a hello the peer could not parse, `internal_error` a server-side fault.
+///
+/// The names are the IANA registrations (RFC 8446 §6.2, RFC 6066 for
+/// `no_application_protocol`, RFC 9001 for `encrypted_client_hello_required`),
+/// snake_case. They are protocol tokens, so they stay Latin in every language
+/// (Rule 4) and `--json` carries them unchanged inside the detail code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertKind {
+    CloseNotify,
+    UnexpectedMessage,
+    BadRecordMac,
+    DecryptionFailed,
+    RecordOverflow,
+    DecompressionFailure,
+    HandshakeFailure,
+    NoCertificate,
+    BadCertificate,
+    UnsupportedCertificate,
+    CertificateRevoked,
+    CertificateExpired,
+    CertificateUnknown,
+    IllegalParameter,
+    UnknownCa,
+    AccessDenied,
+    DecodeError,
+    DecryptError,
+    ExportRestriction,
+    ProtocolVersion,
+    InsufficientSecurity,
+    InternalError,
+    InappropriateFallback,
+    UserCanceled,
+    NoRenegotiation,
+    MissingExtension,
+    UnsupportedExtension,
+    CertificateUnobtainable,
+    UnrecognisedName,
+    BadCertificateStatusResponse,
+    BadCertificateHashValue,
+    UnknownPskIdentity,
+    CertificateRequired,
+    NoApplicationProtocol,
+    EncryptedClientHelloRequired,
+}
+
+impl AlertKind {
+    /// The IANA name, snake_case: the token a [`Detail::Alert`]'s code carries
+    /// after `alert_`.
+    pub fn code(self) -> &'static str {
+        use AlertKind::*;
+        match self {
+            CloseNotify => "close_notify",
+            UnexpectedMessage => "unexpected_message",
+            BadRecordMac => "bad_record_mac",
+            DecryptionFailed => "decryption_failed",
+            RecordOverflow => "record_overflow",
+            DecompressionFailure => "decompression_failure",
+            HandshakeFailure => "handshake_failure",
+            NoCertificate => "no_certificate",
+            BadCertificate => "bad_certificate",
+            UnsupportedCertificate => "unsupported_certificate",
+            CertificateRevoked => "certificate_revoked",
+            CertificateExpired => "certificate_expired",
+            CertificateUnknown => "certificate_unknown",
+            IllegalParameter => "illegal_parameter",
+            UnknownCa => "unknown_ca",
+            AccessDenied => "access_denied",
+            DecodeError => "decode_error",
+            DecryptError => "decrypt_error",
+            ExportRestriction => "export_restriction",
+            ProtocolVersion => "protocol_version",
+            InsufficientSecurity => "insufficient_security",
+            InternalError => "internal_error",
+            InappropriateFallback => "inappropriate_fallback",
+            UserCanceled => "user_canceled",
+            NoRenegotiation => "no_renegotiation",
+            MissingExtension => "missing_extension",
+            UnsupportedExtension => "unsupported_extension",
+            CertificateUnobtainable => "certificate_unobtainable",
+            UnrecognisedName => "unrecognised_name",
+            BadCertificateStatusResponse => "bad_certificate_status_response",
+            BadCertificateHashValue => "bad_certificate_hash_value",
+            UnknownPskIdentity => "unknown_psk_identity",
+            CertificateRequired => "certificate_required",
+            NoApplicationProtocol => "no_application_protocol",
+            EncryptedClientHelloRequired => "encrypted_client_hello_required",
+        }
+    }
+}
+
 impl Detail {
     /// The machine token. `--json` carries exactly this; it never changes with
     /// `--lang`.
@@ -136,10 +230,7 @@ impl Detail {
             DpiAlertHandshakeFailure => Cow::Borrowed("dpi_alert_handshake_failure"),
             ProtocolVersionAlert => Cow::Borrowed("protocol_version_alert"),
             FakeTlsAlert => Cow::Borrowed("fake_tls_alert"),
-            AlertHandshake => Cow::Borrowed("handshake_alert"),
-            AlertSni => Cow::Borrowed("sni_alert"),
-            AlertVersion => Cow::Borrowed("version_alert"),
-            AlertTls => Cow::Borrowed("tls_alert"),
+            Alert(kind) => Cow::Owned(format!("alert_{}", kind.code())),
             NoRootCa => Cow::Borrowed("no_root_certificates"),
             CertExpired => Cow::Borrowed("cert_expired"),
             SelfSigned => Cow::Borrowed("self_signed_cert"),
@@ -246,6 +337,8 @@ mod tests {
             Detail::TimeoutWord,
             Detail::HttpStatus(403),
             Detail::Elapsed(0.3),
+            Detail::Alert(AlertKind::IllegalParameter),
+            Detail::Alert(AlertKind::BadCertificateStatusResponse),
         ];
         for d in &all {
             let code = d.code();

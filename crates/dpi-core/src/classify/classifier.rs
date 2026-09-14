@@ -1,5 +1,6 @@
 use std::io;
-use super::detail::Detail;
+use super::alert;
+use super::detail::{AlertKind, Detail};
 use super::types::{ConnectionStage, DpiStatus};
 
 fn short_detail(msg: &str) -> String {
@@ -13,6 +14,24 @@ fn is_tls_stage(stage: ConnectionStage) -> bool {
         stage,
         ConnectionStage::TlsClientHelloSent | ConnectionStage::TlsHandshakeDone
     )
+}
+
+/// The verdict for a message that reports a peer alert: the description it names
+/// decides the detail.
+///
+/// `protocol_version` is the exception — a peer that refuses the version is
+/// answering about the offer itself, so it reports as a block rather than as an
+/// alert (see [`crate::classify::detail::AlertKind`]). A message that names no
+/// description leaves `None` to the caller, which then reports the generic
+/// alert.
+fn alert_verdict(msg_lower: &str) -> Option<(DpiStatus, Detail)> {
+    let kind = alert::from_message(msg_lower)?;
+    let status = if kind == AlertKind::ProtocolVersion {
+        DpiStatus::TlsBlock
+    } else {
+        DpiStatus::TlsAlert
+    };
+    Some((status, alert::detail_for(kind)))
 }
 
 /// Classifies an SSL/TLS error message into a status plus detail string: a
@@ -44,14 +63,8 @@ pub fn classify_ssl_error(
         return (DpiStatus::TlsAlert, Detail::SniBlockUnrecognizedName);
     }
     if msg.contains("alert(") || msg.contains("fatal alert") || msg.contains("received alert") {
-        if msg.contains("handshakefailure") || msg.contains("handshake failure") {
-            return (DpiStatus::TlsAlert, Detail::DpiAlertHandshakeFailure);
-        }
-        if msg.contains("unrecognized_name") || msg.contains("unrecognized name") {
-            return (DpiStatus::TlsAlert, Detail::SniBlockUnrecognizedName);
-        }
-        if msg.contains("protocol_version") || msg.contains("protocol version") {
-            return (DpiStatus::TlsBlock, Detail::ProtocolVersionAlert);
+        if let Some(verdict) = alert_verdict(&msg) {
+            return verdict;
         }
         return (DpiStatus::TlsAlert, Detail::FakeTlsAlert);
     }
@@ -60,6 +73,9 @@ pub fn classify_ssl_error(
         return (DpiStatus::TlsBlock, Detail::ProtocolVersionAlert);
     }
     if msg.contains("alert") && (msg.contains("handshake") || msg.contains("ssl") || msg.contains("tls") || msg.contains("certificate")) {
+        if let Some(verdict) = alert_verdict(&msg) {
+            return verdict;
+        }
         return (DpiStatus::TlsAlert, Detail::FakeTlsAlert);
     }
     // A message about a protocol element our own TLS stack does not implement is
@@ -190,16 +206,10 @@ pub fn classify_connect_error_full(
 
     // TLS alerts surfacing inside connect errors (DPI)
     if full.contains("sslv3_alert") || full.contains("ssl alert") || (full.contains("alert") && full.contains("handshake")) {
-        if full.contains("handshake_failure") || full.contains("handshake failure") {
-            return (DpiStatus::TlsAlert, Detail::AlertHandshake);
+        if let Some(verdict) = alert_verdict(&full) {
+            return verdict;
         }
-        if full.contains("unrecognized_name") {
-            return (DpiStatus::TlsAlert, Detail::AlertSni);
-        }
-        if full.contains("protocol_version") {
-            return (DpiStatus::TlsAlert, Detail::AlertVersion);
-        }
-        return (DpiStatus::TlsAlert, Detail::AlertTls);
+        return (DpiStatus::TlsAlert, Detail::FakeTlsAlert);
     }
     if full.contains("certificate") || full.contains("unknown ca") {
         let (s, d) = classify_ssl_error(err_msg, bytes_read, ConnectionStage::TlsClientHelloSent);
@@ -441,6 +451,48 @@ mod tests {
             ConnectionStage::TlsClientHelloSent,
         );
         assert_eq!(s, DpiStatus::TlsRst);
+    }
+
+    #[test]
+    fn test_a_named_alert_carries_its_description() {
+        let (s, d) = classify_ssl_error(
+            "connection error | received fatal alert: UnexpectedMessage",
+            0,
+            ConnectionStage::TlsClientHelloSent,
+        );
+        assert_eq!((s, d.code().as_ref()), (DpiStatus::TlsAlert, "alert_unexpected_message"));
+
+        let (s, d) = classify_ssl_error(
+            "received fatal alert: IllegalParameter",
+            0,
+            ConnectionStage::TlsClientHelloSent,
+        );
+        assert_eq!((s, d.code().as_ref()), (DpiStatus::TlsAlert, "alert_illegal_parameter"));
+
+        // A peer that refuses the version is answering about the offer itself,
+        // so that description stays a block rather than an alert.
+        let (s, d) = classify_ssl_error(
+            "received fatal alert: ProtocolVersion",
+            0,
+            ConnectionStage::TlsClientHelloSent,
+        );
+        assert_eq!((s, d.code().as_ref()), (DpiStatus::TlsBlock, "protocol_version_alert"));
+
+        // A named description reached through the connect-error path takes the
+        // same detail as through the ssl error one.
+        let (s, d) = classify_connect_error_full(
+            "sslv3 alert bad certificate",
+            None,
+            None,
+            0,
+            "tls_handshake",
+        );
+        assert_eq!((s, d.code().as_ref()), (DpiStatus::TlsAlert, "alert_bad_certificate"));
+
+        // An alert whose description the peer did not name keeps the generic one.
+        let (s, d) =
+            classify_ssl_error("fatal alert received", 0, ConnectionStage::TlsClientHelloSent);
+        assert_eq!((s, d.code().as_ref()), (DpiStatus::TlsAlert, "fake_tls_alert"));
     }
 
     #[test]
