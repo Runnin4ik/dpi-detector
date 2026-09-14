@@ -136,6 +136,7 @@ impl HttpSender {
                     .max_frame_size(h2.max_frame_size)
                     .max_header_list_size(h2.max_header_list_size)
                     .enable_push(h2.enable_push)
+                    .settings_order(h2.settings_order.iter().copied())
                     .max_concurrent_streams(h2.max_concurrent_streams);
             }
             let (sender, connection) = builder.handshake(io).await?;

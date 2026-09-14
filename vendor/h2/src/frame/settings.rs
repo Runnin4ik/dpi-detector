@@ -6,6 +6,15 @@ use bytes::{BufMut, BytesMut};
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct Settings {
     flags: SettingsFlags,
+
+    /// The order the encoded entries go out in, by setting id. Empty — the
+    /// default, and what every endpoint sends — means ascending id. Ids named
+    /// here go out first, in this order; every other setting this frame carries
+    /// follows in the usual ascending order, so a caller can reorder the list
+    /// but never drop a setting from it. RFC 9113 §6.5 makes the order
+    /// insignificant on the wire; a client that imitates a browser which does
+    /// not sort (Safari sends `4` before `3`) is the one caller that cares.
+    order: Vec<u16>,
     // Fields
     header_table_size: Option<u32>,
     enable_push: Option<u32>,
@@ -60,6 +69,24 @@ impl Settings {
             flags: SettingsFlags::ack(),
             ..Settings::default()
         }
+    }
+
+    /// Sets the order the encoded entries go out in: the ids named here first,
+    /// in this order, then everything else ascending.
+    ///
+    /// An empty iterator restores the default, ascending id.
+    pub fn set_order(&mut self, order: impl IntoIterator<Item = u16>) {
+        self.order = order.into_iter().collect();
+    }
+
+    /// Calls `f` with the setting registered under `id`, if this frame carries
+    /// it.
+    fn for_id<F: FnMut(Setting)>(&self, id: u16, mut f: F) {
+        self.for_each(|setting| {
+            if setting.id() == id {
+                f(setting);
+            }
+        });
     }
 
     pub fn is_ack(&self) -> bool {
@@ -219,8 +246,18 @@ impl Settings {
 
         head.encode(payload_len, dst);
 
-        // Encode the settings
+        // Encode the settings: the ids this frame names first, in that order,
+        // then the rest ascending.
+        for id in &self.order {
+            self.for_id(*id, |setting| {
+                tracing::trace!("encoding setting; val={:?}", setting);
+                setting.encode(dst)
+            });
+        }
         self.for_each(|setting| {
+            if self.order.contains(&setting.id()) {
+                return;
+            }
             tracing::trace!("encoding setting; val={:?}", setting);
             setting.encode(dst)
         });
@@ -337,20 +374,39 @@ impl Setting {
     }
 
     fn encode(&self, dst: &mut BytesMut) {
-        use self::Setting::*;
-
-        let (kind, val) = match *self {
-            HeaderTableSize(v) => (1, v),
-            EnablePush(v) => (2, v),
-            MaxConcurrentStreams(v) => (3, v),
-            InitialWindowSize(v) => (4, v),
-            MaxFrameSize(v) => (5, v),
-            MaxHeaderListSize(v) => (6, v),
-            EnableConnectProtocol(v) => (8, v),
-        };
+        let kind = self.id();
 
         dst.put_u16(kind);
-        dst.put_u32(val);
+        dst.put_u32(self.value());
+    }
+
+    /// The IANA id of this setting (RFC 9113 §6.5.2).
+    fn id(&self) -> u16 {
+        use self::Setting::*;
+
+        match *self {
+            HeaderTableSize(_) => 1,
+            EnablePush(_) => 2,
+            MaxConcurrentStreams(_) => 3,
+            InitialWindowSize(_) => 4,
+            MaxFrameSize(_) => 5,
+            MaxHeaderListSize(_) => 6,
+            EnableConnectProtocol(_) => 8,
+        }
+    }
+
+    fn value(&self) -> u32 {
+        use self::Setting::*;
+
+        match *self {
+            HeaderTableSize(v)
+            | EnablePush(v)
+            | MaxConcurrentStreams(v)
+            | InitialWindowSize(v)
+            | MaxFrameSize(v)
+            | MaxHeaderListSize(v)
+            | EnableConnectProtocol(v) => v,
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 diff -r a/src/client.rs b/src/client.rs
---- a/src/client.rs	2026-09-14 14:23:23.111687500 +0300
-+++ b/src/client.rs	2026-09-14 14:23:23.189273900 +0300
+--- a/src/client.rs	2026-09-14 15:08:18.968915000 +0300
++++ b/src/client.rs	2026-09-14 15:08:19.086810400 +0300
 @@ -138,6 +138,11 @@
  use crate::codec::{Codec, SendError, UserError};
  use crate::ext::Protocol;
@@ -13,7 +13,37 @@ diff -r a/src/client.rs b/src/client.rs
  use crate::proto::{self, Error};
  use crate::{FlowControl, PingPong, RecvStream, SendStream};
  
-@@ -1637,6 +1642,7 @@
+@@ -1118,6 +1123,29 @@
+         self
+     }
+ 
++    /// Sets the order the initial SETTINGS frame lists its entries in: the ids
++    /// named here first, in this order, then anything else ascending. An empty
++    /// iterator — the default — keeps every entry ascending by id.
++    ///
++    /// RFC 9113 §6.5 makes the order insignificant; a client imitating a browser
++    /// that does not sort its list (Safari sends `4` before `3`) is the one
++    /// caller that has a use for it.
++    ///
++    /// # Examples
++    ///
++    /// ```no_run
++    /// # use h2::client;
++    /// # fn doc() {
++    /// let mut builder = client::Builder::new();
++    /// builder.settings_order([4, 3]);
++    /// # let _ = builder;
++    /// # }
++    /// ```
++    pub fn settings_order(&mut self, order: impl IntoIterator<Item = u16>) -> &mut Self {
++        self.settings.set_order(order);
++        self
++    }
++
+     /// Sets the header table size.
+     ///
+     /// This setting informs the peer of the maximum size of the header compression
+@@ -1637,6 +1665,7 @@
          id: StreamId,
          request: Request<()>,
          protocol: Option<Protocol>,
@@ -21,7 +51,7 @@ diff -r a/src/client.rs b/src/client.rs
          end_of_stream: bool,
      ) -> Result<Headers, SendError> {
          use http::request::Parts;
-@@ -1689,6 +1695,10 @@
+@@ -1689,6 +1718,10 @@
          // Create the HEADERS frame
          let mut frame = Headers::new(id, pseudo, headers);
  
@@ -33,8 +63,8 @@ diff -r a/src/client.rs b/src/client.rs
              frame.set_end_stream()
          }
 diff -r a/src/frame/headers.rs b/src/frame/headers.rs
---- a/src/frame/headers.rs	2026-09-14 14:23:23.086589300 +0300
-+++ b/src/frame/headers.rs	2026-09-14 14:23:23.165134700 +0300
+--- a/src/frame/headers.rs	2026-09-14 15:08:18.872922000 +0300
++++ b/src/frame/headers.rs	2026-09-14 15:08:19.054834600 +0300
 @@ -12,7 +12,7 @@
  use std::io::Cursor;
  use std::ops::ControlFlow;
@@ -285,8 +315,8 @@ diff -r a/src/frame/headers.rs b/src/frame/headers.rs
  
          encoder.encode(headers, &mut hpack);
 diff -r a/src/frame/mod.rs b/src/frame/mod.rs
---- a/src/frame/mod.rs	2026-09-14 14:23:23.087094600 +0300
-+++ b/src/frame/mod.rs	2026-09-14 14:23:23.165134700 +0300
+--- a/src/frame/mod.rs	2026-09-14 15:08:18.875222100 +0300
++++ b/src/frame/mod.rs	2026-09-14 15:08:19.054834600 +0300
 @@ -52,7 +52,8 @@
  pub use self::go_away::GoAway;
  pub use self::head::{Head, Kind};
@@ -298,8 +328,8 @@ diff -r a/src/frame/mod.rs b/src/frame/mod.rs
  pub use self::ping::Ping;
  pub use self::priority::{Priority, StreamDependency};
 diff -r a/src/frame/priority.rs b/src/frame/priority.rs
---- a/src/frame/priority.rs	2026-09-14 14:23:23.088370800 +0300
-+++ b/src/frame/priority.rs	2026-09-14 14:23:23.167170700 +0300
+--- a/src/frame/priority.rs	2026-09-14 15:08:18.879118900 +0300
++++ b/src/frame/priority.rs	2026-09-14 15:08:19.056903300 +0300
 @@ -1,4 +1,6 @@
 +use crate::frame::headers::EncodeBuf;
  use crate::frame::*;
@@ -330,9 +360,124 @@ diff -r a/src/frame/priority.rs b/src/frame/priority.rs
 +        dst.put_u8(self.weight);
 +    }
  }
+diff -r a/src/frame/settings.rs b/src/frame/settings.rs
+--- a/src/frame/settings.rs	2026-09-14 15:08:18.884475500 +0300
++++ b/src/frame/settings.rs	2026-09-14 15:08:19.059455200 +0300
+@@ -6,6 +6,15 @@
+ #[derive(Clone, Default, Eq, PartialEq)]
+ pub struct Settings {
+     flags: SettingsFlags,
++
++    /// The order the encoded entries go out in, by setting id. Empty — the
++    /// default, and what every endpoint sends — means ascending id. Ids named
++    /// here go out first, in this order; every other setting this frame carries
++    /// follows in the usual ascending order, so a caller can reorder the list
++    /// but never drop a setting from it. RFC 9113 §6.5 makes the order
++    /// insignificant on the wire; a client that imitates a browser which does
++    /// not sort (Safari sends `4` before `3`) is the one caller that cares.
++    order: Vec<u16>,
+     // Fields
+     header_table_size: Option<u32>,
+     enable_push: Option<u32>,
+@@ -62,6 +71,24 @@
+         }
+     }
+ 
++    /// Sets the order the encoded entries go out in: the ids named here first,
++    /// in this order, then everything else ascending.
++    ///
++    /// An empty iterator restores the default, ascending id.
++    pub fn set_order(&mut self, order: impl IntoIterator<Item = u16>) {
++        self.order = order.into_iter().collect();
++    }
++
++    /// Calls `f` with the setting registered under `id`, if this frame carries
++    /// it.
++    fn for_id<F: FnMut(Setting)>(&self, id: u16, mut f: F) {
++        self.for_each(|setting| {
++            if setting.id() == id {
++                f(setting);
++            }
++        });
++    }
++
+     pub fn is_ack(&self) -> bool {
+         self.flags.is_ack()
+     }
+@@ -219,8 +246,18 @@
+ 
+         head.encode(payload_len, dst);
+ 
+-        // Encode the settings
++        // Encode the settings: the ids this frame names first, in that order,
++        // then the rest ascending.
++        for id in &self.order {
++            self.for_id(*id, |setting| {
++                tracing::trace!("encoding setting; val={:?}", setting);
++                setting.encode(dst)
++            });
++        }
+         self.for_each(|setting| {
++            if self.order.contains(&setting.id()) {
++                return;
++            }
+             tracing::trace!("encoding setting; val={:?}", setting);
+             setting.encode(dst)
+         });
+@@ -337,20 +374,39 @@
+     }
+ 
+     fn encode(&self, dst: &mut BytesMut) {
++        let kind = self.id();
++
++        dst.put_u16(kind);
++        dst.put_u32(self.value());
++    }
++
++    /// The IANA id of this setting (RFC 9113 §6.5.2).
++    fn id(&self) -> u16 {
+         use self::Setting::*;
+ 
+-        let (kind, val) = match *self {
+-            HeaderTableSize(v) => (1, v),
+-            EnablePush(v) => (2, v),
+-            MaxConcurrentStreams(v) => (3, v),
+-            InitialWindowSize(v) => (4, v),
+-            MaxFrameSize(v) => (5, v),
+-            MaxHeaderListSize(v) => (6, v),
+-            EnableConnectProtocol(v) => (8, v),
+-        };
++        match *self {
++            HeaderTableSize(_) => 1,
++            EnablePush(_) => 2,
++            MaxConcurrentStreams(_) => 3,
++            InitialWindowSize(_) => 4,
++            MaxFrameSize(_) => 5,
++            MaxHeaderListSize(_) => 6,
++            EnableConnectProtocol(_) => 8,
++        }
++    }
++
++    fn value(&self) -> u32 {
++        use self::Setting::*;
+ 
+-        dst.put_u16(kind);
+-        dst.put_u32(val);
++        match *self {
++            HeaderTableSize(v)
++            | EnablePush(v)
++            | MaxConcurrentStreams(v)
++            | InitialWindowSize(v)
++            | MaxFrameSize(v)
++            | MaxHeaderListSize(v)
++            | EnableConnectProtocol(v) => v,
++        }
+     }
+ }
+ 
 diff -r a/src/proto/streams/streams.rs b/src/proto/streams/streams.rs
---- a/src/proto/streams/streams.rs	2026-09-14 14:23:23.108481900 +0300
-+++ b/src/proto/streams/streams.rs	2026-09-14 14:23:23.186251700 +0300
+--- a/src/proto/streams/streams.rs	2026-09-14 15:08:18.950678200 +0300
++++ b/src/proto/streams/streams.rs	2026-09-14 15:08:19.080996700 +0300
 @@ -3,7 +3,7 @@
  use super::{Buffer, BufferStatus, Config, Counts, Prioritized, Recv, Send, Stream, StreamId};
  use crate::codec::{Codec, SendError, UserError};

@@ -72,6 +72,9 @@ pub(crate) struct Config {
     pub(crate) max_header_list_size: Option<u32>,
     // `None` omits `SETTINGS_ENABLE_PUSH`; Chrome and Firefox send `0`.
     pub(crate) enable_push: Option<bool>,
+    // The order the initial SETTINGS frame lists its entries in; empty keeps the
+    // h2 default, ascending by id. Safari sends `4` before `3`.
+    pub(crate) settings_order: Vec<u16>,
     pub(crate) keep_alive_interval: Option<Duration>,
     pub(crate) keep_alive_timeout: Duration,
     pub(crate) keep_alive_while_idle: bool,
@@ -94,6 +97,7 @@ impl Default for Config {
             max_frame_size: Some(DEFAULT_MAX_FRAME_SIZE),
             max_header_list_size: Some(DEFAULT_MAX_HEADER_LIST_SIZE),
             enable_push: Some(false),
+            settings_order: Vec::new(),
             keep_alive_interval: None,
             keep_alive_timeout: Duration::from_secs(20),
             keep_alive_while_idle: false,
@@ -121,6 +125,9 @@ fn new_builder(config: &Config) -> Builder {
     }
     if let Some(enable_push) = config.enable_push {
         builder.enable_push(enable_push);
+    }
+    if !config.settings_order.is_empty() {
+        builder.settings_order(config.settings_order.iter().copied());
     }
     if let Some(max) = config.max_frame_size {
         builder.max_frame_size(max);

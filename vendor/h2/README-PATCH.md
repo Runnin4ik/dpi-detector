@@ -46,7 +46,7 @@ probe in this project is built on (Rule 3).
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 0.4.19 — **368 lines across 5
+`PATCH.diff` is the exact diff against pristine 0.4.19 — **513 lines across 6
 files**. It applies to a pristine copy with `patch -p1` (`patch -p1 --dry-run`
 was run against the crates.io source, and the applied result was compared with
 this tree byte for byte).
@@ -67,6 +67,12 @@ this tree byte for byte).
   PUSH_PROMISE uses for its promised id). The weight is the client's own minus
   one: Chrome's `256` is the frame's `255`.
 * `frame::EncodeBuf` became `pub(crate)` so the priority frame can write into it.
+* **`Settings` can carry a send order.** h2 walks its settings ascending by id;
+  Safari's preface sends `4:4194304` before `3:100`. `Settings::set_order` takes
+  the ids to put first (the rest follow ascending, so a caller can reorder the
+  list but never drop a setting from it) and `client::Builder::settings_order`
+  exposes it. The encoder, not the decoder, is affected, and an empty order — the
+  default — bytes the frame exactly as before.
 
 `hyper` needs no patch **for the request shape**: its h2 client rebuilds the
 outgoing request with `http::Request::from_parts(head, ())` and forwards the
@@ -76,11 +82,12 @@ two preface settings hyper does impose are dealt with in
 
 ## Notes for maintainers
 
-* Two behaviours the patch can produce are outside HTTP/2's requirements but
+* Three behaviours the patch can produce are outside HTTP/2's requirements but
   inside every browser's: priority on a request HEADERS (deprecated in RFC 9113,
-  still sent by Chrome, Firefox and Safari) and a pseudo-header order none of
-  them agrees on. Both are per-request, so a run that fires several fingerprint
-  profiles never mixes them.
+  still sent by Chrome, Firefox and Safari), a pseudo-header order none of them
+  agrees on, and a preface whose settings are not sorted. The first two are
+  per-request, so a run that fires several fingerprint profiles never mixes them;
+  the settings order is per-connection and comes from the profile that opens it.
 * When regenerating `PATCH.diff`: copy the pristine crates.io source into `a/`,
   this directory into `b/` (dropping `PATCH.diff`, `README-PATCH.md`,
   `Cargo.lock`, `.cargo-ok`, `.cargo_vcs_info.json`), run `diff -ruN a b`, rewrite

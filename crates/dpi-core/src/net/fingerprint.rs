@@ -361,6 +361,10 @@ pub struct H2Fingerprint {
     /// `SETTINGS_ENABLE_PUSH`; `None` omits the setting. Chrome and Firefox send
     /// `0`, Safari sends none.
     pub enable_push: Option<bool>,
+    /// The order the preface lists its entries in, by setting id. Empty — every
+    /// profile but Safari — is ascending, which is what those bundles send;
+    /// Safari names `4` before `3`.
+    pub settings_order: &'static [u16],
     /// Total connection window; h2 sends `WINDOW_UPDATE` with this minus the
     /// protocol's 65 535 default, which is the increment the impersonated client
     /// sends.
@@ -388,6 +392,7 @@ pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
             max_frame_size: None,
             max_header_list_size: Some(262_144),
             enable_push: Some(false),
+            settings_order: &[],
             connection_window: 15_663_105 + 65_535,
             pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
             priority: Some((256, true)),
@@ -402,6 +407,7 @@ pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
             max_frame_size: Some(16_384),
             max_header_list_size: None,
             enable_push: Some(false),
+            settings_order: &[],
             connection_window: 12_517_377 + 65_535,
             pseudo_order: PseudoOrder::MethodPathAuthorityScheme,
             priority: Some((42, false)),
@@ -416,6 +422,7 @@ pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
             max_frame_size: None,
             max_header_list_size: None,
             enable_push: None,
+            settings_order: &[4, 3],
             connection_window: 10_485_760 + 65_535,
             pseudo_order: PseudoOrder::MethodSchemePathAuthority,
             priority: Some((255, false)),
@@ -943,6 +950,22 @@ mod tests {
         let safari = h2_fingerprint(TlsFingerprint::Safari).expect("safari tunes h2");
         assert_eq!(safari.max_header_list_size, None, "Safari sends no header-list size");
         assert_eq!(safari.enable_push, None, "Safari sends no push setting");
+        assert_eq!(safari.settings_order, [4, 3], "Safari lists the window before the stream cap");
+    }
+
+    /// h2 sorts the settings it sends by id; Safari's preface does not, so the
+    /// order is part of the shape. An empty order means the sorted default the
+    /// other profiles and the baseline keep.
+    #[test]
+    fn h2_settings_go_out_in_the_order_the_wrapper_sends_them() {
+        for (fingerprint, expected) in [
+            (TlsFingerprint::Chrome, &[][..]),
+            (TlsFingerprint::Custom, &[][..]),
+            (TlsFingerprint::Safari, &[4, 3][..]),
+        ] {
+            let h2 = h2_fingerprint(fingerprint).expect("browser profiles tune h2");
+            assert_eq!(h2.settings_order, expected, "{}", fingerprint.code());
+        }
     }
 
     /// The version-bearing label is display only: it must not collide with a

@@ -1123,6 +1123,29 @@ impl Builder {
         self
     }
 
+    /// Sets the order the initial SETTINGS frame lists its entries in: the ids
+    /// named here first, in this order, then anything else ascending. An empty
+    /// iterator — the default — keeps every entry ascending by id.
+    ///
+    /// RFC 9113 §6.5 makes the order insignificant; a client imitating a browser
+    /// that does not sort its list (Safari sends `4` before `3`) is the one
+    /// caller that has a use for it.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use h2::client;
+    /// # fn doc() {
+    /// let mut builder = client::Builder::new();
+    /// builder.settings_order([4, 3]);
+    /// # let _ = builder;
+    /// # }
+    /// ```
+    pub fn settings_order(&mut self, order: impl IntoIterator<Item = u16>) -> &mut Self {
+        self.settings.set_order(order);
+        self
+    }
+
     /// Sets the header table size.
     ///
     /// This setting informs the peer of the maximum size of the header compression

@@ -413,6 +413,20 @@ where
         self
     }
 
+    /// Sets the order the connection preface lists its SETTINGS entries in: the
+    /// ids given here first, in this order, then anything else ascending.
+    ///
+    /// Default is empty, the ascending id every endpoint sends. RFC 9113 §6.5
+    /// makes the order insignificant; Safari's preface (`4` before `3`) is the
+    /// one client that does not sort.
+    pub fn settings_order(
+        &mut self,
+        order: impl IntoIterator<Item = u16>,
+    ) -> &mut Self {
+        self.h2_builder.settings_order = order.into_iter().collect();
+        self
+    }
+
     /// Sets the header table size.
     ///
     /// This setting informs the peer of the maximum size of the header compression
