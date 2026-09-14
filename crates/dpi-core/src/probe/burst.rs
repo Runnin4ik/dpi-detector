@@ -251,27 +251,29 @@ impl BurstProfileReport {
         self.attempts.len() - self.answered()
     }
 
-    /// The failure a reader needs: the most frequent one, `None` when nothing
-    /// failed. Ties resolve to the first seen, so the row is stable.
-    pub fn dominant_failure(&self) -> Option<(DpiStatus, &Detail, usize)> {
-        let mut counts: Vec<(DpiStatus, &Detail, usize)> = Vec::new();
-        for attempt in self.attempts.iter().filter(|a| !a.status.is_ok_status()) {
-            match counts
-                .iter_mut()
-                .find(|(status, detail, _)| *status == attempt.status && *detail == &attempt.detail)
-            {
-                Some(entry) => entry.2 += 1,
-                None => counts.push((attempt.status, &attempt.detail, 1)),
-            }
-        }
-        let mut best: Option<(DpiStatus, &Detail, usize)> = None;
-        for entry in counts {
-            if best.map(|(_, _, count)| entry.2 > count).unwrap_or(true) {
-                best = Some(entry);
-            }
-        }
-        best
+    /// Every failure of this profile, grouped by the status it produced: most
+    /// frequent first, ties in the order the statuses were first seen, empty
+    /// when nothing failed. Grouping by status is what a row displays — the
+    /// detail behind it stays in the JSON.
+    pub fn failure_counts(&self) -> Vec<(DpiStatus, usize)> {
+        group_failures(self.attempts.iter().map(|a| a.status))
     }
+}
+
+/// The failures among `statuses`, grouped by status and ordered the way every
+/// detail row reads them: most frequent first. The sort is stable, so two
+/// statuses with the same count keep the order they were first seen in and the
+/// same input always renders the same row.
+fn group_failures(statuses: impl Iterator<Item = DpiStatus>) -> Vec<(DpiStatus, usize)> {
+    let mut counts: Vec<(DpiStatus, usize)> = Vec::new();
+    for status in statuses.filter(|s| !s.is_ok_status()) {
+        match counts.iter_mut().find(|(seen, _)| *seen == status) {
+            Some(entry) => entry.1 += 1,
+            None => counts.push((status, 1)),
+        }
+    }
+    counts.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+    counts
 }
 
 /// One host: its resolved address (when resolution worked) and one report per
@@ -301,28 +303,11 @@ impl BurstReport {
         self.profiles.iter().any(|p| p.lost() > 0)
     }
 
-    /// The failure to show in one row per host: the most frequent one across
-    /// every profile, `None` when every attempt was answered.
-    pub fn dominant_failure(&self) -> Option<(DpiStatus, &Detail, usize)> {
-        let mut counts: Vec<(DpiStatus, &Detail, usize)> = Vec::new();
-        for profile in &self.profiles {
-            for attempt in profile.attempts.iter().filter(|a| !a.status.is_ok_status()) {
-                match counts
-                    .iter_mut()
-                    .find(|(status, detail, _)| *status == attempt.status && **detail == attempt.detail)
-                {
-                    Some(entry) => entry.2 += 1,
-                    None => counts.push((attempt.status, &attempt.detail, 1)),
-                }
-            }
-        }
-        let mut best: Option<(DpiStatus, &Detail, usize)> = None;
-        for entry in counts {
-            if best.as_ref().map(|(_, _, count)| entry.2 > *count).unwrap_or(true) {
-                best = Some(entry);
-            }
-        }
-        best
+    /// Every failure of this host across every profile, grouped by status and
+    /// ordered like a detail row: most frequent first, ties in the order the
+    /// statuses were first seen, empty when every attempt was answered.
+    pub fn failure_counts(&self) -> Vec<(DpiStatus, usize)> {
+        group_failures(self.profiles.iter().flat_map(|p| p.attempts.iter()).map(|a| a.status))
     }
 }
 
@@ -988,39 +973,50 @@ mod tests {
         assert_eq!(BurstTlsVersion::Tls12.token(), "TLS 1.2");
     }
 
+    /// Grouping is by status, not by the detail behind it, and the order is by
+    /// count with ties in the order the statuses first appeared.
     #[test]
-    fn dominant_failure_picks_the_frequent_one() {
+    fn failure_counts_group_by_status_and_order_by_count() {
         let report = BurstProfileReport {
             fingerprint: TlsFingerprint::Chrome,
             attempts: vec![
                 BurstAttempt { status: DpiStatus::Ok, detail: Detail::None, ms: 10 },
                 BurstAttempt { status: DpiStatus::TlsRst, detail: Detail::RstHello, ms: 11 },
-                BurstAttempt { status: DpiStatus::TlsRst, detail: Detail::RstHello, ms: 12 },
-                BurstAttempt { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, ms: 900 },
+                BurstAttempt { status: DpiStatus::SynDropped, detail: Detail::None, ms: 900 },
+                // Same status, another detail: one group, not two.
+                BurstAttempt {
+                    status: DpiStatus::TlsRst,
+                    detail: Detail::TlsHandshakeTimeout,
+                    ms: 12,
+                },
+                BurstAttempt { status: DpiStatus::TcpRst, detail: Detail::RstHello, ms: 13 },
             ],
         };
         assert_eq!(report.answered(), 1);
-        assert_eq!(report.lost(), 3);
-        let (status, detail, count) = report.dominant_failure().expect("failures");
-        assert_eq!((status, detail, count), (DpiStatus::TlsRst, &Detail::RstHello, 2));
+        assert_eq!(report.lost(), 4);
+        assert_eq!(
+            report.failure_counts(),
+            vec![(DpiStatus::TlsRst, 2), (DpiStatus::SynDropped, 1), (DpiStatus::TcpRst, 1)]
+        );
 
         let clean = BurstProfileReport {
             fingerprint: TlsFingerprint::Custom,
             attempts: vec![BurstAttempt { status: DpiStatus::Ok, detail: Detail::None, ms: 10 }],
         };
-        assert!(clean.dominant_failure().is_none());
+        assert!(clean.failure_counts().is_empty());
         let report = BurstReport {
             domain: "example.com".into(),
             resolved: None,
             profiles: vec![clean],
         };
         assert!(!report.has_losses());
-        assert!(report.dominant_failure().is_none());
+        assert!(report.failure_counts().is_empty());
     }
 
-    /// Across profiles the row shows the failure that happened most often.
+    /// A host that lost its handshakes to more than one middlebox shows every
+    /// group, not just the loudest one.
     #[test]
-    fn report_dominant_failure_spans_profiles() {
+    fn report_failure_counts_span_profiles_and_keep_every_group() {
         let profile = |fingerprint, statuses: Vec<DpiStatus>| BurstProfileReport {
             fingerprint,
             attempts: statuses
@@ -1046,7 +1042,9 @@ mod tests {
         assert!(report.has_losses());
         assert_eq!(report.answered(), 1);
         assert_eq!(report.total(), 5);
-        let (status, detail, count) = report.dominant_failure().expect("failures");
-        assert_eq!((status, detail, count), (DpiStatus::TlsDropped, &Detail::Other("TLS DROP".to_string()), 3));
+        assert_eq!(
+            report.failure_counts(),
+            vec![(DpiStatus::TlsDropped, 3), (DpiStatus::TlsRst, 1)]
+        );
     }
 }

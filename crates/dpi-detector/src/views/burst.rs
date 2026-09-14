@@ -1,5 +1,7 @@
 //! Test 6: the fingerprint burst table, one column per ClientHello profile.
 
+use std::fmt::Write;
+
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dpi_core::classify::*;
 use crate::i18n::{Messages, format_bidi};
@@ -11,8 +13,8 @@ use crate::tui::widgets::{cell_color, status_color, table_preset};
 /// Test 6's table: one row per host, one column per profile, the cell being how
 /// many of the simultaneous handshakes came back. The header names each profile
 /// with the pinned version it reproduces (rule 4: Latin, never translated), and
-/// the detail column names the failure that happened most often across the
-/// profile columns.
+/// the detail column groups every failure the row saw by its status, commonest
+/// first — the loudest one leads and gives the cell its colour.
 pub fn render_burst_table(reports: &[BurstReport], settings: &BurstSettings, msg: &Messages) -> String {
     let profiles: &[TlsFingerprint] = &settings.profiles;
     let mut table = Table::new();
@@ -60,13 +62,26 @@ pub fn render_burst_table(reports: &[BurstReport], settings: &BurstSettings, msg
                 DpiStatus::DnsFail.display_label().to_string(),
                 status_color(DpiStatus::DnsFail),
             ),
-            Some(_) => match report.dominant_failure() {
-                Some((status, _, count)) => (
-                    format!("{} ×{}", status.display_label(), count),
-                    status_color(status),
-                ),
-                None => (DET_ALL_ANSWERED.to_string(), Color::DarkGrey),
-            },
+            Some(_) => {
+                let failures = report.failure_counts();
+                match failures.first() {
+                    None => (DET_ALL_ANSWERED.to_string(), Color::DarkGrey),
+                    Some((dominant, _)) => {
+                        // Every failure, not just the loudest one: a host whose
+                        // 12 lost handshakes came back as two different errors
+                        // reads as two groups, so nothing the run saw is dropped
+                        // from the row. The commonest one leads and colors it.
+                        let mut text = String::new();
+                        for (index, (status, count)) in failures.iter().enumerate() {
+                            if index > 0 {
+                                text.push_str(DETAIL_SEPARATOR);
+                            }
+                            let _ = write!(text, "{} ×{}", status.display_label(), count);
+                        }
+                        (text, status_color(*dominant))
+                    }
+                }
+            }
         };
         row.push(Cell::new(cell_color(&detail, detail_color)));
         table.add_row(row);
@@ -80,3 +95,6 @@ pub fn render_burst_table(reports: &[BurstReport], settings: &BurstSettings, msg
 /// Detail cell of a host whose every handshake was answered: an em dash, like
 /// the other tables' empty-detail cells.
 const DET_ALL_ANSWERED: &str = "—";
+
+/// Between two failure groups in a detail cell (`TLS RST ×3 · SYN DROP ×1`).
+const DETAIL_SEPARATOR: &str = " · ";

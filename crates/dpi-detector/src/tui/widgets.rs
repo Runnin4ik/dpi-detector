@@ -39,7 +39,7 @@ pub fn asc_with(s: &str, ascii: bool) -> String {
             '✓' => out.push_str("[OK]"),
             '→' => out.push_str("->"),
             '►' => out.push('>'),
-            '•' | '╌' | '–' | '—' => out.push('-'),
+            '•' | '╌' | '–' | '—' | '·' => out.push('-'),
             '◉' | '●' => out.push_str("(x)"),
             '○' => out.push_str("( )"),
             '√' => out.push('√'),
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(asc_with("[√] ● ○", true), "[√] (x) ( )");
         assert_eq!(asc_with("↑↓ ←→", true), "^v <->");
         assert_eq!(asc_with("✓ done", true), "[OK] done");
-        assert_eq!(asc_with("⚠ ≈ × — –", true), "! ~ x - -");
+        assert_eq!(asc_with("⚠ ≈ × — – ·", true), "! ~ x - - -");
         assert_eq!(asc_with("╭─╮ │ └┘", true), "┌─┐ │ └┘");
         // ANSI escapes pass through untouched.
         assert_eq!(asc_with("\x1b[1;32m✓\x1b[0m", true), "\x1b[1;32m[OK]\x1b[0m");
