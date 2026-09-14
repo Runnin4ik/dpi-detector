@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rustls::pki_types::ServerName;
+use rustls::ProtocolVersion;
 use tokio::net::TcpStream;
 use tokio::sync::{Barrier, Semaphore};
 use tokio::task::JoinSet;
@@ -52,10 +53,16 @@ pub const BURST_MIN_TIMEOUT_SECS: u64 = 1;
 pub const BURST_MAX_TIMEOUT_SECS: u64 = 60;
 pub const BURST_DEFAULT_TIMEOUT_SECS: u64 = 8;
 
-/// The TLS version the burst handshakes are pinned to.
+/// Which TLS the run asks for.
 ///
-/// Pinned, not negotiated: the column of the report answers "does this shape get
-/// answered over TLS 1.2 / over TLS 1.3", so the config offers exactly one.
+/// `Tls13` is the browser's own offer: Chrome, Safari and Firefox all offer 1.2
+/// and 1.3 together, so this axis sends the profile's real hello — the same one
+/// tests 3 and 4 send — and then requires the answer to be 1.3 ([`answered`]).
+///
+/// `Tls12` is deliberately a client that offers 1.2 alone: a hello offering both
+/// is never answered with 1.2, so nothing else can ask whether a 1.2 handshake
+/// survives on this network. Same trade as test 2's two columns. See
+/// [`offer_for`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BurstTlsVersion {
     #[default]
@@ -439,11 +446,7 @@ pub async fn burst_profile(
     // Phase 2 — the handshakes start together. Only the connections that came up
     // join the barrier, so one refused dial cannot deadlock the rest.
     if !connected.is_empty() {
-        let mut profile = if settings.tls == BurstTlsVersion::Tls12 {
-            TlsProfile::insecure(fingerprint).tls12()
-        } else {
-            TlsProfile::insecure(fingerprint).tls13()
-        };
+        let mut profile = offer_for(settings.tls, fingerprint);
         if let Some(alpn) = settings.alpn.offered() {
             profile = profile.alpn(alpn);
         }
@@ -455,8 +458,10 @@ pub async fn burst_profile(
             let gate = Arc::clone(&gate);
             let name = domain.to_string();
             let limit = settings.timeout;
-            handshakes
-                .spawn(async move { (index, handshake_attempt(connector, name, stream, tracker, gate, limit).await) });
+            let axis = settings.tls;
+            handshakes.spawn(async move {
+                (index, handshake_attempt(connector, name, stream, tracker, gate, limit, axis).await)
+            });
         }
         while let Some(joined) = handshakes.join_next().await {
             if let Ok((index, attempt)) = joined {
@@ -503,6 +508,39 @@ async fn connect_attempt(
     }
 }
 
+/// The TLS offer one axis of the run presents.
+///
+/// [`BurstTlsVersion::Tls13`] is the *browser's own* hello: Chrome, Safari and
+/// Firefox all offer 1.2 and 1.3 together, so a hello pinned to 1.3 would be a
+/// shape no client sends — and the test asks whether *this shape* is blocked, so
+/// the offer has to be the real one (pinned to 1.3 the extension body reads
+/// `[GREASE, 0x0304]` instead of `[GREASE, 0x0304, 0x0303]`, and the padding that
+/// fills the hello to 512 bytes is two bytes short of the browser's). The
+/// handshake still has to come back 1.3 — see [`answered`].
+///
+/// [`BurstTlsVersion::Tls12`] is synthetic on purpose and stays pinned: a client
+/// that offers both versions is never answered with 1.2, so only a 1.2-only hello
+/// can ask whether a 1.2 handshake survives. Same trade as test 2's two columns.
+fn offer_for(axis: BurstTlsVersion, fingerprint: TlsFingerprint) -> TlsProfile {
+    match axis {
+        BurstTlsVersion::Tls13 => TlsProfile::insecure(fingerprint),
+        BurstTlsVersion::Tls12 => TlsProfile::insecure(fingerprint).tls12(),
+    }
+}
+
+/// What a *completed* handshake means for the axis that asked for it.
+///
+/// The 1.3 axis offers both versions, so a peer that answers 1.2 answered — but
+/// not with what the axis is about, and reporting it as plain success would hide
+/// a downgrade. `NoTls13` is the same verdict the classifier reaches when a
+/// server turns out not to speak 1.3, and the badge already says so.
+fn answered(axis: BurstTlsVersion, negotiated: Option<ProtocolVersion>) -> (DpiStatus, Detail) {
+    match (axis, negotiated) {
+        (BurstTlsVersion::Tls13, Some(ProtocolVersion::TLSv1_2)) => (DpiStatus::NoTls13, Detail::NoTls13),
+        _ => (DpiStatus::Ok, Detail::None),
+    }
+}
+
 /// Waits for the gate, then runs the handshake; the clock starts at the gate so
 /// the reported duration is the handshake, not the queueing in front of it.
 async fn handshake_attempt(
@@ -512,6 +550,7 @@ async fn handshake_attempt(
     tracker: DpiProbeTracker,
     gate: Arc<Barrier>,
     limit: Duration,
+    axis: BurstTlsVersion,
 ) -> BurstAttempt {
     gate.wait().await;
     let started = Instant::now();
@@ -527,11 +566,10 @@ async fn handshake_attempt(
         }
     };
     match timeout(limit, connector.connect(server_name, stream)).await {
-        Ok(Ok(_)) => BurstAttempt {
-            status: DpiStatus::Ok,
-            detail: Detail::None,
-            ms: elapsed(started),
-        },
+        Ok(Ok(stream)) => {
+            let (status, detail) = answered(axis, stream.get_ref().1.protocol_version());
+            BurstAttempt { status, detail, ms: elapsed(started) }
+        }
         Ok(Err(e)) => {
             // Same order as `check_domain_tls`: the stream wrapper sees a reset
             // or a premature EOF that the error alone would not name.
@@ -655,15 +693,44 @@ mod tests {
         assert!(elapsed < Duration::from_secs(3), "round took {elapsed:?}");
     }
 
-    /// The JA3 of the hello a profile writes through the connector test 6 uses.
+    /// The TLS 1.3 axis sends the browser's own offer — both versions in the
+    /// list — because test 6 asks whether a *browser shape* gets blocked, and a
+    /// hello pinned to 1.3 is a shape no browser sends. The TLS 1.2 axis stays
+    /// pinned: a client offering both is never answered with 1.2, so only a
+    /// 1.2-only hello can ask whether such a handshake survives. A peer that
+    /// answers the 1.3 axis with 1.2 answered, but not with what the axis is
+    /// about, and must not be reported as a plain success.
+    #[test]
+    fn the_tls13_axis_offers_both_versions_and_answers_a_downgrade() {
+        let chrome = TlsFingerprint::Chrome;
+        assert_eq!(offer_for(BurstTlsVersion::Tls13, chrome).version, crate::net::tls::TlsVersion::Any);
+        assert_eq!(offer_for(BurstTlsVersion::Tls12, chrome).version, crate::net::tls::TlsVersion::Tls12);
+
+        assert_eq!(answered(BurstTlsVersion::Tls13, None), (DpiStatus::Ok, Detail::None));
+        assert_eq!(
+            answered(BurstTlsVersion::Tls13, Some(ProtocolVersion::TLSv1_3)),
+            (DpiStatus::Ok, Detail::None)
+        );
+        assert_eq!(
+            answered(BurstTlsVersion::Tls13, Some(ProtocolVersion::TLSv1_2)),
+            (DpiStatus::NoTls13, Detail::NoTls13)
+        );
+        assert_eq!(
+            answered(BurstTlsVersion::Tls12, Some(ProtocolVersion::TLSv1_2)),
+            (DpiStatus::Ok, Detail::None)
+        );
+    }
+
+    /// The cipher list of the hello a profile writes on `axis` — the same
+    /// [`offer_for`] the run builds, so a stand names a shape by what the run
+    /// actually sent, not by what a hand-built profile would have sent.
     ///
     /// Extension order is not part of the comparison: rustls shuffles it on
     /// every handshake (the Firefox/Chrome/Safari shapes pin their own order
     /// through the vendored profile), so only the cipher list is stable enough to
     /// name a shape arriving at a stand.
-    fn hello_ciphers(fingerprint: TlsFingerprint) -> String {
-        let config =
-            crate::net::tls::create_tls_config(&TlsProfile::insecure(fingerprint).tls13());
+    fn hello_ciphers(fingerprint: TlsFingerprint, axis: BurstTlsVersion) -> String {
+        let config = crate::net::tls::create_tls_config(&offer_for(axis, fingerprint));
         let name = ServerName::try_from("example.com").expect("valid name");
         let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
         let mut buf = Vec::new();
@@ -752,7 +819,8 @@ mod tests {
         let slow_addr = slow_listener.local_addr().expect("addr");
         let fast_addr = fast_listener.local_addr().expect("addr");
 
-        let ciphers = (hello_ciphers(TlsFingerprint::Rustls), hello_ciphers(TlsFingerprint::Chrome));
+        let axis = BurstTlsVersion::default();
+        let ciphers = (hello_ciphers(TlsFingerprint::Rustls, axis), hello_ciphers(TlsFingerprint::Chrome, axis));
         let witness = Witness::default();
         let slow = tokio::spawn(stand(
             0,

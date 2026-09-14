@@ -47,11 +47,14 @@
 //! * ECH is omitted entirely (see [`firefox_like`] — synthesizing it makes
 //!   Google and Cloudflare abort the handshake), and record-layer splitting is
 //!   rustls'.
-//! * A version-pinned hello (test 2's two columns, test 6's TLS axis) advertises
-//!   `[GREASE, 0x0304]` where the client it imitates sends
-//!   `[GREASE, 0x0304, 0x0303]`: rustls writes `supported_versions` from the
-//!   config, and a build that cannot speak 1.2 must not claim it. JA3 and JA4
-//!   do not hash versions; a middlebox reading the body can.
+//! * A hello whose version is pinned for isolation — test 2's two columns and
+//!   test 6's TLS 1.2 axis — advertises one version where the client it imitates
+//!   sends two (`[GREASE, 0x0304]` instead of `[GREASE, 0x0304, 0x0303]`):
+//!   rustls writes `supported_versions` from the config, and a build that cannot
+//!   speak 1.2 must not claim it. JA3 and JA4 do not hash versions; a middlebox
+//!   reading the body can. Everywhere else — tests 3 and 4, and test 6's TLS 1.3
+//!   axis, which is the one that asks whether a *browser shape* is blocked — the
+//!   offer is the browser's own, both versions and all.
 //! * HTTP/2 pseudo-headers are ordered `m,s,a,p` (hyper's order; the clients send
 //!   `m,a,s,p` for Chrome, `m,p,a,s` for Firefox, `m,s,p,a` for Safari) and the
 //!   request `HEADERS` frame carries no priority (h2 0.4 dropped priority
@@ -1141,21 +1144,24 @@ mod tests {
     /// Firefox greases nothing, so its list must stay plain: adding the value
     /// there would deviate from `curl_firefox133` rather than approach it.
     ///
-    /// The list also carries one *version*, where a browser sends two (1.3 and
-    /// 1.2). That is the pinning of test 2's two columns, asserted here so it
-    /// cannot drift by accident: `0x0304` for the TLS 1.3 phase, `0x0303` for
-    /// the TLS 1.2 one — see `net::tls::TlsProfile::tls13`
-    /// for why the deviation is accepted.
+    /// What `supported_versions` carries per builder.
+    ///
+    /// The unpinned builder is the browser's own offer — 1.3 *and* 1.2, with the
+    /// profile's GREASE — and it is what tests 3 and 4 send, plus test 6's TLS
+    /// 1.3 axis: the burst asks whether a *browser shape* is blocked, so the
+    /// offer has to be the browser's, and it can only be built unpinned.
+    ///
+    /// The pinned builders are test 2's two columns (and test 6's TLS 1.2 axis),
+    /// where the whole point is a client that speaks exactly one version: a
+    /// hello offering both is never answered with 1.2, so the isolation is bought
+    /// with one version in the list instead of two — `0x0304` for the 1.3 phase,
+    /// `0x0303` for the 1.2 one. See `net::tls::TlsProfile::tls13` for why the
+    /// deviation is accepted rather than faked.
     #[test]
     fn grease_version_leads_supported_versions() {
         // The `supported_versions` body of a hello, and the `maybe_grease`-th
         // entry of it (0 = first).
-        let versions = |fp: TlsFingerprint, tls12_only: bool| {
-            let profile = if tls12_only {
-                TlsProfile::insecure(fp).tls12()
-            } else {
-                TlsProfile::insecure(fp).tls13()
-            };
+        let versions = |profile: TlsProfile| {
             let config = create_tls_config(&profile);
             let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
             let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
@@ -1174,23 +1180,30 @@ mod tests {
         };
 
         for fp in [TlsFingerprint::Chrome, TlsFingerprint::Safari] {
-            let (list, record) = versions(fp, false);
-            assert_eq!(list.len(), 2, "{fp:?}: {list:04x?}");
-            let (grease, tls13) = (list[0], list[1]);
-            assert!(is_grease_version(grease), "{fp:?} must open with GREASE: {list:04x?}");
-            assert_eq!(tls13, 0x0304, "{fp:?}");
+            // The browser's own offer: both versions, GREASE first, 512 bytes.
+            let (browser, record) = versions(TlsProfile::insecure(fp));
+            assert_eq!(browser.len(), 3, "{fp:?}: {browser:04x?}");
+            assert!(is_grease_version(browser[0]), "{fp:?} must open with GREASE: {browser:04x?}");
+            assert_eq!(&browser[1..], &[0x0304, 0x0303], "{fp:?}: {browser:04x?}");
             assert_eq!(record, 512 + 5, "{fp:?}: the padded hello must stay 512 bytes");
 
+            // Pinned to 1.3: one version in the list (test 2's TLS 1.3 column).
+            let (only13, _) = versions(TlsProfile::insecure(fp).tls13());
+            assert!(is_grease_version(only13[0]), "{fp:?}: {only13:04x?}");
+            assert_eq!(only13[1], 0x0304, "{fp:?}");
+
             // TLS 1.2 alone: the pinned version replaces 1.3, the GREASE stays.
-            let (list12, _) = versions(fp, true);
-            assert!(is_grease_version(list12[0]), "{fp:?}: {list12:04x?}");
-            assert_eq!(list12[1], 0x0303, "{fp:?}");
+            let (only12, _) = versions(TlsProfile::insecure(fp).tls12());
+            assert!(is_grease_version(only12[0]), "{fp:?}: {only12:04x?}");
+            assert_eq!(only12[1], 0x0303, "{fp:?}");
         }
 
-        let (firefox, _) = versions(TlsFingerprint::Custom, false);
-        assert_eq!(firefox, vec![0x0304], "Firefox does not grease");
-        let (rustls_list, _) = versions(TlsFingerprint::Rustls, false);
-        assert_eq!(rustls_list, vec![0x0304], "the baseline hello is untouched");
+        let (firefox, _) = versions(TlsProfile::insecure(TlsFingerprint::Custom));
+        assert_eq!(firefox, vec![0x0304, 0x0303], "Firefox does not grease, and offers both");
+        let (firefox13, _) = versions(TlsProfile::insecure(TlsFingerprint::Custom).tls13());
+        assert_eq!(firefox13, vec![0x0304]);
+        let (rustls_list, _) = versions(TlsProfile::insecure(TlsFingerprint::Rustls));
+        assert_eq!(rustls_list, vec![0x0304, 0x0303], "the baseline offers both, untouched");
     }
 
     /// RFC 8701: `0x?a?a` with both bytes equal.
