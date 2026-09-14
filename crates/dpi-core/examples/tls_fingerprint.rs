@@ -15,11 +15,80 @@
 //!
 //! `dump` needs no network: it builds a ClientHello in memory and prints the JA3
 //! (`dump13`/`dump12` do the same on the version-pinned builders the probes use),
-//! and the extension list, so it can be diffed against a known-good capture.
-//! `live` completes real handshakes and asks `tls.peet.ws` what it saw, which is
-//! the only way to catch a profile that is well formed but that real servers
-//! reject (that is how the GREASE-ECH problem and the certificate-compression
-//! problem were found).
+//! the JA4 and the extension list, so it can be diffed against a known-good
+//! capture. `live` completes real handshakes and asks `tls.peet.ws` what it saw,
+//! which is the only way to catch a profile that is well formed but that real
+//! servers reject (that is how the GREASE-ECH problem and the certificate-
+//! compression problem were found).
+//!
+//! ## Verifying a profile against the bundle it reproduces
+//!
+//! A fingerprint hash is a *summary*. JA3 never reads the signature-algorithms
+//! list; JA3, JA4 and peetprint all drop GREASE by design, because its values
+//! change every connection; and none of them covers the padding length or a
+//! GREASE extension's body. A one-byte difference in either survives every hash,
+//! every test and every `tls.peet.ws` comparison. So compare the *bytes both
+//! clients put on the wire*, not a server's summary of them:
+//!
+//! 1. Run a throwaway TLS listener on `127.0.0.1:443` that reads the first
+//!    handshake message and writes it to a file.
+//! 2. Point the bundle at it (`--connect-to host:443:127.0.0.1:443`) and point a
+//!    probe at it: `-d <name>.nip.io` makes test 6 dial the listener with the
+//!    profile, the TLS axis and the ALPN the axis under test uses.
+//! 3. Give both sides the *same* hostname, so the SNI matches — it is the only
+//!    field a profile takes from the domain, and its length moves the padding.
+//!    When only one side can be pointed at a name, rewrite the SNI in the
+//!    captured bytes and grow or shrink the padding by the same amount; the
+//!    extensions total and the handshake length are unchanged by that swap.
+//! 4. Compare the cipher list in order, the extension type list in order with
+//!    each body's length, then every body with GREASE words masked to zero. Only
+//!    the client random, the session id and the key share's public key may
+//!    differ.
+//! 5. Take every expected value — the `bundle_versions_match_their_ja3`/`_ja4`
+//!    constants included — from the *bundle's own capture*, never from our dump.
+//!    A constant copied from our own output turns the test into a lock-in and
+//!    hides exactly the difference it exists to catch: that is how the Safari
+//!    profile kept a `rsa_pss_rsae_sha384` the bundle de-duplicates, and how the
+//!    closing GREASE extension went without the byte BoringSSL writes into it.
+//! 6. Check the HTTP layer separately. The h2 shape is the SETTINGS payload and
+//!    its order, the window update, the priority and the pseudo-header order —
+//!    what `tls.peet.ws` reports as the akamai fingerprint. A request *header*
+//!    that differs is not a fingerprint difference, and neither is a chosen ALPN
+//!    as long as both sides offer the same list.
+//!
+//! ## Comparing against an echo service (`live`, `tls.peet.ws`)
+//!
+//! An echo service reports what its own stack saw, which is the only way to
+//! catch a profile that is well formed but that real servers reject. It measures
+//! the *shape the far side reads*, not the bytes we send, so:
+//!
+//! 1. Point *both* clients at it — `live <profile>` for ours, and the bundle at
+//!    `https://tls.peet.ws/api/all` — and compare like for like: `ja3`,
+//!    `ja3_hash`, `ja4`, `peetprint_hash` and the akamai h2 fingerprint of one
+//!    against the same field of the other. Comparing our dump with the service's
+//!    report of our *own* probe proves nothing about the bundle.
+//! 2. Offer the same protocol on both sides: the ALPN value is the first field of
+//!    JA4, so a `--http2` bundle against a probe that offers `h2, http/1.1`
+//!    differs for a reason the service reports faithfully and the profile has
+//!    nothing to do with.
+//! 3. Read each hash for what it covers. JA3 never reads the
+//!    signature-algorithms list; JA4 hashes it; both drop GREASE, whose values
+//!    change per connection. peetprint covers more — the repository measured the
+//!    version list and the padding among its inputs — so a mismatch that shows
+//!    up there and nowhere else points at the padded size or the offered
+//!    versions, which is what `ClientHelloProfile::legacy_versions` fixes.
+//! 4. Never conclude "identical" from an echo service alone. Both Safari bugs
+//!    this harness later caught were missed by that route in the very runs that
+//!    called the profile identical: the duplicated signature scheme *was* visible
+//!    in JA4, but the pinned constant had been copied from our own dump instead
+//!    of measured from the bundle, and the missing byte in the closing GREASE
+//!    extension is invisible to all three hashes. Confirm on captured bytes
+//!    (above) before pinning a value, and re-measure from the bundle whenever a
+//!    profile's data changes.
+//! 5. Remember what the service cannot see. It reports the connection the *path*
+//!    delivered: a middlebox that rewrites or truncates a hello changes what the
+//!    service reports, and the profile is then blamed for the network. When an
+//!    echo result disagrees with a captured-byte comparison, trust the bytes.
 
 use std::time::Instant;
 
