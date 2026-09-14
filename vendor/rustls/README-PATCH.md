@@ -44,7 +44,7 @@ their patched rustls rejected valid server configurations.
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 0.23.43 — 741 lines across 7
+`PATCH.diff` is the exact diff against pristine 0.23.43 — 746 lines across 7
 files, one of them new (`src/client/hello_profile.rs`). It applies to a pristine
 copy with `patch -p1` (`patch -p1 --dry-run` was run against the crates.io
 source before this file was replaced) and reproduces this tree byte for byte, up

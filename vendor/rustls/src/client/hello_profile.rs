@@ -226,9 +226,13 @@ impl ClientHelloProfile {
 
         // A profile places GREASE extensions by putting `GREASE_EXTENSION_MARKER`
         // in its order: each occurrence takes the next value from the
-        // per-connection seed and gets a verbatim (empty) body so the encoder
-        // emits it at that exact position.
+        // per-connection seed and is emitted at that exact position. The body
+        // follows BoringSSL: the last GREASE the hello carries has one zero byte
+        // (`2300 01 00`), the opening one is empty — measured on the
+        // `curl-impersonate v2.2.2` bundles, whose closing GREASE is the only
+        // thing that differs in size from ours in an otherwise identical hello.
         let order = self.extension_order.as_ref().map(|order| {
+            let markers = order.iter().filter(|t| **t == GREASE_EXTENSION_MARKER).count();
             let mut nth = 0u8;
             order
                 .iter()
@@ -236,7 +240,11 @@ impl ClientHelloProfile {
                     if *ext_type == GREASE_EXTENSION_MARKER {
                         let value = grease_value(grease_seed, 2 + nth);
                         nth += 1;
-                        raw.push((ExtensionType::from(value), Vec::new()));
+                        let mut body = Vec::new();
+                        if nth as usize == markers {
+                            body.push(0);
+                        }
+                        raw.push((ExtensionType::from(value), body));
                         value
                     } else {
                         *ext_type

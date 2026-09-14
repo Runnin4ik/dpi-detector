@@ -39,7 +39,7 @@ diff -r a/src\client\client_conn.rs b/src\client\client_conn.rs
 diff -r a/src\client\hello_profile.rs b/src\client\hello_profile.rs
 --- a/src\client\hello_profile.rs	1970-01-01 03:00:00.000000000 +0300
 +++ b/src\client\hello_profile.rs	2026-09-14 12:54:49.171655700 +0300
-@@ -0,0 +1,315 @@
+@@ -0,0 +1,320 @@
 +//! ClientHello profile override (dpi-detector patch).
 +//!
 +//! Upstream rustls fixes the ClientHello shape: the cipher-suite list and its
@@ -268,9 +268,13 @@ diff -r a/src\client\hello_profile.rs b/src\client\hello_profile.rs
 +
 +        // A profile places GREASE extensions by putting `GREASE_EXTENSION_MARKER`
 +        // in its order: each occurrence takes the next value from the
-+        // per-connection seed and gets a verbatim (empty) body so the encoder
-+        // emits it at that exact position.
++        // per-connection seed and is emitted at that exact position. The body
++        // follows BoringSSL: the last GREASE the hello carries has one zero byte
++        // (`2300 01 00`), the opening one is empty — measured on the
++        // `curl-impersonate v2.2.2` bundles, whose closing GREASE is the only
++        // thing that differs in size from ours in an otherwise identical hello.
 +        let order = self.extension_order.as_ref().map(|order| {
++            let markers = order.iter().filter(|t| **t == GREASE_EXTENSION_MARKER).count();
 +            let mut nth = 0u8;
 +            order
 +                .iter()
@@ -278,7 +282,8 @@ diff -r a/src\client\hello_profile.rs b/src\client\hello_profile.rs
 +                    if *ext_type == GREASE_EXTENSION_MARKER {
 +                        let value = grease_value(grease_seed, 2 + nth);
 +                        nth += 1;
-+                        raw.push((ExtensionType::from(value), Vec::new()));
++                        let body = if nth as usize == markers { vec![0] } else { Vec::new() };
++                        raw.push((ExtensionType::from(value), body));
 +                        value
 +                    } else {
 +                        *ext_type
