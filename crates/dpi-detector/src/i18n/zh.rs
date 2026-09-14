@@ -222,7 +222,7 @@ pub(crate) fn messages() -> Messages {
         cli_domains: "自定义域名列表文件路径",
         cli_tcp16: "自定义 TCP16 目标文件路径",
         cli_ascii: "面向旧终端的纯 ASCII 输出（无 Unicode 符号或边框）",
-        cli_fingerprint: "TLS ClientHello 指纹配置（rustls|custom|chrome|safari）。custom = Firefox 133，chrome = Chrome 107 / Edge 99-101，safari = Safari 15.5-18.4（curl-impersonate 形态），均提供 h2",
+        cli_fingerprint: "指纹配置（rustls|custom|chrome|safari）：ClientHello、User-Agent 与请求头、HTTP/2 前导帧。custom = Firefox 133，chrome = Chrome 107 / Edge 99-101，safari = Safari 15.5-18.4（curl-impersonate 形态），均提供 h2",
     }
 }
 

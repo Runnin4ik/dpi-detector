@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use http_body_util::BodyExt;
 use hyper::body::Bytes;
-use hyper::header::{ACCEPT, HOST, USER_AGENT};
+use hyper::header::HOST;
 use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
 use parking_lot::Mutex;
@@ -27,7 +27,10 @@ use crate::config::AppConfig;
 use crate::dns::resolve_host;
 use crate::PhaseProgress;
 use crate::probe::connector::RustlsConnector;
-use crate::probe::http::{hyper_err_info, negotiated_h2, HttpRequest, HttpSender};
+use crate::net::fingerprint::http_identity;
+use crate::probe::http::{
+    hyper_err_info, negotiated_h2, request_headers, HttpRequest, HttpSender,
+};
 use crate::probe::connector::DpiTlsConnector;
 use crate::net::tcp::{dial_tcp, DialError};
 use crate::net::tls::TlsProfile;
@@ -320,7 +323,7 @@ pub async fn check_domain_tls(
         *stage.lock() = "tls_connected".to_string();
         let alpn_h2 = negotiated_h2(&tls_stream);
         let io = TokioIo::new(tls_stream);
-        let mut sender = match HttpSender::handshake(io, alpn_h2).await {
+        let mut sender = match HttpSender::handshake(io, alpn_h2, fingerprint).await {
             Ok(sender) => sender,
             Err(e) => {
                 let (s, d) = inner_hyper(&e, "tls_connected", 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
@@ -328,16 +331,19 @@ pub async fn check_domain_tls(
             }
         };
 
-        // GET with Host = domain, fresh socket per probe (Connection: close)
+        // GET with Host = domain, fresh socket per probe (Connection: close).
+        // The headers are the profile's identity, so a probe that looks like
+        // `curl_chrome107` at the TLS layer looks like it here too.
+        let user_agent = cfg.user_agent_for(fingerprint);
         let req = HttpRequest {
             method: Method::GET,
             host: domain,
             path: "/",
-            user_agent: cfg.user_agent.as_str(),
-            headers: vec![
-                ("Accept-Encoding", "identity".to_string()),
-                ("Connection", "close".to_string()),
-            ],
+            headers: request_headers(
+                &http_identity(fingerprint),
+                user_agent,
+                [("Connection", "close".to_string())],
+            ),
         };
 
         *stage.lock() = "sending_data".to_string();
@@ -482,13 +488,21 @@ pub async fn check_http_injection(
             let _ = conn.await;
         });
 
-        let req = Request::builder()
+        // Plain HTTP (port 80) fallback: the same identity the TLS probes send,
+        // with `Connection: close` so the response ends with an EOF.
+        let identity = http_identity(cfg.fingerprint());
+        let mut builder = Request::builder()
             .method(Method::HEAD)
             .uri("/")
-            .header(HOST, domain_owned.as_str())
-            .header(USER_AGENT, cfg.user_agent.as_str())
-            .header(ACCEPT, "*/*")
-            .header("Connection", "close")
+            .header(HOST, domain_owned.as_str());
+        for (name, value) in request_headers(
+            &identity,
+            cfg.user_agent_for(cfg.fingerprint()),
+            [("Connection", "close".to_string())],
+        ) {
+            builder = builder.header(name, value);
+        }
+        let req = builder
             .body(http_body_util::Full::new(Bytes::new()))
             // The method, URI, headers and body above are all constant: this
             // request cannot fail to build.

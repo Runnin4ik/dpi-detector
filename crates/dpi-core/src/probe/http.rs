@@ -6,12 +6,21 @@
 //! report the mismatch as censorship, so the probes speak both: one enum over
 //! hyper's two client connections, and a request builder that drops the headers
 //! HTTP/2 forbids so a call site describes one request instead of two.
+//!
+//! A probe also presents the profile's HTTP identity — its `User-Agent` and
+//! header set ([`crate::net::fingerprint::http_identity`]) and its HTTP/2 preface
+//! ([`h2_fingerprint`]),
+//! both taken from the `curl-impersonate` wrapper the ClientHello is pinned to.
+//! The request itself comes from the call site: which headers a test sends is a
+//! property of the test, the profile only decides what the client looks like.
 
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
-use hyper::header::{HOST, USER_AGENT};
+use hyper::header::HOST;
 use hyper::{Method, Request, Response};
 use hyper_util::rt::TokioExecutor;
+
+use crate::net::fingerprint::{h2_fingerprint, HttpIdentity, TlsFingerprint};
 
 /// Message plus the OS code and kind of the `io::Error` at the end of a hyper
 /// error chain.
@@ -37,13 +46,41 @@ pub(crate) fn hyper_err_info(e: &hyper::Error) -> (String, Option<i32>, Option<s
 /// `host` is the SNI name: the `Host` header in HTTP/1.1, the `:authority`
 /// pseudo-header (taken from the URI) in HTTP/2. The helper is only ever handed
 /// a connection that is already TLS, so the HTTP/2 form is `https://`.
+///
+/// `headers` is the complete, ordered list — `user-agent` included, in the
+/// position the impersonated client puts it ([`HttpIdentity::headers`] plus
+/// whatever the test needs).
 pub struct HttpRequest<'a> {
     pub method: Method,
     pub host: &'a str,
     pub path: &'a str,
-    pub user_agent: &'a str,
-    /// Sent in both protocols, minus the connection-specific ones HTTP/2 rejects.
+    /// Sent in this order, minus the connection-specific ones HTTP/2 rejects.
     pub headers: Vec<(&'a str, String)>,
+}
+
+/// The headers a probe sends: the profile's identity followed by the extras the
+/// test needs (`Connection`, `X-Pad`), so every call site builds one list.
+pub fn request_headers<'a>(
+    identity: &HttpIdentity,
+    user_agent: &'a str,
+    extras: impl IntoIterator<Item = (&'a str, String)>,
+) -> Vec<(&'a str, String)> {
+    let mut headers: Vec<(&'a str, String)> = identity
+        .headers
+        .iter()
+        .map(|(name, value)| {
+            // The profile's own UA comes from the identity; everything else is a
+            // constant. `name` is `&'static str`, which outlives `'a`.
+            let value = if name.eq_ignore_ascii_case("user-agent") {
+                user_agent.to_string()
+            } else {
+                (*value).to_string()
+            };
+            (*name, value)
+        })
+        .collect();
+    headers.extend(extras);
+    headers
 }
 
 /// A hyper sender for whichever protocol the connection agreed on.
@@ -57,15 +94,27 @@ impl HttpSender {
     ///
     /// `io` is a `TokioIo`-wrapped stream (hyper's own I/O traits), and
     /// `alpn_h2` must be what the TLS handshake negotiated — it is the only
-    /// thing that decides which client to start.
-    pub async fn handshake<T>(io: T, alpn_h2: bool) -> hyper::Result<Self>
+    /// thing that decides which client to start. `fingerprint` only tunes the
+    /// HTTP/2 preface: hyper's defaults are the baseline, a browser profile
+    /// overrides them with the ones its ClientHello is pinned to.
+    pub async fn handshake<T>(io: T, alpn_h2: bool, fingerprint: TlsFingerprint) -> hyper::Result<Self>
     where
         T: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
     {
         if alpn_h2 {
-            let (sender, connection) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
-                .handshake(io)
-                .await?;
+            let mut builder = hyper::client::conn::http2::Builder::new(TokioExecutor::new());
+            if let Some(h2) = h2_fingerprint(fingerprint) {
+                builder
+                    .header_table_size(h2.header_table_size)
+                    .initial_stream_window_size(h2.initial_window_size)
+                    .initial_connection_window_size(h2.connection_window)
+                    .max_frame_size(h2.max_frame_size)
+                    .max_header_list_size(h2.max_header_list_size)
+                    // `enable_push(false)` is not exposed here: hyper sets it on
+                    // every client, so `SETTINGS_ENABLE_PUSH = 0` is always sent.
+                    .max_concurrent_streams(h2.max_concurrent_streams);
+            }
+            let (sender, connection) = builder.handshake(io).await?;
             tokio::spawn(async move {
                 let _ = connection.await;
             });
@@ -110,7 +159,6 @@ fn build_request(req: HttpRequest<'_>, h2: bool) -> Request<Full<Bytes>> {
     } else {
         builder = builder.uri(req.path).header(HOST, req.host);
     }
-    builder = builder.header(USER_AGENT, req.user_agent);
     for (name, value) in req.headers {
         if h2 && is_connection_specific(name) {
             continue;
@@ -144,10 +192,10 @@ mod tests {
             method: Method::GET,
             host: "example.com",
             path: "/x",
-            user_agent: "ua",
             headers: vec![
-                ("Accept-Encoding", "identity".to_string()),
-                ("Connection", "close".to_string()),
+                ("user-agent", "ua".to_string()),
+                ("accept-encoding", "identity".to_string()),
+                ("connection", "close".to_string()),
             ],
         }
     }
@@ -161,7 +209,7 @@ mod tests {
         assert_eq!(request.headers().get("accept-encoding").expect("kept"), "identity");
         assert!(request.headers().get("connection").is_none(), "HTTP/2 forbids Connection");
         assert!(request.headers().get(HOST).is_none(), "authority comes from the URI");
-        assert_eq!(request.headers().get(USER_AGENT).expect("ua"), "ua");
+        assert_eq!(request.headers().get("user-agent").expect("ua"), "ua");
     }
 
     #[test]

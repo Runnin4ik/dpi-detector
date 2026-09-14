@@ -16,8 +16,16 @@ fn d_tcp_block_max_kb() -> u64 { 36 }
 fn d_fat_default_sni() -> String { "example.com".to_string() }
 fn d_fat_connect_timeout() -> f64 { 8.0 }
 fn d_fat_read_timeout() -> f64 { 12.0 }
+/// The placeholder `User-Agent` `config.yml` starts with.
+///
+/// It is not what the probes send: [`AppConfig::user_agent_for`] hands the
+/// selected fingerprint profile's own UA to a probe, and only an operator who
+/// edited `user_agent` away from this value gets it on the wire.
+pub const DEFAULT_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
+
 fn d_user_agent() -> String {
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36".to_string()
+    DEFAULT_USER_AGENT.to_string()
 }
 fn d_dns_check_timeout() -> f64 { 5.0 }
 fn d_dns_availability_timeout() -> f64 { 10.0 }
@@ -610,6 +618,20 @@ impl AppConfig {
         crate::net::fingerprint::TlsFingerprint::parse(&self.tls_fingerprint).unwrap_or_default()
     }
 
+    /// The `User-Agent` the probes present.
+    ///
+    /// A configured `user_agent` wins — it is the operator saying what the tool
+    /// should look like. Left at the built-in default it is the placeholder
+    /// `d_user_agent()` ships, so the selected fingerprint profile's own UA takes
+    /// over instead: sending `Chrome/133` behind a `chrome107` ClientHello is a
+    /// mismatch a header-matching middlebox reads in one packet.
+    pub fn user_agent_for(&self, fingerprint: crate::net::fingerprint::TlsFingerprint) -> &str {
+        if self.user_agent != DEFAULT_USER_AGENT {
+            return &self.user_agent;
+        }
+        crate::net::fingerprint::http_identity(fingerprint).user_agent.unwrap_or(DEFAULT_USER_AGENT)
+    }
+
     fn clamp(&mut self) {
         if self.max_concurrent < 1 {
             self.max_concurrent = 50;
@@ -949,6 +971,23 @@ mod tests {
         assert_eq!(clean_domain("[2001:db8::1]:8080"), Some("2001:db8::1".to_string()));
         assert_eq!(clean_domain("2001:db8::1"), Some("2001:db8::1".to_string()));
         assert_eq!(clean_domain(""), None);
+    }
+
+    /// A configured UA is the operator's word and wins; the built-in default is a
+    /// placeholder, so the selected profile's own UA goes on the wire instead.
+    #[test]
+    fn user_agent_follows_the_profile_unless_configured() {
+        use crate::net::fingerprint::TlsFingerprint;
+
+        let mut cfg = AppConfig::default();
+        assert!(cfg.user_agent_for(TlsFingerprint::Chrome).contains("Chrome/107.0.0.0"));
+        assert!(cfg.user_agent_for(TlsFingerprint::Custom).contains("Firefox/133.0"));
+        assert_eq!(cfg.user_agent_for(TlsFingerprint::Rustls), DEFAULT_USER_AGENT);
+
+        cfg.user_agent = "my-probe/1.0".to_string();
+        for fingerprint in TlsFingerprint::ALL {
+            assert_eq!(cfg.user_agent_for(fingerprint), "my-probe/1.0");
+        }
     }
 
     #[test]

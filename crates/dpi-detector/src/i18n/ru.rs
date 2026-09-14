@@ -222,7 +222,7 @@ pub(crate) fn messages() -> Messages {
         cli_domains: "Путь к файлу со списком доменов",
         cli_tcp16: "Путь к файлу целей TCP16",
         cli_ascii: "Только ASCII для старых консолей (без Unicode-глифов и рамок)",
-        cli_fingerprint: "Профиль отпечатка TLS ClientHello (rustls|custom|chrome|safari). custom — форма Firefox 133, chrome — Chrome 107 / Edge 99-101, safari — Safari 15.5-18.4 из curl-impersonate; все предлагают h2",
+        cli_fingerprint: "Профиль отпечатка (rustls|custom|chrome|safari): ClientHello, User-Agent и заголовки, преамбула HTTP/2. custom — форма Firefox 133, chrome — Chrome 107 / Edge 99-101, safari — Safari 15.5-18.4 из curl-impersonate; все предлагают h2",
     }
 }
 

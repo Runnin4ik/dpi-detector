@@ -1,4 +1,4 @@
-//! TLS fingerprint profiles: the ClientHello shape a probe presents.
+//! Fingerprint profiles: the TLS and HTTP shape a probe presents.
 //!
 //! # Why this exists
 //!
@@ -28,17 +28,39 @@
 //!
 //! # What "shape" means here
 //!
-//! Cipher-suite list and order, `supported_groups`, `signature_algorithms`,
-//! ALPN (http/1.1 only — see [`firefox_like`]), exact extension order,
-//! extensions rustls does not normally emit, and the hybrid `X25519MLKEM768`
-//! group. That is what JA3 and JA4 hash.
+//! Three layers, all taken from the same `curl-impersonate v2.2.2` wrapper, so a
+//! probe that looks like `curl_chrome107` in one of them looks like it in all:
 //!
-//! It is **not** a byte-for-byte browser. ECH is omitted entirely (see
-//! [`firefox_like`] — synthesizing it makes Google and Cloudflare abort the
-//! handshake), record-layer splitting is rustls', and there is no ALPS and no
-//! HTTP/2 fingerprint. A censor matching on JA3/JA4 sees a Firefox-shaped
-//! client; one matching on peetprint, HTTP/2 settings or record timing can still
-//! tell the difference. The report says so.
+//! * **TLS** — cipher-suite list and order, `supported_groups`,
+//!   `signature_algorithms`, ALPN, exact extension order, extensions rustls does
+//!   not normally emit, and the hybrid `X25519MLKEM768` group. That is what JA3
+//!   and JA4 hash; the tests pin both against the bundle.
+//! * **HTTP** — the `User-Agent` and header set of the impersonated client, in
+//!   its order ([`http_identity`]). `accept-encoding` stays `identity` (see
+//!   there), and a `user_agent` set in `config.yml` wins over the profile's.
+//! * **HTTP/2** — the `SETTINGS` values, which of them are sent, and the
+//!   connection window that becomes the `WINDOW_UPDATE` increment
+//!   ([`h2_fingerprint`]).
+//!
+//! It is **not** a byte-for-byte browser. What is left, and why:
+//!
+//! * ECH is omitted entirely (see [`firefox_like`] — synthesizing it makes
+//!   Google and Cloudflare abort the handshake), and record-layer splitting is
+//!   rustls'.
+//! * A version-pinned hello (test 2's two columns, test 6's TLS axis) advertises
+//!   `[GREASE, 0x0304]` where the client it imitates sends
+//!   `[GREASE, 0x0304, 0x0303]`: rustls writes `supported_versions` from the
+//!   config, and a build that cannot speak 1.2 must not claim it. JA3 and JA4
+//!   do not hash versions; a middlebox reading the body can.
+//! * HTTP/2 pseudo-headers are ordered `m,s,a,p` (hyper's order; the clients send
+//!   `m,a,s,p` for Chrome, `m,p,a,s` for Firefox, `m,s,p,a` for Safari) and the
+//!   request `HEADERS` frame carries no priority (h2 0.4 dropped priority
+//!   support; Chrome weight 256 / exclusive, Firefox 42 / 0, Safari 255 / 0).
+//!
+//! Measured against `tls.peet.ws` the TLS hashes, the header list and order, the
+//! UA and the whole HTTP/2 `SETTINGS`/`WINDOW_UPDATE` pair match the bundle
+//! exactly; `peetprint` — which folds in the priority and the pseudo-header
+//! order — does not.
 
 use std::sync::{Arc, LazyLock};
 
@@ -212,6 +234,162 @@ impl TlsFingerprint {
 impl std::fmt::Display for TlsFingerprint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.code())
+    }
+}
+
+/// The HTTP identity a profile presents: the `User-Agent` and the headers of the
+/// client whose ClientHello it reproduces, in the order that client sends them.
+///
+/// Taken from the same `curl-impersonate v2.2.2` wrapper the ClientHello is
+/// pinned to, so a probe that looks like `curl_chrome107` at the TLS layer also
+/// looks like it at the HTTP layer. Two deviations, both deliberate:
+///
+/// * `accept-encoding` is `identity`, never the browser's `gzip, deflate, br`:
+///   tests 2–4 count the bytes a connection carries before it is cut
+///   (`read_timeout_at_24kb`, `tcp_block_min_kb`/`max_kb`), and a negotiated
+///   Content-Encoding would make those numbers depend on how well the response
+///   happens to compress. Every measurement this tool has taken used identity.
+/// * the Rustls profile impersonates nobody: it carries no UA of its own
+///   ([`HttpIdentity::user_agent`] is `None`) and keeps the header set the probes
+///   have always sent.
+pub struct HttpIdentity {
+    /// The UA of the impersonated client, `None` for the baseline profile.
+    pub user_agent: Option<&'static str>,
+    /// Headers in wire order, `user-agent` included where the impersonated
+    /// client sends one. The call sites append their own tool-specific headers
+    /// (`Connection`, `X-Pad`) after these.
+    pub headers: &'static [(&'static str, &'static str)],
+}
+
+/// Chrome 107 / Edge 99–101 headers, in `curl_chrome107.bat` order.
+const CHROME_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#""Google Chrome";v="107", "Chromium";v="107", "Not=A?Brand";v="24""#),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", r#""Windows""#),
+    ("upgrade-insecure-requests", "1"),
+    (
+        "user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36",
+    ),
+    (
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+    ),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-user", "?1"),
+    ("sec-fetch-dest", "document"),
+    ("accept-encoding", "identity"),
+    ("accept-language", "en-US,en;q=0.9"),
+];
+
+/// Firefox 133 headers, in `curl_firefox133.bat` order.
+const FIREFOX_HEADERS: &[(&str, &str)] = &[
+    (
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
+    ),
+    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("accept-language", "en-US,en;q=0.5"),
+    ("accept-encoding", "identity"),
+    ("upgrade-insecure-requests", "1"),
+    ("sec-fetch-dest", "document"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-user", "?1"),
+    ("priority", "u=0, i"),
+    ("te", "trailers"),
+];
+
+/// Safari 15.5 headers, in `curl_safari155.bat` order.
+const SAFARI_HEADERS: &[(&str, &str)] = &[
+    (
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
+    ),
+    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("accept-language", "en-GB,en-US;q=0.9,en;q=0.8"),
+    ("accept-encoding", "identity"),
+];
+
+/// The baseline probes' own header set. The Rustls profile is the control every
+/// earlier measurement was taken with, so it keeps exactly what those runs sent
+/// — the call sites add `Connection` and, for test 3/4, `X-Pad`.
+const RUSTLS_HEADERS: &[(&str, &str)] = &[("accept-encoding", "identity")];
+
+/// The HTTP identity of `fingerprint`.
+pub fn http_identity(fingerprint: TlsFingerprint) -> HttpIdentity {
+    match fingerprint {
+        TlsFingerprint::Rustls => HttpIdentity { user_agent: None, headers: RUSTLS_HEADERS },
+        TlsFingerprint::Custom => HttpIdentity {
+            user_agent: Some(FIREFOX_HEADERS[0].1),
+            headers: FIREFOX_HEADERS,
+        },
+        TlsFingerprint::Chrome => HttpIdentity { user_agent: Some(CHROME_HEADERS[4].1), headers: CHROME_HEADERS },
+        TlsFingerprint::Safari => HttpIdentity { user_agent: Some(SAFARI_HEADERS[0].1), headers: SAFARI_HEADERS },
+    }
+}
+
+/// The HTTP/2 preface a profile presents, from the same wrapper as its headers.
+///
+/// `SETTINGS` values, which of them are sent at all, and the connection window
+/// that becomes the `WINDOW_UPDATE` increment. What it cannot reproduce is the
+/// priority a browser puts on its request `HEADERS` frame (weight/exclusive) and
+/// the pseudo-header order: hyper writes `:method, :scheme, :authority, :path`
+/// and sends no priority, while Chrome sends `m,a,s,p` with `weight=256,
+/// exclusive=1`. Both are visible to an HTTP/2 fingerprinter, so the profile is
+/// closer but not identical there.
+pub struct H2Fingerprint {
+    /// `SETTINGS_HEADER_TABLE_SIZE`; `None` omits the setting.
+    pub header_table_size: Option<u32>,
+    /// `SETTINGS_MAX_CONCURRENT_STREAMS`; `None` omits the setting.
+    pub max_concurrent_streams: Option<u32>,
+    /// `SETTINGS_INITIAL_WINDOW_SIZE`.
+    pub initial_window_size: u32,
+    /// `SETTINGS_MAX_FRAME_SIZE`; `None` omits the setting.
+    pub max_frame_size: Option<u32>,
+    /// `SETTINGS_MAX_HEADER_LIST_SIZE`. Always sent, and always 262144 (Chrome's
+    /// value): hyper's client advertises it unconditionally, so the Firefox and
+    /// Safari profiles carry one setting their client does not send.
+    pub max_header_list_size: u32,
+    /// Total connection window; h2 sends `WINDOW_UPDATE` with this minus the
+    /// protocol's 65 535 default, which is the increment the impersonated client
+    /// sends.
+    pub connection_window: u32,
+}
+
+/// The HTTP/2 preface of `fingerprint`, `None` for the baseline profile (hyper's
+/// own defaults, the shape every earlier measurement used).
+pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
+    match fingerprint {
+        // `1:65536;2:0;3:1000;4:6291456;6:262144`, window 15663105.
+        TlsFingerprint::Chrome => Some(H2Fingerprint {
+            header_table_size: Some(65_536),
+            max_concurrent_streams: Some(1000),
+            initial_window_size: 6_291_456,
+            max_frame_size: None,
+            max_header_list_size: 262_144,
+            connection_window: 15_663_105 + 65_535,
+        }),
+        // `1:65536;2:0;4:131072;5:16384`, window 12517377.
+        TlsFingerprint::Custom => Some(H2Fingerprint {
+            header_table_size: Some(65_536),
+            max_concurrent_streams: None,
+            initial_window_size: 131_072,
+            max_frame_size: Some(16_384),
+            max_header_list_size: 262_144,
+            connection_window: 12_517_377 + 65_535,
+        }),
+        // `3:100;4:4194304`, window 10485760.
+        TlsFingerprint::Safari => Some(H2Fingerprint {
+            header_table_size: None,
+            max_concurrent_streams: Some(100),
+            initial_window_size: 4_194_304,
+            max_frame_size: None,
+            max_header_list_size: 262_144,
+            connection_window: 10_485_760 + 65_535,
+        }),
+        TlsFingerprint::Rustls => None,
     }
 }
 
@@ -620,6 +798,70 @@ mod tests {
              49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513-21,29-23-24,0";
     const SAFARI_155_JA4: &str = "t13d2014h2_a09f3c656075_14788d8d241b";
     const FIREFOX_133_JA4_LESS_ECH: &str = "t13d1715h2_5b57614c22b0_8fb63dbc839a";
+
+    /// The HTTP identity and the ClientHello of a profile have to describe the
+    /// same client: a `chrome107` hello behind a `Chrome/133` UA is a mismatch a
+    /// header-matching middlebox reads in a single packet.
+    #[test]
+    fn http_identity_names_the_version_the_hello_imitates() {
+        for (fingerprint, marker) in [
+            (TlsFingerprint::Chrome, "Chrome/107.0.0.0"),
+            (TlsFingerprint::Custom, "Firefox/133.0"),
+            (TlsFingerprint::Safari, "Version/15.5"),
+        ] {
+            let identity = http_identity(fingerprint);
+            let ua = identity.user_agent.expect("a browser profile carries a UA");
+            assert!(ua.contains(marker), "{}: {ua}", fingerprint.code());
+            let (_, in_list) = identity
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+                .expect("the UA is part of the list, in its wire position");
+            assert_eq!(*in_list, ua, "{}: field and list disagree", fingerprint.code());
+            if let Some((_, value)) = identity.headers.iter().find(|(name, _)| *name == "sec-ch-ua") {
+                let version = ua.split("Chrome/").nth(1).and_then(|v| v.split('.').next()).expect("UA version");
+                assert!(value.contains(&format!("v=\"{version}\"")), "{}: {value}", fingerprint.code());
+            }
+            // The one deliberate HTTP-layer deviation: the probes count bytes,
+            // so they never negotiate a Content-Encoding.
+            let (_, encoding) = identity
+                .headers
+                .iter()
+                .find(|(name, _)| *name == "accept-encoding")
+                .expect("every identity states its encoding");
+            assert_eq!(*encoding, "identity", "{}: {}", fingerprint.code(), *encoding);
+        }
+        let baseline = http_identity(TlsFingerprint::Rustls);
+        assert!(baseline.user_agent.is_none(), "the baseline profile impersonates nobody");
+        assert_eq!(baseline.headers, [("accept-encoding", "identity")]);
+    }
+
+    /// The h2 preface is what the pinned wrapper configures through
+    /// `--http2-settings` / `--http2-window-update`; the increment h2 puts on the
+    /// wire is the connection window minus the protocol's 65535 default.
+    #[test]
+    fn h2_preface_matches_the_wrapper_it_is_pinned_to() {
+        let chrome = h2_fingerprint(TlsFingerprint::Chrome).expect("chrome tunes h2");
+        assert_eq!(chrome.header_table_size, Some(65_536));
+        assert_eq!(chrome.max_concurrent_streams, Some(1000));
+        assert_eq!(chrome.initial_window_size, 6_291_456);
+        assert_eq!(chrome.max_frame_size, None, "Chrome advertises no MAX_FRAME_SIZE");
+        assert_eq!(chrome.connection_window - 65_535, 15_663_105);
+
+        let firefox = h2_fingerprint(TlsFingerprint::Custom).expect("firefox tunes h2");
+        assert_eq!(firefox.header_table_size, Some(65_536));
+        assert_eq!(firefox.initial_window_size, 131_072);
+        assert_eq!(firefox.max_frame_size, Some(16_384));
+        assert_eq!(firefox.connection_window - 65_535, 12_517_377);
+
+        let safari = h2_fingerprint(TlsFingerprint::Safari).expect("safari tunes h2");
+        assert_eq!(safari.header_table_size, None, "Safari sends no HEADER_TABLE_SIZE");
+        assert_eq!(safari.max_concurrent_streams, Some(100));
+        assert_eq!(safari.initial_window_size, 4_194_304);
+        assert_eq!(safari.connection_window - 65_535, 10_485_760);
+
+        assert!(h2_fingerprint(TlsFingerprint::Rustls).is_none(), "the baseline keeps hyper's defaults");
+    }
 
     /// The version-bearing label is display only: it must not collide with a
     /// parser name, and every profile whose shape is a pinned curl version has

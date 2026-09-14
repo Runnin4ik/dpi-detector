@@ -222,7 +222,7 @@ pub(crate) fn messages() -> Messages {
         cli_domains: "Path to custom domain list file",
         cli_tcp16: "Path to custom TCP16 target file",
         cli_ascii: "ASCII-only output for legacy consoles (no Unicode glyphs or borders)",
-        cli_fingerprint: "TLS ClientHello fingerprint profile (rustls|custom|chrome|safari). custom = Firefox 133, chrome = Chrome 107 / Edge 99-101, safari = Safari 15.5-18.4 curl-impersonate shapes, all offering h2",
+        cli_fingerprint: "Fingerprint profile (rustls|custom|chrome|safari): the ClientHello, the User-Agent and headers, and the HTTP/2 preface. custom = Firefox 133, chrome = Chrome 107 / Edge 99-101, safari = Safari 15.5-18.4 curl-impersonate shapes, all offering h2",
     }
 }
 

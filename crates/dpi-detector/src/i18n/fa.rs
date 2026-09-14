@@ -215,7 +215,7 @@ pub(crate) fn messages() -> Messages {
         cli_domains: "Masir-e file-e list-e domain ha",
         cli_tcp16: "Masir-e file-e target haye TCP16",
         cli_ascii: "Khorooj-e faghat ASCII baraye console haye ghadimi (bedun-e glyph ya border-e Unicode)",
-        cli_fingerprint: "Profile-e fingerprint-e TLS ClientHello (rustls|custom|chrome|safari). custom = Firefox 133, chrome = Chrome 107 / Edge 99-101, safari = Safari 15.5-18.4 az curl-impersonate; hame h2 pishnahad mikonand",
+        cli_fingerprint: "Profile-e fingerprint (rustls|custom|chrome|safari): ClientHello, User-Agent va header ha, moqaddame-e HTTP/2. custom = Firefox 133, chrome = Chrome 107 / Edge 99-101, safari = Safari 15.5-18.4 az curl-impersonate; hame h2 pishnahad mikonand",
     }
 }
 

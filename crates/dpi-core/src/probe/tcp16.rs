@@ -20,7 +20,10 @@ use crate::classify::{
     classify_connect_error_full, classify_read_error, Detail, DpiStatus, ProbeMetrics,
 };
 use crate::config::AppConfig;
-use crate::probe::http::{hyper_err_info, negotiated_h2, HttpRequest, HttpSender};
+use crate::net::fingerprint::http_identity;
+use crate::probe::http::{
+    hyper_err_info, negotiated_h2, request_headers, HttpRequest, HttpSender,
+};
 use crate::net::tcp::{dial_tcp, DialError};
 use crate::net::tls::{create_tls_config, TlsProfile};
 
@@ -91,7 +94,7 @@ async fn connect_fat_target(
         };
         let alpn_h2 = negotiated_h2(&tls_stream);
         let io = TokioIo::new(tls_stream);
-        match HttpSender::handshake(io, alpn_h2).await {
+        match HttpSender::handshake(io, alpn_h2, cfg.fingerprint()).await {
             Ok(sender) => Ok(sender),
             Err(e) => {
                 let (msg, os_code, os_kind) = hyper_err_info(&e);
@@ -102,7 +105,7 @@ async fn connect_fat_target(
     } else {
         let io = TokioIo::new(tcp);
         // No TLS, so no ALPN: HTTP/1.1 is the only protocol on the wire here.
-        match HttpSender::handshake(io, false).await {
+        match HttpSender::handshake(io, false, cfg.fingerprint()).await {
             Ok(sender) => Ok(sender),
             Err(e) => {
                 let (msg, os_code, os_kind) = hyper_err_info(&e);
@@ -193,19 +196,19 @@ pub async fn probe_tcp_16_20(
         };
 
         let make_req = |pad: Option<&str>| -> HttpRequest<'_> {
-            let mut headers = vec![
-                ("Connection", "keep-alive".to_string()),
-                ("Accept-Encoding", "identity".to_string()),
-            ];
+            let mut extras = vec![("Connection", "keep-alive".to_string())];
             if let Some(p) = pad {
-                headers.push(("X-Pad", p.to_string()));
+                extras.push(("X-Pad", p.to_string()));
             }
             HttpRequest {
                 method: Method::HEAD,
                 host: &host_val,
                 path: "/",
-                user_agent: cfg.user_agent.as_str(),
-                headers,
+                headers: request_headers(
+                    &http_identity(cfg.fingerprint()),
+                    cfg.user_agent_for(cfg.fingerprint()),
+                    extras,
+                ),
             }
         };
 
