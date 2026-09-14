@@ -15,7 +15,7 @@ exclude = ["vendor/rustls"]
 rustls = { path = "vendor/rustls" }
 
 [workspace.package]
-version = "5.0.0-alpha.11"
+version = "5.0.0-alpha.12"
 edition = "2021"
 authors = ["runnin"]
 license = "MIT"
