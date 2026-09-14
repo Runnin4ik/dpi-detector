@@ -14,6 +14,7 @@
 //! probes' second TLS column) and `live` pins TLS 1.3.
 //!
 //! `dump` needs no network: it builds a ClientHello in memory and prints the JA3
+//! (`dump13`/`dump12` do the same on the version-pinned builders the probes use),
 //! and the extension list, so it can be diffed against a known-good capture.
 //! `live` completes real handshakes and asks `tls.peet.ws` what it saw, which is
 //! the only way to catch a profile that is well formed but that real servers
@@ -24,7 +25,7 @@ use std::time::Instant;
 
 use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::net::{ja3, ja4};
-use dpi_core::net::tls::{create_tls_config, TlsProfile};
+use dpi_core::net::tls::{create_tls_config, TlsProfile, TlsVersion};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -54,17 +55,25 @@ async fn main() {
     let fingerprint = TlsFingerprint::parse(&which).expect("profile must be rustls|custom");
 
     match mode.as_str() {
-        "dump" => dump(fingerprint),
+        "dump" => dump(fingerprint, TlsVersion::Any),
+        "dump13" => dump(fingerprint, TlsVersion::Tls13),
+        "dump12" => dump(fingerprint, TlsVersion::Tls12),
         "live" => live(fingerprint, &hosts, false).await,
         "live12" => live(fingerprint, &hosts, true).await,
-        other => panic!("unknown mode {other}, expected dump|live|live12"),
+        other => panic!("unknown mode {other}, expected dump|dump13|dump12|live|live12"),
     }
 }
 
-fn client_hello(fingerprint: TlsFingerprint) -> Vec<u8> {
+fn client_hello(fingerprint: TlsFingerprint, version: TlsVersion) -> Vec<u8> {
     // Same factory the probes use, so the dump reflects the real wire shape
-    // (including the baseline compression policy) rather than a hand-built config.
-    let config = create_tls_config(&TlsProfile::insecure(fingerprint));
+    // (including the baseline compression policy and the version trim) rather
+    // than a hand-built config.
+    let profile = match version {
+        TlsVersion::Tls12 => TlsProfile::insecure(fingerprint).tls12(),
+        TlsVersion::Tls13 => TlsProfile::insecure(fingerprint).tls13(),
+        TlsVersion::Any => TlsProfile::insecure(fingerprint),
+    };
+    let config = create_tls_config(&profile);
 
     let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
     let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
@@ -73,8 +82,8 @@ fn client_hello(fingerprint: TlsFingerprint) -> Vec<u8> {
     buf
 }
 
-fn dump(fingerprint: TlsFingerprint) {
-    let buf = client_hello(fingerprint);
+fn dump(fingerprint: TlsFingerprint, version: TlsVersion) {
+    let buf = client_hello(fingerprint, version);
     println!("profile   = {}", fingerprint.code());
     println!("record    = {} bytes", buf.len() - 5);
     println!("ja3       = {}", ja3::client_hello_ja3(&buf));

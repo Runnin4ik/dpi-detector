@@ -298,10 +298,44 @@ fn apply_profile(config: &mut ClientConfig, profile: &TlsProfile) {
     // axis), and a profile's fallback versions exist to make an *unpinned* hello
     // look like the browser's. Keeping them here would advertise 1.1 behind a
     // hello that offers exactly one version — a shape no client sends and a
-    // question the run is not asking.
+    // question the run is not asking. The same goes for the other version's
+    // extensions and cipher suites: a browser drops them when it offers one
+    // version, and the far side answers a hello that keeps them with a fatal
+    // alert (see `fingerprint::pinned_drop`).
     if profile.version != TlsVersion::Any {
         if let Some(hello) = config.hello_profile.as_mut() {
-            Arc::make_mut(hello).legacy_versions.clear();
+            let hello = Arc::make_mut(hello);
+            hello.legacy_versions.clear();
+
+            let drop = crate::net::fingerprint::pinned_drop(profile.fingerprint, profile.version);
+            if !drop.is_empty() {
+                // Suppression is what removes them: an extension missing from
+                // the order is still sent, only later, and one the profile
+                // supplies verbatim would be sent from `raw_extensions`.
+                hello.suppress_extensions.extend_from_slice(drop);
+                if let Some(order) = hello.extension_order.as_mut() {
+                    order.retain(|ext| !drop.contains(ext));
+                }
+                hello.raw_extensions.retain(|(ext, _)| !drop.contains(ext));
+            }
+            if let Some(suites) = hello.cipher_suites.as_mut() {
+                suites.retain(|suite| offers_version(profile.version, *suite));
+            }
         }
+    }
+}
+
+/// Whether cipher suite `suite` belongs to `version`.
+///
+/// The TLS 1.3 suites are the `0x13xx` block and everything a browser offers
+/// below it is a 1.2 suite, so a pinned hello keeps exactly one family — as the
+/// browsers do (Chrome 107 pinned to 1.3 offers 0x1301-0x1303 alone, pinned to
+/// 1.2 the ECDHE/RSA suites alone).
+fn offers_version(version: TlsVersion, suite: u16) -> bool {
+    let is_tls13 = (0x1301..=0x1305).contains(&suite);
+    match version {
+        TlsVersion::Tls13 => is_tls13,
+        TlsVersion::Tls12 => !is_tls13,
+        TlsVersion::Any => true,
     }
 }

@@ -75,6 +75,8 @@ use rustls::client::hello_profile::GREASE_EXTENSION_MARKER;
 use rustls::client::ClientHelloProfile;
 use rustls::ClientConfig;
 
+use crate::net::tls::TlsVersion;
+
 
 /// Which ClientHello shape the probes present.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -486,6 +488,52 @@ pub fn needs_pq(fingerprint: TlsFingerprint) -> bool {
 /// has always sent.
 pub fn advertises_cert_compression(fingerprint: TlsFingerprint) -> bool {
     !matches!(fingerprint, TlsFingerprint::Rustls)
+}
+
+/// The extensions a browser leaves out of a hello that offers one version alone.
+///
+/// A ClientHello is not one fixed set: a client offering a single version drops
+/// what belongs to the other one, and the pinned hello this tool sends is what a
+/// probe column measures. Read off the `curl-impersonate v2.2.2` bundles pinned
+/// the same way (`--tlsv1.3 --tls-max 1.3`, `--tls-max 1.2`):
+///
+/// * no 1.3-only hello carries `ec_point_formats`, Chrome 107 and Safari 15.5
+///   also drop `extended_master_secret` and `renegotiation_info`, and Chrome
+///   drops `session_ticket`;
+/// * no 1.2-only hello carries `supported_versions`, and none carries padding —
+///   the extension exists to lift a hello over 256 bytes, and a 1.2 hello is
+///   already under that floor, which is where BoringSSL stops padding — nor ALPS
+///   (17513), a 1.3 extension.
+///
+/// Firefox 133 keeps `extended_master_secret` and `renegotiation_info` at 1.3,
+/// so the list is per profile rather than one rule for all three.
+///
+/// Without it a pinned hello advertises one version while still carrying the
+/// other's extensions and cipher suites — a shape no client sends. Measured on
+/// `standby-rezka.tv`: Chrome 107 and Safari 15.5 pinned to 1.3 got
+/// `alert_illegal_parameter`, while the same shapes from the pinned bundle —
+/// which drops these — got `200`.
+pub fn pinned_drop(fingerprint: TlsFingerprint, version: TlsVersion) -> &'static [u16] {
+    match (fingerprint, version) {
+        (TlsFingerprint::Chrome, TlsVersion::Tls13) => &[
+            EXT_EXTENDED_MASTER_SECRET,
+            EXT_RENEGOTIATION_INFO,
+            EXT_EC_POINT_FORMATS,
+            EXT_SESSION_TICKET,
+        ],
+        (TlsFingerprint::Safari, TlsVersion::Tls13) => &[
+            EXT_EXTENDED_MASTER_SECRET,
+            EXT_RENEGOTIATION_INFO,
+            EXT_EC_POINT_FORMATS,
+        ],
+        (TlsFingerprint::Custom, TlsVersion::Tls13) => &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
+        (TlsFingerprint::Chrome, TlsVersion::Tls12) => {
+            &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING]
+        }
+        (TlsFingerprint::Safari, TlsVersion::Tls12) => &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+        (TlsFingerprint::Custom, TlsVersion::Tls12) => &[EXT_SUPPORTED_VERSIONS],
+        (TlsFingerprint::Rustls, _) | (_, TlsVersion::Any) => &[],
+    }
 }
 
 /// Installs the profile on a client config, if the selection has one.
@@ -1093,22 +1141,26 @@ mod tests {
         );
     }
 
-    /// The JA3 (and size) of the hello a profile writes, on the builder the
-    /// caller asks for: `tls13_only` is what the probes and test 6 use, the
-    /// general one is what the tools and the earlier measurements used.
-    fn client_hello_of(fingerprint: TlsFingerprint, tls13_only: bool) -> (String, usize) {
-        let (ja3, length, _) = client_hello_full(fingerprint, tls13_only);
+    /// The JA3 (and size) of the hello a profile writes on `version`: the two
+    /// pinned builders are what the probes and test 6 use, `Any` is what the
+    /// tools and the earlier measurements used.
+    fn client_hello_of(fingerprint: TlsFingerprint, version: TlsVersion) -> (String, usize) {
+        let (ja3, length, _) = client_hello_full(fingerprint, version);
         (ja3, length)
     }
 
-    /// The three fingerprints of the hello a profile writes on `tls13_only`:
-    /// JA3, the hello size, and JA4.
-    fn client_hello_full(fingerprint: TlsFingerprint, tls13_only: bool) -> (String, usize, String) {
-        let config = if tls13_only {
-            create_tls_config(&TlsProfile::insecure(fingerprint).tls13())
-        } else {
-            create_tls_config(&TlsProfile::insecure(fingerprint))
+    /// The three fingerprints of the hello a profile writes on `version`: JA3,
+    /// the hello size, and JA4.
+    fn client_hello_full(
+        fingerprint: TlsFingerprint,
+        version: TlsVersion,
+    ) -> (String, usize, String) {
+        let profile = match version {
+            TlsVersion::Tls12 => TlsProfile::insecure(fingerprint).tls12(),
+            TlsVersion::Tls13 => TlsProfile::insecure(fingerprint).tls13(),
+            TlsVersion::Any => TlsProfile::insecure(fingerprint),
         };
+        let config = create_tls_config(&profile);
         let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
         let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
         let mut buf = Vec::new();
@@ -1127,10 +1179,24 @@ mod tests {
     ///
     /// Anything that changes these — an extension added or dropped, a cipher
     /// reordered, the padding extension lost — makes the profile stop
-    /// reproducing the fingerprint the censor is reported to match on. Both
-    /// builders are checked because they used to disagree: rustls drops
-    /// `session_ticket` from a TLS 1.3-only hello, which cost Chrome an
-    /// extension in the very column the probes use.
+    /// reproducing the fingerprint the censor is reported to match on.
+    ///
+    /// Both pinned builders were checked because a hello that advertises one
+    /// version while still carrying the other's extensions and cipher suites is a
+    /// shape no client sends: `standby-rezka.tv` answered the hybrid with
+    /// `alert_illegal_parameter`. Pinned, the bundles drop what belongs to the
+    /// other version — the 1.2-era extensions and the 1.2 cipher suites from a
+    /// 1.3-only hello, `supported_versions` and the padding (a 1.2 hello is
+    /// already under the 256-byte floor where BoringSSL stops padding) from a
+    /// 1.2-only one — and Chrome also drops ALPS from the 1.2 hello.
+    ///
+    /// The 1.3 hellos are byte-identical to the pinned bundles; the point-formats
+    /// field is empty there, which is what a 1.3-only browser hello has. The 1.2
+    /// hellos stop one extension short of the bundle's, which lists
+    /// `compress_certificate` (27) in a 1.2 hello — rustls offers it only when
+    /// the hello also offers 1.3, so the cipher suites match and `27` is the one
+    /// extension we cannot send. Firefox's 1.3 hello stops at `27` for the ECH
+    /// reason in [`firefox_like`].
     #[test]
     fn bundle_versions_match_their_ja3() {
         const CHROME_107: &str = CHROME_107_JA3;
@@ -1144,33 +1210,71 @@ mod tests {
              49161-49171-49172-156-157-47-53,\
              0-23-65281-10-11-35-16-5-34-51-43-13-45-28-27,4588-29-23-24-25-256-257,0";
 
-        for tls13_only in [true, false] {
-            assert_eq!(
-                client_hello_of(TlsFingerprint::Chrome, tls13_only).0,
-                CHROME_107,
-                "chrome (tls13_only={tls13_only})"
-            );
-            assert_eq!(
-                client_hello_of(TlsFingerprint::Safari, tls13_only).0,
-                SAFARI_155,
-                "safari (tls13_only={tls13_only})"
-            );
-            assert_eq!(
-                client_hello_of(TlsFingerprint::Custom, tls13_only).0,
-                FIREFOX_133,
-                "firefox (tls13_only={tls13_only})"
-            );
+        const CHROME_107_TLS13: &str =
+            "771,4865-4866-4867,0-10-16-5-13-18-51-45-43-27-17513-21,29-23-24,";
+        const SAFARI_155_TLS13: &str =
+            "771,4865-4866-4867,0-10-16-5-13-18-51-45-43-27-21,29-23-24-25,";
+        const FIREFOX_133_TLS13: &str =
+            "771,4865-4867-4866,0-23-65281-10-16-5-34-51-43-13-45-28-27,4588-29-23-24-25-256-257,";
+
+        const CHROME_107_TLS12: &str = "771,49195-49199-49196-49200-52393-52392-49171-49172-\
+             156-157-47-53,0-23-65281-10-11-35-16-5-13-18,29-23-24,0";
+        const SAFARI_155_TLS12: &str = "771,49196-49195-52393-49200-49199-52392-49162-49161-\
+             49172-49171-157-156-53-47-49160-49170-10,\
+             0-23-65281-10-11-16-5-13-18,29-23-24-25,0";
+        const FIREFOX_133_TLS12: &str = "771,49195-49199-52393-52392-49196-49200-49162-49161-\
+             49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-34-13-28,\
+             4588-29-23-24-25-256-257,0";
+
+        for (version, profiles) in [
+            (
+                TlsVersion::Any,
+                [
+                    (TlsFingerprint::Chrome, CHROME_107),
+                    (TlsFingerprint::Safari, SAFARI_155),
+                    (TlsFingerprint::Custom, FIREFOX_133),
+                ],
+            ),
+            (
+                TlsVersion::Tls13,
+                [
+                    (TlsFingerprint::Chrome, CHROME_107_TLS13),
+                    (TlsFingerprint::Safari, SAFARI_155_TLS13),
+                    (TlsFingerprint::Custom, FIREFOX_133_TLS13),
+                ],
+            ),
+            (
+                TlsVersion::Tls12,
+                [
+                    (TlsFingerprint::Chrome, CHROME_107_TLS12),
+                    (TlsFingerprint::Safari, SAFARI_155_TLS12),
+                    (TlsFingerprint::Custom, FIREFOX_133_TLS12),
+                ],
+            ),
+        ] {
+            for (fingerprint, expected) in profiles {
+                assert_eq!(
+                    client_hello_of(fingerprint, version).0,
+                    expected,
+                    "{fingerprint} ({version:?})"
+                );
+            }
         }
 
-        // BoringSSL pads a browser hello to exactly 512 bytes — the
+        // BoringSSL pads a 1.3 browser hello to exactly 512 bytes — the
         // `curl-impersonate v2.2.2` chrome107/safari155 hellos measure 512 — and
         // the padding extension is part of the JA3s above, so both the size and a
-        // lost pad are checked here.
+        // lost pad are checked here. A 1.2 hello is shorter than the 256-byte
+        // floor, so it carries no padding at all: the bundle's 1.2 hellos measure
+        // 198 and 210 bytes against our 185 and 199 (the `compress_certificate`
+        // difference), all of them well under the floor.
         for fingerprint in [TlsFingerprint::Chrome, TlsFingerprint::Safari] {
-            for tls13_only in [true, false] {
-                let (_, length) = client_hello_of(fingerprint, tls13_only);
-                assert_eq!(length, 512, "{fingerprint} hello (tls13_only={tls13_only})");
+            for version in [TlsVersion::Any, TlsVersion::Tls13] {
+                let (_, length) = client_hello_of(fingerprint, version);
+                assert_eq!(length, 512, "{fingerprint} hello ({version:?})");
             }
+            let (_, length) = client_hello_of(fingerprint, TlsVersion::Tls12);
+            assert!(length < 256, "{fingerprint} 1.2 hello is padded: {length}");
         }
     }
 
@@ -1185,19 +1289,53 @@ mod tests {
     /// cipher hash is the bundle's.
     #[test]
     fn bundle_versions_match_their_ja4() {
-        for tls13_only in [true, false] {
-            let (_, _, chrome) = client_hello_full(TlsFingerprint::Chrome, tls13_only);
-            assert_eq!(chrome, CHROME_107_JA4, "chrome (tls13_only={tls13_only})");
-            let (_, _, safari) = client_hello_full(TlsFingerprint::Safari, tls13_only);
-            assert_eq!(safari, SAFARI_155_JA4, "safari (tls13_only={tls13_only})");
-            let (_, _, firefox) = client_hello_full(TlsFingerprint::Custom, tls13_only);
-            assert_eq!(firefox, FIREFOX_133_JA4_LESS_ECH, "firefox (tls13_only={tls13_only})");
+        // The pinned 1.3 hashes are the bundle's: those hellos are byte-identical
+        // to `curl_chrome107`/`curl_safari155`/`curl_firefox133` pinned with
+        // `--tlsv1.3 --tls-max 1.3`. The 1.2 hashes are ours alone — the pinned
+        // configuration is the one where rustls cannot send the bundle's
+        // `compress_certificate`, so the extension count and hash differ by that
+        // one extension.
+        const CHROME_107_TLS13: &str = "t13d0312h2_55b375c5d22e_89e42599e699";
+        const SAFARI_155_TLS13: &str = "t13d0311h2_55b375c5d22e_14aed462abe7";
+        const FIREFOX_133_TLS13: &str = "t13d0313h2_55b375c5d22e_1dac57d28bce";
+        const CHROME_107_TLS12: &str = "t12d1210h2_d34a8e72043a_fae48490d0f6";
+        const SAFARI_155_TLS12: &str = "t12d1709h2_ba5946811be1_e0e2b8a7da62";
+        const FIREFOX_133_TLS12: &str = "t12d1411h2_c866b44c5a26_242292a3764d";
+
+        for (version, chrome, safari, firefox) in [
+            (
+                TlsVersion::Any,
+                CHROME_107_JA4,
+                SAFARI_155_JA4,
+                FIREFOX_133_JA4_LESS_ECH,
+            ),
+            (
+                TlsVersion::Tls13,
+                CHROME_107_TLS13,
+                SAFARI_155_TLS13,
+                FIREFOX_133_TLS13,
+            ),
+            (
+                TlsVersion::Tls12,
+                CHROME_107_TLS12,
+                SAFARI_155_TLS12,
+                FIREFOX_133_TLS12,
+            ),
+        ] {
+            let (_, _, got) = client_hello_full(TlsFingerprint::Chrome, version);
+            assert_eq!(got, chrome, "chrome ({version:?})");
+            let (_, _, got) = client_hello_full(TlsFingerprint::Safari, version);
+            assert_eq!(got, safari, "safari ({version:?})");
+            let (_, _, got) = client_hello_full(TlsFingerprint::Custom, version);
+            assert_eq!(got, firefox, "firefox ({version:?})");
         }
     }
 
     /// Test 6 pins the TLS version and the ALPN it offers, and both have to
     /// reach the wire: the pinned JA4 shows the version field (`t12`/`t13`) and
-    /// the ALPN field (`h2`/`h1`), while JA3 is unaffected by either.
+    /// the ALPN field (`h2`/`h1`), while JA3 turns on the version — a 1.3-only
+    /// hello carries 3 ciphers and 12 extensions against the browser offer's 15
+    /// and 16 — but never on ALPN, whose values JA3 does not read.
     #[test]
     fn pinned_tls_version_and_alpn_reach_the_hello() {
         let hello = |tls12_only: bool, alpn: Option<Vec<Vec<u8>>>| {
@@ -1218,13 +1356,12 @@ mod tests {
         };
 
         let (ja3_default, ja4_default) = hello(false, None);
-        assert!(ja4_default.starts_with("t13d1516h2_"), "{ja4_default}");
-        assert_eq!(ja3_default, CHROME_107_JA3.replace("-65037", ""));
+        assert!(ja4_default.starts_with("t13d0312h2_"), "{ja4_default}");
 
         // HTTP/1.1 alone: same hello except the ALPN extension's body, so JA4
         // keeps its counts and hashes and changes only the ALPN field.
         let (ja3_http11, ja4_http11) = hello(false, Some(vec![b"http/1.1".to_vec()]));
-        assert!(ja4_http11.starts_with("t13d1516h1_"), "{ja4_http11}");
+        assert!(ja4_http11.starts_with("t13d0312h1_"), "{ja4_http11}");
         assert_eq!(
             ja4_http11.split_once('_').map(|x| x.1),
             ja4_default.split_once('_').map(|x| x.1),
@@ -1232,9 +1369,10 @@ mod tests {
         );
         assert_eq!(ja3_http11, ja3_default, "JA3 hashes types, not ALPN values");
 
-        // TLS 1.2: the version field follows the pinned version, and the hello
-        // offers no post-quantum group or key share (the profile's TLS 1.3-only
-        // extensions drop out with it).
+        // TLS 1.2: the version field follows the pinned version. A browser's
+        // 1.2-only hello carries no `supported_versions` for JA4 to read, so the
+        // field comes from the ClientHello's legacy version — not from its TLS
+        // 1.0 record header, which no client's protocol is.
         let (_, ja4_tls12) = hello(true, None);
         assert!(ja4_tls12.starts_with("t12d"), "{ja4_tls12}");
     }
@@ -1261,8 +1399,8 @@ mod tests {
     /// deviation is accepted rather than faked.
     #[test]
     fn grease_version_leads_supported_versions() {
-        // The `supported_versions` body of a hello, and the `maybe_grease`-th
-        // entry of it (0 = first).
+        // The `supported_versions` body of a hello, `None` when the hello does
+        // not carry the extension at all, and the record size.
         let versions = |profile: TlsProfile| {
             let config = create_tls_config(&profile);
             let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
@@ -1272,12 +1410,13 @@ mod tests {
             let body = crate::net::ja3::extensions(&buf[crate::net::ja3::RECORD_HEADER..])
                 .into_iter()
                 .find(|(ext_type, _)| *ext_type == 43)
-                .map(|(_, body)| body.to_vec())
-                .expect("supported_versions extension");
-            let entries = body[0] as usize / 2;
-            let list = (0..entries)
-                .map(|i| u16::from_be_bytes([body[1 + 2 * i], body[2 + 2 * i]]))
-                .collect::<Vec<u16>>();
+                .map(|(_, body)| body.to_vec());
+            let list = body.map(|body| {
+                let entries = body[0] as usize / 2;
+                (0..entries)
+                    .map(|i| u16::from_be_bytes([body[1 + 2 * i], body[2 + 2 * i]]))
+                    .collect::<Vec<u16>>()
+            });
             (list, buf.len())
         };
 
@@ -1291,6 +1430,7 @@ mod tests {
             // The browser's own offer: both modern versions, GREASE first, the
             // profile's fallbacks behind them, 512 bytes.
             let (browser, record) = versions(TlsProfile::insecure(fp));
+            let browser = browser.expect("the browser offer carries supported_versions");
             assert!(is_grease_version(browser[0]), "{fp:?} must open with GREASE: {browser:04x?}");
             let expected = [vec![0x0304, 0x0303], legacy.clone()].concat();
             assert_eq!(&browser[1..], &expected[..], "{fp:?}: {browser:04x?}");
@@ -1299,21 +1439,35 @@ mod tests {
             // Pinned to 1.3: one version in the list (test 2's TLS 1.3 column),
             // and no fallbacks — a pinned run isolates one version on purpose.
             let (only13, _) = versions(TlsProfile::insecure(fp).tls13());
+            let only13 = only13.expect("a 1.3-only hello still names its version");
             assert!(is_grease_version(only13[0]), "{fp:?}: {only13:04x?}");
             assert_eq!(&only13[1..], &[0x0304], "{fp:?}: {only13:04x?}");
 
-            // TLS 1.2 alone: the pinned version replaces 1.3, the GREASE stays.
+            // TLS 1.2 alone: the pinned version replaces 1.3 — and the extension
+            // goes with it, because a hello that cannot negotiate anything above
+            // 1.2 has no version list to send. That is what the pinned bundles
+            // send (`curl_chrome107 --tls-max 1.2` carries no extension 43), and
+            // it is the shape test 2's second column measures.
             let (only12, _) = versions(TlsProfile::insecure(fp).tls12());
-            assert!(is_grease_version(only12[0]), "{fp:?}: {only12:04x?}");
-            assert_eq!(&only12[1..], &[0x0303], "{fp:?}: {only12:04x?}");
+            assert!(only12.is_none(), "{fp:?}: a 1.2-only hello carries no supported_versions");
         }
 
         let (firefox, _) = versions(TlsProfile::insecure(TlsFingerprint::Custom));
-        assert_eq!(firefox, vec![0x0304, 0x0303], "Firefox does not grease, and offers both");
+        assert_eq!(
+            firefox.expect("firefox carries supported_versions"),
+            vec![0x0304, 0x0303],
+            "Firefox does not grease, and offers both"
+        );
         let (firefox13, _) = versions(TlsProfile::insecure(TlsFingerprint::Custom).tls13());
-        assert_eq!(firefox13, vec![0x0304]);
+        assert_eq!(firefox13.expect("a 1.3-only Firefox hello names its version"), vec![0x0304]);
+        let (firefox12, _) = versions(TlsProfile::insecure(TlsFingerprint::Custom).tls12());
+        assert!(firefox12.is_none());
         let (rustls_list, _) = versions(TlsProfile::insecure(TlsFingerprint::Rustls));
-        assert_eq!(rustls_list, vec![0x0304, 0x0303], "the baseline offers both, untouched");
+        assert_eq!(
+            rustls_list.expect("the baseline carries supported_versions"),
+            vec![0x0304, 0x0303],
+            "the baseline offers both, untouched"
+        );
     }
 
     /// RFC 8701: `0x?a?a` with both bytes equal.

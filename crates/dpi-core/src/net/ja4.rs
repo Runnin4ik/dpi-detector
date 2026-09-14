@@ -72,7 +72,10 @@ pub fn client_hello_ja4(record: &[u8]) -> String {
 
     format!(
         "t{}{}{:02}{:02}{}_{}_{}",
-        version_field(body_of(EXT_SUPPORTED_VERSIONS).map(supported_versions).unwrap_or_default()),
+        version_field(
+            body_of(EXT_SUPPORTED_VERSIONS).map(supported_versions).unwrap_or_default(),
+            u16::from_be_bytes([message[4], message[5]]),
+        ),
         if ext_types.contains(&EXT_SERVER_NAME) { 'd' } else { 'i' },
         ciphers.len().min(99),
         ext_types.len().min(99),
@@ -131,9 +134,13 @@ fn first_protocol(body: &[u8]) -> Option<String> {
     })
 }
 
-/// JA4's two-character TLS version field, from the highest version offered.
-fn version_field(versions: Vec<u16>) -> &'static str {
-    match versions.iter().copied().max().unwrap_or(0x0301) {
+/// JA4's two-character TLS version field: the highest version offered, or the
+/// ClientHello's own legacy version when `supported_versions` is not there at
+/// all — which is what a browser pinned to TLS 1.2 sends, and what the JA4
+/// specification reads in that case. A hello without the extension is not a
+/// TLS 1.0 client, so the legacy `0x0301` record version is not a fallback.
+fn version_field(versions: Vec<u16>, legacy_version: u16) -> &'static str {
+    match versions.iter().copied().max().unwrap_or(legacy_version) {
         0x0304 => "13",
         0x0303 => "12",
         0x0302 => "11",
