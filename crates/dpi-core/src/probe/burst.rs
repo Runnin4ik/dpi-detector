@@ -1,16 +1,23 @@
-//! Test 7: simultaneous-handshake stress per SNI.
+//! Test 6: simultaneous-attempt stress per SNI.
 //!
-//! Reproduces the class of throttling where a handful of handshakes with one
+//! Reproduces the class of throttling where a handful of attempts with one
 //! fingerprint makes a site unreachable for a while: every attempt is its own
 //! TCP connection carrying a full (non-resumed) ClientHello of the selected
-//! profile, and the handshakes are released together through a barrier, so they
-//! are simultaneous rather than merely concurrent. What the test reports is how
-//! many of the N were answered and the classified verdict of each that was not.
+//! profile, released together through a barrier so they are simultaneous rather
+//! than merely concurrent, and then one `GET /` over whatever protocol the
+//! handshake negotiated. What the test reports is how many of the N came back
+//! whole and the classified verdict of each that did not.
+//!
+//! The handshake alone is not the whole story: a shape can be answered and then
+//! cut, redirected or blocked the moment the request goes out, which is the
+//! behaviour the test exists to catch. The request is identical for every shape
+//! (the profile only changes the client's identity), so the attempts stay
+//! comparable.
 //!
 //! The probes of test 2 answer "is this site reachable"; this one answers "does
 //! the act of asking N times change the answer", which needs the attempts to be
-//! indistinguishable except for their simultaneity — hence the barrier, the
-//! fresh session per attempt, and no HTTP request on top.
+//! indistinguishable except for their simultaneity — hence the barrier and the
+//! fresh session per attempt.
 //!
 //! Profiles are fired **one at a time over the whole target list**: every host
 //! is probed with the first shape to the end before any host sees the second.
@@ -37,6 +44,8 @@ use crate::config::AppConfig;
 use crate::net::fingerprint::TlsFingerprint;
 use crate::probe::connector::{DpiTlsConnector, RustlsConnector};
 use crate::probe::domains::{resolve_ip, IpFamily};
+use crate::probe::http::check_http;
+use parking_lot::Mutex;
 use crate::net::tcp::{dial_tcp, DialError};
 use crate::net::tls::TlsProfile;
 
@@ -100,8 +109,8 @@ impl BurstTlsVersion {
 /// What the burst offers in ALPN.
 ///
 /// `Http2` is the browsers' own list (`h2, http/1.1`), `Http11` asks for
-/// HTTP/1.1 alone. The handshake is all test 6 sends, so this shapes the
-/// ClientHello (and JA4's ALPN field) without a request following it.
+/// HTTP/1.1 alone. It shapes the ClientHello (and JA4's ALPN field), and it
+/// decides which client speaks the request that follows the handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BurstAlpn {
     #[default]
@@ -205,7 +214,16 @@ impl BurstSettings {
     }
 }
 
-/// One handshake attempt: its verdict, why, and how long it took.
+/// What every attempt of one round shares: the shape being fired, the axis it
+/// asks for, and the config the request phase reads its timeouts from.
+#[derive(Clone)]
+struct Round {
+    fingerprint: TlsFingerprint,
+    axis: BurstTlsVersion,
+    cfg: AppConfig,
+}
+
+/// One attempt — handshake then `GET /`: its verdict, why, and how long it took.
 #[derive(Debug, Clone)]
 pub struct BurstAttempt {
     pub status: DpiStatus,
@@ -221,7 +239,9 @@ pub struct BurstProfileReport {
 }
 
 impl BurstProfileReport {
-    /// Attempts the target answered (a completed handshake).
+    /// Attempts that came back whole: the handshake was answered *and* the
+    /// request returned something the probes call OK. A row that handshook and
+    /// then got nothing back is a lost attempt, not an answered one.
     pub fn answered(&self) -> usize {
         self.attempts.iter().filter(|a| a.status.is_ok_status()).count()
     }
@@ -366,9 +386,10 @@ pub async fn burst_targets(
             let domain = target.domain.clone();
             let settings = settings.clone();
             let gate = Arc::clone(&gate);
+            let cfg = cfg.clone();
             rounds.spawn(async move {
                 let _permit = gate.acquire().await;
-                let report = burst_profile(&address, &domain, fingerprint, &settings).await;
+                let report = burst_profile(&address, &domain, fingerprint, &settings, &cfg).await;
                 (index, report)
             });
         }
@@ -423,6 +444,7 @@ pub async fn burst_profile(
     domain: &str,
     fingerprint: TlsFingerprint,
     settings: &BurstSettings,
+    cfg: &AppConfig,
 ) -> BurstProfileReport {
     let attempts = settings.attempts;
     let mut slots: Vec<Option<BurstAttempt>> = (0..attempts).map(|_| None).collect();
@@ -458,9 +480,9 @@ pub async fn burst_profile(
             let gate = Arc::clone(&gate);
             let name = domain.to_string();
             let limit = settings.timeout;
-            let axis = settings.tls;
+            let round = Round { fingerprint, axis: settings.tls, cfg: cfg.clone() };
             handshakes.spawn(async move {
-                (index, handshake_attempt(connector, name, stream, tracker, gate, limit, axis).await)
+                (index, handshake_attempt(connector, name, stream, tracker, gate, limit, round).await)
             });
         }
         while let Some(joined) = handshakes.join_next().await {
@@ -541,8 +563,10 @@ fn answered(axis: BurstTlsVersion, negotiated: Option<ProtocolVersion>) -> (DpiS
     }
 }
 
-/// Waits for the gate, then runs the handshake; the clock starts at the gate so
-/// the reported duration is the handshake, not the queueing in front of it.
+/// Waits for the gate, then runs the attempt: the handshake, and — when it
+/// completes — the request under `cfg.read_timeout` ([`check_http`]). The clock
+/// starts at the gate, so the reported duration is the attempt itself, not the
+/// queueing in front of it.
 async fn handshake_attempt(
     connector: Arc<RustlsConnector>,
     domain: String,
@@ -550,12 +574,13 @@ async fn handshake_attempt(
     tracker: DpiProbeTracker,
     gate: Arc<Barrier>,
     limit: Duration,
-    axis: BurstTlsVersion,
+    round: Round,
 ) -> BurstAttempt {
+    let Round { fingerprint, axis, cfg } = round;
     gate.wait().await;
     let started = Instant::now();
     let elapsed = |started: Instant| started.elapsed().as_millis() as u64;
-    let server_name = match ServerName::try_from(domain) {
+    let server_name = match ServerName::try_from(domain.clone()) {
         Ok(name) => name,
         Err(e) => {
             return BurstAttempt {
@@ -567,7 +592,28 @@ async fn handshake_attempt(
     };
     match timeout(limit, connector.connect(server_name, stream)).await {
         Ok(Ok(stream)) => {
-            let (status, detail) = answered(axis, stream.get_ref().1.protocol_version());
+            let negotiated = stream.get_ref().1.protocol_version();
+            let stage = Arc::new(Mutex::new("tls_connected".to_string()));
+            // The request is the second half of the attempt. A shape can be
+            // answered and then cut, redirected or blocked the moment the
+            // request goes out, and that is exactly what the test is for.
+            let http = match timeout(
+                Duration::from_secs_f64(cfg.read_timeout),
+                check_http(stream, &domain, &cfg, fingerprint, &stage),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => (DpiStatus::ReadTimeout, Detail::ReadTimeoutWord, 0),
+            };
+            let (axis_status, axis_detail) = answered(axis, negotiated);
+            // A peer that answered the browser's offer with 1.2 answered, but
+            // not with what the axis is about: that outranks the request's own
+            // verdict, since it explains why the run is not measuring 1.3.
+            let (status, detail, _) = match axis_status {
+                DpiStatus::Ok => http,
+                _ => (axis_status, axis_detail, 0),
+            };
             BurstAttempt { status, detail, ms: elapsed(started) }
         }
         Ok(Err(e)) => {
@@ -627,7 +673,7 @@ mod tests {
             }
         });
 
-        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(3, 3000, vec![])).await;
+        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(3, 3000, vec![]), &AppConfig::default()).await;
         let _ = accept.await;
 
         assert_eq!(report.attempts.len(), 3);
@@ -649,7 +695,7 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
 
         let started = Instant::now();
-        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(2, 400, vec![])).await;
+        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(2, 400, vec![]), &AppConfig::default()).await;
         let elapsed = started.elapsed();
         drop(listener);
 
@@ -674,7 +720,7 @@ mod tests {
         drop(listener);
 
         let started = Instant::now();
-        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(2, 2000, vec![])).await;
+        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(2, 2000, vec![]), &AppConfig::default()).await;
         let elapsed = started.elapsed();
 
         assert_eq!(report.attempts.len(), 2);

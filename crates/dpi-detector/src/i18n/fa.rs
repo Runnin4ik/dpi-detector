@@ -208,7 +208,7 @@ pub(crate) fn messages() -> Messages {
         cli_domain: "Domain haye khass baraye barresi (mitavanid tekrar konid: -d vk.com -d ya.ru)",
         cli_output: "Masir-e file baraye zakhire-ye report",
         cli_burst: "Fingerprint/Sibir blocking (test 6): darkhast haye hamzaman dar har round [pishfarz: 4]",
-        cli_burst_timeout: "Test 6: timeout-e yek mosafehe, sanie [pishfarz: 8]",
+        cli_burst_timeout: "Test 6: timeout-e mosafehe, sanie [pishfarz: 8]; darkhast-e baad az aan montazer-e read_timeout mimanad",
         cli_burst_profiles: "Fingerprint haye test 6: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [pishfarz: all]",
         cli_burst_tls: "Version-e TLS baraye test 6: 1.2|1.3 [pishfarz: 1.3]",
         cli_burst_alpn: "ALPN baraye test 6: h2 (h2 ba bazgasht be http/1.1)|http/1.1 (faghat http/1.1) [pishfarz: h2]",

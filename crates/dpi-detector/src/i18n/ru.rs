@@ -215,7 +215,7 @@ pub(crate) fn messages() -> Messages {
         cli_domain: "Конкретные домены для проверки (флаг можно повторять: -d vk.com -d ya.ru)",
         cli_output: "Путь к файлу отчёта",
         cli_burst: "Fingerprint/Сибирская блокировка (тест 6): одновременных запросов за раунд [по умолчанию: 4]",
-        cli_burst_timeout: "Тест 6: таймаут одного рукопожатия, секунды [по умолчанию: 8]",
+        cli_burst_timeout: "Тест 6: таймаут рукопожатия, секунды [по умолчанию: 8]; запрос после него ждёт read_timeout",
         cli_burst_profiles: "Fingerprint для теста 6: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [по умолчанию: all]",
         cli_burst_tls: "Версия TLS для теста 6: 1.2|1.3 [по умолчанию: 1.3]",
         cli_burst_alpn: "ALPN для теста 6: h2 (предлагает h2 с откатом на http/1.1)|http/1.1 (только http/1.1) [по умолчанию: h2]",

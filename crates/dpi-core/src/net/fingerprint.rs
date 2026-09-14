@@ -928,7 +928,7 @@ mod tests {
         assert_eq!(TlsFingerprint::parse(""), None);
     }
 
-    /// Test 7 takes a *list* of profiles; `all` and the curl aliases must work,
+    /// Test 6 takes a *list* of profiles; `all` and the curl aliases must work,
     /// and an unrecognised token must be reported rather than silently swapped
     /// for a different set.
     #[test]
@@ -1093,7 +1093,7 @@ mod tests {
         }
     }
 
-    /// Test 7 pins the TLS version and the ALPN it offers, and both have to
+    /// Test 6 pins the TLS version and the ALPN it offers, and both have to
     /// reach the wire: the pinned JA4 shows the version field (`t12`/`t13`) and
     /// the ALPN field (`h2`/`h1`), while JA3 is unaffected by either.
     #[test]

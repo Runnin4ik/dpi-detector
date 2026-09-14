@@ -215,7 +215,7 @@ pub(crate) fn messages() -> Messages {
         cli_domain: "Specific domain(s) to test (repeat the flag: -d vk.com -d ya.ru)",
         cli_output: "Output file path to save report",
         cli_burst: "Fingerprint stress (test 6): simultaneous requests per round [default: 4]",
-        cli_burst_timeout: "Test 6: timeout of one handshake, seconds [default: 8]",
+        cli_burst_timeout: "Test 6: handshake timeout, seconds [default: 8]; the request that follows waits read_timeout",
         cli_burst_profiles: "Test 6 fingerprints: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [default: all]",
         cli_burst_tls: "Test 6 TLS version: 1.2|1.3 [default: 1.3]",
         cli_burst_alpn: "Test 6 ALPN: h2 (offers h2 with the http/1.1 fallback)|http/1.1 (offers http/1.1 only) [default: h2]",
