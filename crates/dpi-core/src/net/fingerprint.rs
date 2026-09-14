@@ -70,6 +70,7 @@
 
 use std::sync::{Arc, LazyLock};
 
+use h2::client::PseudoOrder;
 use rustls::client::hello_profile::GREASE_EXTENSION_MARKER;
 use rustls::client::ClientHelloProfile;
 use rustls::ClientConfig;
@@ -362,13 +363,22 @@ pub struct H2Fingerprint {
     /// protocol's 65 535 default, which is the increment the impersonated client
     /// sends.
     pub connection_window: u32,
+    /// The order the request puts its pseudo-header fields in. RFC 9113 leaves
+    /// it open and the browsers disagree; no ClientHello hash shows it.
+    pub pseudo_order: PseudoOrder,
+    /// The request's `HEADERS` frame carries the PRIORITY flag, as
+    /// `(weight, exclusive)` — the weight the impersonated client names, one
+    /// more than the byte on the wire (Chrome's `256` is the frame's `255`).
+    pub priority: Option<(u16, bool)>,
 }
 
 /// The HTTP/2 preface of `fingerprint`, `None` for the baseline profile (hyper's
 /// own defaults, the shape every earlier measurement used).
 pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
     match fingerprint {
-        // `1:65536;2:0;3:1000;4:6291456;6:262144`, window 15663105.
+        // `1:65536;2:0;3:1000;4:6291456;6:262144`, window 15663105,
+        // `--http2-stream-weight 256 --http2-stream-exclusive 1`, pseudo-headers
+        // `masp`.
         TlsFingerprint::Chrome => Some(H2Fingerprint {
             header_table_size: Some(65_536),
             max_concurrent_streams: Some(1000),
@@ -376,8 +386,12 @@ pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
             max_frame_size: None,
             max_header_list_size: 262_144,
             connection_window: 15_663_105 + 65_535,
+            pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
+            priority: Some((256, true)),
         }),
-        // `1:65536;2:0;4:131072;5:16384`, window 12517377.
+        // `1:65536;2:0;4:131072;5:16384`, window 12517377,
+        // `--http2-stream-weight 42 --http2-stream-exclusive 0`,
+        // `--http2-pseudo-headers-order "mpas"`.
         TlsFingerprint::Custom => Some(H2Fingerprint {
             header_table_size: Some(65_536),
             max_concurrent_streams: None,
@@ -385,8 +399,12 @@ pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
             max_frame_size: Some(16_384),
             max_header_list_size: 262_144,
             connection_window: 12_517_377 + 65_535,
+            pseudo_order: PseudoOrder::MethodPathAuthorityScheme,
+            priority: Some((42, false)),
         }),
-        // `3:100;4:4194304`, window 10485760.
+        // `3:100;4:4194304`, window 10485760,
+        // `--http2-stream-weight 255 --http2-stream-exclusive 0`,
+        // `--http2-pseudo-headers-order "mspa"`.
         TlsFingerprint::Safari => Some(H2Fingerprint {
             header_table_size: None,
             max_concurrent_streams: Some(100),
@@ -394,6 +412,8 @@ pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
             max_frame_size: None,
             max_header_list_size: 262_144,
             connection_window: 10_485_760 + 65_535,
+            pseudo_order: PseudoOrder::MethodSchemePathAuthority,
+            priority: Some((255, false)),
         }),
         TlsFingerprint::Rustls => None,
     }
@@ -878,6 +898,28 @@ mod tests {
         assert_eq!(safari.connection_window - 65_535, 10_485_760);
 
         assert!(h2_fingerprint(TlsFingerprint::Rustls).is_none(), "the baseline keeps hyper's defaults");
+    }
+
+    /// The request shape is measured, not guessed: each triple is what the
+    /// bundle named in its `.bat` and what it put on the wire (decrypted with the
+    /// bundle's `SSLKEYLOGFILE`). Chrome 107 sends no
+    /// `--http2-pseudo-headers-order`, Firefox 133 `"mpas"` and Safari 155
+    /// `"mspa"`; all three take the PRIORITY flag on the request's `HEADERS`.
+    #[test]
+    fn h2_request_shape_matches_the_wrapper_it_is_pinned_to() {
+        use PseudoOrder::*;
+
+        let chrome = h2_fingerprint(TlsFingerprint::Chrome).expect("chrome tunes h2");
+        assert_eq!(chrome.pseudo_order, MethodAuthoritySchemePath);
+        assert_eq!(chrome.priority, Some((256, true)));
+
+        let firefox = h2_fingerprint(TlsFingerprint::Custom).expect("firefox tunes h2");
+        assert_eq!(firefox.pseudo_order, MethodPathAuthorityScheme);
+        assert_eq!(firefox.priority, Some((42, false)));
+
+        let safari = h2_fingerprint(TlsFingerprint::Safari).expect("safari tunes h2");
+        assert_eq!(safari.pseudo_order, MethodSchemePathAuthority);
+        assert_eq!(safari.priority, Some((255, false)));
     }
 
     /// The version-bearing label is display only: it must not collide with a

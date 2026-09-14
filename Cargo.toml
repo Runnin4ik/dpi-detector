@@ -4,15 +4,17 @@ members = [
     "crates/dpi-core",
     "crates/dpi-detector",
 ]
-# The vendored TLS crate is a patched rustls (see vendor/rustls/README-PATCH.md):
-# it is the upstream 0.23.43 source with a ClientHello-profile hook, so it must
-# NOT be a workspace member (its tests/examples are upstream's, not ours).
-exclude = ["vendor/rustls"]
+# The vendored crates are patched upstream sources (see
+# vendor/*/README-PATCH.md): rustls with a ClientHello-profile hook and h2 with
+# the request shape a browser puts in its h2 preface. They must NOT be workspace
+# members (their tests/examples are upstream's, not ours).
+exclude = ["vendor/rustls", "vendor/h2"]
 
-# Fingerprint hook: our own ClientHello override, applied through `[patch]`
-# so that tokio-rustls / rustls-rustcrypto keep using one rustls instance.
+# Fingerprint hooks, applied through `[patch]` so that tokio-rustls /
+# hyper / rustls-rustcrypto keep resolving to one instance of each.
 [patch.crates-io]
 rustls = { path = "vendor/rustls" }
+h2 = { path = "vendor/h2" }
 
 [workspace.package]
 version = "5.0.0-alpha.12"
@@ -33,6 +35,9 @@ rustls-rustcrypto = "0.0.2-alpha"
 webpki-roots = "1.0"
 hyper = { version = "1.4", default-features = false, features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio", "client-legacy", "http1", "http2"] }
+# Direct: the probes put a request shape (pseudo-header order, HEADERS priority)
+# into the request, which only the patched h2 reads (vendor/h2/README-PATCH.md).
+h2 = "0.4"
 http-body-util = "0.1"
 bytes = "1.7"
 serde = { version = "1.0", features = ["derive"] }

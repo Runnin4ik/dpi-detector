@@ -33,6 +33,8 @@ use crate::classify::{
     classify_connect_error_full, classify_ssl_error, ConnectionStage, Detail, DpiProbeStream, DpiStatus,
 };
 use crate::config::AppConfig;
+use h2::client::RequestShape;
+
 use crate::net::fingerprint::{h2_fingerprint, http_identity, HttpIdentity, TlsFingerprint};
 
 /// Message plus the OS code and kind of the `io::Error` at the end of a hyper
@@ -97,9 +99,18 @@ pub fn request_headers<'a>(
 }
 
 /// A hyper sender for whichever protocol the connection agreed on.
+///
+/// The HTTP/2 arm carries the request shape its profile pinned (pseudo-header
+/// order and whether a request's `HEADERS` frame takes the PRIORITY flag): a
+/// shape belongs to the connection's identity, not to one request, and the
+/// patched `h2` reads it from the request's extensions
+/// (`vendor/h2/README-PATCH.md`).
 pub enum HttpSender {
     H1(hyper::client::conn::http1::SendRequest<Full<Bytes>>),
-    H2(hyper::client::conn::http2::SendRequest<Full<Bytes>>),
+    H2 {
+        sender: hyper::client::conn::http2::SendRequest<Full<Bytes>>,
+        shape: Option<RequestShape>,
+    },
 }
 
 impl HttpSender {
@@ -107,9 +118,10 @@ impl HttpSender {
     ///
     /// `io` is a `TokioIo`-wrapped stream (hyper's own I/O traits), and
     /// `alpn_h2` must be what the TLS handshake negotiated — it is the only
-    /// thing that decides which client to start. `fingerprint` only tunes the
-    /// HTTP/2 preface: hyper's defaults are the baseline, a browser profile
-    /// overrides them with the ones its ClientHello is pinned to.
+    /// thing that decides which client to start. `fingerprint` tunes the HTTP/2
+    /// preface and the shape of the requests on it: hyper's defaults are the
+    /// baseline, a browser profile overrides them with the ones its ClientHello
+    /// is pinned to.
     pub async fn handshake<T>(io: T, alpn_h2: bool, fingerprint: TlsFingerprint) -> hyper::Result<Self>
     where
         T: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
@@ -131,7 +143,11 @@ impl HttpSender {
             tokio::spawn(async move {
                 let _ = connection.await;
             });
-            Ok(Self::H2(sender))
+            let shape = h2_fingerprint(fingerprint).map(|h2| RequestShape {
+                pseudo_order: h2.pseudo_order,
+                priority: h2.priority,
+            });
+            Ok(Self::H2 { sender, shape })
         } else {
             let (sender, connection) = hyper::client::conn::http1::handshake(io).await?;
             tokio::spawn(async move {
@@ -143,28 +159,36 @@ impl HttpSender {
 
     /// True when the connection speaks HTTP/2.
     pub fn is_h2(&self) -> bool {
-        matches!(self, Self::H2(_))
+        matches!(self, Self::H2 { .. })
     }
 
     /// True once the peer closed the connection or the driver stopped.
     pub fn is_closed(&self) -> bool {
         match self {
             Self::H1(sender) => sender.is_closed(),
-            Self::H2(sender) => sender.is_closed(),
+            Self::H2 { sender, .. } => sender.is_closed(),
         }
     }
 
     /// Sends one request, built for the protocol in use.
     pub async fn send(&mut self, req: HttpRequest<'_>) -> hyper::Result<Response<Incoming>> {
-        let request = build_request(req, self.is_h2());
         match self {
-            Self::H1(sender) => sender.send_request(request).await,
-            Self::H2(sender) => sender.send_request(request).await,
+            Self::H1(sender) => sender.send_request(build_request(req, false)).await,
+            Self::H2 { sender, shape } => {
+                let mut request = build_request(req, true);
+                if let Some(shape) = *shape {
+                    request.extensions_mut().insert(shape);
+                }
+                sender.send_request(request).await
+            }
         }
     }
 }
 
 /// Builds the wire request for one of the two protocols.
+///
+/// The shape an h2 profile pinned is attached by [`HttpSender::send`], which is
+/// where the protocol is known.
 fn build_request(req: HttpRequest<'_>, h2: bool) -> Request<Full<Bytes>> {
     let mut builder = Request::builder().method(req.method);
     if h2 {
