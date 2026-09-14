@@ -793,6 +793,14 @@ mod tests {
             ("holod.media", "https://cdn.holod.media/x", DpiStatus::Ok, ""),
             ("m.holod.media", "https://holod.media/x", DpiStatus::Ok, ""),
             ("www.holod.media", "http://holod.media/x", DpiStatus::Ok, ""),
+            // Two subdomains of one site are that site, not a redirect away.
+            ("m.youtube.com", "https://www.youtube.com/x", DpiStatus::Ok, ""),
+            ("www.youtube.com", "https://m.youtube.com/x", DpiStatus::Ok, ""),
+            ("a.example.co.uk", "https://b.example.co.uk/x", DpiStatus::Ok, ""),
+            // A two-label host has no parent site: its "parent" is a TLD, and
+            // reading `com` as the site would make every `.com` host one site.
+            ("youtube.com", "https://example.com/x", DpiStatus::RedirSuspect, "example.com"),
+            ("m.youtube.com", "https://www.google.com/x", DpiStatus::RedirSuspect, "www.google.com"),
             // A different registrable domain is not the same site, however it
             // reads: this is the instagram → facebook case.
             ("www.instagram.com", "https://www.facebook.com/x", DpiStatus::RedirSuspect, "www.facebook.com"),

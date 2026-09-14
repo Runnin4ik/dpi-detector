@@ -269,18 +269,33 @@ fn resolve_location(base: &str, location: &str) -> String {
     }
 }
 
+/// The site a host belongs to when it is a subdomain of one: `m.youtube.com` →
+/// `youtube.com`. A two-label host returns `None` — its parent is a TLD, and
+/// treating `com` as a site would make every `.com` host the same site.
+///
+/// The rule is label arithmetic, not a public-suffix lookup, so parents whose
+/// labels belong to different owners (`user1.github.io` and `user2.github.io`)
+/// are read as one site. That is the price of not carrying a suffix list, and it
+/// errs towards "this redirect stays on the site it came from".
+fn site_of(host: &str) -> Option<&str> {
+    let (_, rest) = host.split_once('.')?;
+    rest.contains('.').then_some(rest)
+}
+
 /// Classifies a redirect by host: the same site family → OK (in the HTTP phase a
 /// same-host hop to https reads `301 → https`, elsewhere `→ https`), a foreign
 /// host → REDIR with the host it named.
 ///
-/// "Same family" means the two hosts are the same name, or one is a subdomain of
-/// the other at a label boundary, with a leading `www.` ignored on both sides.
-/// The comparison is symmetric because both directions are how a site spells
-/// itself: `holod.media` → `www.holod.media` and `www.holod.media` →
-/// `holod.media`, and equally `m.holod.media` → `holod.media`. Everything else
-/// counts as foreign, so a redirect from `www.instagram.com` to
+/// "Same family" is any of three things, with a leading `www.` ignored on both
+/// sides:
+/// * the same name (`holod.media` → `www.holod.media`);
+/// * one a subdomain of the other (`m.holod.media` → `holod.media`);
+/// * two subdomains of the same site (`m.youtube.com` → `www.youtube.com`) —
+///   the site is the host minus its first label, see [`site_of`].
+///
+/// Everything else counts as foreign, so `www.instagram.com` →
 /// `www.facebook.com` stays a red REDIR — and so does `a.example.com` →
-/// `b.example.com`, which is two different sites under one parent.
+/// `b.other.com`, which are two sites under different parents.
 pub(crate) fn classify_redirect(
     domain: &str,
     base_url: &str,
@@ -295,16 +310,18 @@ pub(crate) fn classify_redirect(
     let scheme_https = resolved.to_ascii_lowercase().starts_with("https");
     let norm_loc = strip_www(&loc_host).to_string();
     let norm_dom = strip_www(&domain.to_ascii_lowercase()).to_string();
-    let same_host = norm_loc == norm_dom
+    let site_loc = site_of(&norm_loc);
+    let same_site = norm_loc == norm_dom
         || norm_loc.ends_with(&format!(".{}", norm_dom))
-        || norm_dom.ends_with(&format!(".{}", norm_loc));
+        || norm_dom.ends_with(&format!(".{}", norm_loc))
+        || (site_loc.is_some() && site_loc == site_of(&norm_dom));
     let short_host: String = loc_host.chars().take(30).collect();
 
     if http_phase {
-        if same_host && scheme_https {
+        if same_site && scheme_https {
             return (DpiStatus::Ok, Detail::UpgradeHttps { status: Some(status) });
         }
-        if same_host {
+        if same_site {
             // Same domain (or a subdomain) is a normal redirect: OK, not a badge
             // of its own. Only a foreign domain is flagged, as a red REDIR.
             return (DpiStatus::Ok, Detail::HttpStatus(status));
@@ -312,10 +329,10 @@ pub(crate) fn classify_redirect(
         return (DpiStatus::RedirSuspect, Detail::Redirect { host: short_host });
     }
 
-    if same_host && scheme_https {
+    if same_site && scheme_https {
         return (DpiStatus::Ok, Detail::UpgradeHttps { status: None });
     }
-    if same_host {
+    if same_site {
         return (DpiStatus::Ok, Detail::Redirect { host: short_host });
     }
     (DpiStatus::RedirSuspect, Detail::Redirect { host: short_host })
