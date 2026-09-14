@@ -93,7 +93,7 @@ impl BurstTlsVersion {
 /// What the burst offers in ALPN.
 ///
 /// `Http2` is the browsers' own list (`h2, http/1.1`), `Http11` asks for
-/// HTTP/1.1 alone. The handshake is all test 7 sends, so this shapes the
+/// HTTP/1.1 alone. The handshake is all test 6 sends, so this shapes the
 /// ClientHello (and JA4's ALPN field) without a request following it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BurstAlpn {
@@ -655,7 +655,7 @@ mod tests {
         assert!(elapsed < Duration::from_secs(3), "round took {elapsed:?}");
     }
 
-    /// The JA3 of the hello a profile writes through the connector test 7 uses.
+    /// The JA3 of the hello a profile writes through the connector test 6 uses.
     ///
     /// Extension order is not part of the comparison: rustls shuffles it on
     /// every handshake (the Firefox/Chrome/Safari shapes pin their own order

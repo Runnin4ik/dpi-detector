@@ -193,7 +193,7 @@ impl TlsFingerprint {
         Self::Safari,
     ];
 
-    /// Parses a profile list for test 7: `all`, or comma/space separated names
+    /// Parses a profile list for test 6: `all`, or comma/space separated names
     /// (including the `curl_*` aliases). Unknown tokens come back separately so
     /// the caller can warn instead of silently running a different test than the
     /// one that was asked for; an empty or all-unknown list means `all`.
@@ -989,7 +989,7 @@ mod tests {
     }
 
     /// The JA3 (and size) of the hello a profile writes, on the builder the
-    /// caller asks for: `tls13_only` is what the probes and test 7 use, the
+    /// caller asks for: `tls13_only` is what the probes and test 6 use, the
     /// general one is what the tools and the earlier measurements used.
     fn client_hello_of(fingerprint: TlsFingerprint, tls13_only: bool) -> (String, usize) {
         let (ja3, length, _) = client_hello_full(fingerprint, tls13_only);

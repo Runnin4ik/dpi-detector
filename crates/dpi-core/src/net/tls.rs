@@ -63,7 +63,7 @@ pub struct TlsProfile {
     /// An ALPN list to offer instead of the profile's own.
     ///
     /// `None` offers the profile's list (browsers send `h2, http/1.1`), `Some`
-    /// replaces it — test 7 uses that to ask one protocol per run, which changes
+    /// replaces it — test 6 uses that to ask one protocol per run, which changes
     /// the ClientHello only in the ALPN extension's body and in JA4's ALPN field.
     pub alpn: Option<Vec<Vec<u8>>>,
     /// Verify the server certificate against the system roots instead of
