@@ -219,6 +219,8 @@ pub(crate) fn messages() -> Messages {
         cli_burst_profiles: "Fingerprint для теста 6: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [по умолчанию: all]",
         cli_burst_tls: "Версия TLS для теста 6: 1.2|1.3 [по умолчанию: 1.3]",
         cli_burst_alpn: "ALPN для теста 6: h2 (предлагает h2 с откатом на http/1.1)|http/1.1 (только http/1.1) [по умолчанию: h2]",
+        cli_trace: "Трассировка теста 6: строка на каждую попытку (раунд, отпечаток, домен, статус, деталь, мс); без пути — в stderr, с путём — в указанный файл [по умолчанию: выключено]",
+        trace_open_failed: "Не удалось открыть файл трассировки {}",
         cli_domains: "Путь к файлу со списком доменов",
         cli_tcp16: "Путь к файлу целей TCP16",
         cli_ascii: "Только ASCII для старых консолей (без Unicode-глифов и рамок)",

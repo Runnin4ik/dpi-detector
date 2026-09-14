@@ -232,6 +232,9 @@ pub struct Messages {
     pub cli_burst_profiles: &'static str,
     pub cli_burst_tls: &'static str,
     pub cli_burst_alpn: &'static str,
+    pub cli_trace: &'static str,
+    /// Shown when the `--trace` path cannot be opened; `{}` is `<path>: <error>`.
+    pub trace_open_failed: &'static str,
     pub cli_domains: &'static str,
     pub cli_tcp16: &'static str,
     pub cli_ascii: &'static str,

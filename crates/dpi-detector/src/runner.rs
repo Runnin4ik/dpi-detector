@@ -4,7 +4,7 @@
 //! share one 1700-line file.
 
 use std::collections::HashSet;
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,8 +21,8 @@ use crate::i18n::{legend_text, Language, Messages};
 use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::net::netinfo::{detect_bypass_tools, fetch_public_ips, get_system_dns, is_tun_name};
 use dpi_core::probe::burst::{
-    burst_targets, BurstAlpn, BurstObserver, BurstSettings, BurstTarget, BurstTlsVersion,
-    BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_TIMEOUT_SECS,
+    burst_targets, BurstAlpn, BurstObserver, BurstProfileReport, BurstSettings, BurstTarget,
+    BurstTlsVersion, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_TIMEOUT_SECS,
 };
 use dpi_core::probe::cymru::{fetch_ip_cymru, IpCymruInfo};
 use dpi_core::probe::domains::{
@@ -263,6 +263,128 @@ impl BurstObserver for BurstLine {
 
     fn host_finished(&self) {
         self.live.tick();
+    }
+}
+
+/// `--trace`: one line per attempt of test 6, written the moment the attempt
+/// exists.
+///
+/// The line is machine-readable on purpose — a UTC stamp, the round, the shape,
+/// the host, the attempt, the status token, the detail code and the milliseconds
+/// — so a round that fell over can be read back afterwards (`grep safari
+/// trace.log`) or watched live in a second window (`Get-Content -Wait`) while
+/// the screen redraws. It carries no translated text, so it reads the same in
+/// every language, and it never touches stdout: the frame and the table stay
+/// where they were.
+struct TraceObserver {
+    out: std::sync::Mutex<Box<dyn Write + Send>>,
+    round: std::sync::Mutex<(usize, usize)>,
+}
+
+impl TraceObserver {
+    /// `None` when no trace was asked for, or when the file it named cannot be
+    /// opened — in which case the run continues untraced and says why.
+    fn new(target: Option<&str>, msg: &Messages) -> Option<Self> {
+        let target = target?;
+        let out: Box<dyn Write + Send> = if target.is_empty() {
+            Box::new(std::io::stderr())
+        } else {
+            match std::fs::File::create(target) {
+                Ok(file) => Box::new(file),
+                Err(err) => {
+                    eprintln!(
+                        "{}",
+                        msg.trace_open_failed
+                            .replacen("{}", &format!("{target}: {err}"), 1)
+                    );
+                    return None;
+                }
+            }
+        };
+        Some(Self { out: std::sync::Mutex::new(out), round: std::sync::Mutex::new((0, 0)) })
+    }
+
+    fn line(&self, text: &str) {
+        if let Ok(mut out) = self.out.lock() {
+            // A failed write is not worth stopping a diagnostic run for.
+            let _ = writeln!(out, "{text}");
+            let _ = out.flush();
+        }
+    }
+}
+
+impl BurstObserver for TraceObserver {
+    fn round_started(&self, fingerprint: TlsFingerprint, index: usize, total: usize, hosts: usize) {
+        if let Ok(mut round) = self.round.lock() {
+            *round = (index, total);
+        }
+        self.line(&format!(
+            "{}  round {}/{} {} ({}) hosts={hosts}",
+            utc_clock(),
+            index + 1,
+            total,
+            fingerprint.display_label(),
+            fingerprint.code()
+        ));
+    }
+
+    fn host_probed(&self, fingerprint: TlsFingerprint, domain: &str, report: &BurstProfileReport) {
+        let (index, total) = self.round.lock().map(|r| *r).unwrap_or((0, 0));
+        for (attempt, result) in report.attempts.iter().enumerate() {
+            self.line(&format!(
+                "{}  r{}/{} {:<8} {:<28} #{:<2} {:<12} {:<40} {:>5} ms",
+                utc_clock(),
+                index + 1,
+                total,
+                fingerprint.code(),
+                domain,
+                attempt + 1,
+                result.status.as_str(),
+                result.detail.code(),
+                result.ms,
+            ));
+        }
+    }
+}
+
+/// UTC, because a timezone database is not worth carrying for a trace: the lines
+/// only have to line up with each other and with the run.
+fn utc_clock() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{:02}:{:02}:{:02}Z", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)
+}
+
+/// The observers one run may have: the live line when the terminal can take one,
+/// and the trace when `--trace` asked for it. Either may be absent, so neither
+/// mode has to know about the other.
+struct Observers<'a> {
+    line: Option<&'a BurstLine>,
+    trace: Option<&'a TraceObserver>,
+}
+
+impl BurstObserver for Observers<'_> {
+    fn round_started(&self, fingerprint: TlsFingerprint, index: usize, total: usize, hosts: usize) {
+        if let Some(line) = self.line {
+            line.round_started(fingerprint, index, total, hosts);
+        }
+        if let Some(trace) = self.trace {
+            trace.round_started(fingerprint, index, total, hosts);
+        }
+    }
+
+    fn host_finished(&self) {
+        if let Some(line) = self.line {
+            line.host_finished();
+        }
+    }
+
+    fn host_probed(&self, fingerprint: TlsFingerprint, domain: &str, report: &BurstProfileReport) {
+        if let Some(trace) = self.trace {
+            trace.host_probed(fingerprint, domain, report);
+        }
     }
 }
 
@@ -734,12 +856,12 @@ pub(crate) async fn run_test_suite(
         // live line that names the shape currently on the wire and how far the
         // run has got, and nothing else is printed until the table.
         let line = BurstLine { live: Arc::clone(&live), msg: *msg };
-        let observer: &dyn BurstObserver = if args.json || !std::io::stderr().is_terminal() {
-            &()
-        } else {
-            &line
+        let trace = TraceObserver::new(args.trace.as_deref(), msg);
+        let observers = Observers {
+            line: (!args.json && std::io::stderr().is_terminal()).then_some(&line),
+            trace: trace.as_ref(),
         };
-        let reports = burst_targets(cfg, &targets, settings, concurrency, observer).await;
+        let reports = burst_targets(cfg, &targets, settings, concurrency, &observers).await;
         if !args.json && std::io::stderr().is_terminal() {
             live.finish();
         }

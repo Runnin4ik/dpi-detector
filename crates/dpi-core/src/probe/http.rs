@@ -269,8 +269,18 @@ fn resolve_location(base: &str, location: &str) -> String {
     }
 }
 
-/// Classifies a redirect by host: same host or subdomain → OK (in the HTTP phase a
-/// same-host hop to https reads `301 → https`), a foreign host → REDIR with its short name.
+/// Classifies a redirect by host: the same site family → OK (in the HTTP phase a
+/// same-host hop to https reads `301 → https`, elsewhere `→ https`), a foreign
+/// host → REDIR with the host it named.
+///
+/// "Same family" means the two hosts are the same name, or one is a subdomain of
+/// the other at a label boundary, with a leading `www.` ignored on both sides.
+/// The comparison is symmetric because both directions are how a site spells
+/// itself: `holod.media` → `www.holod.media` and `www.holod.media` →
+/// `holod.media`, and equally `m.holod.media` → `holod.media`. Everything else
+/// counts as foreign, so a redirect from `www.instagram.com` to
+/// `www.facebook.com` stays a red REDIR — and so does `a.example.com` →
+/// `b.example.com`, which is two different sites under one parent.
 pub(crate) fn classify_redirect(
     domain: &str,
     base_url: &str,
@@ -285,28 +295,30 @@ pub(crate) fn classify_redirect(
     let scheme_https = resolved.to_ascii_lowercase().starts_with("https");
     let norm_loc = strip_www(&loc_host).to_string();
     let norm_dom = strip_www(&domain.to_ascii_lowercase()).to_string();
-    let same_host = norm_loc == norm_dom || norm_loc.ends_with(&format!(".{}", norm_dom));
+    let same_host = norm_loc == norm_dom
+        || norm_loc.ends_with(&format!(".{}", norm_dom))
+        || norm_dom.ends_with(&format!(".{}", norm_loc));
     let short_host: String = loc_host.chars().take(30).collect();
 
     if http_phase {
         if same_host && scheme_https {
-            return (DpiStatus::Ok, Detail::Other(format!("{} → https", status)));
+            return (DpiStatus::Ok, Detail::UpgradeHttps { status: Some(status) });
         }
         if same_host {
             // Same domain (or a subdomain) is a normal redirect: OK, not a badge
             // of its own. Only a foreign domain is flagged, as a red REDIR.
             return (DpiStatus::Ok, Detail::HttpStatus(status));
         }
-        return (DpiStatus::RedirSuspect, Detail::Other(format!("→ {}", short_host)));
+        return (DpiStatus::RedirSuspect, Detail::Redirect { host: short_host });
     }
 
     if same_host && scheme_https {
-        return (DpiStatus::Ok, Detail::Other("→ https".to_string()));
+        return (DpiStatus::Ok, Detail::UpgradeHttps { status: None });
     }
     if same_host {
-        return (DpiStatus::Ok, Detail::Other(format!("→ {}", short_host)));
+        return (DpiStatus::Ok, Detail::Redirect { host: short_host });
     }
-    (DpiStatus::RedirSuspect, Detail::Other(format!("→ {}", short_host)))
+    (DpiStatus::RedirSuspect, Detail::Redirect { host: short_host })
 }
 
 pub(crate) fn inner_hyper(

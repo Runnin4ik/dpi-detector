@@ -1,6 +1,7 @@
 use std::io;
 use super::alert;
 use super::detail::{AlertKind, Detail};
+use super::stack;
 use super::types::{ConnectionStage, DpiStatus};
 
 fn short_detail(msg: &str) -> String {
@@ -14,6 +15,39 @@ fn is_tls_stage(stage: ConnectionStage) -> bool {
         stage,
         ConnectionStage::TlsClientHelloSent | ConnectionStage::TlsHandshakeDone
     )
+}
+
+/// Messages about a protocol element our own TLS stack does not implement are
+/// not evidence about the network. rustls words these with "certificate" (`got
+/// CompressedCertificate when expecting Certificate`,
+/// `UnknownCertificateExtension`), so without this they read as a certificate
+/// interception — and, since rustls reports them the same way it reports a peer
+/// that broke the protocol, they would also take a stack failure's name. Real
+/// interference still lands in the alert, record and EOF branches.
+fn is_unimplemented_element(msg_lower: &str) -> bool {
+    [
+        "unsupportedextension",
+        "unsupported extension",
+        "unknowncertificateextension",
+        "unknown certificate extension",
+        "compressedcertificate",
+        "compressed certificate",
+    ]
+    .iter()
+    .any(|m| msg_lower.contains(m))
+}
+
+/// The detail for a message nothing else classified: a named TLS-stack failure
+/// carries the rustls name it was classified by, anything else keeps its own
+/// words.
+fn unclassified_detail(msg_lower: &str, raw: &str) -> Detail {
+    if is_unimplemented_element(msg_lower) {
+        return Detail::Other(short_detail(raw));
+    }
+    match stack::from_message(msg_lower) {
+        Some(kind) => stack::detail_for(kind),
+        None => Detail::Other(short_detail(raw)),
+    }
 }
 
 /// The verdict for a message that reports a peer alert: the description it names
@@ -79,22 +113,10 @@ pub fn classify_ssl_error(
         return (DpiStatus::TlsAlert, Detail::FakeTlsAlert);
     }
     // A message about a protocol element our own TLS stack does not implement is
-    // not evidence about the network. rustls words these with "certificate"
-    // (`got CompressedCertificate when expecting Certificate`,
-    // `UnknownCertificateExtension`), so without this they are reported as an
-    // interception. Real interference still lands in the branches above: a
-    // censor's spoofed ServerHello arrives as a version/record/alert error.
-    if [
-        "unsupportedextension",
-        "unsupported extension",
-        "unknowncertificateextension",
-        "unknown certificate extension",
-        "compressedcertificate",
-        "compressed certificate",
-    ]
-    .iter()
-    .any(|m| msg.contains(m))
-    {
+    // not evidence about the network (see `is_unimplemented_element`). Real
+    // interference still lands in the branches above: a censor's spoofed
+    // ServerHello arrives as a version/record/alert error.
+    if is_unimplemented_element(&msg) {
         return (DpiStatus::Unknown, Detail::Other(short_detail(err_msg)));
     }
 
@@ -141,7 +163,7 @@ pub fn classify_ssl_error(
         return (DpiStatus::NoTls13, Detail::NoTls13);
     }
 
-    (DpiStatus::Unknown, Detail::Other(short_detail(err_msg)))
+    (DpiStatus::Unknown, unclassified_detail(&msg, err_msg))
 }
 
 fn dns_failure_text(msg: &str) -> bool {
@@ -271,7 +293,7 @@ pub fn classify_connect_error_full(
         return (DpiStatus::OsErr, Detail::Other(format!("OS errno {}", code)));
     }
 
-    (DpiStatus::Unknown, Detail::Other(short_detail(err_msg)))
+    (DpiStatus::Unknown, unclassified_detail(&full, err_msg))
 }
 
 /// Legacy io::Error-based entry point (stage unknown → tcp_connect).
@@ -331,27 +353,31 @@ pub fn classify_tls_error(
 
     // A reset/EOF after ClientHello with zero bytes back is a DPI SNI RST,
     // even when the OS masks it as a generic error.
-    if status == DpiStatus::Unknown
-        && (stage == ConnectionStage::TlsClientHelloSent || (bytes_sent > 0 && bytes_recv == 0))
-    {
+    if status == DpiStatus::Unknown {
         let lower = err_msg.to_ascii_lowercase();
-        if lower.contains("reset")
-            || lower.contains("eof")
-            || lower.contains("closed")
-            || lower.contains("abort")
-            || lower.contains("broken pipe")
-            || lower.contains("10054")
-            || lower.contains(" 104")
+        if (stage == ConnectionStage::TlsClientHelloSent || (bytes_sent > 0 && bytes_recv == 0))
+            && (lower.contains("reset")
+                || lower.contains("eof")
+                || lower.contains("closed")
+                || lower.contains("abort")
+                || lower.contains("broken pipe")
+                || lower.contains("10054")
+                || lower.contains(" 104"))
         {
             return (
                 DpiStatus::TlsRst,
                 Detail::TlsRstHello,
             );
         }
-    }
 
-    if status == DpiStatus::Unknown {
-        return (DpiStatus::Unknown, Detail::Other(format!("TLS error: {}", short_detail(err_msg))));
+        // The stack's own wording survives as a detail; anything else keeps its
+        // own words under the TLS label.
+        return match stack::from_message(&lower) {
+            Some(kind) if !is_unimplemented_element(&lower) => {
+                (DpiStatus::Unknown, stack::detail_for(kind))
+            }
+            _ => (DpiStatus::Unknown, Detail::Other(format!("TLS error: {}", short_detail(err_msg)))),
+        };
     }
     (status, detail)
 }
@@ -370,7 +396,7 @@ pub fn classify_read_error(
     let (status, detail) =
         classify_connect_error_full(err_msg, raw_os_error, kind, bytes_read, "reading_data");
     if status == DpiStatus::Unknown {
-        return (DpiStatus::Unknown, Detail::Other(short_detail(err_msg)));
+        return (DpiStatus::Unknown, unclassified_detail(&err_msg.to_ascii_lowercase(), err_msg));
     }
     (status, detail)
 }
@@ -505,11 +531,48 @@ mod tests {
         for msg in [
             "received unexpected handshake message: got CompressedCertificate when expecting Certificate or CertificateRequest",
             "received corrupt message of type UnknownCertificateExtension",
-            "peer misbehaved: UnsolicitedServerHelloExtension",
         ] {
             let (s, d) = classify_ssl_error(msg, 0, ConnectionStage::TlsClientHelloSent);
             assert_eq!(s, DpiStatus::Unknown, "{msg} -> {}", d.code());
+            // Our stack lacking a feature is not a peer failure: the message
+            // keeps its own words instead of taking a stack failure's name.
+            assert!(matches!(d, Detail::Other(_)), "{msg} -> {}", d.code());
         }
+
+        // A peer that broke the protocol is a stack failure the reader can name,
+        // but still not evidence of interception: the status stays Unknown.
+        let (s, d) = classify_ssl_error(
+            "peer misbehaved: UnsolicitedServerHelloExtension",
+            0,
+            ConnectionStage::TlsClientHelloSent,
+        );
+        assert_eq!((s, d.code().as_ref()), (DpiStatus::Unknown, "tls_peer_misbehaved"));
+    }
+
+    /// A record that will not decrypt is the signature of an injected or
+    /// rewritten record, and it used to reach the table as the rustls sentence
+    /// in English. It now carries the stack failure's name; the status stays
+    /// Unknown because a buggy server produces the same message.
+    #[test]
+    fn test_a_stack_failure_is_named_not_quoted() {
+        let observed = "connection error | cannot decrypt peer's message";
+        let (s, d) = classify_read_error(observed, None, None, 0);
+        assert_eq!((s, d.code().as_ref()), (DpiStatus::Unknown, "tls_decrypt_error"));
+
+        // The same wording through the TLS path keeps the same detail.
+        let (s, d) = classify_tls_error(
+            ConnectionStage::TlsClientHelloSent,
+            100,
+            0,
+            observed,
+            false,
+        );
+        assert_eq!((s, d.code().as_ref()), (DpiStatus::Unknown, "tls_decrypt_error"));
+
+        // A message naming nothing known keeps its own words.
+        let (s, d) = classify_read_error("connection error | oops", None, None, 0);
+        assert_eq!(s, DpiStatus::Unknown);
+        assert_eq!(d.code().as_ref(), "connection error | oops");
     }
 
     #[test]

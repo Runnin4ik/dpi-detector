@@ -49,6 +49,10 @@ pub enum Detail {
     /// A peer alert that named its description: the code is
     /// `alert_<description>` (`alert_illegal_parameter`).
     Alert(AlertKind),
+    /// A TLS-stack failure that is not an alert from the peer: our own TLS layer
+    /// refused the bytes it received — `cannot decrypt peer's message`, `peer
+    /// misbehaved: …`. The code is `tls_<kind>`.
+    StackFailure(StackKind),
 
     // ─── Certificates ───
     NoRootCa,
@@ -107,6 +111,12 @@ pub enum Detail {
     IspBlockpage { arrow: bool, ip: String },
     /// The resolver answered with a loopback/private address (`-> <ip>`).
     LocalIp { ip: String },
+    /// The peer redirected to `host`: on the same site family the verdict stays
+    /// OK, a foreign one is a red `REDIR`.
+    Redirect { host: String },
+    /// A hop to `https` on the same host: `-> https`, or `301 -> https` when the
+    /// status that carried it is known.
+    UpgradeHttps { status: Option<u16> },
     /// An HTTP status line.
     HttpStatus(u16),
     /// How long a successful check took.
@@ -211,6 +221,54 @@ impl AlertKind {
     }
 }
 
+/// One failure of our own TLS stack over bytes the peer sent, named as rustls
+/// names it.
+///
+/// These are the messages a middlebox leaves behind when it rewrites or injects
+/// records: a record that does not decrypt, a message that arrived out of order,
+/// a peer that broke the protocol. rustls words each one differently and the
+/// difference is the diagnosis, so they are values, not free text — the free
+/// text would be English prose inside a Russian table, and it changes with the
+/// rustls version, which no test can pin.
+///
+/// The names are rustls's own [`Error`] variants, snake_case (see
+/// `vendor/rustls/src/error.rs`). They are protocol tokens, so they stay Latin
+/// in every language (Rule 4) and `--json` carries them inside the detail code
+/// after `tls_`.
+///
+/// [`Error`]: https://docs.rs/rustls/latest/rustls/enum.Error.html
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackKind {
+    /// `cannot decrypt peer's message`: a record we could not open.
+    DecryptError,
+    /// `received corrupt message of type …`.
+    InvalidMessage,
+    /// `received unexpected message: got … when expecting …`.
+    InappropriateMessage,
+    /// `received unexpected handshake message: got … when expecting …`.
+    InappropriateHandshakeMessage,
+    /// `peer misbehaved: …`.
+    PeerMisbehaved,
+    /// `peer doesn't support any known protocol`: no ALPN in common.
+    NoApplicationProtocol,
+}
+
+impl StackKind {
+    /// The rustls name, snake_case: the token a [`Detail::StackFailure`]'s code
+    /// carries after `tls_`.
+    pub fn code(self) -> &'static str {
+        use StackKind::*;
+        match self {
+            DecryptError => "decrypt_error",
+            InvalidMessage => "invalid_message",
+            InappropriateMessage => "inappropriate_message",
+            InappropriateHandshakeMessage => "inappropriate_handshake_message",
+            PeerMisbehaved => "peer_misbehaved",
+            NoApplicationProtocol => "no_application_protocol",
+        }
+    }
+}
+
 impl Detail {
     /// The machine token. `--json` carries exactly this; it never changes with
     /// `--lang`.
@@ -231,6 +289,7 @@ impl Detail {
             ProtocolVersionAlert => Cow::Borrowed("protocol_version_alert"),
             FakeTlsAlert => Cow::Borrowed("fake_tls_alert"),
             Alert(kind) => Cow::Owned(format!("alert_{}", kind.code())),
+            StackFailure(kind) => Cow::Owned(format!("tls_{}", kind.code())),
             NoRootCa => Cow::Borrowed("no_root_certificates"),
             CertExpired => Cow::Borrowed("cert_expired"),
             SelfSigned => Cow::Borrowed("self_signed_cert"),
@@ -266,6 +325,8 @@ impl Detail {
             TimeoutStage { stage } => Cow::Owned(format!("timeout_{}", stage)),
             IspBlockpage { .. } => Cow::Borrowed("isp_blockpage"),
             LocalIp { .. } => Cow::Borrowed("local_ip"),
+            Redirect { .. } => Cow::Borrowed("redirect_to_host"),
+            UpgradeHttps { .. } => Cow::Borrowed("upgrade_https"),
             HttpStatus(code) => Cow::Owned(format!("http_{}", code)),
             Elapsed(secs) => Cow::Owned(format!("elapsed_{}ms", (secs * 1000.0).round() as u64)),
             Other(text) => Cow::Owned(text.clone()),
@@ -339,6 +400,11 @@ mod tests {
             Detail::Elapsed(0.3),
             Detail::Alert(AlertKind::IllegalParameter),
             Detail::Alert(AlertKind::BadCertificateStatusResponse),
+            Detail::StackFailure(StackKind::DecryptError),
+            Detail::StackFailure(StackKind::InappropriateHandshakeMessage),
+            Detail::Redirect { host: "example.com".into() },
+            Detail::UpgradeHttps { status: Some(301) },
+            Detail::UpgradeHttps { status: None },
         ];
         for d in &all {
             let code = d.code();
@@ -348,6 +414,13 @@ mod tests {
             );
         }
         assert_eq!(Detail::HttpStatus(403).code(), "http_403");
+        assert_eq!(Detail::StackFailure(StackKind::DecryptError).code(), "tls_decrypt_error");
+        assert_eq!(
+            Detail::StackFailure(StackKind::InappropriateHandshakeMessage).code(),
+            "tls_inappropriate_handshake_message"
+        );
+        assert_eq!(Detail::Redirect { host: "example.com".into() }.code(), "redirect_to_host");
+        assert_eq!(Detail::UpgradeHttps { status: Some(301) }.code(), "upgrade_https");
         assert_eq!(Detail::Elapsed(0.3).code(), "elapsed_300ms");
         assert_eq!(Detail::None.code(), "");
     }

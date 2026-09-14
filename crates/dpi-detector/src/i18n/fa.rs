@@ -212,6 +212,8 @@ pub(crate) fn messages() -> Messages {
         cli_burst_profiles: "Fingerprint haye test 6: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [pishfarz: all]",
         cli_burst_tls: "Version-e TLS baraye test 6: 1.2|1.3 [pishfarz: 1.3]",
         cli_burst_alpn: "ALPN baraye test 6: h2 (h2 ba bazgasht be http/1.1)|http/1.1 (faghat http/1.1) [pishfarz: h2]",
+        cli_trace: "Trace baraye test 6: yek khat baraye har talash (dore, fingerPrint, domain, vaziyat, joz'yat, ms); bedun-e masir be stderr, ba masir be an file [pishfarz: khamush]",
+        trace_open_failed: "File-e trace baz nashod {}",
         cli_domains: "Masir-e file-e list-e domain ha",
         cli_tcp16: "Masir-e file-e target haye TCP16",
         cli_ascii: "Khorooj-e faghat ASCII baraye console haye ghadimi (bedun-e glyph ya border-e Unicode)",

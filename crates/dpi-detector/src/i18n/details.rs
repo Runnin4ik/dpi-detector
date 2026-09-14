@@ -65,6 +65,16 @@ pub fn detail_text(detail: &Detail, lang: Language) -> String {
                 &format!("Alert-e TLS ({name})"),
             )
         }
+        Detail::StackFailure(kind) => {
+            let name = kind.code();
+            t4(
+                lang,
+                &format!("TLS-стек ({name})"),
+                &format!("TLS stack ({name})"),
+                &format!("TLS 协议栈（{name}）"),
+                &format!("Khatay-e TLS ({name})"),
+            )
+        }
         Detail::UnknownConnectionFailure => t4(lang, "Unknown connection failure", "Unknown connection failure", "未知连接错误", "Khata-ye nashenakhte dar ettesal"),
         Detail::DomainNotFound => t4(lang, "Домен не найден", "Domain not found", "域名未找到", "Domain peyda nashod"),
         Detail::DnsTimeoutUnavailable => t4(lang, "DNS таймаут/недоступен", "DNS timeout/unavailable", "DNS 超时/不可用", "DNS mohlat ya dar dastras nist"),
@@ -91,6 +101,11 @@ pub fn detail_text(detail: &Detail, lang: Language) -> String {
         Detail::IspBlockpage { arrow: false, ip } => format!("{} {}", msg.detail_isp_stub, ip),
         Detail::LocalIp { ip } => format!("{} -> {}", msg.detail_local_ip, ip),
         Detail::HttpStatus(code) => format!("HTTP {}", code),
+        // The target of a redirect is a host and a scheme, not prose: the arrow
+        // is the same in every language (and maps to `->` on an ASCII console).
+        Detail::Redirect { host } => format!("→ {host}"),
+        Detail::UpgradeHttps { status: Some(code) } => format!("{code} → https"),
+        Detail::UpgradeHttps { status: None } => "→ https".to_string(),
         Detail::Elapsed(secs) => format!("{:.1}s", secs),
         // Free text from the OS or the TLS stack: appended as it came.
         Detail::Other(text) => text.clone(),
@@ -101,7 +116,7 @@ pub fn detail_text(detail: &Detail, lang: Language) -> String {
 mod tests {
     use super::*;
     use crate::i18n::Language::*;
-    use dpi_core::classify::detail::AlertKind;
+    use dpi_core::classify::detail::{AlertKind, StackKind};
 
     #[test]
     fn composed_details_keep_their_tokens() {
@@ -119,6 +134,22 @@ mod tests {
         assert_eq!(detail_text(&stub, En), "ISP blockpage -> 1.1.1.1");
         assert_eq!(detail_text(&Detail::LocalIp { ip: "10.0.0.1".into() }, Zh), "本地 IP -> 10.0.0.1");
         assert_eq!(detail_text(&Detail::HttpStatus(451), Zh), "HTTP 451");
+        assert_eq!(
+            detail_text(&Detail::StackFailure(StackKind::DecryptError), Ru),
+            "TLS-стек (decrypt_error)"
+        );
+        assert_eq!(
+            detail_text(&Detail::StackFailure(StackKind::PeerMisbehaved), En),
+            "TLS stack (peer_misbehaved)"
+        );
+        // A redirect reads as its target in every language, and an https hop
+        // names the status that carried it when one is known.
+        let foreign = Detail::Redirect { host: "www.facebook.com".into() };
+        for lang in [En, Ru, Zh, Fa] {
+            assert_eq!(detail_text(&foreign, lang), "→ www.facebook.com");
+        }
+        assert_eq!(detail_text(&Detail::UpgradeHttps { status: Some(301) }, Ru), "301 → https");
+        assert_eq!(detail_text(&Detail::UpgradeHttps { status: None }, Ru), "→ https");
         assert_eq!(detail_text(&Detail::Elapsed(0.3), Ru), "0.3s");
         assert_eq!(detail_text(&Detail::None, Ru), "");
         assert_eq!(detail_text(&Detail::Other("→ https".into()), En), "→ https");

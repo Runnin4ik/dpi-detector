@@ -219,6 +219,8 @@ pub(crate) fn messages() -> Messages {
         cli_burst_profiles: "测试 6 的 Fingerprint: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [默认: all]",
         cli_burst_tls: "测试 6 的 TLS 版本: 1.2|1.3 [默认: 1.3]",
         cli_burst_alpn: "测试 6 的 ALPN: h2（提供 h2 并回退 http/1.1）|http/1.1（仅 http/1.1）[默认: h2]",
+        cli_trace: "测试 6 追踪: 每次尝试一行（轮次、指纹、域名、状态、详情、毫秒）；无路径写入 stderr，有路径写入该文件 [默认: 关闭]",
+        trace_open_failed: "无法打开追踪文件 {}",
         cli_domains: "自定义域名列表文件路径",
         cli_tcp16: "自定义 TCP16 目标文件路径",
         cli_ascii: "面向旧终端的纯 ASCII 输出（无 Unicode 符号或边框）",

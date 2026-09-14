@@ -327,6 +327,20 @@ pub trait BurstObserver {
 
     /// One host finished its round, answered or not.
     fn host_finished(&self) {}
+
+    /// One host's round landed, with every attempt it produced.
+    ///
+    /// The live line counts hosts and ignores this; a trace prints the attempts
+    /// the moment they exist, which is what turns "SAFARI 0/4" into a status and
+    /// a millisecond count per attempt. A caller that wants neither implements
+    /// nothing.
+    fn host_probed(
+        &self,
+        _fingerprint: TlsFingerprint,
+        _domain: &str,
+        _report: &BurstProfileReport,
+    ) {
+    }
 }
 
 impl BurstObserver for () {}
@@ -381,6 +395,7 @@ pub async fn burst_targets(
         while let Some(joined) = rounds.join_next().await {
             observer.host_finished();
             if let Ok((index, report)) = joined {
+                observer.host_probed(fingerprint, &targets[index].domain, &report);
                 reports[index].profiles.push(report);
             }
         }
@@ -875,6 +890,7 @@ mod tests {
         struct Rounds {
             started: std::sync::Mutex<Vec<(TlsFingerprint, usize, usize, usize)>>,
             finished: std::sync::atomic::AtomicUsize,
+            probed: std::sync::Mutex<Vec<String>>,
         }
         impl BurstObserver for Rounds {
             fn round_started(&self, fp: TlsFingerprint, index: usize, total: usize, hosts: usize) {
@@ -882,6 +898,12 @@ mod tests {
             }
             fn host_finished(&self) {
                 self.finished.fetch_add(1, Ordering::SeqCst);
+            }
+            fn host_probed(&self, fp: TlsFingerprint, domain: &str, report: &BurstProfileReport) {
+                self.probed
+                    .lock()
+                    .expect("lock")
+                    .push(format!("{} {domain} x{}", fp.code(), report.attempts.len()));
             }
         }
         let rounds = Rounds::default();
@@ -904,6 +926,19 @@ mod tests {
             ]
         );
         assert_eq!(rounds.finished.load(Ordering::SeqCst), 4, "one tick per host per round");
+        // The trace reads this: every host's round arrives once per shape, with
+        // the attempts it produced — silent hosts are not silently dropped.
+        let mut probed = rounds.probed.lock().expect("lock").clone();
+        probed.sort();
+        assert_eq!(
+            probed,
+            vec![
+                "chrome fast.example x2",
+                "chrome slow.example x2",
+                "rustls fast.example x2",
+                "rustls slow.example x2",
+            ]
+        );
         assert_eq!(reports.len(), 2);
         for report in &reports {
             let shapes: Vec<TlsFingerprint> = report.profiles.iter().map(|p| p.fingerprint).collect();

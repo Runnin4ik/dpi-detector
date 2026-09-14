@@ -32,6 +32,9 @@ pub struct CliArgs {
     pub burst_tls: Option<String>,
     /// Test 6: ALPN to offer, `h2` or `http/1.1`.
     pub burst_alpn: Option<String>,
+    /// Test 6: per-attempt trace. `Some("")` is stderr, `Some(path)` that file,
+    /// `None` means no trace.
+    pub trace: Option<String>,
 }
 
 /// Builds the CLI definition with `msg`'s language: `about`, per-argument help
@@ -180,6 +183,17 @@ pub fn command(msg: &Messages) -> Command {
                 .help(msg.cli_burst_alpn),
         )
         .arg(
+            // An optional value: no path means stderr, a path means that file.
+            // The empty string is what clap stores for "flag given, no value".
+            Arg::new("trace")
+                .long("trace")
+                .value_name("PATH")
+                .num_args(0..=1)
+                .default_missing_value("")
+                .help_heading(msg.cli_options_heading)
+                .help(msg.cli_trace),
+        )
+        .arg(
             Arg::new("help")
                 .short('h')
                 .long("help")
@@ -221,5 +235,6 @@ pub fn parse_cli(lang: Language) -> CliArgs {
         burst_profiles: m.get_one::<String>("burst-profiles").cloned(),
         burst_tls: m.get_one::<String>("burst-tls").cloned(),
         burst_alpn: m.get_one::<String>("burst-alpn").cloned(),
+        trace: m.get_one::<String>("trace").cloned(),
     }
 }

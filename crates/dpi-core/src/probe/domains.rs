@@ -762,21 +762,50 @@ mod tests {
     fn test_classify_redirect_same_https() {
         let (s, d) = classify_redirect("example.com", "https://example.com", 301, "https://example.com/", false);
         assert_eq!(s, DpiStatus::Ok);
-        assert_eq!(d, Detail::Other("→ https".to_string()));
+        assert_eq!(d, Detail::UpgradeHttps { status: None });
     }
 
     #[test]
     fn test_classify_redirect_foreign() {
         let (s, d) = classify_redirect("example.com", "https://example.com", 302, "https://evil.com/block", false);
         assert_eq!(s, DpiStatus::RedirSuspect);
-        assert!(d.code().contains("evil.com"));
+        assert_eq!(d, Detail::Redirect { host: "evil.com".to_string() });
     }
 
     #[test]
     fn test_classify_redirect_http_phase() {
         let (s, d) = classify_redirect("example.com", "http://example.com", 301, "https://example.com/", true);
         assert_eq!(s, DpiStatus::Ok);
-        assert_eq!(d, Detail::Other("301 → https".to_string()));
+        assert_eq!(d, Detail::UpgradeHttps { status: Some(301) });
+    }
+
+    /// The rule the table reads by: a redirect that stays inside one site family
+    /// is a normal `OK`, whatever the direction — a subdomain spelling out the
+    /// main domain (`www.holod.media` → `holod.media`) and the main domain
+    /// naming a subdomain (`holod.media` → `cdn.holod.media`) are both the site
+    /// itself. Only a name outside the family is a red `REDIR`.
+    #[test]
+    fn test_a_subdomain_redirect_inside_the_same_site_is_ok() {
+        let cases: &[(&str, &str, DpiStatus, &str)] = &[
+            // (requested domain, Location, expected status, expected redirect host when foreign)
+            ("www.holod.media", "https://holod.media/x", DpiStatus::Ok, ""),
+            ("holod.media", "https://www.holod.media/x", DpiStatus::Ok, ""),
+            ("holod.media", "https://cdn.holod.media/x", DpiStatus::Ok, ""),
+            ("m.holod.media", "https://holod.media/x", DpiStatus::Ok, ""),
+            ("www.holod.media", "http://holod.media/x", DpiStatus::Ok, ""),
+            // A different registrable domain is not the same site, however it
+            // reads: this is the instagram → facebook case.
+            ("www.instagram.com", "https://www.facebook.com/x", DpiStatus::RedirSuspect, "www.facebook.com"),
+            ("holod.media", "https://not-holod.media/x", DpiStatus::RedirSuspect, "not-holod.media"),
+            ("holod.media", "https://holod.media.evil.com/x", DpiStatus::RedirSuspect, "holod.media.evil.com"),
+        ];
+        for (domain, location, want, foreign) in cases {
+            let (s, d) = classify_redirect(domain, &format!("https://{domain}"), 301, location, false);
+            assert_eq!(s, *want, "{domain} + {location} -> {}", d.code());
+            if *want == DpiStatus::RedirSuspect {
+                assert_eq!(d, Detail::Redirect { host: (*foreign).to_string() }, "{domain} + {location}");
+            }
+        }
     }
 
     /// Same-host-or-subdomain redirects read as a plain `OK`, a redirect to
@@ -787,31 +816,30 @@ mod tests {
     #[test]
     fn test_classify_redirect_matrix() {
         // (base, status, location, expected status, expected detail)
-        // (base, status, location, expected status, expected detail code)
-        let cases: &[(&str, u16, &str, DpiStatus, &str)] = &[
-            ("https://holod.media", 301, "https://holod.media/", DpiStatus::Ok, "→ https"),
-            ("https://holod.media", 301, "/en/", DpiStatus::Ok, "→ https"),
-            ("https://holod.media", 301, "index.html", DpiStatus::Ok, "→ https"),
-            ("https://holod.media", 301, "?q=1", DpiStatus::Ok, "→ https"),
-            ("https://holod.media", 301, "https://sub.holod.media/x", DpiStatus::Ok, "→ https"),
-            ("https://holod.media", 302, "http://holod.media/x", DpiStatus::Ok, "→ holod.media"),
-            ("http://holod.media", 301, "https://holod.media/", DpiStatus::Ok, "301 → https"),
-            ("http://holod.media", 301, "https://sub.holod.media/x", DpiStatus::Ok, "301 → https"),
-            ("http://holod.media", 301, "http://holod.media/x", DpiStatus::Ok, "http_301"),
-            ("http://holod.media", 301, "/en/", DpiStatus::Ok, "http_301"),
-            ("http://holod.media", 301, "index.html", DpiStatus::Ok, "http_301"),
-            ("http://holod.media", 301, "?q=1", DpiStatus::Ok, "http_301"),
-            ("https://holod.media", 302, "//evil.com/block", DpiStatus::RedirSuspect, "→ evil.com"),
-            ("http://holod.media", 302, "//evil.com/block", DpiStatus::RedirSuspect, "→ evil.com"),
-            ("https://holod.media", 302, "https://evil.com/block", DpiStatus::RedirSuspect, "→ evil.com"),
-            ("https://holod.media", 302, "https://not-holod.media/", DpiStatus::RedirSuspect, "→ not-holod.media"),
-            ("https://holod.media", 302, "https://holod.media.evil.com/", DpiStatus::RedirSuspect, "→ holod.media.evil.com"),
+        let cases: &[(&str, u16, &str, DpiStatus, Detail)] = &[
+            ("https://holod.media", 301, "https://holod.media/", DpiStatus::Ok, Detail::UpgradeHttps { status: None }),
+            ("https://holod.media", 301, "/en/", DpiStatus::Ok, Detail::UpgradeHttps { status: None }),
+            ("https://holod.media", 301, "index.html", DpiStatus::Ok, Detail::UpgradeHttps { status: None }),
+            ("https://holod.media", 301, "?q=1", DpiStatus::Ok, Detail::UpgradeHttps { status: None }),
+            ("https://holod.media", 301, "https://sub.holod.media/x", DpiStatus::Ok, Detail::UpgradeHttps { status: None }),
+            ("https://holod.media", 302, "http://holod.media/x", DpiStatus::Ok, Detail::Redirect { host: "holod.media".into() }),
+            ("http://holod.media", 301, "https://holod.media/", DpiStatus::Ok, Detail::UpgradeHttps { status: Some(301) }),
+            ("http://holod.media", 301, "https://sub.holod.media/x", DpiStatus::Ok, Detail::UpgradeHttps { status: Some(301) }),
+            ("http://holod.media", 301, "http://holod.media/x", DpiStatus::Ok, Detail::HttpStatus(301)),
+            ("http://holod.media", 301, "/en/", DpiStatus::Ok, Detail::HttpStatus(301)),
+            ("http://holod.media", 301, "index.html", DpiStatus::Ok, Detail::HttpStatus(301)),
+            ("http://holod.media", 301, "?q=1", DpiStatus::Ok, Detail::HttpStatus(301)),
+            ("https://holod.media", 302, "//evil.com/block", DpiStatus::RedirSuspect, Detail::Redirect { host: "evil.com".into() }),
+            ("http://holod.media", 302, "//evil.com/block", DpiStatus::RedirSuspect, Detail::Redirect { host: "evil.com".into() }),
+            ("https://holod.media", 302, "https://evil.com/block", DpiStatus::RedirSuspect, Detail::Redirect { host: "evil.com".into() }),
+            ("https://holod.media", 302, "https://not-holod.media/", DpiStatus::RedirSuspect, Detail::Redirect { host: "not-holod.media".into() }),
+            ("https://holod.media", 302, "https://holod.media.evil.com/", DpiStatus::RedirSuspect, Detail::Redirect { host: "holod.media.evil.com".into() }),
         ];
         for (base, status, location, want, detail) in cases {
             let http_phase = base.starts_with("http:");
             let (s, d) = classify_redirect("holod.media", base, *status, location, http_phase);
             assert_eq!(s, *want, "{base} + {location} -> {}", d.code());
-            assert_eq!(d.code(), *detail, "{base} + {location}");
+            assert_eq!(&d, detail, "{base} + {location}");
             // A legitimate redirect counts as success, a foreign one does not.
             assert_eq!(s.is_ok_status(), *want != DpiStatus::RedirSuspect, "{base} + {location}");
         }

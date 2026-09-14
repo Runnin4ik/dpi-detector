@@ -219,6 +219,8 @@ pub(crate) fn messages() -> Messages {
         cli_burst_profiles: "Test 6 fingerprints: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [default: all]",
         cli_burst_tls: "Test 6 TLS version: 1.2|1.3 [default: 1.3]",
         cli_burst_alpn: "Test 6 ALPN: h2 (offers h2 with the http/1.1 fallback)|http/1.1 (offers http/1.1 only) [default: h2]",
+        cli_trace: "Test 6 trace: one line per attempt (round, shape, host, status, detail, ms); without a path to stderr, with one to that file [default: off]",
+        trace_open_failed: "Could not open the trace file {}",
         cli_domains: "Path to custom domain list file",
         cli_tcp16: "Path to custom TCP16 target file",
         cli_ascii: "ASCII-only output for legacy consoles (no Unicode glyphs or borders)",
