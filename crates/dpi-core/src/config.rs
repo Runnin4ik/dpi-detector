@@ -223,7 +223,7 @@ pub struct AppConfig {
     #[serde(default = "d_ip_version")]
     pub ip_version: String,
     /// ClientHello shape the probes present: `rustls` (default, unchanged
-    /// behaviour) or `custom` (Firefox-shaped, for fingerprint A/B runs).
+    /// behaviour) or `firefox` (Firefox-shaped, for fingerprint A/B runs).
     #[serde(default = "d_tls_fingerprint")]
     pub tls_fingerprint: String,
     #[serde(default)]
@@ -981,7 +981,7 @@ mod tests {
 
         let mut cfg = AppConfig::default();
         assert!(cfg.user_agent_for(TlsFingerprint::Chrome).contains("Chrome/107.0.0.0"));
-        assert!(cfg.user_agent_for(TlsFingerprint::Custom).contains("Firefox/133.0"));
+        assert!(cfg.user_agent_for(TlsFingerprint::Firefox).contains("Firefox/133.0"));
         assert_eq!(cfg.user_agent_for(TlsFingerprint::Rustls), DEFAULT_USER_AGENT);
 
         cfg.user_agent = "my-probe/1.0".to_string();

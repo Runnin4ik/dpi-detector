@@ -189,7 +189,7 @@ pub(crate) fn messages() -> Messages {
         cfg_warn_dc_port: "TELEGRAM_DC_PORT 无效，已重置为 443",
 
         warn_unknown_lang: "警告: 未知的 --lang '{}'（应为 ru|en|zh|fa|auto），改用 en",
-        warn_unknown_fingerprint: "警告: 未知的 --fingerprint '{}'（应为 rustls|custom|chrome|safari），改用 {}",
+        warn_unknown_fingerprint: "警告: 未知的 --fingerprint '{}'（应为 rustls|firefox|chrome|safari），改用 {}",
         warn_unknown_burst_axis: "警告: 未知的 {} '{}'，改用 {}",
         press_enter_to_exit: "按回车键退出...",
         invalid_proxy_err: "无效代理 {}: {}\n",
@@ -216,15 +216,15 @@ pub(crate) fn messages() -> Messages {
         cli_output: "保存报告的输出文件路径",
         cli_burst: "Fingerprint/西伯利亚封锁 (测试 6): 每轮同时请求数 [默认: 4]",
         cli_burst_timeout: "测试 6: 握手超时, 秒 [默认: 8]; 之后的请求等待 read_timeout",
-        cli_burst_profiles: "测试 6 的 Fingerprint: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [默认: all]",
-        cli_burst_tls: "测试 6 的 TLS 版本: 1.2|1.3 [默认: 1.3]",
+        cli_burst_profiles: "测试 6 的 Fingerprint: all|rustls,firefox(firefox133),chrome(chrome107),safari(safari155) [默认: all]",
+        cli_burst_tls: "测试 6 的 TLS: 1.3+1.2（浏览器提议，应答必须为 1.3）|1.3（仅提供 1.3）|1.2（仅提供 1.2）[默认: 1.3+1.2]",
         cli_burst_alpn: "测试 6 的 ALPN: h2（提供 h2 并回退 http/1.1）|http/1.1（仅 http/1.1）[默认: h2]",
         cli_trace: "测试 6 追踪: 每次尝试一行（轮次、指纹、域名、状态、详情、毫秒）；无路径写入 stderr，有路径写入该文件 [默认: 关闭]",
         trace_open_failed: "无法打开追踪文件 {}",
         cli_domains: "自定义域名列表文件路径",
         cli_tcp16: "自定义 TCP16 目标文件路径",
         cli_ascii: "面向旧终端的纯 ASCII 输出（无 Unicode 符号或边框）",
-        cli_fingerprint: "指纹配置（rustls|custom|chrome|safari）：ClientHello、User-Agent 与请求头、HTTP/2 前导帧。custom = Firefox 133，chrome = Chrome 107 / Edge 99-101，safari = Safari 15.5-18.4（curl-impersonate 形态），均提供 h2",
+        cli_fingerprint: "指纹配置（rustls|firefox|chrome|safari）：ClientHello、User-Agent 与请求头、HTTP/2 前导帧。firefox = Firefox 133，chrome = Chrome 107 / Edge 99-101，safari = Safari 15.5-18.4（curl-impersonate 形态），均提供 h2",
     }
 }
 

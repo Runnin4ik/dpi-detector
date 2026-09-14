@@ -12,7 +12,7 @@
 //!
 //! * [`TlsFingerprint::Rustls`] — the untouched default. Every measurement the
 //!   tool has ever taken was taken with this, so it stays the baseline.
-//! * [`TlsFingerprint::Custom`] — a Firefox-148-shaped ClientHello. The shape is
+//! * [`TlsFingerprint::Firefox`] — a Firefox-148-shaped ClientHello. The shape is
 //!   taken from uTLS `HelloFirefox_148` (the profile Xray/REALITY clients
 //!   present), including its post-quantum key share.
 //! * [`TlsFingerprint::Chrome`] / [`TlsFingerprint::Safari`] — the shapes the
@@ -23,7 +23,7 @@
 //!   [`chrome_like`] for the exact provenance and the one deviation.
 //!
 //! The blocked/not-blocked framing from the forum report is why both directions
-//! exist: `chrome`/`safari` are the reported *triggers*, `custom` is the
+//! exist: `chrome`/`safari` are the reported *triggers*, `firefox` is the
 //! Firefox-shaped client that reportedly is not, and `rustls` is the control.
 //!
 //! # What "shape" means here
@@ -84,8 +84,8 @@ pub enum TlsFingerprint {
     /// Untouched rustls: the historical baseline.
     #[default]
     Rustls,
-    /// Firefox-148-shaped (uTLS `HelloFirefox_148`).
-    Custom,
+    /// `curl_firefox133`-shaped: Firefox 133's own ClientHello.
+    Firefox,
     /// `curl_chrome99..116` / `curl_edge99,101`-shaped (reported TSPU trigger).
     Chrome,
     /// `curl_safari15.5..18.4`-shaped (reported TSPU trigger).
@@ -115,10 +115,10 @@ const SPECS: [Spec; 4] = [
         code: "rustls",
     },
     Spec {
-        id: TlsFingerprint::Custom,
+        id: TlsFingerprint::Firefox,
         token: "FIREFOX",
         label: "FIREFOX 133",
-        code: "custom",
+        code: "firefox",
     },
     Spec {
         id: TlsFingerprint::Chrome,
@@ -183,11 +183,11 @@ impl TlsFingerprint {
             return matches!(version, 155 | 170 | 172 | 180 | 184).then_some(Self::Safari);
         }
         if let Some(version) = curl_version(&value, "curl_firefox") {
-            return (version == 133).then_some(Self::Custom);
+            return (version == 133).then_some(Self::Firefox);
         }
         match value.as_str() {
             "rustls" | "default" | "none" => Some(Self::Rustls),
-            "custom" | "firefox" | "firefox-like" | "firefox133" => Some(Self::Custom),
+            "firefox" | "firefox-like" | "firefox133" => Some(Self::Firefox),
             "chrome" | "chrome99" | "chrome107" => Some(Self::Chrome),
             "safari" | "safari155" | "safari184" => Some(Self::Safari),
             _ => None,
@@ -197,7 +197,7 @@ impl TlsFingerprint {
     /// Values accepted by the config validator and the CLI.
     pub const ALL: [TlsFingerprint; 4] = [
         Self::Rustls,
-        Self::Custom,
+        Self::Firefox,
         Self::Chrome,
         Self::Safari,
     ];
@@ -330,7 +330,7 @@ const RUSTLS_HEADERS: &[(&str, &str)] = &[("accept-encoding", "identity")];
 pub fn http_identity(fingerprint: TlsFingerprint) -> HttpIdentity {
     match fingerprint {
         TlsFingerprint::Rustls => HttpIdentity { user_agent: None, headers: RUSTLS_HEADERS },
-        TlsFingerprint::Custom => HttpIdentity {
+        TlsFingerprint::Firefox => HttpIdentity {
             user_agent: Some(FIREFOX_HEADERS[0].1),
             headers: FIREFOX_HEADERS,
         },
@@ -402,7 +402,7 @@ pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
         // `1:65536;2:0;4:131072;5:16384`, window 12517377,
         // `--http2-stream-weight 42 --http2-stream-exclusive 0`,
         // `--http2-pseudo-headers-order "mpas"`.
-        TlsFingerprint::Custom => Some(H2Fingerprint {
+        TlsFingerprint::Firefox => Some(H2Fingerprint {
             header_table_size: Some(65_536),
             max_concurrent_streams: None,
             initial_window_size: 131_072,
@@ -433,14 +433,14 @@ pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
     }
 }
 
-/// The custom ClientHello shape, built once.
+/// The Firefox ClientHello shape, built once.
 ///
 /// Derived from uTLS `HelloFirefox_148` (`u_parrots.go`), the definition Xray
 /// uses for its `firefox` profile. Where rustls already emits an extension the
 /// profile only fixes its position; where rustls has no field for it (SCT,
 /// secure renegotiation, delegated credentials, record size limit, GREASE ECH)
 /// the body is supplied verbatim.
-pub fn custom_profile() -> Arc<ClientHelloProfile> {
+pub fn firefox_profile() -> Arc<ClientHelloProfile> {
     static PROFILE: LazyLock<Arc<ClientHelloProfile>> = LazyLock::new(|| Arc::new(firefox_like()));
     PROFILE.clone()
 }
@@ -474,7 +474,7 @@ fn curl_version(value: &str, prefix: &str) -> Option<u16> {
 /// 15.5–18.4, both of which predate `X25519MLKEM768`, and adding a group the
 /// original does not send would change the fingerprint we are reproducing.
 pub fn needs_pq(fingerprint: TlsFingerprint) -> bool {
-    matches!(fingerprint, TlsFingerprint::Custom)
+    matches!(fingerprint, TlsFingerprint::Firefox)
 }
 
 /// True when this selection advertises `compress_certificate` (extension 27).
@@ -526,12 +526,12 @@ pub fn pinned_drop(fingerprint: TlsFingerprint, version: TlsVersion) -> &'static
             EXT_RENEGOTIATION_INFO,
             EXT_EC_POINT_FORMATS,
         ],
-        (TlsFingerprint::Custom, TlsVersion::Tls13) => &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
+        (TlsFingerprint::Firefox, TlsVersion::Tls13) => &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
         (TlsFingerprint::Chrome, TlsVersion::Tls12) => {
             &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING]
         }
         (TlsFingerprint::Safari, TlsVersion::Tls12) => &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
-        (TlsFingerprint::Custom, TlsVersion::Tls12) => &[EXT_SUPPORTED_VERSIONS],
+        (TlsFingerprint::Firefox, TlsVersion::Tls12) => &[EXT_SUPPORTED_VERSIONS],
         (TlsFingerprint::Rustls, _) | (_, TlsVersion::Any) => &[],
     }
 }
@@ -540,7 +540,7 @@ pub fn pinned_drop(fingerprint: TlsFingerprint, version: TlsVersion) -> &'static
 pub fn apply(config: &mut ClientConfig, fingerprint: TlsFingerprint) {
     config.hello_profile = match fingerprint {
         TlsFingerprint::Rustls => None,
-        TlsFingerprint::Custom => Some(custom_profile()),
+        TlsFingerprint::Firefox => Some(firefox_profile()),
         TlsFingerprint::Chrome => Some(chrome_profile()),
         TlsFingerprint::Safari => Some(safari_profile()),
     };
@@ -921,7 +921,7 @@ mod tests {
     fn http_identity_names_the_version_the_hello_imitates() {
         for (fingerprint, marker) in [
             (TlsFingerprint::Chrome, "Chrome/107.0.0.0"),
-            (TlsFingerprint::Custom, "Firefox/133.0"),
+            (TlsFingerprint::Firefox, "Firefox/133.0"),
             (TlsFingerprint::Safari, "Version/15.5"),
         ] {
             let identity = http_identity(fingerprint);
@@ -963,7 +963,7 @@ mod tests {
         assert_eq!(chrome.max_frame_size, None, "Chrome advertises no MAX_FRAME_SIZE");
         assert_eq!(chrome.connection_window - 65_535, 15_663_105);
 
-        let firefox = h2_fingerprint(TlsFingerprint::Custom).expect("firefox tunes h2");
+        let firefox = h2_fingerprint(TlsFingerprint::Firefox).expect("firefox tunes h2");
         assert_eq!(firefox.header_table_size, Some(65_536));
         assert_eq!(firefox.initial_window_size, 131_072);
         assert_eq!(firefox.max_frame_size, Some(16_384));
@@ -991,7 +991,7 @@ mod tests {
         assert_eq!(chrome.pseudo_order, MethodAuthoritySchemePath);
         assert_eq!(chrome.priority, Some((256, true)));
 
-        let firefox = h2_fingerprint(TlsFingerprint::Custom).expect("firefox tunes h2");
+        let firefox = h2_fingerprint(TlsFingerprint::Firefox).expect("firefox tunes h2");
         assert_eq!(firefox.pseudo_order, MethodPathAuthorityScheme);
         assert_eq!(firefox.priority, Some((42, false)));
 
@@ -1009,7 +1009,7 @@ mod tests {
         assert_eq!(chrome.max_header_list_size, Some(262_144));
         assert_eq!(chrome.enable_push, Some(false));
 
-        let firefox = h2_fingerprint(TlsFingerprint::Custom).expect("firefox tunes h2");
+        let firefox = h2_fingerprint(TlsFingerprint::Firefox).expect("firefox tunes h2");
         assert_eq!(firefox.max_header_list_size, None, "Firefox sends no header-list size");
         assert_eq!(firefox.enable_push, Some(false));
 
@@ -1026,7 +1026,7 @@ mod tests {
     fn h2_settings_go_out_in_the_order_the_wrapper_sends_them() {
         for (fingerprint, expected) in [
             (TlsFingerprint::Chrome, &[][..]),
-            (TlsFingerprint::Custom, &[][..]),
+            (TlsFingerprint::Firefox, &[][..]),
             (TlsFingerprint::Safari, &[4, 3][..]),
         ] {
             let h2 = h2_fingerprint(fingerprint).expect("browser profiles tune h2");
@@ -1039,7 +1039,7 @@ mod tests {
     /// to say which one.
     #[test]
     fn display_labels_name_the_pinned_version() {
-        assert_eq!(TlsFingerprint::Custom.display_label(), "FIREFOX 133");
+        assert_eq!(TlsFingerprint::Firefox.display_label(), "FIREFOX 133");
         assert_eq!(TlsFingerprint::Chrome.display_label(), "CHROME 107");
         assert_eq!(TlsFingerprint::Safari.display_label(), "SAFARI 155");
         assert_eq!(TlsFingerprint::Rustls.display_label(), "RUSTLS");
@@ -1052,17 +1052,21 @@ mod tests {
     #[test]
     fn fingerprint_tokens_are_stable() {
         assert_eq!(TlsFingerprint::Rustls.token(), "RUSTLS");
-        assert_eq!(TlsFingerprint::Custom.token(), "FIREFOX");
+        assert_eq!(TlsFingerprint::Firefox.token(), "FIREFOX");
         assert_eq!(TlsFingerprint::Rustls.code(), "rustls");
-        assert_eq!(TlsFingerprint::Custom.code(), "custom");
+        assert_eq!(TlsFingerprint::Firefox.code(), "firefox");
         assert_eq!(TlsFingerprint::default(), TlsFingerprint::Rustls);
     }
 
     #[test]
     fn fingerprint_parses_known_values_and_rejects_others() {
         assert_eq!(TlsFingerprint::parse("rustls"), Some(TlsFingerprint::Rustls));
-        assert_eq!(TlsFingerprint::parse("CUSTOM"), Some(TlsFingerprint::Custom));
-        assert_eq!(TlsFingerprint::parse(" firefox "), Some(TlsFingerprint::Custom));
+        assert_eq!(TlsFingerprint::parse("FIREFOX"), Some(TlsFingerprint::Firefox));
+        assert_eq!(TlsFingerprint::parse(" firefox "), Some(TlsFingerprint::Firefox));
+        // The old name is gone rather than aliased: a config or a script that
+        // still says `custom` is told it is unknown instead of silently measuring
+        // the same profile under a name the tool no longer prints.
+        assert_eq!(TlsFingerprint::parse("custom"), None);
         assert_eq!(TlsFingerprint::parse("chrome"), Some(TlsFingerprint::Chrome));
         assert_eq!(TlsFingerprint::parse("safari"), Some(TlsFingerprint::Safari));
         // The names the fingerprint-blocking report uses are accepted when the
@@ -1085,7 +1089,7 @@ mod tests {
         );
         assert_eq!(
             TlsFingerprint::parse("curl_firefox133"),
-            Some(TlsFingerprint::Custom)
+            Some(TlsFingerprint::Firefox)
         );
         // Shapes no profile sends: shuffled extension order, post-quantum
         // group, signed certificate timestamps.
@@ -1114,8 +1118,8 @@ mod tests {
             vec![TlsFingerprint::Safari, TlsFingerprint::Rustls]
         );
         // Mixed: the known half runs, the rest is reported.
-        let (known, unknown) = TlsFingerprint::parse_list("custom,bogus");
-        assert_eq!(known, vec![TlsFingerprint::Custom]);
+        let (known, unknown) = TlsFingerprint::parse_list("firefox,bogus");
+        assert_eq!(known, vec![TlsFingerprint::Firefox]);
         assert_eq!(unknown, vec!["bogus".to_string()]);
         // Nothing recognised: fall back to all, still reporting what was wrong.
         let (known, unknown) = TlsFingerprint::parse_list("bogus");
@@ -1129,7 +1133,7 @@ mod tests {
     /// signed_certificate_timestamp out), and nothing suppressed.
     #[test]
     fn custom_profile_matches_firefox_133_shape() {
-        let profile = custom_profile();
+        let profile = firefox_profile();
 
         assert_eq!(profile.cipher_suites.as_ref().map(|c| c.len()), Some(17));
         assert_eq!(profile.groups.as_ref().and_then(|g| g.first()), Some(&4588));
@@ -1250,7 +1254,7 @@ mod tests {
                 [
                     (TlsFingerprint::Chrome, CHROME_107),
                     (TlsFingerprint::Safari, SAFARI_155),
-                    (TlsFingerprint::Custom, FIREFOX_133),
+                    (TlsFingerprint::Firefox, FIREFOX_133),
                 ],
             ),
             (
@@ -1258,7 +1262,7 @@ mod tests {
                 [
                     (TlsFingerprint::Chrome, CHROME_107_TLS13),
                     (TlsFingerprint::Safari, SAFARI_155_TLS13),
-                    (TlsFingerprint::Custom, FIREFOX_133_TLS13),
+                    (TlsFingerprint::Firefox, FIREFOX_133_TLS13),
                 ],
             ),
             (
@@ -1266,7 +1270,7 @@ mod tests {
                 [
                     (TlsFingerprint::Chrome, CHROME_107_TLS12),
                     (TlsFingerprint::Safari, SAFARI_155_TLS12),
-                    (TlsFingerprint::Custom, FIREFOX_133_TLS12),
+                    (TlsFingerprint::Firefox, FIREFOX_133_TLS12),
                 ],
             ),
         ] {
@@ -1344,7 +1348,7 @@ mod tests {
             assert_eq!(got, chrome, "chrome ({version:?})");
             let (_, _, got) = client_hello_full(TlsFingerprint::Safari, version);
             assert_eq!(got, safari, "safari ({version:?})");
-            let (_, _, got) = client_hello_full(TlsFingerprint::Custom, version);
+            let (_, _, got) = client_hello_full(TlsFingerprint::Firefox, version);
             assert_eq!(got, firefox, "firefox ({version:?})");
         }
     }
@@ -1470,15 +1474,15 @@ mod tests {
             assert!(only12.is_none(), "{fp:?}: a 1.2-only hello carries no supported_versions");
         }
 
-        let (firefox, _) = versions(TlsProfile::insecure(TlsFingerprint::Custom));
+        let (firefox, _) = versions(TlsProfile::insecure(TlsFingerprint::Firefox));
         assert_eq!(
             firefox.expect("firefox carries supported_versions"),
             vec![0x0304, 0x0303],
             "Firefox does not grease, and offers both"
         );
-        let (firefox13, _) = versions(TlsProfile::insecure(TlsFingerprint::Custom).tls13());
+        let (firefox13, _) = versions(TlsProfile::insecure(TlsFingerprint::Firefox).tls13());
         assert_eq!(firefox13.expect("a 1.3-only Firefox hello names its version"), vec![0x0304]);
-        let (firefox12, _) = versions(TlsProfile::insecure(TlsFingerprint::Custom).tls12());
+        let (firefox12, _) = versions(TlsProfile::insecure(TlsFingerprint::Firefox).tls12());
         assert!(firefox12.is_none());
         let (rustls_list, _) = versions(TlsProfile::insecure(TlsFingerprint::Rustls));
         assert_eq!(
@@ -1501,7 +1505,7 @@ mod tests {
     fn curl_family_profiles_do_not_use_the_pq_provider() {
         assert!(!needs_pq(TlsFingerprint::Chrome));
         assert!(!needs_pq(TlsFingerprint::Safari));
-        assert!(needs_pq(TlsFingerprint::Custom));
+        assert!(needs_pq(TlsFingerprint::Firefox));
         assert!(advertises_cert_compression(TlsFingerprint::Chrome));
         assert!(advertises_cert_compression(TlsFingerprint::Safari));
         assert!(!advertises_cert_compression(TlsFingerprint::Rustls));
@@ -1516,7 +1520,7 @@ mod tests {
     fn the_decompressor_list_follows_the_profile() {
         for (name, fingerprint, decompressors) in [
             ("Rustls", TlsFingerprint::Rustls, 0),
-            ("Firefox", TlsFingerprint::Custom, 2),
+            ("Firefox", TlsFingerprint::Firefox, 2),
             ("Chrome", TlsFingerprint::Chrome, 2),
             ("Safari", TlsFingerprint::Safari, 2),
         ] {
@@ -1536,7 +1540,7 @@ mod tests {
     #[test]
     fn every_advertised_compression_algorithm_is_readable() {
         for (name, profile) in [
-            ("Firefox", custom_profile()),
+            ("Firefox", firefox_profile()),
             ("Chrome", chrome_profile()),
             ("Safari", safari_profile()),
         ] {

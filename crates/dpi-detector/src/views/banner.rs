@@ -26,7 +26,7 @@ pub fn render_banner(msg: &Messages, _profile: RegionProfile, badge: &str) -> St
     panel_with(&version_line, &[row1, row2], BOX_WIDTH, false, "36")
 }
 /// Active TLS fingerprint line(s) for the human report header (text mode only).
-/// Always one line with the profile (`Fingerprint: FIREFOX (firefox 148)`) using the
+/// Always one line with the profile (`Fingerprint: FIREFOX (firefox 133)`) using the
 /// canonical token and label; the translated caveat follows on a second line for every
 /// non-default profile (with RUSTLS it is irrelevant noise). The `[!]` prefix
 /// and colors are added here, never stored in i18n (rule 4 keeps
@@ -61,8 +61,10 @@ mod tests {
         let fa = get_messages(Language::Fa);
         assert_eq!(render_fingerprint_header(TlsFingerprint::Rustls, &fa), "Fingerprint: RUSTLS (pishfarz)");
         // A label that does not repeat the code keeps the full parenthetical.
-        let custom = render_fingerprint_header(TlsFingerprint::Custom, &en);
-        assert!(custom.starts_with("Fingerprint: FIREFOX (firefox 133)"), "{custom}");
-        assert!(custom.contains("FIREFOX = firefox133"), "the caveat still follows");
+        // The label already carries the code (`firefox 133` holds `firefox`), so
+        // the parenthetical is dropped and the line stays one token shorter.
+        let firefox = render_fingerprint_header(TlsFingerprint::Firefox, &en);
+        assert!(firefox.starts_with("Fingerprint: FIREFOX 133"), "{firefox}");
+        assert!(firefox.contains("FIREFOX = firefox133"), "the caveat still follows");
     }
 }

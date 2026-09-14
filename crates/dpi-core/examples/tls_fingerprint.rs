@@ -7,9 +7,9 @@
 //! cargo run --release --example tls_fingerprint dump rustls   # wire bytes only
 //! cargo run --release --example tls_fingerprint dump13 chrome  # pinned to TLS 1.3
 //! cargo run --release --example tls_fingerprint dump12 chrome  # pinned to TLS 1.2
-//! cargo run --release --example tls_fingerprint live custom   # real servers
-//! cargo run --release --example tls_fingerprint liveany custom # the unpinned offer
-//! cargo run --release --example tls_fingerprint live12 custom hub.docker.com
+//! cargo run --release --example tls_fingerprint live firefox  # real servers
+//! cargo run --release --example tls_fingerprint liveany firefox # the unpinned offer
+//! cargo run --release --example tls_fingerprint live12 firefox hub.docker.com
 //! ```
 //!
 //! Every `live` form takes an optional host list; `live`/`live13` pin TLS 1.3
@@ -122,14 +122,14 @@ const HOSTS: [&str; 6] = [
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "dump".into());
-    let which = std::env::args().nth(2).unwrap_or_else(|| "custom".into());
+    let which = std::env::args().nth(2).unwrap_or_else(|| "firefox".into());
     let extra: Vec<String> = std::env::args().skip(3).collect();
     let hosts: Vec<String> = if extra.is_empty() {
         HOSTS.iter().map(|h| (*h).to_string()).collect()
     } else {
         extra
     };
-    let fingerprint = TlsFingerprint::parse(&which).expect("profile must be rustls|custom");
+    let fingerprint = TlsFingerprint::parse(&which).expect("profile must be rustls|firefox|chrome|safari");
 
     match mode.as_str() {
         "dump" => dump(fingerprint, TlsVersion::Any),

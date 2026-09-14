@@ -64,43 +64,53 @@ pub const BURST_DEFAULT_TIMEOUT_SECS: u64 = 8;
 
 /// Which TLS the run asks for.
 ///
-/// `Tls13` is the browser's own offer: Chrome, Safari and Firefox all offer 1.2
-/// and 1.3 together, so this axis sends the profile's real hello — the same one
-/// tests 3 and 4 send — and then requires the answer to be 1.3 ([`answered`]).
+/// `Tls13And12` is the browser's own offer: Chrome, Safari and Firefox all offer
+/// 1.2 and 1.3 together, so this axis sends the profile's real hello — the same
+/// one tests 3 and 4 send — and then requires the answer to be 1.3
+/// ([`answered`]). It is the default because it is the shape a browser puts on
+/// the wire.
 ///
-/// `Tls12` is deliberately a client that offers 1.2 alone: a hello offering both
-/// is never answered with 1.2, so nothing else can ask whether a 1.2 handshake
-/// survives on this network. Same trade as test 2's two columns. See
-/// [`offer_for`].
+/// `Tls13Only` and `Tls12Only` are deliberately clients that offer one version
+/// alone: a hello offering both is never answered with 1.2, so nothing else can
+/// ask whether a 1.2 handshake survives on this network — and a middlebox that
+/// treats a one-version hello differently from a browser's is exactly what the
+/// 1.3-only axis looks for. Same trade as test 2's two columns, whose builders
+/// these are. See [`offer_for`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BurstTlsVersion {
     #[default]
-    Tls13,
-    Tls12,
+    Tls13And12,
+    Tls13Only,
+    Tls12Only,
 }
 
 impl BurstTlsVersion {
     /// Canonical token for the report and the screen (rule 4, never translated).
     pub fn token(self) -> &'static str {
         match self {
-            Self::Tls13 => "TLS 1.3",
-            Self::Tls12 => "TLS 1.2",
+            Self::Tls13And12 => "TLS 1.3+1.2",
+            Self::Tls13Only => "TLS 1.3",
+            Self::Tls12Only => "TLS 1.2",
         }
     }
 
     /// Machine value for the JSON payload and the CLI.
     pub fn code(self) -> &'static str {
         match self {
-            Self::Tls13 => "1.3",
-            Self::Tls12 => "1.2",
+            Self::Tls13And12 => "1.3+1.2",
+            Self::Tls13Only => "1.3",
+            Self::Tls12Only => "1.2",
         }
     }
 
     /// Parses a CLI/config value. `None` for anything unknown.
     pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().trim_start_matches("tls").trim_start_matches(['v', ' ']) {
-            "1.3" | "13" => Some(Self::Tls13),
-            "1.2" | "12" => Some(Self::Tls12),
+        let value = value.trim().to_ascii_lowercase();
+        let value = value.trim_start_matches("tls").trim_start_matches(['v', ' ']);
+        match value {
+            "1.3+1.2" | "1.2+1.3" | "13+12" | "both" | "any" => Some(Self::Tls13And12),
+            "1.3" | "13" => Some(Self::Tls13Only),
+            "1.2" | "12" => Some(Self::Tls12Only),
             _ => None,
         }
     }
@@ -532,33 +542,42 @@ async fn connect_attempt(
 
 /// The TLS offer one axis of the run presents.
 ///
-/// [`BurstTlsVersion::Tls13`] is the *browser's own* hello: Chrome, Safari and
-/// Firefox all offer 1.2 and 1.3 together, so a hello pinned to 1.3 would be a
-/// shape no client sends — and the test asks whether *this shape* is blocked, so
-/// the offer has to be the real one (pinned to 1.3 the extension body reads
-/// `[GREASE, 0x0304]` instead of `[GREASE, 0x0304, 0x0303]`, and the padding that
-/// fills the hello to 512 bytes is two bytes short of the browser's). The
-/// handshake still has to come back 1.3 — see [`answered`].
+/// [`BurstTlsVersion::Tls13And12`] is the *browser's own* hello: Chrome, Safari
+/// and Firefox all offer 1.2 and 1.3 together, so a hello pinned to 1.3 would be
+/// a shape no client sends — and when the test asks whether *this shape* is
+/// blocked, the offer has to be the real one (pinned to 1.3 the extension body
+/// reads `[GREASE, 0x0304]` instead of `[GREASE, 0x0304, 0x0303]`, and the
+/// padding that fills the hello to 512 bytes is two bytes short of the
+/// browser's). The handshake still has to come back 1.3 — see [`answered`].
 ///
-/// [`BurstTlsVersion::Tls12`] is synthetic on purpose and stays pinned: a client
-/// that offers both versions is never answered with 1.2, so only a 1.2-only hello
-/// can ask whether a 1.2 handshake survives. Same trade as test 2's two columns.
+/// The two pinned axes are synthetic on purpose, and they are test 2's two
+/// columns: a client that offers both versions is never answered with 1.2, so
+/// only a 1.2-only hello can ask whether a 1.2 handshake survives — and only a
+/// 1.3-only hello can ask whether a middlebox treats a one-version offer
+/// differently from the browser's.
 fn offer_for(axis: BurstTlsVersion, fingerprint: TlsFingerprint) -> TlsProfile {
     match axis {
-        BurstTlsVersion::Tls13 => TlsProfile::insecure(fingerprint),
-        BurstTlsVersion::Tls12 => TlsProfile::insecure(fingerprint).tls12(),
+        BurstTlsVersion::Tls13And12 => TlsProfile::insecure(fingerprint),
+        BurstTlsVersion::Tls13Only => TlsProfile::insecure(fingerprint).tls13(),
+        BurstTlsVersion::Tls12Only => TlsProfile::insecure(fingerprint).tls12(),
     }
 }
 
 /// What a *completed* handshake means for the axis that asked for it.
 ///
-/// The 1.3 axis offers both versions, so a peer that answers 1.2 answered — but
-/// not with what the axis is about, and reporting it as plain success would hide
-/// a downgrade. `NoTls13` is the same verdict the classifier reaches when a
-/// server turns out not to speak 1.3, and the badge already says so.
+/// The browser-offer axis offers both versions, so a peer that answers 1.2
+/// answered — but not with what the axis is about, and reporting it as plain
+/// success would hide a downgrade. `NoTls13` is the same verdict the classifier
+/// reaches when a server turns out not to speak 1.3, and the badge already says
+/// so. The pinned axes cannot negotiate the other version at all, so anything
+/// that completes there is the answer they asked for; a peer that cannot speak
+/// it fails the handshake instead, and the classifier reports that as
+/// `NoTls13` on its own.
 fn answered(axis: BurstTlsVersion, negotiated: Option<ProtocolVersion>) -> (DpiStatus, Detail) {
     match (axis, negotiated) {
-        (BurstTlsVersion::Tls13, Some(ProtocolVersion::TLSv1_2)) => (DpiStatus::NoTls13, Detail::NoTls13),
+        (BurstTlsVersion::Tls13And12, Some(ProtocolVersion::TLSv1_2)) => {
+            (DpiStatus::NoTls13, Detail::NoTls13)
+        }
         _ => (DpiStatus::Ok, Detail::None),
     }
 }
@@ -739,30 +758,51 @@ mod tests {
         assert!(elapsed < Duration::from_secs(3), "round took {elapsed:?}");
     }
 
-    /// The TLS 1.3 axis sends the browser's own offer — both versions in the
-    /// list — because test 6 asks whether a *browser shape* gets blocked, and a
-    /// hello pinned to 1.3 is a shape no browser sends. The TLS 1.2 axis stays
-    /// pinned: a client offering both is never answered with 1.2, so only a
-    /// 1.2-only hello can ask whether such a handshake survives. A peer that
-    /// answers the 1.3 axis with 1.2 answered, but not with what the axis is
-    /// about, and must not be reported as a plain success.
+    /// The browser-offer axis sends the browser's own offer — both versions in
+    /// the list — because test 6 asks whether a *browser shape* gets blocked, and
+    /// a hello pinned to 1.3 is a shape no browser sends. The two pinned axes are
+    /// test 2's builders: a client offering both is never answered with 1.2, so
+    /// only a 1.2-only hello can ask whether such a handshake survives, and only
+    /// a 1.3-only one can ask whether a one-version offer is treated differently.
+    /// A peer that answers the browser offer with 1.2 answered, but not with what
+    /// the axis is about, and must not be reported as a plain success.
     #[test]
     fn the_tls13_axis_offers_both_versions_and_answers_a_downgrade() {
         let chrome = TlsFingerprint::Chrome;
-        assert_eq!(offer_for(BurstTlsVersion::Tls13, chrome).version, crate::net::tls::TlsVersion::Any);
-        assert_eq!(offer_for(BurstTlsVersion::Tls12, chrome).version, crate::net::tls::TlsVersion::Tls12);
-
-        assert_eq!(answered(BurstTlsVersion::Tls13, None), (DpiStatus::Ok, Detail::None));
         assert_eq!(
-            answered(BurstTlsVersion::Tls13, Some(ProtocolVersion::TLSv1_3)),
+            offer_for(BurstTlsVersion::Tls13And12, chrome).version,
+            crate::net::tls::TlsVersion::Any
+        );
+        assert_eq!(
+            offer_for(BurstTlsVersion::Tls13Only, chrome).version,
+            crate::net::tls::TlsVersion::Tls13
+        );
+        assert_eq!(
+            offer_for(BurstTlsVersion::Tls12Only, chrome).version,
+            crate::net::tls::TlsVersion::Tls12
+        );
+
+        assert_eq!(answered(BurstTlsVersion::Tls13And12, None), (DpiStatus::Ok, Detail::None));
+        assert_eq!(
+            answered(BurstTlsVersion::Tls13And12, Some(ProtocolVersion::TLSv1_3)),
             (DpiStatus::Ok, Detail::None)
         );
         assert_eq!(
-            answered(BurstTlsVersion::Tls13, Some(ProtocolVersion::TLSv1_2)),
+            answered(BurstTlsVersion::Tls13And12, Some(ProtocolVersion::TLSv1_2)),
             (DpiStatus::NoTls13, Detail::NoTls13)
         );
         assert_eq!(
-            answered(BurstTlsVersion::Tls12, Some(ProtocolVersion::TLSv1_2)),
+            answered(BurstTlsVersion::Tls12Only, Some(ProtocolVersion::TLSv1_2)),
+            (DpiStatus::Ok, Detail::None)
+        );
+        // A pinned axis cannot reach the other version, so a completed handshake
+        // there is the answer it asked for.
+        assert_eq!(
+            answered(BurstTlsVersion::Tls13Only, Some(ProtocolVersion::TLSv1_3)),
+            (DpiStatus::Ok, Detail::None)
+        );
+        assert_eq!(
+            answered(BurstTlsVersion::Tls12Only, Some(ProtocolVersion::TLSv1_3)),
             (DpiStatus::Ok, Detail::None)
         );
     }
@@ -951,7 +991,7 @@ mod tests {
 
     #[test]
     fn settings_are_clamped_into_the_meaningful_range() {
-        let axes = (BurstTlsVersion::Tls13, BurstAlpn::Http2);
+        let axes = (BurstTlsVersion::Tls13And12, BurstAlpn::Http2);
         assert_eq!(BurstSettings::clamped(0, 0, axes.0, axes.1, vec![]).attempts, BURST_MIN_ATTEMPTS);
         assert_eq!(BurstSettings::clamped(99, 999, axes.0, axes.1, vec![]).attempts, BURST_MAX_ATTEMPTS);
         assert_eq!(
@@ -968,25 +1008,32 @@ mod tests {
             TlsFingerprint::ALL.to_vec()
         );
         // The axes survive clamping untouched.
-        let kept = BurstSettings::clamped(4, 8, BurstTlsVersion::Tls12, BurstAlpn::Http11, vec![]);
-        assert_eq!((kept.tls, kept.alpn), (BurstTlsVersion::Tls12, BurstAlpn::Http11));
+        let kept = BurstSettings::clamped(4, 8, BurstTlsVersion::Tls12Only, BurstAlpn::Http11, vec![]);
+        assert_eq!((kept.tls, kept.alpn), (BurstTlsVersion::Tls12Only, BurstAlpn::Http11));
         assert_eq!(BurstSettings::default().attempts, BURST_DEFAULT_ATTEMPTS);
-        // Defaults keep what the probes send today: TLS 1.3 and the profile's own
-        // `h2, http/1.1`.
+        // Defaults keep what a browser sends: both versions, and the profile's
+        // own `h2, http/1.1`.
         let default = BurstSettings::default();
-        assert_eq!((default.tls, default.alpn), (BurstTlsVersion::Tls13, BurstAlpn::Http2));
+        assert_eq!((default.tls, default.alpn), (BurstTlsVersion::Tls13And12, BurstAlpn::Http2));
         assert!(default.alpn.offered().is_none());
     }
 
-    /// The two axes are what the screen and the CLI offer, so both spellings of
-    /// each value must parse — and nothing else may.
+    /// The axes are what the screen and the CLI offer, so every spelling of every
+    /// value must parse — and nothing else may.
     #[test]
     fn burst_axes_parse_their_values() {
+        for value in ["1.3+1.2", "1.2+1.3", "tls1.3+1.2", "TLS 1.3+1.2", "both"] {
+            assert_eq!(
+                BurstTlsVersion::parse(value),
+                Some(BurstTlsVersion::Tls13And12),
+                "{value}"
+            );
+        }
         for value in ["1.3", "13", "tls1.3", "TLS 1.3"] {
-            assert_eq!(BurstTlsVersion::parse(value), Some(BurstTlsVersion::Tls13), "{value}");
+            assert_eq!(BurstTlsVersion::parse(value), Some(BurstTlsVersion::Tls13Only), "{value}");
         }
         for value in ["1.2", "12", "tls1.2", "TLS 1.2"] {
-            assert_eq!(BurstTlsVersion::parse(value), Some(BurstTlsVersion::Tls12), "{value}");
+            assert_eq!(BurstTlsVersion::parse(value), Some(BurstTlsVersion::Tls12Only), "{value}");
         }
         assert_eq!(BurstTlsVersion::parse("1.1"), None);
         assert_eq!(BurstTlsVersion::parse(""), None);
@@ -1004,8 +1051,10 @@ mod tests {
         assert_eq!(BurstAlpn::Http11.offered(), Some(vec![b"http/1.1".to_vec()]));
         assert_eq!(BurstAlpn::Http2.token(), "h2");
         assert_eq!(BurstAlpn::Http11.token(), "http/1.1");
-        assert_eq!(BurstTlsVersion::Tls13.code(), "1.3");
-        assert_eq!(BurstTlsVersion::Tls12.token(), "TLS 1.2");
+        assert_eq!(BurstTlsVersion::Tls13And12.code(), "1.3+1.2");
+        assert_eq!(BurstTlsVersion::Tls13Only.code(), "1.3");
+        assert_eq!(BurstTlsVersion::Tls12Only.token(), "TLS 1.2");
+        assert_eq!(BurstTlsVersion::Tls13And12.token(), "TLS 1.3+1.2");
     }
 
     /// Grouping is by status, not by the detail behind it, and the order is by
@@ -1035,7 +1084,7 @@ mod tests {
         );
 
         let clean = BurstProfileReport {
-            fingerprint: TlsFingerprint::Custom,
+            fingerprint: TlsFingerprint::Firefox,
             attempts: vec![BurstAttempt { status: DpiStatus::Ok, detail: Detail::None, ms: 10 }],
         };
         assert!(clean.failure_counts().is_empty());

@@ -203,8 +203,8 @@ async fn burst_settings_loop(
             if !editing => match cursor {
                 BURST_ROW_ATTEMPTS => attempts = attempts.saturating_sub(1).max(BURST_MIN_ATTEMPTS),
                 BURST_ROW_TIMEOUT => timeout_secs = timeout_secs.saturating_sub(1).max(BURST_MIN_TIMEOUT_SECS),
-                // Two-valued axes: either direction flips them.
-                BURST_ROW_TLS => tls = flip_tls(tls),
+                // The TLS axis has three values, so each direction steps it.
+                BURST_ROW_TLS => tls = flip_tls(tls, false),
                 BURST_ROW_HTTP => alpn = flip_alpn(alpn),
                 BURST_ROW_PROFILES => {
                     let next = profile_index.map(|i| (i + PROFILE_CHOICES - 1) % PROFILE_CHOICES).unwrap_or(0);
@@ -225,7 +225,7 @@ async fn burst_settings_loop(
                 BURST_ROW_DOMAIN => editing = true,
                 BURST_ROW_ATTEMPTS => attempts = (attempts + 1).min(BURST_MAX_ATTEMPTS),
                 BURST_ROW_TIMEOUT => timeout_secs = (timeout_secs + 1).min(BURST_MAX_TIMEOUT_SECS),
-                BURST_ROW_TLS => tls = flip_tls(tls),
+                BURST_ROW_TLS => tls = flip_tls(tls, true),
                 BURST_ROW_HTTP => alpn = flip_alpn(alpn),
                 BURST_ROW_PROFILES => {
                     let next = profile_index.map(|i| (i + 1) % PROFILE_CHOICES).unwrap_or(0);
@@ -402,12 +402,24 @@ fn domain_push(text: &mut String, c: char, edited: &mut bool) {
     }
 }
 
-/// Either direction flips a two-valued axis.
-fn flip_tls(tls: BurstTlsVersion) -> BurstTlsVersion {
-    match tls {
-        BurstTlsVersion::Tls13 => BurstTlsVersion::Tls12,
-        BurstTlsVersion::Tls12 => BurstTlsVersion::Tls13,
-    }
+/// Cycles the three-valued TLS axis: the browser's offer, then each pinned
+/// version. Ordered so the first two entries read as "what a browser sends" and
+/// "the same shape with one version" — the pair a 1.3-only middlebox separates.
+const TLS_CHOICES: [BurstTlsVersion; 3] = [
+    BurstTlsVersion::Tls13And12,
+    BurstTlsVersion::Tls13Only,
+    BurstTlsVersion::Tls12Only,
+];
+
+/// Either direction steps through [`TLS_CHOICES`].
+fn flip_tls(tls: BurstTlsVersion, forward: bool) -> BurstTlsVersion {
+    let at = TLS_CHOICES.iter().position(|choice| *choice == tls).unwrap_or(0);
+    let next = if forward {
+        (at + 1) % TLS_CHOICES.len()
+    } else {
+        (at + TLS_CHOICES.len() - 1) % TLS_CHOICES.len()
+    };
+    TLS_CHOICES[next]
 }
 
 fn flip_alpn(alpn: BurstAlpn) -> BurstAlpn {
@@ -475,7 +487,7 @@ mod tests {
         let msg = get_messages(Language::Ru);
         let all = TlsFingerprint::ALL.to_vec();
 
-        let empty = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13, BurstAlpn::Http2, "", false, &all, Some(0), 35);
+        let empty = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13And12, BurstAlpn::Http2, "", false, &all, Some(0), 35);
         // The last row is the footer, which lives outside the box.
         for row in empty.iter().take(empty.len() - 1) {
             assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{row:?}");
@@ -497,7 +509,7 @@ mod tests {
 
         // Typing replaces the prompt; the caret marks the active field, and the
         // row still fits the box.
-        let typed = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13, BurstAlpn::Http11, "www.google.com", true, &all, Some(0), 35);
+        let typed = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13And12, BurstAlpn::Http11, "www.google.com", true, &all, Some(0), 35);
         for row in typed.iter().take(typed.len() - 1) {
             assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{row:?}");
         }
@@ -510,7 +522,7 @@ mod tests {
         // it is named with the version it reproduces, not with the bare family.
         let chrome = [TlsFingerprint::Chrome];
         let single = burst_settings_rows(
-            &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12, BurstAlpn::Http2, "", false, &chrome, profile_index_of(&chrome), 35,
+            &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12Only, BurstAlpn::Http2, "", false, &chrome, profile_index_of(&chrome), 35,
         );
         assert!(strip_ansi(&single.join("\n")).contains("CHROME 107 [4/5]"));
     }
@@ -563,7 +575,7 @@ mod tests {
                 BURST_ROW_DOMAIN,
                 4,
                 8,
-                BurstTlsVersion::Tls13,
+                BurstTlsVersion::Tls13And12,
                 BurstAlpn::Http2,
                 text,
                 editing,

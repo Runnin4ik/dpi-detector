@@ -145,7 +145,7 @@ pub fn fingerprint_label(fp: dpi_core::net::fingerprint::TlsFingerprint, lang: L
     match (fp, lang) {
         (F::Rustls, Language::Fa) => "rustls (pishfarz)",
         (F::Rustls, _) => "rustls (default)",
-        (F::Custom, _) => "firefox 133",
+        (F::Firefox, _) => "firefox 133",
         (F::Chrome, _) => "curl chrome 107",
         (F::Safari, _) => "curl safari 155",
     }

@@ -189,7 +189,7 @@ pub(crate) fn messages() -> Messages {
         cfg_warn_dc_port: "TELEGRAM_DC_PORT invalid, reset to 443",
 
         warn_unknown_lang: "Warning: unknown --lang '{}' (expected ru|en|zh|fa|auto), using en",
-        warn_unknown_fingerprint: "Warning: unknown --fingerprint '{}' (expected rustls|custom|chrome|safari), using {}",
+        warn_unknown_fingerprint: "Warning: unknown --fingerprint '{}' (expected rustls|firefox|chrome|safari), using {}",
         warn_unknown_burst_axis: "Warning: unknown {} '{}', using {}",
         press_enter_to_exit: "Press Enter to exit...",
         invalid_proxy_err: "Invalid proxy {}: {}\n",
@@ -216,15 +216,15 @@ pub(crate) fn messages() -> Messages {
         cli_output: "Output file path to save report",
         cli_burst: "Fingerprint stress (test 6): simultaneous requests per round [default: 4]",
         cli_burst_timeout: "Test 6: handshake timeout, seconds [default: 8]; the request that follows waits read_timeout",
-        cli_burst_profiles: "Test 6 fingerprints: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [default: all]",
-        cli_burst_tls: "Test 6 TLS version: 1.2|1.3 [default: 1.3]",
+        cli_burst_profiles: "Test 6 fingerprints: all|rustls,firefox(firefox133),chrome(chrome107),safari(safari155) [default: all]",
+        cli_burst_tls: "Test 6 TLS: 1.3+1.2 (the browser's own offer, must answer 1.3)|1.3 (offers 1.3 only)|1.2 (offers 1.2 only) [default: 1.3+1.2]",
         cli_burst_alpn: "Test 6 ALPN: h2 (offers h2 with the http/1.1 fallback)|http/1.1 (offers http/1.1 only) [default: h2]",
         cli_trace: "Test 6 trace: one line per attempt (round, shape, host, status, detail, ms); without a path to stderr, with one to that file [default: off]",
         trace_open_failed: "Could not open the trace file {}",
         cli_domains: "Path to custom domain list file",
         cli_tcp16: "Path to custom TCP16 target file",
         cli_ascii: "ASCII-only output for legacy consoles (no Unicode glyphs or borders)",
-        cli_fingerprint: "Fingerprint profile (rustls|custom|chrome|safari): the ClientHello, the User-Agent and headers, and the HTTP/2 preface. custom = Firefox 133, chrome = Chrome 107 / Edge 99-101, safari = Safari 15.5-18.4 curl-impersonate shapes, all offering h2",
+        cli_fingerprint: "Fingerprint profile (rustls|firefox|chrome|safari): the ClientHello, the User-Agent and headers, and the HTTP/2 preface. firefox = Firefox 133, chrome = Chrome 107 / Edge 99-101, safari = Safari 15.5-18.4 curl-impersonate shapes, all offering h2",
     }
 }
 

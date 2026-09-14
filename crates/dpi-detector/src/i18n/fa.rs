@@ -182,7 +182,7 @@ pub(crate) fn messages() -> Messages {
         cfg_warn_dc_port: "TELEGRAM_DC_PORT na-motabar ast, be 443 reset shod",
 
         warn_unknown_lang: "Hoshdar: --lang '{}' nashenakhte (entezar: ru|en|zh|fa|auto), en estefade shod",
-        warn_unknown_fingerprint: "Hoshdar: --fingerprint '{}' nashenakhte (entezar: rustls|custom|chrome|safari), {} estefade shod",
+        warn_unknown_fingerprint: "Hoshdar: --fingerprint '{}' nashenakhte (entezar: rustls|firefox|chrome|safari), {} estefade shod",
         warn_unknown_burst_axis: "Hoshdar: meghdar-e nashenakhte {} '{}', {} estefade shod",
         press_enter_to_exit: "Baraye khorooj Enter ra feshar dahid...",
         invalid_proxy_err: "Proxy-e na-motabar {}: {}\n",
@@ -209,15 +209,15 @@ pub(crate) fn messages() -> Messages {
         cli_output: "Masir-e file baraye zakhire-ye report",
         cli_burst: "Fingerprint/Sibir blocking (test 6): darkhast haye hamzaman dar har round [pishfarz: 4]",
         cli_burst_timeout: "Test 6: timeout-e mosafehe, sanie [pishfarz: 8]; darkhast-e baad az aan montazer-e read_timeout mimanad",
-        cli_burst_profiles: "Fingerprint haye test 6: all|rustls,custom(firefox133),chrome(chrome107),safari(safari155) [pishfarz: all]",
-        cli_burst_tls: "Version-e TLS baraye test 6: 1.2|1.3 [pishfarz: 1.3]",
+        cli_burst_profiles: "Fingerprint haye test 6: all|rustls,firefox(firefox133),chrome(chrome107),safari(safari155) [pishfarz: all]",
+        cli_burst_tls: "TLS baraye test 6: 1.3+1.2 (pishnahad-e browser, pasokh bayad 1.3 bashad)|1.3 (faghat 1.3)|1.2 (faghat 1.2) [pishfarz: 1.3+1.2]",
         cli_burst_alpn: "ALPN baraye test 6: h2 (h2 ba bazgasht be http/1.1)|http/1.1 (faghat http/1.1) [pishfarz: h2]",
         cli_trace: "Trace baraye test 6: yek khat baraye har talash (dore, fingerPrint, domain, vaziyat, joz'yat, ms); bedun-e masir be stderr, ba masir be an file [pishfarz: khamush]",
         trace_open_failed: "File-e trace baz nashod {}",
         cli_domains: "Masir-e file-e list-e domain ha",
         cli_tcp16: "Masir-e file-e target haye TCP16",
         cli_ascii: "Khorooj-e faghat ASCII baraye console haye ghadimi (bedun-e glyph ya border-e Unicode)",
-        cli_fingerprint: "Profile-e fingerprint (rustls|custom|chrome|safari): ClientHello, User-Agent va header ha, moqaddame-e HTTP/2. custom = Firefox 133, chrome = Chrome 107 / Edge 99-101, safari = Safari 15.5-18.4 az curl-impersonate; hame h2 pishnahad mikonand",
+        cli_fingerprint: "Profile-e fingerprint (rustls|firefox|chrome|safari): ClientHello, User-Agent va header ha, moqaddame-e HTTP/2. firefox = Firefox 133, chrome = Chrome 107 / Edge 99-101, safari = Safari 15.5-18.4 az curl-impersonate; hame h2 pishnahad mikonand",
     }
 }
 
