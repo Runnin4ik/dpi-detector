@@ -11,7 +11,7 @@ use dpi_core::probe::burst::{BurstReport, BurstSettings};
 use crate::tui::widgets::{cell_color, status_color, table_preset};
 
 /// Test 6's table: one row per host, one column per profile, the cell being how
-/// many of the simultaneous handshakes came back. The header names each profile
+/// many of the overlapping handshakes came back. The header names each profile
 /// with the pinned version it reproduces (rule 4: Latin, never translated), and
 /// the detail column groups every failure the row saw by its status, commonest
 /// first — the loudest one leads and gives the cell its colour.

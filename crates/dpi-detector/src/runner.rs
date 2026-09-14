@@ -866,7 +866,7 @@ pub(crate) async fn run_test_suite(
         tg_full = Some(rep);
     }
 
-    // ── Test 6: fingerprint / Siberian blocking (simultaneous handshakes) ──
+    // ── Test 6: fingerprint / Siberian blocking (overlapping handshakes) ──
     if tests.burst {
         let settings = &burst.settings;
         // Profile-major: `burst_targets` probes every target with the first

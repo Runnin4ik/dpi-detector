@@ -214,7 +214,7 @@ pub(crate) fn messages() -> Messages {
         cli_concurrency: "并行请求的并发上限",
         cli_domain: "要测试的指定域名（可重复指定: -d vk.com -d ya.ru）",
         cli_output: "保存报告的输出文件路径",
-        cli_burst: "Fingerprint/西伯利亚封锁 (测试 6): 每主机依次连接数 [默认: 5]",
+        cli_burst: "Fingerprint/西伯利亚封锁 (测试 6): 每主机连接数, 间隔 20 毫秒发起 [默认: 5]",
         cli_burst_timeout: "测试 6: 握手超时, 秒 [默认: 8]; 之后的请求等待 read_timeout",
         cli_burst_profiles: "测试 6 的 Fingerprint: all|rustls,firefox(firefox133),chrome(chrome107),safari(safari155) [默认: all]",
         cli_burst_tls: "测试 6 的 TLS: 1.3+1.2（浏览器提议，应答必须为 1.3）|1.3（仅提供 1.3）|1.2（仅提供 1.2）[默认: 1.3+1.2]",

@@ -7,12 +7,14 @@
 //! negotiated. What the test reports is how many of the N came back whole and
 //! the classified verdict of each that did not.
 //!
-//! The attempts run **one at a time, in order**. Fired together they measure the
-//! wrong thing: a link that starts dropping after the third connection answers
-//! all N of a simultaneous round, so the block that round caused is only visible
-//! in the next run, as a domain that "suddenly" stopped answering. Sequential,
-//! the k-th attempt inherits whatever the first k−1 triggered, and the count of
-//! answers before the first refusal is the number the test is asked for.
+//! The attempts of a round are **launched 20 ms apart and overlap**: the trigger
+//! this test reproduces watches a rate (several connection attempts inside a
+//! window of a few hundred milliseconds), so attempts spread over the length of a
+//! slow link never reach it — but a round fired at a single instant is answered
+//! before the block can land, letting all of them through and hiding the block
+//! until the next run. The small delay keeps the round inside any plausible
+//! window (five attempts span 80 ms) while leaving the block room to land between
+//! two starts; the attempt it lands on is the verdict the report shows.
 //!
 //! The handshake alone is not the whole story: a shape can be answered and then
 //! cut, redirected or blocked the moment the request goes out, which is the
@@ -58,7 +60,7 @@ use crate::net::tls::TlsProfile;
 /// Port every attempt dials (the probes' TLS column uses the same one).
 pub const BURST_PORT: u16 = 443;
 /// Bounds of the per-round attempt count — the connections one shape fires at
-/// one host, one after another. Two is the smallest number that can differ from
+/// one host, launched [`BURST_LAUNCH_GAP`] apart. Two is the smallest number that can differ from
 /// a single probe; the upper bound keeps a stray keystroke from turning the test
 /// into a flood. The default sits one above the commonest throttle (a link that
 /// cuts the fourth connection): at four, the run ends exactly where the answer
@@ -66,6 +68,21 @@ pub const BURST_PORT: u16 = 443;
 pub const BURST_MIN_ATTEMPTS: usize = 2;
 pub const BURST_MAX_ATTEMPTS: usize = 16;
 pub const BURST_DEFAULT_ATTEMPTS: usize = 5;
+/// Delay between the starts of two consecutive attempts of one round.
+///
+/// The attempts of a round overlap. The trigger this test reproduces is a *rate*
+/// — several connection attempts inside a window of a few hundred milliseconds —
+/// and a round that waits for each attempt to finish before starting the next
+/// never reaches that rate on anything but a fast link. Firing them all at once
+/// answers the wrong question the other way round: every attempt is already
+/// established by the time the block lands, so the whole round passes and the
+/// block only shows up in the *next* one.
+///
+/// 20 ms keeps a five-attempt round inside any window a trigger would plausibly
+/// use (80 ms end to end), while still leaving the block room to land *between*
+/// two starts — which is what makes the refusal visible in the run that caused
+/// it, at the index of the attempt it landed on.
+pub const BURST_LAUNCH_GAP: Duration = Duration::from_millis(20);
 /// Bounds of the per-attempt timeout, in whole seconds.
 pub const BURST_MIN_TIMEOUT_SECS: u64 = 1;
 pub const BURST_MAX_TIMEOUT_SECS: u64 = 60;
@@ -164,7 +181,7 @@ impl BurstAlpn {
     }
 }
 
-/// What to fire: how many simultaneous handshakes, how long each may take, which
+/// What to fire: how many overlapping handshakes, how long each may take, which
 /// TLS version and ALPN they offer, and with which ClientHello shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BurstSettings {
@@ -456,14 +473,16 @@ async fn resolve_targets(
     addresses
 }
 
-/// One profile's round against one address: the attempts run one after another,
-/// each the whole connection — dial, handshake, request.
+/// One profile's round against one address: the first attempt goes out at once
+/// and every next one [`BURST_LAUNCH_GAP`] later, so the whole round overlaps
+/// without being a single instant.
 ///
-/// Sequencing is the measurement, not a rate limit. Together, the attempts of
-/// one round all take the same answer, so a host that stops answering after the
-/// third connection looks healthy in the run that broke it; one at a time, the
-/// k-th attempt is a question asked *after* the first k−1 were asked, and the
-/// count of answers before the first refusal is what the test reports.
+/// Overlapping is the measurement. The attempts have to be close enough together
+/// to reach the rate a throttling trigger watches for — on a slow link, a round
+/// that waits for each attempt to finish never gets there — and far enough apart
+/// that the block, once triggered, lands *between* two starts instead of after
+/// all of them. Three attempts is the shortest run that can show it: the first
+/// two answer, the third is refused, and `M/N` reads 2.
 pub async fn burst_profile(
     addr: &SocketAddr,
     domain: &str,
@@ -477,21 +496,52 @@ pub async fn burst_profile(
     }
     // Built once for the round: every attempt of one shape presents the same
     // hello, and a per-attempt connector would add nothing but a copy.
-    let connector = RustlsConnector::from(profile);
-    let round = Round { fingerprint, axis: settings.tls, cfg: cfg.clone() };
-    let mut attempts = Vec::with_capacity(settings.attempts);
-    for _ in 0..settings.attempts {
-        let attempt = match connect_attempt(*addr, settings.timeout).await {
-            Ok((stream, tracker)) => {
-                handshake_attempt(&connector, domain, stream, tracker, settings.timeout, &round).await
+    let connector = Arc::new(RustlsConnector::from(profile));
+    let round = Arc::new(Round { fingerprint, axis: settings.tls, cfg: cfg.clone() });
+
+    let mut launches = JoinSet::new();
+    for index in 0..settings.attempts {
+        let addr = *addr;
+        let domain = domain.to_string();
+        let connector = Arc::clone(&connector);
+        let round = Arc::clone(&round);
+        let limit = settings.timeout;
+        launches.spawn(async move {
+            // The clock, not the previous attempt's completion: this is what
+            // keeps the round inside a rate window on a slow link.
+            if index > 0 {
+                tokio::time::sleep(BURST_LAUNCH_GAP * index as u32).await;
             }
-            // A dial that never came up is this attempt's whole result: the next
-            // one still runs, since a refused connection says nothing about the
-            // host being done with us.
-            Err(attempt) => attempt,
-        };
-        attempts.push(attempt);
+            let attempt = match connect_attempt(addr, limit).await {
+                Ok((stream, tracker)) => {
+                    handshake_attempt(&connector, &domain, stream, tracker, limit, &round).await
+                }
+                // A dial that never came up is this attempt's whole result.
+                Err(attempt) => attempt,
+            };
+            (index, attempt)
+        });
     }
+
+    // Collected by launch order, which is the order the report prints them in:
+    // the k-th line is the k-th connection that went out, not the k-th that
+    // finished.
+    let mut slots: Vec<Option<BurstAttempt>> = (0..settings.attempts).map(|_| None).collect();
+    while let Some(joined) = launches.join_next().await {
+        if let Ok((index, attempt)) = joined {
+            slots[index] = Some(attempt);
+        }
+    }
+    let attempts = slots
+        .into_iter()
+        .map(|slot| {
+            slot.unwrap_or(BurstAttempt {
+                status: DpiStatus::Err,
+                detail: Detail::Other("attempt aborted".to_string()),
+                ms: 0,
+            })
+        })
+        .collect();
     BurstProfileReport { fingerprint, attempts }
 }
 
@@ -702,12 +752,12 @@ mod tests {
             assert_eq!(attempt.status, DpiStatus::TlsDropped, "{:?}", attempt);
             assert_eq!(attempt.detail, Detail::TlsHandshakeTimeout);
         }
-        // Each attempt pays its own 400 ms, so two of them cannot come back in
-        // less — a round that fired them together would take about one. This is
-        // the sequencing the test exists for: the second attempt has to be asked
-        // *after* the first gave up, or a host that answers the first N
-        // connections and then stops would report as healthy.
-        assert!(elapsed >= Duration::from_millis(800), "round took {elapsed:?}");
+        // Every attempt pays its own 400 ms, and the round is not the sum of
+        // them: the attempts overlap, so the second is already waiting when the
+        // first gives up and the round costs about one timeout. One after
+        // another it would need 800 ms, which is what the upper bound rules out.
+        assert!(elapsed >= Duration::from_millis(400), "round took {elapsed:?}");
+        assert!(elapsed < Duration::from_millis(780), "round took {elapsed:?}");
     }
 
     /// Nothing answers the dial. Windows may either refuse the loopback SYN or
@@ -737,9 +787,9 @@ mod tests {
             // One local condition, one verdict: the attempts do not disagree.
             assert_eq!(attempt.status, first, "{:?}", report.attempts);
         }
-        // The attempts run one after another, so the round's budget is the two
-        // dial timeouts plus the work around them — the assertion is that it ends,
-        // not that it ends fast.
+        // Dead dials come back at once, so the round's budget is the slowest of
+        // the two plus the 20 ms between them — the assertion is that it ends, not
+        // that it ends fast.
         assert!(elapsed < Duration::from_millis(5200), "round took {elapsed:?}");
     }
 
