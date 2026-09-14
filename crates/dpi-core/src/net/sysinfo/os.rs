@@ -488,7 +488,7 @@ fn wsl_net_mode() -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
 

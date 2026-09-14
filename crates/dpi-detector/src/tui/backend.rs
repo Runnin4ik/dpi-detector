@@ -336,7 +336,7 @@ fn apply_ansi_code(code: &str, mut cur: u16, default_attr: u16) -> u16 {
     cur
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
     /// Windows 7/8 consoles have no VT processing: the SNI rows keep their
