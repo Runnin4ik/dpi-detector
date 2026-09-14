@@ -296,7 +296,7 @@ async fn peet(fingerprint: TlsFingerprint) {
         method: Method::GET,
         host: HOST,
         path: "/api/all",
-        headers: request_headers(&identity, user_agent, Vec::new()),
+        headers: request_headers(&identity, user_agent, Vec::new(), false),
     };
     let response = match sender.send(request).await {
         Ok(response) => response,

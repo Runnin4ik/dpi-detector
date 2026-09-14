@@ -202,7 +202,9 @@ pub async fn check_domain_tls(
         };
 
         *stage.lock() = "tls_connected".to_string();
-        check_http(tls_stream, domain, cfg, fingerprint, &stage).await
+        // Test 2 counts the bytes a connection carries before it is cut, so it
+        // never negotiates a Content-Encoding.
+        check_http(tls_stream, domain, cfg, fingerprint, &stage, true).await
     };
 
     match timeout(total_timeout, fut).await {
@@ -285,6 +287,7 @@ pub async fn check_http_injection(
             &identity,
             cfg.user_agent_for(cfg.fingerprint()),
             [("Connection", "close".to_string())],
+            true,
         ) {
             builder = builder.header(name, value);
         }

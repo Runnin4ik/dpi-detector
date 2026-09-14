@@ -36,8 +36,9 @@
 //!   not normally emit, and the hybrid `X25519MLKEM768` group. That is what JA3
 //!   and JA4 hash; the tests pin both against the bundle.
 //! * **HTTP** — the `User-Agent` and header set of the impersonated client, in
-//!   its order ([`http_identity`]). `accept-encoding` stays `identity` (see
-//!   there), and a `user_agent` set in `config.yml` wins over the profile's.
+//!   its order ([`http_identity`]), `accept-encoding` included; the byte-counting
+//!   probes override that one header to `identity` (see there). A `user_agent`
+//!   set in `config.yml` wins over the profile's.
 //! * **HTTP/2** — the `SETTINGS` values, which of them are sent, and the
 //!   connection window that becomes the `WINDOW_UPDATE` increment
 //!   ([`h2_fingerprint`]).
@@ -251,16 +252,15 @@ impl std::fmt::Display for TlsFingerprint {
 ///
 /// Taken from the same `curl-impersonate v2.2.2` wrapper the ClientHello is
 /// pinned to, so a probe that looks like `curl_chrome107` at the TLS layer also
-/// looks like it at the HTTP layer. Two deviations, both deliberate:
+/// looks like it at the HTTP layer. One deviation, deliberate and opt-in:
 ///
-/// * `accept-encoding` is `identity`, never the browser's `gzip, deflate, br`:
-///   tests 2–4 count the bytes a connection carries before it is cut
-///   (`read_timeout_at_24kb`, `tcp_block_min_kb`/`max_kb`), and a negotiated
-///   Content-Encoding would make those numbers depend on how well the response
-///   happens to compress. Every measurement this tool has taken used identity.
-/// * the Rustls profile impersonates nobody: it carries no UA of its own
-///   ([`HttpIdentity::user_agent`] is `None`) and keeps the header set the probes
-///   have always sent.
+/// * the probes that count the bytes a connection carries before it is cut
+///   (tests 2–4: `read_timeout_at_24kb`, `tcp_block_min_kb`/`max_kb`) override
+///   `accept-encoding` to `identity`, because a negotiated `Content-Encoding`
+///   would make those numbers depend on how well the response happens to
+///   compress. [`request_headers`](crate::probe::http::request_headers) does the
+///   override per call; everything else, the fingerprint tests included, sends
+///   the `accept-encoding` the impersonated client sends.
 pub struct HttpIdentity {
     /// The UA of the impersonated client, `None` for the baseline profile.
     pub user_agent: Option<&'static str>,
@@ -288,7 +288,7 @@ const CHROME_HEADERS: &[(&str, &str)] = &[
     ("sec-fetch-mode", "navigate"),
     ("sec-fetch-user", "?1"),
     ("sec-fetch-dest", "document"),
-    ("accept-encoding", "identity"),
+    ("accept-encoding", "gzip, deflate, br"),
     ("accept-language", "en-US,en;q=0.9"),
 ];
 
@@ -300,7 +300,7 @@ const FIREFOX_HEADERS: &[(&str, &str)] = &[
     ),
     ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
     ("accept-language", "en-US,en;q=0.5"),
-    ("accept-encoding", "identity"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
     ("upgrade-insecure-requests", "1"),
     ("sec-fetch-dest", "document"),
     ("sec-fetch-mode", "navigate"),
@@ -318,7 +318,7 @@ const SAFARI_HEADERS: &[(&str, &str)] = &[
     ),
     ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
     ("accept-language", "en-GB,en-US;q=0.9,en;q=0.8"),
-    ("accept-encoding", "identity"),
+    ("accept-encoding", "gzip, deflate, br"),
 ];
 
 /// The baseline probes' own header set. The Rustls profile is the control every
@@ -341,13 +341,12 @@ pub fn http_identity(fingerprint: TlsFingerprint) -> HttpIdentity {
 
 /// The HTTP/2 preface a profile presents, from the same wrapper as its headers.
 ///
-/// `SETTINGS` values, which of them are sent at all, and the connection window
-/// that becomes the `WINDOW_UPDATE` increment. What it cannot reproduce is the
-/// priority a browser puts on its request `HEADERS` frame (weight/exclusive) and
-/// the pseudo-header order: hyper writes `:method, :scheme, :authority, :path`
-/// and sends no priority, while Chrome sends `m,a,s,p` with `weight=256,
-/// exclusive=1`. Both are visible to an HTTP/2 fingerprinter, so the profile is
-/// closer but not identical there.
+/// `SETTINGS` values, which of them are sent, and the connection window
+/// that becomes the `WINDOW_UPDATE` increment. The request's own shape — the
+/// pseudo-header order and the PRIORITY flag with the weight and exclusivity the
+/// wrapper names (`--http2-stream-weight`, `--http2-stream-exclusive`) — travels
+/// beside it, in [`H2Fingerprint::priority`] and `pseudo_order`, and reaches the
+/// wire through the patched `h2` (`vendor/h2/README-PATCH.md`).
 pub struct H2Fingerprint {
     /// `SETTINGS_HEADER_TABLE_SIZE`; `None` omits the setting.
     pub header_table_size: Option<u32>,
@@ -937,14 +936,19 @@ mod tests {
                 let version = ua.split("Chrome/").nth(1).and_then(|v| v.split('.').next()).expect("UA version");
                 assert!(value.contains(&format!("v=\"{version}\"")), "{}: {value}", fingerprint.code());
             }
-            // The one deliberate HTTP-layer deviation: the probes count bytes,
-            // so they never negotiate a Content-Encoding.
+            // The HTTP identity is the impersonated client's, encoding included:
+            // what the byte-counting probes do with it is their own business.
             let (_, encoding) = identity
                 .headers
                 .iter()
                 .find(|(name, _)| *name == "accept-encoding")
                 .expect("every identity states its encoding");
-            assert_eq!(*encoding, "identity", "{}: {}", fingerprint.code(), *encoding);
+            let expected = match fingerprint {
+                TlsFingerprint::Firefox => "gzip, deflate, br, zstd",
+                TlsFingerprint::Chrome | TlsFingerprint::Safari => "gzip, deflate, br",
+                TlsFingerprint::Rustls => "identity",
+            };
+            assert_eq!(*encoding, expected, "{}: {}", fingerprint.code(), *encoding);
         }
         let baseline = http_identity(TlsFingerprint::Rustls);
         assert!(baseline.user_agent.is_none(), "the baseline profile impersonates nobody");

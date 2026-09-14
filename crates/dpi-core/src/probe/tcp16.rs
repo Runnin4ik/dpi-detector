@@ -208,6 +208,7 @@ pub async fn probe_tcp_16_20(
                     &http_identity(cfg.fingerprint()),
                     cfg.user_agent_for(cfg.fingerprint()),
                     extras,
+                    true,
                 ),
             }
         };

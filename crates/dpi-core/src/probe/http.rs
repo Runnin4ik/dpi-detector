@@ -75,10 +75,17 @@ pub struct HttpRequest<'a> {
 
 /// The headers a probe sends: the profile's identity followed by the extras the
 /// test needs (`Connection`, `X-Pad`), so every call site builds one list.
+///
+/// `identity_encoding` replaces the profile's `accept-encoding` with `identity`
+/// *in place* — same header, same position, same byte count — for the probes
+/// that count the bytes a connection carries before it is cut. A negotiated
+/// `Content-Encoding` would make those numbers depend on how well the response
+/// compresses; the fingerprint tests send what the impersonated client sends.
 pub fn request_headers<'a>(
     identity: &HttpIdentity,
     user_agent: &'a str,
     extras: impl IntoIterator<Item = (&'a str, String)>,
+    identity_encoding: bool,
 ) -> Vec<(&'a str, String)> {
     let mut headers: Vec<(&'a str, String)> = identity
         .headers
@@ -94,6 +101,13 @@ pub fn request_headers<'a>(
             (*name, value)
         })
         .collect();
+    if identity_encoding {
+        for (name, value) in &mut headers {
+            if name.eq_ignore_ascii_case("accept-encoding") {
+                *value = "identity".to_string();
+            }
+        }
+    }
     headers.extend(extras);
     headers
 }
@@ -379,6 +393,7 @@ pub(crate) async fn check_http(
     cfg: &AppConfig,
     fingerprint: TlsFingerprint,
     stage: &Arc<Mutex<String>>,
+    identity_encoding: bool,
 ) -> (DpiStatus, Detail, usize) {
         *stage.lock() = "tls_connected".to_string();
         let alpn_h2 = negotiated_h2(&tls_stream);
@@ -403,6 +418,7 @@ pub(crate) async fn check_http(
                 &http_identity(fingerprint),
                 user_agent,
                 [("Connection", "close".to_string())],
+                identity_encoding,
             ),
         };
 

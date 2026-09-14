@@ -652,7 +652,7 @@ async fn handshake_attempt(
             // request goes out, and that is exactly what the test is for.
             let http = match timeout(
                 Duration::from_secs_f64(cfg.read_timeout),
-                check_http(stream, domain, cfg, fingerprint, &stage),
+                check_http(stream, domain, cfg, fingerprint, &stage, false),
             )
             .await
             {
