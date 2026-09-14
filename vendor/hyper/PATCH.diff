@@ -1,0 +1,73 @@
+diff -r a/src/client/conn/http2.rs b/src/client/conn/http2.rs
+--- a/src/client/conn/http2.rs	2026-09-14 14:53:35.721191500 +0300
++++ b/src/client/conn/http2.rs	2026-09-14 14:53:35.810553200 +0300
+@@ -395,9 +395,21 @@
+ 
+     /// Sets the max size of received header frames.
+     ///
+-    /// Default is currently 16KB, but can change.
+-    pub fn max_header_list_size(&mut self, max: u32) -> &mut Self {
+-        self.h2_builder.max_header_list_size = max;
++    /// Default is currently 16KB, but can change. `None` omits
++    /// `SETTINGS_MAX_HEADER_LIST_SIZE` from the connection preface — the shape
++    /// Firefox and Safari send, unlike Chrome.
++    pub fn max_header_list_size(&mut self, max: impl Into<Option<u32>>) -> &mut Self {
++        self.h2_builder.max_header_list_size = max.into();
++        self
++    }
++
++    /// Sets whether the client advertises `SETTINGS_ENABLE_PUSH`.
++    ///
++    /// Default is `Some(false)`, which every client that does not want pushes
++    /// sends. `None` omits the setting — Safari sends none — and leaves the
++    /// peer's default (pushes allowed) in force.
++    pub fn enable_push(&mut self, enabled: impl Into<Option<bool>>) -> &mut Self {
++        self.h2_builder.enable_push = enabled.into();
+         self
+     }
+ 
+diff -r a/src/proto/h2/client.rs b/src/proto/h2/client.rs
+--- a/src/proto/h2/client.rs	2026-09-14 14:53:35.749622100 +0300
++++ b/src/proto/h2/client.rs	2026-09-14 14:53:35.843436100 +0300
+@@ -67,7 +67,11 @@
+     pub(crate) initial_stream_window_size: u32,
+     pub(crate) initial_max_send_streams: usize,
+     pub(crate) max_frame_size: Option<u32>,
+-    pub(crate) max_header_list_size: u32,
++    // `None` leaves the setting out of the initial SETTINGS frame entirely,
++    // which is what Safari and Firefox send for `MAX_HEADER_LIST_SIZE`.
++    pub(crate) max_header_list_size: Option<u32>,
++    // `None` omits `SETTINGS_ENABLE_PUSH`; Chrome and Firefox send `0`.
++    pub(crate) enable_push: Option<bool>,
+     pub(crate) keep_alive_interval: Option<Duration>,
+     pub(crate) keep_alive_timeout: Duration,
+     pub(crate) keep_alive_while_idle: bool,
+@@ -88,7 +92,8 @@
+             initial_stream_window_size: DEFAULT_STREAM_WINDOW,
+             initial_max_send_streams: DEFAULT_INITIAL_MAX_SEND_STREAMS,
+             max_frame_size: Some(DEFAULT_MAX_FRAME_SIZE),
+-            max_header_list_size: DEFAULT_MAX_HEADER_LIST_SIZE,
++            max_header_list_size: Some(DEFAULT_MAX_HEADER_LIST_SIZE),
++            enable_push: Some(false),
+             keep_alive_interval: None,
+             keep_alive_timeout: Duration::from_secs(20),
+             keep_alive_while_idle: false,
+@@ -109,10 +114,14 @@
+         .initial_max_send_streams(config.initial_max_send_streams)
+         .initial_window_size(config.initial_stream_window_size)
+         .initial_connection_window_size(config.initial_conn_window_size)
+-        .max_header_list_size(config.max_header_list_size)
+         .max_send_buffer_size(config.max_send_buffer_size)
+-        .max_local_error_reset_streams(config.max_local_error_reset_streams)
+-        .enable_push(false);
++        .max_local_error_reset_streams(config.max_local_error_reset_streams);
++    if let Some(max) = config.max_header_list_size {
++        builder.max_header_list_size(max);
++    }
++    if let Some(enable_push) = config.enable_push {
++        builder.enable_push(enable_push);
++    }
+     if let Some(max) = config.max_frame_size {
+         builder.max_frame_size(max);
+     }
+Only in hyp_b: target

@@ -68,10 +68,11 @@ this tree byte for byte).
   one: Chrome's `256` is the frame's `255`.
 * `frame::EncodeBuf` became `pub(crate)` so the priority frame can write into it.
 
-`hyper` needs **no** patch: its h2 client rebuilds the outgoing request with
-`http::Request::from_parts(head, ())` and forwards the extensions untouched, so
-the shape reaches h2 on any request hyper sends. This is the difference from the
-rsTLS patch, which had to reach `ClientConfig`.
+`hyper` needs no patch **for the request shape**: its h2 client rebuilds the
+outgoing request with `http::Request::from_parts(head, ())` and forwards the
+extensions untouched, so the shape reaches h2 on any request hyper sends. (The
+two preface settings hyper does impose are dealt with in
+`vendor/hyper/README-PATCH.md`.)
 
 ## Notes for maintainers
 

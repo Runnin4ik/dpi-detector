@@ -135,8 +135,7 @@ impl HttpSender {
                     .initial_connection_window_size(h2.connection_window)
                     .max_frame_size(h2.max_frame_size)
                     .max_header_list_size(h2.max_header_list_size)
-                    // `enable_push(false)` is not exposed here: hyper sets it on
-                    // every client, so `SETTINGS_ENABLE_PUSH = 0` is always sent.
+                    .enable_push(h2.enable_push)
                     .max_concurrent_streams(h2.max_concurrent_streams);
             }
             let (sender, connection) = builder.handshake(io).await?;

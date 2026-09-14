@@ -355,10 +355,12 @@ pub struct H2Fingerprint {
     pub initial_window_size: u32,
     /// `SETTINGS_MAX_FRAME_SIZE`; `None` omits the setting.
     pub max_frame_size: Option<u32>,
-    /// `SETTINGS_MAX_HEADER_LIST_SIZE`. Always sent, and always 262144 (Chrome's
-    /// value): hyper's client advertises it unconditionally, so the Firefox and
-    /// Safari profiles carry one setting their client does not send.
-    pub max_header_list_size: u32,
+    /// `SETTINGS_MAX_HEADER_LIST_SIZE`; `None` omits the setting. Chrome sends
+    /// 262144, Firefox and Safari send none.
+    pub max_header_list_size: Option<u32>,
+    /// `SETTINGS_ENABLE_PUSH`; `None` omits the setting. Chrome and Firefox send
+    /// `0`, Safari sends none.
+    pub enable_push: Option<bool>,
     /// Total connection window; h2 sends `WINDOW_UPDATE` with this minus the
     /// protocol's 65 535 default, which is the increment the impersonated client
     /// sends.
@@ -384,7 +386,8 @@ pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
             max_concurrent_streams: Some(1000),
             initial_window_size: 6_291_456,
             max_frame_size: None,
-            max_header_list_size: 262_144,
+            max_header_list_size: Some(262_144),
+            enable_push: Some(false),
             connection_window: 15_663_105 + 65_535,
             pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
             priority: Some((256, true)),
@@ -397,7 +400,8 @@ pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
             max_concurrent_streams: None,
             initial_window_size: 131_072,
             max_frame_size: Some(16_384),
-            max_header_list_size: 262_144,
+            max_header_list_size: None,
+            enable_push: Some(false),
             connection_window: 12_517_377 + 65_535,
             pseudo_order: PseudoOrder::MethodPathAuthorityScheme,
             priority: Some((42, false)),
@@ -410,7 +414,8 @@ pub fn h2_fingerprint(fingerprint: TlsFingerprint) -> Option<H2Fingerprint> {
             max_concurrent_streams: Some(100),
             initial_window_size: 4_194_304,
             max_frame_size: None,
-            max_header_list_size: 262_144,
+            max_header_list_size: None,
+            enable_push: None,
             connection_window: 10_485_760 + 65_535,
             pseudo_order: PseudoOrder::MethodSchemePathAuthority,
             priority: Some((255, false)),
@@ -920,6 +925,24 @@ mod tests {
         let safari = h2_fingerprint(TlsFingerprint::Safari).expect("safari tunes h2");
         assert_eq!(safari.pseudo_order, MethodSchemePathAuthority);
         assert_eq!(safari.priority, Some((255, false)));
+    }
+
+    /// Which settings a preface carries is part of the shape: Chrome sends
+    /// `SETTINGS_MAX_HEADER_LIST_SIZE = 262144` and `SETTINGS_ENABLE_PUSH = 0`,
+    /// Firefox the push setting but no header-list size, Safari neither.
+    #[test]
+    fn h2_preface_settings_match_the_wrapper_they_are_pinned_to() {
+        let chrome = h2_fingerprint(TlsFingerprint::Chrome).expect("chrome tunes h2");
+        assert_eq!(chrome.max_header_list_size, Some(262_144));
+        assert_eq!(chrome.enable_push, Some(false));
+
+        let firefox = h2_fingerprint(TlsFingerprint::Custom).expect("firefox tunes h2");
+        assert_eq!(firefox.max_header_list_size, None, "Firefox sends no header-list size");
+        assert_eq!(firefox.enable_push, Some(false));
+
+        let safari = h2_fingerprint(TlsFingerprint::Safari).expect("safari tunes h2");
+        assert_eq!(safari.max_header_list_size, None, "Safari sends no header-list size");
+        assert_eq!(safari.enable_push, None, "Safari sends no push setting");
     }
 
     /// The version-bearing label is display only: it must not collide with a

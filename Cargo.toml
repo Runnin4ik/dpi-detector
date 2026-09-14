@@ -5,16 +5,18 @@ members = [
     "crates/dpi-detector",
 ]
 # The vendored crates are patched upstream sources (see
-# vendor/*/README-PATCH.md): rustls with a ClientHello-profile hook and h2 with
-# the request shape a browser puts in its h2 preface. They must NOT be workspace
-# members (their tests/examples are upstream's, not ours).
-exclude = ["vendor/rustls", "vendor/h2"]
+# vendor/*/README-PATCH.md): rustls with a ClientHello-profile hook, h2 with the
+# request shape a browser puts in its h2 preface, and hyper with the two preface
+# settings a browser may leave out. They must NOT be workspace members (their
+# tests/examples are upstream's, not ours).
+exclude = ["vendor/rustls", "vendor/h2", "vendor/hyper"]
 
 # Fingerprint hooks, applied through `[patch]` so that tokio-rustls /
-# hyper / rustls-rustcrypto keep resolving to one instance of each.
+# hyper / hyper-util / rustls-rustcrypto keep resolving to one instance of each.
 [patch.crates-io]
 rustls = { path = "vendor/rustls" }
 h2 = { path = "vendor/h2" }
+hyper = { path = "vendor/hyper" }
 
 [workspace.package]
 version = "5.0.0-alpha.12"
