@@ -293,4 +293,15 @@ fn apply_profile(config: &mut ClientConfig, profile: &TlsProfile) {
             }
         }
     }
+
+    // A pinned run isolates one version (test 2's two columns, test 6's TLS 1.2
+    // axis), and a profile's fallback versions exist to make an *unpinned* hello
+    // look like the browser's. Keeping them here would advertise 1.1 behind a
+    // hello that offers exactly one version — a shape no client sends and a
+    // question the run is not asking.
+    if profile.version != TlsVersion::Any {
+        if let Some(hello) = config.hello_profile.as_mut() {
+            Arc::make_mut(hello).legacy_versions.clear();
+        }
+    }
 }

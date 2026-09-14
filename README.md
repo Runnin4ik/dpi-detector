@@ -150,7 +150,7 @@ curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install
 
 | Слой | Что воспроизводится | Что нет |
 | --- | --- | --- |
-| TLS | список шифров и их порядок, группы, `signature_algorithms`, ALPN, порядок расширений, GREASE, ALPS, padding до 512, сжатие сертификата; тесты пинуют JA3 и JA4 против бандла | ECH (синтез ломает рукопожатие с Google и Cloudflare); там, где версия пришпилена ради изоляции (две колонки теста 2 и ось `1.2` теста 6), в `supported_versions` нет фолбэка `0x0303`, который шлёт оригинал — JA3/JA4 этого не видят, читающий тело middlebox видит |
+| TLS | список шифров и их порядок, группы, `signature_algorithms`, ALPN, порядок расширений, GREASE, ALPS, padding до 512, сжатие сертификата, а у Safari ещё и фолбэки `0x0302`/`0x0301` в `supported_versions`; тесты пинуют JA3 и JA4 против бандла | ECH (синтез ломает рукопожатие с Google и Cloudflare, поэтому у Firefox форма на одно расширение и на 357 байт короче оригинала); там, где версия пришпилена ради изоляции (две колонки теста 2 и ось `1.2` теста 6), в `supported_versions` ровно одна версия — JA3/JA4 этого не видят, читающий тело middlebox видит |
 | HTTP | `User-Agent` и набор заголовков клиента в его порядке (`sec-ch-ua*`, `accept`, `sec-fetch-*`, `accept-language`; у Firefox ещё `priority` и `te`) | `accept-encoding` всегда `identity`: тесты 2–4 считают байты до обрыва, а согласованное сжатие сделало бы эти числа зависящими от сжимаемости ответа |
 | HTTP/2 | значения `SETTINGS` и то, какие из них отправляются, плюс оконный `WINDOW_UPDATE` | порядок псевдозаголовков (`m,s,a,p` — порядок hyper; Chrome шлёт `m,a,s,p`, Firefox `m,p,a,s`, Safari `m,s,p,a`) и приоритет на `HEADERS` (h2 0.4 не умеет приоритеты) |
 

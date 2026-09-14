@@ -101,6 +101,17 @@ pub struct ClientHelloProfile {
     /// Requires `21` (padding) in [`Self::extension_order`] — the order names
     /// the position, this field computes the length.
     pub padding_to: Option<u16>,
+
+    /// Versions this client offers *behind* 1.2 as fallbacks, in wire order.
+    ///
+    /// Safari 15.5 advertises TLS 1.1 and 1.0 after 1.2 — a hello without them
+    /// is a shape no Safari sends, and its `supported_versions` body is what a
+    /// middlebox reads. The entries are written verbatim and change nothing
+    /// about what can be negotiated: rustls still refuses a peer that selects
+    /// anything outside the config's own set, with
+    /// `PeerIncompatible::ServerDoesNotSupportTls12Or13`, which callers can tell
+    /// apart from a real block.
+    pub legacy_versions: Vec<u16>,
 }
 
 /// Marker for a GREASE extension (RFC 8701) inside a profile's extension order.
@@ -184,6 +195,14 @@ impl ClientHelloProfile {
 
         if let Some(alpn) = &self.alpn {
             exts.protocols = Some(alpn.iter().cloned().map(ProtocolName::from).collect());
+        }
+
+        // The fallbacks a browser advertises behind 1.2 ride in the same list the
+        // config fills; the GREASE slot stays ahead of them (see `hs.rs`).
+        if !self.legacy_versions.is_empty() {
+            if let Some(versions) = exts.supported_versions.as_mut() {
+                versions.legacy = self.legacy_versions.clone();
+            }
         }
 
         // RFC 8879: `compress_certificate` is a TLS 1.3 extension. rustls sets it

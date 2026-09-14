@@ -359,7 +359,7 @@ fn minimal_client_hello() -> ClientHelloPayload {
             supported_versions: Some(SupportedProtocolVersions {
                 tls12: true,
                 tls13: true,
-                grease: None,
+                ..Default::default()
             }),
             key_shares: Some(vec![KeyShareEntry {
                 group: NamedGroup::X25519,

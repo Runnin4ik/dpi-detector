@@ -694,7 +694,7 @@ impl TlsListElement for KeyShareEntry {
 /// ignore the preference of the client.
 ///
 /// RFC8446: `ProtocolVersion versions<2..254>;`
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct SupportedProtocolVersions {
     pub(crate) tls13: bool,
     pub(crate) tls12: bool,
@@ -703,6 +703,14 @@ pub(crate) struct SupportedProtocolVersions {
     /// `GREASE, 0x0304, 0x0303`). Version *selection* reads `tls13`/`tls12`, so
     /// this is display state only and cannot change the handshake.
     pub(crate) grease: Option<u16>,
+    /// dpi-detector patch: versions a browser offers *behind* 1.2 as fallbacks.
+    /// Safari 15.5 sends `GREASE, 0x0304, 0x0303, 0x0302, 0x0301`, and a hello
+    /// missing the last two is a shape no Safari sends. Display state like
+    /// `grease`: which versions can actually be negotiated is still decided by
+    /// the config, so a peer that selects one of these is refused with
+    /// `PeerIncompatible::ServerDoesNotSupportTls12Or13` — a verdict distinct
+    /// from a handshake that a censor cut.
+    pub(crate) legacy: Vec<u16>,
 }
 
 impl SupportedProtocolVersions {
@@ -736,6 +744,10 @@ impl Codec<'_> for SupportedProtocolVersions {
         if self.tls12 {
             ProtocolVersion::TLSv1_2.encode(inner.buf);
         }
+        // dpi-detector patch: the fallbacks the profile asked for, behind 1.2.
+        for version in &self.legacy {
+            ProtocolVersion::from(*version).encode(inner.buf);
+        }
     }
 
     fn read(reader: &mut Reader<'_>) -> Result<Self, InvalidMessage> {
@@ -750,7 +762,7 @@ impl Codec<'_> for SupportedProtocolVersions {
             };
         }
 
-        Ok(Self { tls13, tls12, grease: None })
+        Ok(Self { tls13, tls12, grease: None, legacy: Vec::new() })
     }
 }
 

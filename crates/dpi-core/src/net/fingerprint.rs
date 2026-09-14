@@ -49,12 +49,15 @@
 //!   rustls'.
 //! * A hello whose version is pinned for isolation — test 2's two columns and
 //!   test 6's TLS 1.2 axis — advertises one version where the client it imitates
-//!   sends two (`[GREASE, 0x0304]` instead of `[GREASE, 0x0304, 0x0303]`):
-//!   rustls writes `supported_versions` from the config, and a build that cannot
-//!   speak 1.2 must not claim it. JA3 and JA4 do not hash versions; a middlebox
-//!   reading the body can. Everywhere else — tests 3 and 4, and test 6's TLS 1.3
-//!   axis, which is the one that asks whether a *browser shape* is blocked — the
-//!   offer is the browser's own, both versions and all.
+//!   sends two or more (`[GREASE, 0x0304]` instead of
+//!   `[GREASE, 0x0304, 0x0303, 0x0302, 0x0301]`): rustls writes
+//!   `supported_versions` from the config, and a build that cannot speak 1.2
+//!   must not claim it. JA3 and JA4 do not hash versions; a middlebox reading the
+//!   body can. Everywhere else — tests 3 and 4, and test 6's TLS 1.3 axis, which
+//!   is the one that asks whether a *browser shape* is blocked — the offer is the
+//!   browser's own, fallbacks included: Safari 15.5 lists TLS 1.1 and 1.0 behind
+//!   1.2 ([`legacy_versions`]), and a peer that actually selects one is refused
+//!   by the config and reported `NO TLS1.3`, not as a block.
 //! * HTTP/2 pseudo-headers are ordered `m,s,a,p` (hyper's order; the clients send
 //!   `m,a,s,p` for Chrome, `m,p,a,s` for Firefox, `m,s,p,a` for Safari) and the
 //!   request `HEADERS` frame carries no priority (h2 0.4 dropped priority
@@ -576,6 +579,8 @@ fn firefox_like() -> ClientHelloProfile {
         grease: false,
         // Firefox sends no padding; the JA3 this profile is pinned to has none.
         padding_to: None,
+        // Firefox 133 offers 1.3 and 1.2 only.
+        legacy_versions: Vec::new(),
     }
 }
 
@@ -675,6 +680,9 @@ fn chrome_like() -> ClientHelloProfile {
         cert_compression: Some(vec![2]),
         grease: true,
         padding_to: Some(512),
+        // Chrome 107 offers 1.3 and 1.2 only (`curl_chrome107` sends neither
+        // 1.1 nor 1.0).
+        legacy_versions: Vec::new(),
     }
 }
 
@@ -764,6 +772,12 @@ fn safari_like() -> ClientHelloProfile {
         cert_compression: Some(vec![1]),
         grease: true,
         padding_to: Some(512),
+        // Safari 15.5 keeps offering TLS 1.1 and 1.0 behind 1.2, and
+        // `curl_safari155` sends both. They go on the wire verbatim; rustls still
+        // negotiates nothing below 1.2, so a peer that selects one of them ends
+        // the handshake in `PeerIncompatible::ServerDoesNotSupportTls12Or13` —
+        // which the classifier already reads as `NO TLS1.3`, not as a block.
+        legacy_versions: vec![0x0302, 0x0301],
     }
 }
 
@@ -1179,23 +1193,31 @@ mod tests {
             (list, buf.len())
         };
 
-        for fp in [TlsFingerprint::Chrome, TlsFingerprint::Safari] {
-            // The browser's own offer: both versions, GREASE first, 512 bytes.
+        for (fp, legacy) in [
+            (TlsFingerprint::Chrome, Vec::new()),
+            // Safari 15.5 keeps advertising TLS 1.1 and 1.0 behind 1.2, and
+            // `curl_safari155` sends both — a hello without them is a shape no
+            // Safari sends.
+            (TlsFingerprint::Safari, vec![0x0302, 0x0301]),
+        ] {
+            // The browser's own offer: both modern versions, GREASE first, the
+            // profile's fallbacks behind them, 512 bytes.
             let (browser, record) = versions(TlsProfile::insecure(fp));
-            assert_eq!(browser.len(), 3, "{fp:?}: {browser:04x?}");
             assert!(is_grease_version(browser[0]), "{fp:?} must open with GREASE: {browser:04x?}");
-            assert_eq!(&browser[1..], &[0x0304, 0x0303], "{fp:?}: {browser:04x?}");
+            let expected = [vec![0x0304, 0x0303], legacy.clone()].concat();
+            assert_eq!(&browser[1..], &expected[..], "{fp:?}: {browser:04x?}");
             assert_eq!(record, 512 + 5, "{fp:?}: the padded hello must stay 512 bytes");
 
-            // Pinned to 1.3: one version in the list (test 2's TLS 1.3 column).
+            // Pinned to 1.3: one version in the list (test 2's TLS 1.3 column),
+            // and no fallbacks — a pinned run isolates one version on purpose.
             let (only13, _) = versions(TlsProfile::insecure(fp).tls13());
             assert!(is_grease_version(only13[0]), "{fp:?}: {only13:04x?}");
-            assert_eq!(only13[1], 0x0304, "{fp:?}");
+            assert_eq!(&only13[1..], &[0x0304], "{fp:?}: {only13:04x?}");
 
             // TLS 1.2 alone: the pinned version replaces 1.3, the GREASE stays.
             let (only12, _) = versions(TlsProfile::insecure(fp).tls12());
             assert!(is_grease_version(only12[0]), "{fp:?}: {only12:04x?}");
-            assert_eq!(only12[1], 0x0303, "{fp:?}");
+            assert_eq!(&only12[1..], &[0x0303], "{fp:?}: {only12:04x?}");
         }
 
         let (firefox, _) = versions(TlsProfile::insecure(TlsFingerprint::Custom));

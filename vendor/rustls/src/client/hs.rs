@@ -209,10 +209,18 @@ fn emit_client_hello_for_retry(
         tls13: config.supports_version(ProtocolVersion::TLSv1_3, cx.common.protocol),
         // Set below, from the hello profile's GREASE seed.
         grease: None,
+        // Set below, from the hello profile's own fallback list.
+        legacy: Vec::new(),
     };
 
     // should be unreachable thanks to config builder
     assert!(supported_versions.any(|_| true));
+
+    // The struct is moved into `exts` below and is no longer `Copy` (the profile
+    // fallback list is a `Vec`), so the two flags the rest of the assembly reads
+    // are captured here.
+    let offers_tls13 = supported_versions.tls13;
+    let offers_tls12 = supported_versions.tls12;
 
     let mut exts = Box::new(ClientExtensions {
         // offer groups which are usable for any offered version
@@ -243,7 +251,7 @@ fn emit_client_hello_for_retry(
         None => {}
     };
 
-    if supported_versions.tls13 {
+    if offers_tls13 {
         if let Some(cas_extension) = config.verifier.root_hint_subjects() {
             exts.certificate_authority_names = Some(cas_extension.to_owned());
         }
@@ -278,7 +286,7 @@ fn emit_client_hello_for_retry(
     };
 
     if let Some(key_share) = &key_share {
-        debug_assert!(supported_versions.tls13);
+        debug_assert!(offers_tls13);
         let mut shares = vec![KeyShareEntry::new(key_share.group(), key_share.pub_key())];
 
         if !retryreq
@@ -309,7 +317,7 @@ fn emit_client_hello_for_retry(
         exts.cookie = Some(cookie.clone());
     }
 
-    if supported_versions.tls13 {
+    if offers_tls13 {
         // We could support PSK_KE here too. Such connections don't
         // have forward secrecy, and are similar to TLS1.2 resumption.
         exts.preshared_key_modes = Some(PskKeyExchangeModes {
@@ -326,7 +334,7 @@ fn emit_client_hello_for_retry(
     }
 
     input.hello.offered_cert_compression =
-        if supported_versions.tls13 && !config.cert_decompressors.is_empty() {
+        if offers_tls13 && !config.cert_decompressors.is_empty() {
             exts.certificate_compression_algorithms = Some(
                 config
                     .cert_decompressors
@@ -379,7 +387,7 @@ fn emit_client_hello_for_retry(
         })
         .collect();
 
-    if supported_versions.tls12 {
+    if offers_tls12 {
         // We don't do renegotiation at all, in fact.
         cipher_suites.push(CipherSuite::TLS_EMPTY_RENEGOTIATION_INFO_SCSV);
     }
@@ -393,7 +401,7 @@ fn emit_client_hello_for_retry(
             &mut exts,
             &mut cipher_suites,
             grease_seed,
-            supported_versions.tls13,
+            offers_tls13,
         );
         // dpi-detector patch: a browser that greases also offers a key share for
         // the GREASE group — Chrome opens its share list with it, one dummy byte
@@ -557,7 +565,7 @@ fn emit_client_hello_for_retry(
         ech_state,
     };
 
-    Ok(if supported_versions.tls13 && retryreq.is_none() {
+    Ok(if offers_tls13 && retryreq.is_none() {
         Box::new(ExpectServerHelloOrHelloRetryRequest {
             next,
             extra_exts: extra_exts.into_owned(),

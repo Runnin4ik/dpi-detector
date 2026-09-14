@@ -1,6 +1,6 @@
-diff -ruN a/src/client/builder.rs b/src/client/builder.rs
---- a/src/client/builder.rs	2026-09-11 14:18:09.361068200 +0300
-+++ b/src/client/builder.rs	2026-09-11 14:18:09.645930300 +0300
+diff -r a/src\client\builder.rs b/src\client\builder.rs
+--- a/src\client\builder.rs	2026-09-14 12:54:48.848324800 +0300
++++ b/src\client\builder.rs	2026-09-14 12:54:49.162660600 +0300
 @@ -168,6 +168,7 @@
          ClientConfig {
              provider: self.provider,
@@ -9,9 +9,9 @@ diff -ruN a/src/client/builder.rs b/src/client/builder.rs
              check_selected_alpn: true,
              resumption: Resumption::default(),
              max_fragment_size: None,
-diff -ruN a/src/client/client_conn.rs b/src/client/client_conn.rs
---- a/src/client/client_conn.rs	2026-09-11 14:18:09.362578800 +0300
-+++ b/src/client/client_conn.rs	2026-09-11 14:18:09.645930300 +0300
+diff -r a/src\client\client_conn.rs b/src\client\client_conn.rs
+--- a/src\client\client_conn.rs	2026-09-14 12:54:48.850349700 +0300
++++ b/src\client\client_conn.rs	2026-09-14 12:54:49.163707300 +0300
 @@ -6,6 +6,7 @@
  use pki_types::{ServerName, UnixTime};
  
@@ -36,10 +36,10 @@ diff -ruN a/src/client/client_conn.rs b/src/client/client_conn.rs
      /// Whether to check the selected ALPN was offered.
      ///
      /// The default is true.
-diff -ruN a/src/client/hello_profile.rs b/src/client/hello_profile.rs
---- a/src/client/hello_profile.rs	1970-01-01 03:00:00.000000000 +0300
-+++ b/src/client/hello_profile.rs	2026-09-11 14:18:09.652560600 +0300
-@@ -0,0 +1,266 @@
+diff -r a/src\client\hello_profile.rs b/src\client\hello_profile.rs
+--- a/src\client\hello_profile.rs	1970-01-01 03:00:00.000000000 +0300
++++ b/src\client\hello_profile.rs	2026-09-14 12:54:49.171655700 +0300
+@@ -0,0 +1,315 @@
 +//! ClientHello profile override (dpi-detector patch).
 +//!
 +//! Upstream rustls fixes the ClientHello shape: the cipher-suite list and its
@@ -143,6 +143,17 @@ diff -ruN a/src/client/hello_profile.rs b/src/client/hello_profile.rs
 +    /// Requires `21` (padding) in [`Self::extension_order`] — the order names
 +    /// the position, this field computes the length.
 +    pub padding_to: Option<u16>,
++
++    /// Versions this client offers *behind* 1.2 as fallbacks, in wire order.
++    ///
++    /// Safari 15.5 advertises TLS 1.1 and 1.0 after 1.2 — a hello without them
++    /// is a shape no Safari sends, and its `supported_versions` body is what a
++    /// middlebox reads. The entries are written verbatim and change nothing
++    /// about what can be negotiated: rustls still refuses a peer that selects
++    /// anything outside the config's own set, with
++    /// `PeerIncompatible::ServerDoesNotSupportTls12Or13`, which callers can tell
++    /// apart from a real block.
++    pub legacy_versions: Vec<u16>,
 +}
 +
 +/// Marker for a GREASE extension (RFC 8701) inside a profile's extension order.
@@ -150,6 +161,36 @@ diff -ruN a/src/client/hello_profile.rs b/src/client/hello_profile.rs
 +/// Chrome opens and closes its extension list with one, and the value has to be
 +/// drawn from the per-connection seed, so an order cannot name it directly.
 +pub const GREASE_EXTENSION_MARKER: u16 = 0x0a0a;
++
++impl ClientHelloProfile {
++    /// The GREASE group value this profile greases with, if it greases at all.
++    ///
++    /// The `grease` flag already puts this value at the head of
++    /// `supported_groups`; a caller that emits key shares uses the same value, so
++    /// the share list opens with the group list's first entry exactly as a
++    /// browser's does.
++    pub(crate) fn grease_group(&self, seed: u16) -> Option<NamedGroup> {
++        self.grease.then(|| NamedGroup::from(grease_value(seed, 1)))
++    }
++
++    /// The GREASE value this profile writes at the head of `supported_versions`,
++    /// if it greases at all.
++    ///
++    /// The slot sits after the GREASE extensions (`2 + one per marker`), so no
++    /// two positions of one hello share a value — as in a browser, whose
++    /// `supported_versions` GREASE differs from the one in its key share.
++    pub(crate) fn grease_supported_versions(&self, seed: u16) -> Option<u16> {
++        if !self.grease {
++            return None;
++        }
++        let markers = self
++            .extension_order
++            .as_ref()
++            .map(|order| order.iter().filter(|t| **t == GREASE_EXTENSION_MARKER).count() as u8)
++            .unwrap_or(0);
++        Some(grease_value(seed, 2 + markers))
++    }
++}
 +
 +impl ClientHelloProfile {
 +    /// Applies the profile to a freshly built ClientHello.
@@ -196,6 +237,14 @@ diff -ruN a/src/client/hello_profile.rs b/src/client/hello_profile.rs
 +
 +        if let Some(alpn) = &self.alpn {
 +            exts.protocols = Some(alpn.iter().cloned().map(ProtocolName::from).collect());
++        }
++
++        // The fallbacks a browser advertises behind 1.2 ride in the same list the
++        // config fills; the GREASE slot stays ahead of them (see `hs.rs`).
++        if !self.legacy_versions.is_empty() {
++            if let Some(versions) = exts.supported_versions.as_mut() {
++                versions.legacy = self.legacy_versions.clone();
++            }
 +        }
 +
 +        // RFC 8879: `compress_certificate` is a TLS 1.3 extension. rustls sets it
@@ -306,10 +355,74 @@ diff -ruN a/src/client/hello_profile.rs b/src/client/hello_profile.rs
 +    /// `renegotiation_info`
 +    pub const RENEGOTIATION_INFO: u16 = 65281;
 +}
-diff -ruN a/src/client/hs.rs b/src/client/hs.rs
---- a/src/client/hs.rs	2026-09-11 14:18:09.368617800 +0300
-+++ b/src/client/hs.rs	2026-09-11 14:18:09.648976700 +0300
-@@ -382,6 +382,19 @@
+diff -r a/src\client\hs.rs b/src\client\hs.rs
+--- a/src\client\hs.rs	2026-09-14 12:54:48.860336600 +0300
++++ b/src\client\hs.rs	2026-09-14 12:55:17.351569000 +0300
+@@ -207,11 +207,21 @@
+         tls12: config.supports_version(ProtocolVersion::TLSv1_2, cx.common.protocol)
+             && !forbids_tls12,
+         tls13: config.supports_version(ProtocolVersion::TLSv1_3, cx.common.protocol),
++        // Set below, from the hello profile's GREASE seed.
++        grease: None,
++        // Set below, from the hello profile's own fallback list.
++        legacy: Vec::new(),
+     };
+ 
+     // should be unreachable thanks to config builder
+     assert!(supported_versions.any(|_| true));
+ 
++    // The struct is moved into `exts` below and is no longer `Copy` (the profile
++    // fallback list is a `Vec`), so the two flags the rest of the assembly reads
++    // are captured here.
++    let offers_tls13 = supported_versions.tls13;
++    let offers_tls12 = supported_versions.tls12;
++
+     let mut exts = Box::new(ClientExtensions {
+         // offer groups which are usable for any offered version
+         named_groups: Some(
+@@ -241,7 +251,7 @@
+         None => {}
+     };
+ 
+-    if supported_versions.tls13 {
++    if offers_tls13 {
+         if let Some(cas_extension) = config.verifier.root_hint_subjects() {
+             exts.certificate_authority_names = Some(cas_extension.to_owned());
+         }
+@@ -276,7 +286,7 @@
+     };
+ 
+     if let Some(key_share) = &key_share {
+-        debug_assert!(supported_versions.tls13);
++        debug_assert!(offers_tls13);
+         let mut shares = vec![KeyShareEntry::new(key_share.group(), key_share.pub_key())];
+ 
+         if !retryreq
+@@ -307,7 +317,7 @@
+         exts.cookie = Some(cookie.clone());
+     }
+ 
+-    if supported_versions.tls13 {
++    if offers_tls13 {
+         // We could support PSK_KE here too. Such connections don't
+         // have forward secrecy, and are similar to TLS1.2 resumption.
+         exts.preshared_key_modes = Some(PskKeyExchangeModes {
+@@ -324,7 +334,7 @@
+     }
+ 
+     input.hello.offered_cert_compression =
+-        if supported_versions.tls13 && !config.cert_decompressors.is_empty() {
++        if offers_tls13 && !config.cert_decompressors.is_empty() {
+             exts.certificate_compression_algorithms = Some(
+                 config
+                     .cert_decompressors
+@@ -377,11 +387,43 @@
+         })
+         .collect();
+ 
+-    if supported_versions.tls12 {
++    if offers_tls12 {
+         // We don't do renegotiation at all, in fact.
          cipher_suites.push(CipherSuite::TLS_EMPTY_RENEGOTIATION_INFO_SCSV);
      }
  
@@ -322,14 +435,33 @@ diff -ruN a/src/client/hs.rs b/src/client/hs.rs
 +            &mut exts,
 +            &mut cipher_suites,
 +            grease_seed,
-+            supported_versions.tls13,
++            offers_tls13,
 +        );
++        // dpi-detector patch: a browser that greases also offers a key share for
++        // the GREASE group — Chrome opens its share list with it, one dummy byte
++        // — and `curl_chrome107`/`curl_safari155` send exactly that. The group is
++        // the same value the profile puts at the head of `supported_groups`, and
++        // RFC 8701 requires servers to ignore it (a share for a group the server
++        // did not offer cannot be selected).
++        if let Some(group) = profile.grease_group(grease_seed) {
++            if let Some(shares) = exts.key_shares.as_mut() {
++                shares.insert(0, KeyShareEntry::new(group, vec![0u8]));
++            }
++        }
++        // dpi-detector patch: the same browser puts a GREASE code point at the
++        // head of `supported_versions` (ahead of 1.3). JA3 and JA4 ignore it; a
++        // middlebox reading the hello does not have to.
++        if let Some(grease_version) = profile.grease_supported_versions(grease_seed) {
++            if let Some(versions) = exts.supported_versions.as_mut() {
++                versions.grease = Some(grease_version);
++            }
++        }
 +    }
 +
      let mut chp_payload = ClientHelloPayload {
          client_version: ProtocolVersion::TLSv1_2,
          random: input.random,
-@@ -431,8 +444,10 @@
+@@ -431,8 +473,10 @@
          _ => {}
      }
  
@@ -342,9 +474,18 @@ diff -ruN a/src/client/hs.rs b/src/client/hs.rs
      input.hello.offered_cipher_suites = chp_payload.cipher_suites.clone();
  
      let mut chp = HandshakeMessagePayload(HandshakePayload::ClientHello(chp_payload));
-diff -ruN a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs	2026-09-11 14:18:09.546088100 +0300
-+++ b/src/lib.rs	2026-09-11 14:18:09.721400500 +0300
+@@ -521,7 +565,7 @@
+         ech_state,
+     };
+ 
+-    Ok(if supported_versions.tls13 && retryreq.is_none() {
++    Ok(if offers_tls13 && retryreq.is_none() {
+         Box::new(ExpectServerHelloOrHelloRetryRequest {
+             next,
+             extra_exts: extra_exts.into_owned(),
+diff -r a/src\lib.rs b/src\lib.rs
+--- a/src\lib.rs	2026-09-14 12:54:49.067146300 +0300
++++ b/src\lib.rs	2026-09-14 12:54:49.246137100 +0300
 @@ -586,6 +586,7 @@
      mod ech;
      pub(super) mod handy;
@@ -361,10 +502,66 @@ diff -ruN a/src/lib.rs b/src/lib.rs
      pub use handy::AlwaysResolvesClientRawPublicKeys;
      #[cfg(any(feature = "std", feature = "hashbrown"))]
      pub use handy::ClientSessionMemoryCache;
-diff -ruN a/src/msgs/handshake.rs b/src/msgs/handshake.rs
---- a/src/msgs/handshake.rs	2026-09-11 14:18:09.475342300 +0300
-+++ b/src/msgs/handshake.rs	2026-09-11 14:18:09.692774300 +0300
-@@ -978,6 +978,28 @@
+diff -r a/src\msgs\handshake.rs b/src\msgs\handshake.rs
+--- a/src\msgs\handshake.rs	2026-09-14 12:54:48.986006500 +0300
++++ b/src\msgs\handshake.rs	2026-09-14 12:54:49.221484900 +0300
+@@ -694,10 +694,23 @@
+ /// ignore the preference of the client.
+ ///
+ /// RFC8446: `ProtocolVersion versions<2..254>;`
+-#[derive(Clone, Copy, Debug, Default)]
++#[derive(Clone, Debug, Default)]
+ pub(crate) struct SupportedProtocolVersions {
+     pub(crate) tls13: bool,
+     pub(crate) tls12: bool,
++    /// dpi-detector patch: an RFC 8701 GREASE code point written ahead of the
++    /// real versions, which is where browsers put one (`curl_chrome107` sends
++    /// `GREASE, 0x0304, 0x0303`). Version *selection* reads `tls13`/`tls12`, so
++    /// this is display state only and cannot change the handshake.
++    pub(crate) grease: Option<u16>,
++    /// dpi-detector patch: versions a browser offers *behind* 1.2 as fallbacks.
++    /// Safari 15.5 sends `GREASE, 0x0304, 0x0303, 0x0302, 0x0301`, and a hello
++    /// missing the last two is a shape no Safari sends. Display state like
++    /// `grease`: which versions can actually be negotiated is still decided by
++    /// the config, so a peer that selects one of these is refused with
++    /// `PeerIncompatible::ServerDoesNotSupportTls12Or13` — a verdict distinct
++    /// from a handshake that a censor cut.
++    pub(crate) legacy: Vec<u16>,
+ }
+ 
+ impl SupportedProtocolVersions {
+@@ -720,12 +733,21 @@
+ impl Codec<'_> for SupportedProtocolVersions {
+     fn encode(&self, bytes: &mut Vec<u8>) {
+         let inner = LengthPrefixedBuffer::new(Self::LIST_LENGTH, bytes);
++        // dpi-detector patch: browsers open this list with a GREASE value; it is
++        // a plain u16 on the wire, not one of the named protocol versions.
++        if let Some(grease) = self.grease {
++            grease.encode(inner.buf);
++        }
+         if self.tls13 {
+             ProtocolVersion::TLSv1_3.encode(inner.buf);
+         }
+         if self.tls12 {
+             ProtocolVersion::TLSv1_2.encode(inner.buf);
+         }
++        // dpi-detector patch: the fallbacks the profile asked for, behind 1.2.
++        for version in &self.legacy {
++            ProtocolVersion::from(*version).encode(inner.buf);
++        }
+     }
+ 
+     fn read(reader: &mut Reader<'_>) -> Result<Self, InvalidMessage> {
+@@ -740,7 +762,7 @@
+             };
+         }
+ 
+-        Ok(Self { tls13, tls12 })
++        Ok(Self { tls13, tls12, grease: None, legacy: Vec::new() })
+     }
+ }
+ 
+@@ -978,6 +1000,28 @@
  
          /// Extensions that must appear contiguously.
          pub(crate) contiguous_extensions: Vec<ExtensionType>,
@@ -393,7 +590,7 @@ diff -ruN a/src/msgs/handshake.rs b/src/msgs/handshake.rs
      }
  }
  
-@@ -1010,6 +1032,10 @@
+@@ -1010,6 +1054,10 @@
              encrypted_client_hello_outer,
              order_seed,
              contiguous_extensions,
@@ -404,7 +601,7 @@ diff -ruN a/src/msgs/handshake.rs b/src/msgs/handshake.rs
          } = self;
          ClientExtensions {
              server_name: server_name.map(|x| x.into_owned()),
-@@ -1038,12 +1064,65 @@
+@@ -1038,12 +1086,65 @@
              encrypted_client_hello_outer,
              order_seed,
              contiguous_extensions,
@@ -472,7 +669,7 @@ diff -ruN a/src/msgs/handshake.rs b/src/msgs/handshake.rs
  
          if self
              .encrypted_client_hello_outer
-@@ -1051,7 +1130,7 @@
+@@ -1051,7 +1152,7 @@
          {
              exts.push(ExtensionType::EncryptedClientHelloOuterExtensions);
          }
@@ -481,20 +678,20 @@ diff -ruN a/src/msgs/handshake.rs b/src/msgs/handshake.rs
              exts.push(ExtensionType::EncryptedClientHello);
          }
          if self.preshared_key_offer.is_some() {
-@@ -1105,6 +1184,31 @@
+@@ -1105,6 +1206,31 @@
  
          let body = LengthPrefixedBuffer::new(ListLength::U16, bytes);
          for item in order {
 +            if item == ExtensionType::Padding && self.padding_to.is_some() {
 +                // dpi-detector patch: pad the hello the way browsers do
 +                // (RFC 7685), so extension 21 is present in JA3/JA4 exactly as
-+                // it is for Chrome and Firefox. `+ 9` is the TLS record header
-+                // (5) and the handshake header (4) that precede this payload when
-+                // rustls writes a record; being a few bytes off for a hello
-+                // re-encoded into a bare buffer (ECH inner, HRR) only changes the
-+                // pad size, never whether the extension is present.
-+                let len = (self.padding_to.unwrap_or(0) as usize + 9)
-+                    .saturating_sub(body.buf.len() + 4);
++                // it is for Chrome. The target is the *handshake message*: the
++                // `curl-impersonate v2.2.2` chrome107/safari155 hellos measure
++                // exactly 512 bytes on the wire (record 517), and an earlier
++                // `+ 9` here — meant to account for the handshake and record
++                // headers — overshot by nine bytes (message 521, record 526),
++                // which any length-based matcher can see.
++                let len = (self.padding_to.unwrap_or(0) as usize).saturating_sub(body.buf.len() + 4);
 +                if len > 0 {
 +                    item.encode(body.buf);
 +                    (len as u16).encode(body.buf);
@@ -513,7 +710,7 @@ diff -ruN a/src/msgs/handshake.rs b/src/msgs/handshake.rs
              self.encode_one(item, body.buf);
          }
      }
-@@ -1756,7 +1860,16 @@
+@@ -1756,7 +1882,16 @@
          let mut sub = r.sub(len)?;
  
          while sub.any_left() {
@@ -531,3 +728,14 @@ diff -ruN a/src/msgs/handshake.rs b/src/msgs/handshake.rs
                  Err(InvalidMessage::UnknownCertificateExtension)
              })?;
          }
+diff -r a/src\server\test.rs b/src\server\test.rs
+--- a/src\server\test.rs	2026-09-14 12:54:49.011685100 +0300
++++ b/src\server\test.rs	2026-09-14 12:54:49.231395500 +0300
+@@ -359,6 +359,7 @@
+             supported_versions: Some(SupportedProtocolVersions {
+                 tls12: true,
+                 tls13: true,
++                ..Default::default()
+             }),
+             key_shares: Some(vec![KeyShareEntry {
+                 group: NamedGroup::X25519,
