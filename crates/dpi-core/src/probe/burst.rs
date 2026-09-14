@@ -60,10 +60,12 @@ pub const BURST_PORT: u16 = 443;
 /// Bounds of the per-round attempt count — the connections one shape fires at
 /// one host, one after another. Two is the smallest number that can differ from
 /// a single probe; the upper bound keeps a stray keystroke from turning the test
-/// into a flood.
+/// into a flood. The default sits one above the commonest throttle (a link that
+/// cuts the fourth connection): at four, the run ends exactly where the answer
+/// starts.
 pub const BURST_MIN_ATTEMPTS: usize = 2;
 pub const BURST_MAX_ATTEMPTS: usize = 16;
-pub const BURST_DEFAULT_ATTEMPTS: usize = 4;
+pub const BURST_DEFAULT_ATTEMPTS: usize = 5;
 /// Bounds of the per-attempt timeout, in whole seconds.
 pub const BURST_MIN_TIMEOUT_SECS: u64 = 1;
 pub const BURST_MAX_TIMEOUT_SECS: u64 = 60;
