@@ -813,7 +813,11 @@ fn safari_like() -> ClientHelloProfile {
             0x0203, // ECDSA SHA-1 — Safari 15.5 sends it; JA3 ignores the list,
                     // JA4 hashes it, which is how its absence was caught
             0x0805, // RSA-PSS SHA-384
-            0x0805, // duplicated by Safari itself
+            // `curl_safari155.bat` names `rsa_pss_rsae_sha384` twice and BoringSSL
+            // sends it once: the script's list is an input, the wire is what it
+            // de-duplicates to. Copying the script instead cost this profile an
+            // eleventh scheme, which the byte comparison against the pinned
+            // bundle caught in the signature-algorithms extension.
             0x0501, // RSA-PKCS1 SHA-384
             0x0806, // RSA-PSS SHA-512
             0x0601, // RSA-PKCS1 SHA-512
@@ -893,7 +897,7 @@ mod tests {
     const CHROME_107_JA4: &str = "t13d1516h2_8daaf6152771_e5627efa2ab1";
     const CHROME_107_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-\
              49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513-21,29-23-24,0";
-    const SAFARI_155_JA4: &str = "t13d2014h2_a09f3c656075_14788d8d241b";
+    const SAFARI_155_JA4: &str = "t13d2014h2_a09f3c656075_2a6581477f52";
     const FIREFOX_133_JA4_LESS_ECH: &str = "t13d1715h2_5b57614c22b0_8fb63dbc839a";
 
     /// The HTTP identity and the ClientHello of a profile have to describe the
@@ -1296,10 +1300,10 @@ mod tests {
         // `compress_certificate`, so the extension count and hash differ by that
         // one extension.
         const CHROME_107_TLS13: &str = "t13d0312h2_55b375c5d22e_89e42599e699";
-        const SAFARI_155_TLS13: &str = "t13d0311h2_55b375c5d22e_14aed462abe7";
+        const SAFARI_155_TLS13: &str = "t13d0311h2_55b375c5d22e_3727ed65331a";
         const FIREFOX_133_TLS13: &str = "t13d0313h2_55b375c5d22e_1dac57d28bce";
         const CHROME_107_TLS12: &str = "t12d1210h2_d34a8e72043a_fae48490d0f6";
-        const SAFARI_155_TLS12: &str = "t12d1709h2_ba5946811be1_e0e2b8a7da62";
+        const SAFARI_155_TLS12: &str = "t12d1709h2_ba5946811be1_8c31861e0dbb";
         const FIREFOX_133_TLS12: &str = "t12d1411h2_c866b44c5a26_242292a3764d";
 
         for (version, chrome, safari, firefox) in [
