@@ -76,8 +76,6 @@ pub enum NotCovered {
     /// to the default-route comparison, which is why this is read per flow.
     Tunnel,
 }
-
-/// What became of our own traffic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     /// The tool's rules cover the port and interface our traffic uses, and the
@@ -87,6 +85,11 @@ pub enum Verdict {
     Excluded,
     /// The tool is running, but its rules do not cover us.
     NotQueued(NotCovered),
+    /// The rules take our traffic, but the strategy applies the desync to 80/443
+    /// only for targets on its own lists — so a run's numbers are a mixture of
+    /// bypassed and unbypassed, and a reader should know that before reading
+    /// them. Nothing is broken; this is a property of the strategy.
+    ListMode,
     /// The tool is running and its queue is not bound, or nothing could be read
     /// back about our flow.
     Unknown,
@@ -129,9 +132,7 @@ pub struct Intercept {
 /// configuration, which is the half that says whether that family is covered at
 /// all. The caller resolves addresses — `net/` does not reach into `dns/`.
 pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Intercept> {
-    if !pidfile_alive() {
-        return None;
-    }
+    let pid = pidfile_pid()?;
     let v6 = family == Family::V6;
     // Where our traffic actually goes for this target, then the tunnel question
     // answers itself: a per-destination route into a VPN leaves the interface
@@ -180,6 +181,11 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         }
     } else if !target.is_none_or(|addr| conf.ports.contains(&addr.port())) {
         Verdict::NotQueued(NotCovered::Port)
+    } else if list_mode(pid) {
+        // Interception is fine; the strategy is what decides which targets get
+        // the desync. Saying so before a run is the difference between "the
+        // bypass does not work" and "these numbers are a mixture".
+        Verdict::ListMode
     } else {
         Verdict::Processed
     };
@@ -228,13 +234,127 @@ async fn probe_flow(target: SocketAddr) -> Flow {
     Flow::default()
 }
 
-/// True when the package's pidfile names a live process.
-fn pidfile_alive() -> bool {
-    let Ok(text) = std::fs::read_to_string(PIDFILE) else {
+/// The pid of the package's process, when its pidfile names a live one.
+fn pidfile_pid() -> Option<u32> {
+    let text = std::fs::read_to_string(PIDFILE).ok()?;
+    let pid: String = text.trim().chars().filter(char::is_ascii_digit).collect();
+    let pid = pid.parse::<u32>().ok()?;
+    std::path::Path::new(&format!("/proc/{pid}")).exists().then_some(pid)
+}
+
+/// Whether the running strategy applies the desync to 80/443 only for targets
+/// on its own lists.
+///
+/// Read from the live argv rather than the config: the config holds
+/// `NFQWS_EXTRA_ARGS="$MODE_AUTO"`, and it is the argv that shows what that
+/// expanded to — plus whatever a custom strategy added on its own, which is the
+/// only place a hand-written `--ipset` appears at all. Nothing is written and no
+/// packet is sent for this: it is one small file.
+fn list_mode(pid: u32) -> bool {
+    let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
         return false;
     };
-    let pid: String = text.trim().chars().filter(char::is_ascii_digit).collect();
-    !pid.is_empty() && std::path::Path::new(&format!("/proc/{pid}")).exists()
+    let args: Vec<String> = raw
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect();
+    list_mode_in(&args)
+}
+
+/// The parsing half of [`list_mode`], on an argv in memory.
+///
+/// The package's argument model has profiles: `--new` ends one and starts the
+/// next, the `--filter-*` options that follow are the profile's own filters and
+/// they all have to match (a `--filter-tcp=443 --filter-l7=tls` profile takes
+/// TLS on 443, nothing else). Profiles are tried in order and the first one that
+/// matches a connection handles it, so the question is asked of that profile
+/// alone: if it desyncs everything it takes, a run's numbers are all from one
+/// world, whatever the later profiles do.
+fn list_mode_in(args: &[String]) -> bool {
+    for profile in profiles(args) {
+        if !takes_web(&profile.filters) {
+            continue;
+        }
+        return profile.listed;
+    }
+    false
+}
+
+/// One profile of the argument model.
+#[derive(Debug, Default)]
+struct Profile {
+    filters: Vec<String>,
+    /// Carries a positive hostlist or ipset filter.
+    listed: bool,
+}
+
+/// Splits an argv into profiles on `--new`. Options before the first `--new`
+/// are the first profile, which is also where the daemon's own options sit.
+fn profiles(args: &[String]) -> Vec<Profile> {
+    let mut profiles = vec![Profile::default()];
+    for arg in args {
+        if arg == "--new" {
+            profiles.push(Profile::default());
+            continue;
+        }
+        let profile = profiles.last_mut().expect("at least one profile");
+        if arg.starts_with("--filter-") {
+            profile.filters.push(arg.clone());
+        } else if is_list_filter(arg) {
+            profile.listed = true;
+        }
+    }
+    profiles
+}
+
+/// Whether a profile's filters would take a TLS connection to port 443 or an
+/// HTTP one to port 80 — what a web test sends.
+///
+/// A profile with no filters of its own takes everything. Ports and L7 are
+/// required to match when they are stated; a UDP-only filter is a different
+/// protocol from what the tests use.
+fn takes_web(filters: &[String]) -> bool {
+    let mut tcp = false;
+    let mut web_port = false;
+    let mut udp_only = false;
+    let mut l7 = false;
+    let mut web_l7 = false;
+    for filter in filters {
+        if let Some(ports) = filter.strip_prefix("--filter-tcp=") {
+            tcp = true;
+            web_port |= ports.split(',').any(|port| matches!(port.trim(), "80" | "443"));
+        } else if filter.starts_with("--filter-udp=") {
+            udp_only |= !filter.starts_with("--filter-udp=0");
+        } else if let Some(names) = filter.strip_prefix("--filter-l7=") {
+            l7 = true;
+            web_l7 |= names.split(',').any(|name| matches!(name.trim(), "tls" | "http"));
+        }
+    }
+    if udp_only && !tcp {
+        return false;
+    }
+    if tcp && !web_port {
+        return false;
+    }
+    if l7 && !web_l7 {
+        return false;
+    }
+    true
+}
+
+/// A *positive* list filter: the exclusions only ever widen what is desynced,
+/// and `--ipset-ip=0.0.0.0` is how a strategy says "no single addresses".
+fn is_list_filter(arg: &str) -> bool {
+    if arg.starts_with("--hostlist-exclude=") || arg.starts_with("--ipset-exclude=") {
+        return false;
+    }
+    if let Some(ip) = arg.strip_prefix("--ipset-ip=") {
+        return !matches!(ip, "0.0.0.0" | "::");
+    }
+    ["--hostlist=", "--hostlist-auto=", "--hostlist-domains=", "--ipset="]
+        .iter()
+        .any(|prefix| arg.starts_with(prefix))
 }
 
 /// The resolved config the init script writes: `KEY=value` or `KEY="value"`.
@@ -571,6 +691,94 @@ mod tests {
         let tunnelled_target: SocketAddr = "1.1.1.1:443".parse().unwrap();
         assert_eq!(parse_conntrack_mark(routed, 44836, routed_target), Some(0));
         assert_eq!(parse_conntrack_mark(tunnelled, 51447, tunnelled_target), Some(0));
+    }
+
+    fn argv(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
+    /// The profile layout of a real strategy on a Keenetic: QUIC, then a
+    /// discord hostlist on its own ports, then TLS on 443 with no list at all,
+    /// then HTTP, and only at the end a profile filtered by ipset. The TLS
+    /// profile is the one a web test meets, and it desyncs everything it takes —
+    /// so this is *not* list mode, whatever the later profile does.
+    #[test]
+    fn the_first_profile_that_takes_our_traffic_decides() {
+        let real = argv(&[
+            "--daemon",
+            "--qnum=300",
+            "--filter-udp=443",
+            "--filter-l7=quic",
+            "--lua-desync=fake:blob=quic_initial:repeats=11",
+            "--new",
+            "--filter-tcp=2053,2083,2087,2096,5222,8443",
+            "--hostlist-domains=discord.media",
+            "--lua-desync=hostfakesplit:repeats=4",
+            "--new",
+            "--filter-tcp=443",
+            "--filter-l7=tls",
+            "--lua-desync=hostfakesplit:repeats=8",
+            "--new",
+            "--filter-tcp=80",
+            "--filter-l7=http",
+            "--lua-desync=multisplit:pos=1,3",
+            "--new",
+            "--ipset=/opt/etc/nfqws2/lists/ipset.list",
+            "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
+            "--ipset-ip=0.0.0.0",
+            "--new",
+        ]);
+        assert!(!list_mode_in(&real), "the TLS profile has no list of its own");
+    }
+
+    /// The same layout with the list moved onto the TLS profile: now a web run
+    /// is half bypassed and half not, which is what the reader has to be told.
+    #[test]
+    fn a_list_on_the_web_profile_is_list_mode() {
+        let listed = argv(&[
+            "--filter-udp=443",
+            "--filter-l7=quic",
+            "--new",
+            "--filter-tcp=443",
+            "--filter-l7=tls",
+            "--ipset=/opt/etc/nfqws2/lists/ipset.list",
+            "--lua-desync=hostfakesplit:repeats=8",
+            "--new",
+        ]);
+        assert!(list_mode_in(&listed));
+    }
+
+    /// Filters of one profile are all required: a TLS-on-443 profile does not
+    /// take what a profile for other ports does, and neither takes another
+    /// protocol.
+    #[test]
+    fn profile_filters_are_taken_together() {
+        let other_ports = argv(&["--filter-tcp=2053,5222", "--hostlist=/tmp/user.list"]);
+        assert!(!list_mode_in(&other_ports), "not the ports a web test uses");
+        let udp = argv(&["--filter-udp=443", "--filter-l7=quic", "--ipset=/tmp/quic.list"]);
+        assert!(!list_mode_in(&udp), "a UDP profile is not what a web test meets");
+        let other_l7 = argv(&["--filter-tcp=443", "--filter-l7=mtproto", "--ipset=/tmp/x.list"]);
+        assert!(!list_mode_in(&other_l7), "not the protocol a web test speaks");
+    }
+
+    /// Exclusions never make a profile list-driven, and `--ipset-ip=0.0.0.0` is
+    /// how a strategy spells "no single addresses".
+    #[test]
+    fn exclusions_and_empty_ip_lists_do_not_count() {
+        let excluded = argv(&["--filter-tcp=443", "--hostlist-exclude=/tmp/exclude.list"]);
+        assert!(!list_mode_in(&excluded));
+        let empty_ip = argv(&["--filter-tcp=443", "--ipset-ip=0.0.0.0"]);
+        assert!(!list_mode_in(&empty_ip));
+        let named = argv(&["--filter-tcp=443", "--hostlist-domains=example.com"]);
+        assert!(list_mode_in(&named), "a literal domain list is still a list");
+    }
+
+    /// A list in the profile before any `--new` — where the daemon's own options
+    /// also live — covers whatever that profile takes.
+    #[test]
+    fn a_list_in_the_first_profile_counts() {
+        let first = argv(&["--hostlist=/tmp/user.list", "--filter-tcp=443"]);
+        assert!(list_mode_in(&first));
     }
 
     /// The main table captured on a Keenetic, with its provider host route and

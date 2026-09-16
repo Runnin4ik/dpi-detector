@@ -92,6 +92,10 @@ pub(crate) fn messages() -> Messages {
                            traffic-e ma az tunnel (VPN) miravad, amma qavanin rooy-e interface-e provider ast.\n\n\
                            Traffic-e dakhel-e tunnel ra obur nemibinad: in target ra az tunnel birun biarid\n\
                            ya interface-e tunnel ra be ISP_INTERFACE ezafe konid, sepas:",
+        intercept_list_mode: "nfqws2 ejra mishavad, amma strategy hame-ye target-ha ra nemigirad:\n\
+                              baraye 80 va 443 filter-e list (hostlist ya ipset) faal ast.\n\n\
+                              Bakhshi az test-ha ba obur miravad va bakhshi bedoun-e an - natayej mokhtalat ast.\n\
+                              Baraye test, filter-e list ra az strategy hazf konid (dar strategy-ha-ye standard MODE_ALL), sepas:",
         intercept_unchecked: "nfqws2 ejra mishavad, amma queue javab nemidahad - barresi nashod.\n\
                               Ehtemalan service hanuz bala nayamade, an ra restart konid:",
 

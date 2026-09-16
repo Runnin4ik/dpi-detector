@@ -21,6 +21,7 @@ pub fn render_intercept_notice(msg: &Messages, found: Option<&Intercept>) -> Opt
     let found = found?;
     let body = match found.verdict {
         Verdict::Processed => return None,
+        Verdict::ListMode => msg.intercept_list_mode.to_string(),
         Verdict::Excluded => match found.policy.as_deref() {
             Some(policy) => msg.intercept_excluded.replacen("{}", policy, 1),
             None => msg.intercept_excluded_unnamed.to_string(),

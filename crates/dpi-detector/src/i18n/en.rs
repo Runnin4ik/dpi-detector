@@ -93,6 +93,10 @@ pub(crate) fn messages() -> Messages {
                            our traffic leaves through a tunnel (VPN), while its rules are on the provider interface.\n\n\
                            Traffic inside a tunnel is out of the bypass's reach: take the target out of the tunnel\n\
                            or add the tunnel interface to ISP_INTERFACE, then:",
+        intercept_list_mode: "nfqws2 is running, but its strategy does not cover every target:\n\
+                              for 80 and 443 it filters by lists (hostlist or ipset).\n\n\
+                              Some of what a run measures goes through the bypass and some does not.\n\
+                              For the test, drop the list filter from the strategy (MODE_ALL in the stock ones), then:",
         intercept_unchecked: "nfqws2 is running, but its queue is not answering - the check failed.\n\
                               The service may not have finished starting, restart it:",
 

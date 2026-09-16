@@ -93,6 +93,10 @@ pub(crate) fn messages() -> Messages {
                            我们的流量走隧道（VPN），而规则在运营商接口上。\n\n\
                            隧道内的流量绕过看不到：请把该目标移出隧道，\n\
                            或把隧道接口加入 ISP_INTERFACE，然后：",
+        intercept_list_mode: "检测到 nfqws2 正在运行，但策略并不覆盖所有目标：\n\
+                              对 80 和 443 启用了按列表过滤（hostlist 或 ipset）。\n\n\
+                              部分检查会走绕过，部分不会 — 结果会是混合的。\n\
+                              测试期间请去掉策略中的列表过滤（标准策略用 MODE_ALL），然后：",
         intercept_unchecked: "检测到 nfqws2 正在运行，但队列没有响应 — 检查失败。\n\
                               服务可能还没启动完成，请重启它：",
 
