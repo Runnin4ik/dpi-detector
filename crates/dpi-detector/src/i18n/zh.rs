@@ -94,9 +94,13 @@ pub(crate) fn messages() -> Messages {
                            隧道内的流量绕过看不到：请把该目标移出隧道，\n\
                            或把隧道接口加入 ISP_INTERFACE，然后：",
         intercept_list_mode: "检测到 nfqws2 正在运行，但策略并不覆盖所有目标：\n\
-                              对 80 和 443 启用了按列表过滤（hostlist 或 ipset）。\n\n\
-                              部分检查会走绕过，部分不会 — 结果会是混合的。\n\
-                              测试期间请去掉策略中的列表过滤（标准策略用 MODE_ALL），然后：",
+                              配置档案「{}」使用列表过滤：{}\n\n\
+                              这个列表来自工作模式，因此部分检查会走绕过，部分不会。\n\
+                              测试期间请在 NFQWS_EXTRA_ARGS 中把 MODE_AUTO 或 MODE_LIST 换成 MODE_ALL，然后：",
+        intercept_list_mode_own: "检测到 nfqws2 正在运行，但策略并不覆盖所有目标：\n\
+                                  配置档案「{}」使用列表过滤：{}\n\n\
+                                  部分检查会走绕过，部分不会。\n\
+                                  测试期间请从 NFQWS_ARGS_CUSTOM 的该档案中删除此过滤器，然后：",
         intercept_unchecked: "检测到 nfqws2 正在运行，但队列没有响应 — 检查失败。\n\
                               服务可能还没启动完成，请重启它：",
 

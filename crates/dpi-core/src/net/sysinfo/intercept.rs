@@ -44,6 +44,8 @@ use super::is_tun_name;
 pub const MARK_EXCLUDE: u32 = 0x2000_0000;
 
 const CONF_RUN: &str = "/opt/etc/nfqws2/nfqws2.conf.run";
+/// The install's own config, where the working modes are defined.
+const CONF: &str = "/opt/etc/nfqws2/nfqws2.conf";
 const PIDFILE: &str = "/opt/var/run/nfqws2.pid";
 const ROUTE_PROC: &str = "/proc/net/route";
 const ROUTE6_PROC: &str = "/proc/net/ipv6_route";
@@ -76,7 +78,7 @@ pub enum NotCovered {
     /// to the default-route comparison, which is why this is read per flow.
     Tunnel,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     /// The tool's rules cover the port and interface our traffic uses, and the
     /// policy did not mark the connection: the desync sees these packets.
@@ -85,11 +87,11 @@ pub enum Verdict {
     Excluded,
     /// The tool is running, but its rules do not cover us.
     NotQueued(NotCovered),
-    /// The rules take our traffic, but the strategy applies the desync to 80/443
-    /// only for targets on its own lists — so a run's numbers are a mixture of
-    /// bypassed and unbypassed, and a reader should know that before reading
-    /// them. Nothing is broken; this is a property of the strategy.
-    ListMode,
+    /// The rules take our traffic, but the strategy applies the desync to a
+    /// filtered part of it only — so a run's numbers are a mixture of bypassed
+    /// and unbypassed, and a reader should know which filter to look at before
+    /// reading them. Nothing is broken; this is a property of the strategy.
+    ListMode { filter: ListFilter, from_mode: bool },
     /// The tool is running and its queue is not bound, or nothing could be read
     /// back about our flow.
     Unknown,
@@ -181,11 +183,12 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         }
     } else if !target.is_none_or(|addr| conf.ports.contains(&addr.port())) {
         Verdict::NotQueued(NotCovered::Port)
-    } else if list_mode(pid) {
+    } else if let Some(filter) = list_mode(pid) {
         // Interception is fine; the strategy is what decides which targets get
-        // the desync. Saying so before a run is the difference between "the
-        // bypass does not work" and "these numbers are a mixture".
-        Verdict::ListMode
+        // the desync. Saying so before a run — and which filter to remove — is
+        // the difference between "the bypass does not work" and "these numbers
+        // are a mixture".
+        Verdict::ListMode { from_mode: list_from_mode(&filter.option), filter }
     } else {
         Verdict::Processed
     };
@@ -242,18 +245,26 @@ fn pidfile_pid() -> Option<u32> {
     std::path::Path::new(&format!("/proc/{pid}")).exists().then_some(pid)
 }
 
-/// Whether the running strategy applies the desync to 80/443 only for targets
-/// on its own lists.
+/// The profile that filters a run's traffic by a list, and the option that does
+/// it, so a reader is told which filter to remove rather than which concept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListFilter {
+    /// The profile's own filters, as written in the argv: `tcp=443 l7=tls`.
+    pub profile: String,
+    /// The option carrying the list, value included.
+    pub option: String,
+}
+
+/// Whether the running strategy filters a web run's traffic by lists, and by
+/// which filter.
 ///
 /// Read from the live argv rather than the config: the config holds
 /// `NFQWS_EXTRA_ARGS="$MODE_AUTO"`, and it is the argv that shows what that
 /// expanded to — plus whatever a custom strategy added on its own, which is the
 /// only place a hand-written `--ipset` appears at all. Nothing is written and no
 /// packet is sent for this: it is one small file.
-fn list_mode(pid: u32) -> bool {
-    let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
-        return false;
-    };
+fn list_mode(pid: u32) -> Option<ListFilter> {
+    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
     let args: Vec<String> = raw
         .split(|byte| *byte == 0)
         .filter(|part| !part.is_empty())
@@ -271,22 +282,37 @@ fn list_mode(pid: u32) -> bool {
 /// matches a connection handles it, so the question is asked of that profile
 /// alone: if it desyncs everything it takes, a run's numbers are all from one
 /// world, whatever the later profiles do.
-fn list_mode_in(args: &[String]) -> bool {
+fn list_mode_in(args: &[String]) -> Option<ListFilter> {
     for profile in profiles(args) {
         if !profile.acts || !takes_web(&profile.filters) {
             continue;
         }
-        return profile.listed;
+        let Some(option) = profile.list_option.as_ref() else {
+            // The first profile that takes our traffic desyncs everything it
+            // takes, and the later ones never see it.
+            return None;
+        };
+        return Some(ListFilter { profile: profile_label(&profile.filters), option: option.clone() });
     }
-    false
+    None
+}
+
+/// A profile's filters as the argv spells them, without the `--filter-` prefix:
+/// `tcp=443 l7=tls`. Tokens, not prose, so nothing here needs a translation.
+fn profile_label(filters: &[String]) -> String {
+    filters
+        .iter()
+        .map(|filter| filter.trim_start_matches("--filter-"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// One profile of the argument model.
 #[derive(Debug, Default)]
 struct Profile {
     filters: Vec<String>,
-    /// Carries a positive hostlist or ipset filter.
-    listed: bool,
+    /// The positive hostlist or ipset option the profile carries, if any.
+    list_option: Option<String>,
     /// Carries at least one `--lua-desync` instance.
     ///
     /// A profile without one does nothing to a packet, whatever its filters
@@ -312,7 +338,7 @@ fn profiles(args: &[String]) -> Vec<Profile> {
         } else if arg.starts_with("--lua-desync") {
             profile.acts = true;
         } else if is_list_filter(arg) {
-            profile.listed = true;
+            profile.list_option = Some(arg.clone());
         }
     }
     profiles
@@ -365,6 +391,27 @@ fn is_list_filter(arg: &str) -> bool {
     ["--hostlist=", "--hostlist-auto=", "--hostlist-domains=", "--ipset="]
         .iter()
         .any(|prefix| arg.starts_with(prefix))
+}
+
+/// Whether the offending option's value is one the package's modes define.
+///
+/// The install's modes live in the config (`MODE_LIST`, `MODE_ALL`, `MODE_AUTO`),
+/// and when a filter's value appears among them the advice is to switch the mode
+/// for the test rather than to edit the strategy: `MODE_ALL` is what the package
+/// ships for "everything except the exclude list".
+fn list_from_mode(option: &str) -> bool {
+    let Some((_, value)) = option.split_once('=') else {
+        return false;
+    };
+    if value.is_empty() {
+        return false;
+    }
+    let Ok(conf) = std::fs::read_to_string(CONF) else {
+        return false;
+    };
+    conf.lines()
+        .filter(|line| line.starts_with("MODE_"))
+        .any(|line| line.contains(value))
 }
 
 /// The resolved config the init script writes: `KEY=value` or `KEY="value"`.
@@ -738,7 +785,7 @@ mod tests {
             "--ipset-ip=0.0.0.0",
             "--new",
         ]);
-        assert!(!list_mode_in(&real), "the TLS profile has no list of its own");
+        assert!(list_mode_in(&real).is_none(), "the TLS profile has no list of its own");
     }
 
     /// The same layout with the list moved onto the TLS profile: now a web run
@@ -755,7 +802,9 @@ mod tests {
             "--lua-desync=hostfakesplit:repeats=8",
             "--new",
         ]);
-        assert!(list_mode_in(&listed));
+        let filter = list_mode_in(&listed).expect("the TLS profile filters by ipset");
+        assert_eq!(filter.profile, "tcp=443 l7=tls");
+        assert!(filter.option.starts_with("--ipset="), "{}", filter.option);
     }
 
     /// Filters of one profile are all required: a TLS-on-443 profile does not
@@ -764,11 +813,11 @@ mod tests {
     #[test]
     fn profile_filters_are_taken_together() {
         let other_ports = argv(&["--filter-tcp=2053,5222", "--hostlist=/tmp/user.list"]);
-        assert!(!list_mode_in(&other_ports), "not the ports a web test uses");
+        assert!(list_mode_in(&other_ports).is_none(), "not the ports a web test uses");
         let udp = argv(&["--filter-udp=443", "--filter-l7=quic", "--ipset=/tmp/quic.list"]);
-        assert!(!list_mode_in(&udp), "a UDP profile is not what a web test meets");
+        assert!(list_mode_in(&udp).is_none(), "a UDP profile is not what a web test meets");
         let other_l7 = argv(&["--filter-tcp=443", "--filter-l7=mtproto", "--ipset=/tmp/x.list"]);
-        assert!(!list_mode_in(&other_l7), "not the protocol a web test speaks");
+        assert!(list_mode_in(&other_l7).is_none(), "not the protocol a web test speaks");
     }
 
     /// Exclusions never make a profile list-driven, and `--ipset-ip=0.0.0.0` is
@@ -780,15 +829,15 @@ mod tests {
             "--hostlist-exclude=/tmp/exclude.list",
             "--lua-desync=multisplit",
         ]);
-        assert!(!list_mode_in(&excluded));
+        assert!(list_mode_in(&excluded).is_none());
         let empty_ip = argv(&["--filter-tcp=443", "--ipset-ip=0.0.0.0", "--lua-desync=multisplit"]);
-        assert!(!list_mode_in(&empty_ip));
+        assert!(list_mode_in(&empty_ip).is_none());
         let named = argv(&[
             "--filter-tcp=443",
             "--hostlist-domains=example.com",
             "--lua-desync=multisplit",
         ]);
-        assert!(list_mode_in(&named), "a literal domain list is still a list");
+        assert!(list_mode_in(&named).is_some(), "a literal domain list is still a list");
     }
 
     /// A list in the profile before any `--new` — where the daemon's own options
@@ -796,7 +845,7 @@ mod tests {
     #[test]
     fn a_list_in_the_first_profile_counts() {
         let first = argv(&["--hostlist=/tmp/user.list", "--filter-tcp=443", "--lua-desync=multisplit"]);
-        assert!(list_mode_in(&first));
+        assert!(list_mode_in(&first).is_some());
     }
 
     /// How the package assembles argv for the stock strategies: the custom
@@ -827,7 +876,7 @@ mod tests {
             "--hostlist-auto=/opt/etc/nfqws2/lists/auto.list",
             "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
         ]);
-        assert!(list_mode_in(&stock));
+        assert!(list_mode_in(&stock).is_some());
     }
 
     /// With `NFQWS_ARGS` empty the mode becomes a profile of its own: no
@@ -846,7 +895,7 @@ mod tests {
             "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
             "--new",
         ]);
-        assert!(!list_mode_in(&empty_strategy), "the web profile has no list of its own");
+        assert!(list_mode_in(&empty_strategy).is_none(), "the web profile has no list of its own");
     }
 
     /// An auto-list profile takes only connections whose host is already known,
@@ -861,7 +910,7 @@ mod tests {
             "--hostlist-auto=/opt/etc/nfqws2/lists/auto.list",
             "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
         ]);
-        assert!(list_mode_in(&auto));
+        assert!(list_mode_in(&auto).is_some());
     }
 
     /// The main table captured on a Keenetic, with its provider host route and

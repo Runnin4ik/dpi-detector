@@ -91,6 +91,7 @@ pub struct Messages {
     pub intercept_ipv6: &'static str,
     pub intercept_tunnel: &'static str,
     pub intercept_list_mode: &'static str,
+    pub intercept_list_mode_own: &'static str,
     pub intercept_unchecked: &'static str,
 
     // DNS Endpoints & Availability

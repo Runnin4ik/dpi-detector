@@ -19,9 +19,12 @@ use crate::tui::widgets::{BOX_WIDTH, panel_with};
 /// one path, and it must read the same in all four.
 pub fn render_intercept_notice(msg: &Messages, found: Option<&Intercept>) -> Option<String> {
     let found = found?;
-    let body = match found.verdict {
+    let body = match &found.verdict {
         Verdict::Processed => return None,
-        Verdict::ListMode => msg.intercept_list_mode.to_string(),
+        Verdict::ListMode { filter, from_mode } => {
+            let template = if *from_mode { msg.intercept_list_mode } else { msg.intercept_list_mode_own };
+            template.replacen("{}", &filter.profile, 1).replacen("{}", &filter.option, 1)
+        }
         Verdict::Excluded => match found.policy.as_deref() {
             Some(policy) => msg.intercept_excluded.replacen("{}", policy, 1),
             None => msg.intercept_excluded_unnamed.to_string(),
