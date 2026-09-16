@@ -70,6 +70,14 @@ pub(crate) fn messages() -> Messages {
         not_detected: "not detected",
         unavailable: "unavailable",
 
+        intercept_checking: "Interception: checking...",
+        intercept_none: "Interception: no bypass tool found - traffic goes out direct",
+        intercept_processed: "Interception: {} - our traffic is processed (queue {})",
+        intercept_excluded: "Interception: {} - our traffic is excluded by mark {}",
+        intercept_not_queued: "Interception: {} - our traffic never reached queue {}",
+        intercept_unknown: "Interception: {} is running, the result could not be read",
+        intercept_unmeasurable: "Interception: {} - cannot be measured (only nfqws2)",
+
 
         subnet_label: "Subnet:",
         ttlb_label: "TTLB:",

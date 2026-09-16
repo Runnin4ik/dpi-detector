@@ -425,6 +425,7 @@ pub(crate) async fn run_test_suite(
     profile: RegionProfile,
     lang: Language,
     badge: &str,
+    intercept: &str,
     banner_done: bool,
     emitter: &mut Emitter,
 ) {
@@ -433,7 +434,7 @@ pub(crate) async fn run_test_suite(
     let mut results = crate::json::Results::default();
 
     if !args.json && !banner_done {
-        emitter.emit(&render_banner(msg, profile, badge));
+        emitter.emit(&render_banner(msg, profile, badge, intercept));
     }
 
     let sem = Arc::new(Semaphore::new(concurrency.max(1)));

@@ -70,6 +70,14 @@ pub(crate) fn messages() -> Messages {
         not_detected: "не обнаружен",
         unavailable: "недоступен",
 
+        intercept_checking: "Перехват: проверяется…",
+        intercept_none: "Перехват: обход не найден — трафик идёт напрямую",
+        intercept_processed: "Перехват: {} — наш трафик обрабатывается (очередь {})",
+        intercept_excluded: "Перехват: {} — наш трафик исключён меткой {}",
+        intercept_not_queued: "Перехват: {} — в очередь {} наш трафик не попал",
+        intercept_unknown: "Перехват: {} запущен, проверить не удалось",
+        intercept_unmeasurable: "Перехват: {} — измерить нельзя (только nfqws2)",
+
 
         subnet_label: "Subnet:",
         ttlb_label: "TTLB:",

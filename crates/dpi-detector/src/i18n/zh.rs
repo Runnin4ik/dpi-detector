@@ -70,6 +70,14 @@ pub(crate) fn messages() -> Messages {
         not_detected: "未检测到",
         unavailable: "不可用",
 
+        intercept_checking: "拦截: 检查中...",
+        intercept_none: "拦截: 未发现绕过工具 — 流量直连",
+        intercept_processed: "拦截: {} — 我们的流量已被处理（队列 {}）",
+        intercept_excluded: "拦截: {} — 我们的流量被标记 {} 排除",
+        intercept_not_queued: "拦截: {} — 我们的流量未进入队列 {}",
+        intercept_unknown: "拦截: {} 正在运行，无法读取结果",
+        intercept_unmeasurable: "拦截: {} — 无法测量（仅支持 nfqws2）",
+
 
         subnet_label: "子网:",
         ttlb_label: "TTLB:",

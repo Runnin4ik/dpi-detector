@@ -4,9 +4,11 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+#[cfg(target_os = "windows")]
 use std::time::Duration;
 
 mod bypass;
+pub mod intercept;
 mod os;
 
 pub use bypass::detect_bypass_tools;
@@ -81,6 +83,11 @@ pub fn ipv6_supported() -> bool {
 }
 
 /// Runs a helper process and returns its stdout, or `None` when the timeout expires.
+///
+/// Windows-only: it exists for `tasklist` and `route print`, while the POSIX
+/// paths read `/proc` and `/etc/resolv.conf` directly — Entware's BusyBox `ps`
+/// takes neither `-e` nor `-o` anyway.
+#[cfg(target_os = "windows")]
 fn run_cmd(program: &str, args: &[&str], timeout_dur: Duration) -> Option<String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let prog = program.to_string();

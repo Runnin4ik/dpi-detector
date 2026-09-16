@@ -17,7 +17,7 @@ use std::time::Duration;
 use crate::TestSelection;
 use crate::render::{
     BOX_WIDTH, asc, ascii_mode, clean_output, frame_home, frame_repaint, output_str,
-    panel_to_string, plain_mode, render_banner, strip_ansi_len,
+    panel_to_string, plain_mode, render_banner, render_intercept, strip_ansi_len, InterceptState,
 };
 use crate::tui::input::nav_key;
 use crate::tui::screens::legend::{MenuAction, legend_loop};
@@ -41,6 +41,9 @@ pub enum MenuResult {
 /// Shared slot for the background version check: None = pending.
 pub type VersionSlot = Arc<Mutex<Option<Option<ReleaseInfo>>>>;
 
+/// Shared slot for the background interception probe: None = pending.
+pub type InterceptSlot = Arc<Mutex<Option<InterceptState>>>;
+
 /// Probes whether this terminal supports raw mode (TUI) without visible side effects.
 pub fn tui_available() -> bool {
     if enable_raw_mode().is_err() {
@@ -56,6 +59,7 @@ pub async fn run_interactive_menu(
     cfg: &AppConfig,
     badge: &str,
     latest_slot: &VersionSlot,
+    intercept_slot: &InterceptSlot,
 ) -> MenuResult {
     if enable_raw_mode().is_err() {
         return MenuResult::Quit;
@@ -66,7 +70,7 @@ pub async fn run_interactive_menu(
     // screen and in the scrollback.
     let _ = execute!(out, crossterm::cursor::Hide);
 
-    let result = run_menu_loop(initial_lang, profile, cfg, badge, latest_slot).await;
+    let result = run_menu_loop(initial_lang, profile, cfg, badge, latest_slot, intercept_slot).await;
 
     let _ = execute!(out, crossterm::cursor::Show);
     let _ = disable_raw_mode();
@@ -88,12 +92,27 @@ fn current_badge(_initial: &str, latest_slot: &VersionSlot, lang: Language) -> S
     }
 }
 
+/// Resolves the header's interception line against the background probe slot.
+/// The slot holds the probe's *data*, not its rendering, so a language change
+/// in the menu re-words the line instead of pinning the old language.
+fn current_intercept(slot: &InterceptSlot, lang: Language) -> String {
+    let msg = get_messages(lang);
+    match slot.lock() {
+        Ok(guard) => match &*guard {
+            None => render_intercept(&msg, &InterceptState { pending: true, ..Default::default() }),
+            Some(state) => render_intercept(&msg, state),
+        },
+        Err(_) => String::new(),
+    }
+}
+
 async fn run_menu_loop(
     initial_lang: Language,
     profile: RegionProfile,
     cfg: &AppConfig,
     badge: &str,
     latest_slot: &VersionSlot,
+    intercept_slot: &InterceptSlot,
 ) -> MenuResult {
     let mut cursor = 0usize;
     let mut current_lang = initial_lang;
@@ -127,6 +146,9 @@ async fn run_menu_loop(
     // Paint state: a full clear+redraw several times a second flickers, so
     // repaint only on the first paint, a keypress, or a badge/row change.
     let mut last_badge = String::new();
+    // The interception line is resolved like the badge and repaints the frame
+    // the same way, so the probe can land while the menu is already on screen.
+    let mut last_intercept = String::new();
     // Widest row of the previous frame: the next repaint pads every row to at
     // least this, so a line that shrank cannot leave glyphs behind.
     let mut prev_max = 0usize;
@@ -145,7 +167,8 @@ async fn run_menu_loop(
 
         // Re-resolve every iteration, repaint only on change.
         let live_badge = current_badge(badge, latest_slot, current_lang);
-        if dirty || live_badge != last_badge {
+        let live_intercept = current_intercept(intercept_slot, current_lang);
+        if dirty || live_badge != last_badge || live_intercept != last_intercept {
             draw_menu(
                 cursor,
                 current_lang,
@@ -159,11 +182,13 @@ async fn run_menu_loop(
                 &msg,
                 profile,
                 &live_badge,
+                &live_intercept,
                 notice.as_deref(),
                 &mut prev_max,
                 &mut drawn,
             );
             last_badge = live_badge;
+            last_intercept = live_intercept;
             dirty = false;
         }
         let event = tokio::select! {
@@ -366,12 +391,13 @@ fn draw_menu(
     msg: &Messages,
     profile: RegionProfile,
     badge: &str,
+    intercept: &str,
     notice: Option<&str>,
     prev_max: &mut usize,
     drawn: &mut u16,
 ) {
     let mut rows: Vec<String> = Vec::with_capacity(24);
-    for row in render_banner(msg, profile, badge).split('\n') {
+    for row in render_banner(msg, profile, badge, intercept).split('\n') {
         rows.push(clean_output(row));
     }
     let mut lines = Vec::new();
@@ -553,9 +579,10 @@ pub(crate) async fn menu_until_something_to_run(
     cfg: &AppConfig,
     badge: &str,
     version_slot: &VersionSlot,
+    intercept_slot: &InterceptSlot,
 ) -> Option<MenuSelection> {
     loop {
-        let chosen = match run_interactive_menu(lang, profile, cfg, badge, version_slot).await {
+        let chosen = match run_interactive_menu(lang, profile, cfg, badge, version_slot, intercept_slot).await {
             MenuResult::Run(chosen) => chosen,
             MenuResult::Quit => return None,
         };

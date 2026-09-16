@@ -79,6 +79,16 @@ pub struct Messages {
     pub not_detected: &'static str,
     pub unavailable: &'static str,
 
+    // Interception of this process's own traffic by a local bypass tool.
+    // `{}` slots: the tool name, then the queue number or the connection mark.
+    pub intercept_checking: &'static str,
+    pub intercept_none: &'static str,
+    pub intercept_processed: &'static str,
+    pub intercept_excluded: &'static str,
+    pub intercept_not_queued: &'static str,
+    pub intercept_unknown: &'static str,
+    pub intercept_unmeasurable: &'static str,
+
     // DNS Endpoints & Availability
     pub subnet_label: &'static str,
     pub ttlb_label: &'static str,

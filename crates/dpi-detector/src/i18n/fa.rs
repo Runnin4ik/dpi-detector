@@ -69,6 +69,14 @@ pub(crate) fn messages() -> Messages {
         not_detected: "peyda nashod",
         unavailable: "dar dastras nist",
 
+        intercept_checking: "Intercept: dar hal-e barresi...",
+        intercept_none: "Intercept: abzar-e obur peyda nashod - traffic mostaghim miravad",
+        intercept_processed: "Intercept: {} - traffic-e ma pardazesh mishavad (queue {})",
+        intercept_excluded: "Intercept: {} - traffic-e ma ba mark {} mostasna shod",
+        intercept_not_queued: "Intercept: {} - traffic-e ma be queue {} narasid",
+        intercept_unknown: "Intercept: {} ejra mishavad, natije khande nashod",
+        intercept_unmeasurable: "Intercept: {} - qabel-e andaze-giri nist (faqat nfqws2)",
+
         subnet_label: "Subnet:",
         ttlb_label: "TTLB:",
         org_label: "Org:",
