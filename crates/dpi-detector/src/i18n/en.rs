@@ -70,13 +70,27 @@ pub(crate) fn messages() -> Messages {
         not_detected: "not detected",
         unavailable: "unavailable",
 
-        intercept_checking: "Interception: checking...",
-        intercept_none: "Interception: no bypass tool found - traffic goes out direct",
-        intercept_processed: "Interception: {} - our traffic is processed (queue {})",
-        intercept_excluded: "Interception: {} - our traffic is excluded by mark {}",
-        intercept_not_queued: "Interception: {} - our traffic never reached queue {}",
-        intercept_unknown: "Interception: {} is running, the result could not be read",
-        intercept_unmeasurable: "Interception: {} - cannot be measured (only nfqws2)",
+        intercept_excluded: "nfqws2 is running, but it does not see the detector's traffic:\n\
+                             the connection is excluded by the \"{}\" access policy.\n\n\
+                             To have the bypass apply to the router itself, temporarily set POLICY_EXCLUDE=1\n\
+                             or point POLICY_NAME at a name no policy uses, then:",
+        intercept_excluded_unnamed: "nfqws2 is running, but it does not see the detector's traffic:\n\
+                                     the connection is excluded by the access policy.\n\n\
+                                     To have the bypass apply to the router itself, temporarily set POLICY_EXCLUDE=1\n\
+                                     or point POLICY_NAME at a name no policy uses, then:",
+        intercept_interface: "nfqws2 is running, but it does not see the detector's traffic:\n\
+                              its rules are on interface {}, while ours leaves through {}.\n\n\
+                              To have the bypass cover our traffic, add that interface to ISP_INTERFACE\n\
+                              in /opt/etc/nfqws2/nfqws2.conf (several are space separated), then:",
+        intercept_ports: "nfqws2 is running, but it does not see the detector's traffic:\n\
+                          it does not process the port we use.\n\n\
+                          Add the port to TCP_PORTS and to the strategy's --filter-tcp, then:",
+        intercept_ipv6: "nfqws2 is running, but it does not see the detector's traffic:\n\
+                         no IPv6 rules are installed - the package config has IPV6_ENABLED=0.\n\n\
+                         To have the bypass work over IPv6 too, set IPV6_ENABLED=1\n\
+                         in /opt/etc/nfqws2/nfqws2.conf, then:",
+        intercept_unchecked: "nfqws2 is running, but its queue is not answering - the check failed.\n\
+                              The service may not have finished starting, restart it:",
 
 
         subnet_label: "Subnet:",

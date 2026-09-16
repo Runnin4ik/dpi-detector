@@ -70,13 +70,27 @@ pub(crate) fn messages() -> Messages {
         not_detected: "未检测到",
         unavailable: "不可用",
 
-        intercept_checking: "拦截: 检查中...",
-        intercept_none: "拦截: 未发现绕过工具 — 流量直连",
-        intercept_processed: "拦截: {} — 我们的流量已被处理（队列 {}）",
-        intercept_excluded: "拦截: {} — 我们的流量被标记 {} 排除",
-        intercept_not_queued: "拦截: {} — 我们的流量未进入队列 {}",
-        intercept_unknown: "拦截: {} 正在运行，无法读取结果",
-        intercept_unmeasurable: "拦截: {} — 无法测量（仅支持 nfqws2）",
+        intercept_excluded: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
+                             连接被访问策略「{}」排除。\n\n\
+                             要让绕过也适用于路由器本身，可临时设置 POLICY_EXCLUDE=1，\n\
+                             或把 POLICY_NAME 改成不存在的名字，然后：",
+        intercept_excluded_unnamed: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
+                                     连接被访问策略排除。\n\n\
+                                     要让绕过也适用于路由器本身，可临时设置 POLICY_EXCLUDE=1，\n\
+                                     或把 POLICY_NAME 改成不存在的名字，然后：",
+        intercept_interface: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
+                              规则在接口 {} 上，而我们的流量从 {} 出去。\n\n\
+                              要让绕过覆盖我们的流量，请把该接口加入 ISP_INTERFACE\n\
+                              （/opt/etc/nfqws2/nfqws2.conf，多个用空格分隔），然后：",
+        intercept_ports: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
+                          它不处理我们使用的端口。\n\n\
+                          请把端口加入 TCP_PORTS 和策略的 --filter-tcp，然后：",
+        intercept_ipv6: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
+                         没有安装 IPv6 规则 — 配置中 IPV6_ENABLED=0。\n\n\
+                         要让绕过也适用于 IPv6，请把 IPV6_ENABLED=1\n\
+                         写入 /opt/etc/nfqws2/nfqws2.conf，然后：",
+        intercept_unchecked: "检测到 nfqws2 正在运行，但队列没有响应 — 检查失败。\n\
+                              服务可能还没启动完成，请重启它：",
 
 
         subnet_label: "子网:",

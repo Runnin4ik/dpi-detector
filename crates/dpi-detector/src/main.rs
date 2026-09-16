@@ -1,4 +1,5 @@
 use std::io::{stdout, IsTerminal, Write};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use dpi_core::config::{
@@ -23,7 +24,7 @@ mod views;
 use dpi_core::classify::Detail;
 use menu::{
     burst_settings_menu, export_report, legend_loop, menu_until_something_to_run,
-    read_post_test_action, run_interactive_menu, tui_available, InterceptSlot, MenuAction,
+    read_post_test_action, run_interactive_menu, tui_available, MenuAction,
     MenuResult, PostTestAction, VersionSlot,
 };
 use runner::{
@@ -32,10 +33,10 @@ use runner::{
 };
 use render::{
     asc, clean_output, output_str, plain_mode, render_banner, render_fingerprint_header,
-    render_intercept, set_ascii_mode, set_has_vt, set_plain_mode, strip_ansi, InterceptState,
+    set_ascii_mode, set_has_vt, set_plain_mode, strip_ansi,
 };
 use dpi_core::dns::resolve_host;
-use dpi_core::net::netinfo::{detect_bypass_tools, nfqws2};
+use dpi_core::net::netinfo::{nfqws2, Family, Intercept};
 
 /// Which tests a run turns on, parsed from the selection string (digits 0–7).
 ///
@@ -154,18 +155,33 @@ fn prescan_language() -> Language {
     }
 }
 
-/// The header's interception line, rendered for the current language.
-///
-/// Empty while the probe is still running: in text mode the header is printed
-/// once, and an empty line leaves the banner at its usual height instead of
-/// claiming a verdict the probe has not reached.
-fn intercept_text(slot: &InterceptSlot, lang: Language) -> String {
-    let Ok(guard) = slot.lock() else {
-        return String::new();
-    };
-    match &*guard {
-        None => String::new(),
-        Some(state) => render_intercept(&get_messages(lang), state),
+/// A bypass probe per address family: the package covers IPv4 and IPv6 with
+/// separate rules, so the answer can differ between them.
+#[derive(Debug, Clone, Default)]
+struct Intercepts {
+    v4: Option<Intercept>,
+    v6: Option<Intercept>,
+}
+
+/// Shared slot for the background interception probe: None = pending.
+type InterceptSlot = Arc<Mutex<Option<Intercepts>>>;
+
+/// Runs the probe for one family. A missing target is not fatal: the verdict
+/// then rests on the package's configuration alone, which is the half that says
+/// whether that family is covered at all — an IPv6 run of a domain with no AAAA
+/// record is exactly that case.
+async fn probe_family(family: Family, target: Option<SocketAddr>) -> Option<Intercept> {
+    nfqws2(family, target).await
+}
+
+/// The probe result for the family this run will use (`ip_version`).
+fn intercept_for(slot: &InterceptSlot, ip_version: &str) -> Option<Intercept> {
+    let guard = slot.lock().ok()?;
+    let found = guard.as_ref()?;
+    if ip_version == "ipv6" {
+        found.v6.clone()
+    } else {
+        found.v4.clone()
     }
 }
 
@@ -293,38 +309,37 @@ async fn main() {
 
     // Background interception probe, on the version check's own budget: it
     // answers whether the bypass on this device takes *our* traffic, and the
-    // header must not wait on it either.
+    // header must not wait on it either. Both families are probed — the menu
+    // picks the run's family after this, and the package covers v4 and v6
+    // separately.
     let intercept_slot: InterceptSlot = Arc::new(Mutex::new(None));
     {
         let slot = Arc::clone(&intercept_slot);
-        let signatures = cfg.bypass_tools();
         let domain = args
             .domain
             .first()
             .cloned()
             .or_else(|| dpi_core::config::embedded_burst_domains().into_iter().next());
         tokio::spawn(async move {
-            // The process scan shells out on Windows, so it does not run on the
-            // reactor thread.
-            let tools = tokio::task::spawn_blocking(move || detect_bypass_tools(&signatures))
-                .await
-                .unwrap_or_default();
             // The probe needs an address, not a name: resolution is the binary's
-            // business, since `net/` never reaches into `dns/`. IPv4 only — the
-            // probe opens an IPv4 socket, which is also what the tests dial by
-            // default (`ip_version`).
-            let result = match domain {
-                Some(domain) => match resolve_host(&domain, 443, Duration::from_secs(3)).await {
-                    Ok(addrs) => match addrs.into_iter().find(|addr| addr.is_ipv4()) {
-                        Some(target) => nfqws2(target).await,
-                        None => None,
-                    },
-                    Err(_) => None,
-                },
+            // business, since `net/` never reaches into `dns/`.
+            let addrs = match domain {
+                Some(domain) => resolve_host(&domain, 443, Duration::from_secs(3)).await.ok(),
                 None => None,
             };
+            let target = |v6: bool| {
+                addrs
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .find(|addr| addr.is_ipv6() == v6)
+            };
+            let (v4, v6) = tokio::join!(
+                probe_family(Family::V4, target(false)),
+                probe_family(Family::V6, target(true))
+            );
             if let Ok(mut guard) = slot.lock() {
-                *guard = Some(InterceptState { pending: false, result, tools });
+                *guard = Some(Intercepts { v4, v6 });
             }
         });
     }
@@ -340,7 +355,7 @@ async fn main() {
 
     // If user ran the binary with NO arguments and TUI is unavailable:
     if !has_explicit_cmd && !wants_menu {
-        let banner = render_banner(&msg, profile, msg.checking_updates, "");
+        let banner = render_banner(&msg, profile, msg.checking_updates);
         print_out(&clean_output(&banner));
         let raw_err = if let Err(e) = crossterm::terminal::enable_raw_mode() {
             Some(format!("{e}"))
@@ -397,11 +412,6 @@ async fn main() {
             }
         }
     }
-    // The header line for the text report: empty when the probe did not answer
-    // in time, which reads as "nothing to say about interception" rather than
-    // as a claim about it.
-    let intercept_line = intercept_text(&intercept_slot, lang);
-
     if is_interactive {
         // Poll the version slot for the menu badge without blocking
         if let Ok(g) = version_slot.lock() {
@@ -409,7 +419,7 @@ async fn main() {
                 badge = version_badge_lang(latest.as_ref(), lang);
             }
         }
-        match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot, &intercept_slot).await {
+        match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot).await {
             MenuResult::Run(sel) => {
                 tests_str = sel.selected_tests;
                 concurrency = sel.concurrency;
@@ -431,7 +441,7 @@ async fn main() {
 
     // Non-interactive runs print the banner first, then the config line.
     if !args.json && !banner_done {
-        print_out(&render_banner(&msg, profile, &badge, &intercept_line));
+        print_out(&render_banner(&msg, profile, &badge));
         banner_done = true;
     }
 
@@ -453,7 +463,7 @@ async fn main() {
         // terminal to answer it, the legend is the whole program.
         match legend_loop(lang, &msg) {
             MenuAction::Menu if is_interactive => {
-                match menu_until_something_to_run(lang, profile, &cfg, &badge, &version_slot, &intercept_slot).await {
+                match menu_until_something_to_run(lang, profile, &cfg, &badge, &version_slot).await {
                     Some(chosen) => {
                         tests_str = chosen.selected_tests;
                         concurrency = chosen.concurrency;
@@ -566,7 +576,7 @@ async fn main() {
             profile,
             lang,
             &badge,
-            &intercept_line,
+            intercept_for(&intercept_slot, &ip_version).as_ref(),
             banner_done,
             &mut emitter,
         )
@@ -617,7 +627,7 @@ async fn main() {
                             badge = version_badge_lang(latest.as_ref(), lang);
                         }
                     }
-                    match menu_until_something_to_run(lang, profile, &cfg, &badge, &version_slot, &intercept_slot).await {
+                    match menu_until_something_to_run(lang, profile, &cfg, &badge, &version_slot).await {
                         Some(chosen) => {
                             selection = chosen.selected_tests;
                             concurrency = chosen.concurrency;

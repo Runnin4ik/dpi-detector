@@ -38,7 +38,7 @@ use tokio::sync::Semaphore;
 use crate::args::CliArgs;
 use crate::render::{
     render_banner, render_burst_table,
-    render_dns_availability, render_dns_endpoints, render_dns_resolve_notes, render_domain_table, render_netinfo_panel, render_summary, render_tcp_table, render_telegram,
+    render_dns_availability, render_dns_endpoints, render_dns_resolve_notes, render_domain_table, render_intercept_notice, render_netinfo_panel, render_summary, render_tcp_table, render_telegram,
     render_whitelist, LiveProgress,
     NetFamilyInfo, NetInfoData, NetTtlb, Spinner, SummaryData, TcpRow,
 };
@@ -425,7 +425,7 @@ pub(crate) async fn run_test_suite(
     profile: RegionProfile,
     lang: Language,
     badge: &str,
-    intercept: &str,
+    intercept: Option<&dpi_core::net::netinfo::Intercept>,
     banner_done: bool,
     emitter: &mut Emitter,
 ) {
@@ -434,7 +434,13 @@ pub(crate) async fn run_test_suite(
     let mut results = crate::json::Results::default();
 
     if !args.json && !banner_done {
-        emitter.emit(&render_banner(msg, profile, badge, intercept));
+        emitter.emit(&render_banner(msg, profile, badge));
+    }
+    // What the run means depends on whether the bypass sees it, so this comes
+    // before any result: a reader who sees only the tables must not have to
+    // guess which of the two worlds they were measured in.
+    if let Some(notice) = render_intercept_notice(msg, intercept) {
+        emitter.emit(&notice);
     }
 
     let sem = Arc::new(Semaphore::new(concurrency.max(1)));

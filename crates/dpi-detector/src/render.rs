@@ -9,7 +9,7 @@ pub use crate::tui::backend::{
 };
 pub use crate::tui::progress::{LiveProgress, Spinner};
 pub use crate::tui::widgets::{asc, frame_repaint, panel_to_string, strip_ansi_len, BOX_WIDTH};
-pub use crate::views::banner::{render_banner, render_fingerprint_header, render_intercept, InterceptState};
+pub use crate::views::banner::{render_banner, render_fingerprint_header, render_intercept_notice};
 pub use crate::views::burst::render_burst_table;
 pub use crate::views::dns::{render_dns_availability, render_dns_endpoints};
 pub use crate::views::domains::{render_dns_resolve_notes, render_domain_table};

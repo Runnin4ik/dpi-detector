@@ -79,15 +79,17 @@ pub struct Messages {
     pub not_detected: &'static str,
     pub unavailable: &'static str,
 
-    // Interception of this process's own traffic by a local bypass tool.
-    // `{}` slots: the tool name, then the queue number or the connection mark.
-    pub intercept_checking: &'static str,
-    pub intercept_none: &'static str,
-    pub intercept_processed: &'static str,
+    // Interception of this process's own traffic by nfqws2 on Keenetic.
+    // Multi-line blocks, printed after the menu selection with a blank line
+    // around them; `{}` slots are the policy name and the two interface names.
+    // The restart command is appended by the caller, so it stays one path in
+    // every language.
     pub intercept_excluded: &'static str,
-    pub intercept_not_queued: &'static str,
-    pub intercept_unknown: &'static str,
-    pub intercept_unmeasurable: &'static str,
+    pub intercept_excluded_unnamed: &'static str,
+    pub intercept_interface: &'static str,
+    pub intercept_ports: &'static str,
+    pub intercept_ipv6: &'static str,
+    pub intercept_unchecked: &'static str,
 
     // DNS Endpoints & Availability
     pub subnet_label: &'static str,

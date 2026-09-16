@@ -11,10 +11,12 @@
 //! Everything here is read from the tool's own state, never guessed:
 //!
 //! * `/opt/etc/nfqws2/nfqws2.conf.run` — what the init script resolved on
-//!   start: the queue number, the interfaces it hooked, the ports it queues;
+//!   start: the queue number, the policy it looks for, the interfaces it hooked,
+//!   the ports it queues, and whether the IPv6 half is on at all;
 //! * `/opt/var/run/nfqws2.pid` — liveness;
 //! * `/proc/net/netfilter/nfnetlink_queue` — that the queue is actually bound;
-//! * `/proc/net/route` — the interface our own traffic leaves by;
+//! * `/proc/net/route` and `/proc/net/ipv6_route` — the interface our own
+//!   traffic leaves by, one file per address family;
 //! * `/proc/net/nf_conntrack` — the `ctmark` of our own flow, where the
 //!   policy's `CONNMARK --set-xmark` shows up.
 //!
@@ -30,7 +32,7 @@
 //! tests send.
 
 use std::io::{BufRead, BufReader};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
 /// The mark the package stamps on connections its access policy leaves alone
@@ -42,6 +44,7 @@ pub const MARK_EXCLUDE: u32 = 0x2000_0000;
 const CONF_RUN: &str = "/opt/etc/nfqws2/nfqws2.conf.run";
 const PIDFILE: &str = "/opt/var/run/nfqws2.pid";
 const ROUTE_PROC: &str = "/proc/net/route";
+const ROUTE6_PROC: &str = "/proc/net/ipv6_route";
 const QUEUE_PROC: &str = "/proc/net/netfilter/nfnetlink_queue";
 const CONNTRACK_PROC: &str = "/proc/net/nf_conntrack";
 
@@ -52,6 +55,20 @@ const PROBE_WAIT: Duration = Duration::from_millis(150);
 /// connection is still being created.
 const PROBE_ATTEMPTS: usize = 2;
 
+/// Why the rules do not take our traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotCovered {
+    /// Our traffic leaves by an interface the rules were not attached to — a
+    /// tunnel, a second uplink. The common case on a router that routes its own
+    /// traffic somewhere else.
+    Interface,
+    /// The port our probe uses is not in the package's `TCP_PORTS`.
+    Port,
+    /// Our traffic is IPv6 and the package installs no IPv6 rules at all
+    /// (`IPV6_ENABLED=0`). The v4 rules can be perfect and this still holds.
+    Ipv6,
+}
+
 /// What became of our own traffic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
@@ -60,65 +77,116 @@ pub enum Verdict {
     Processed,
     /// The access policy excluded our connection before the queue.
     Excluded,
-    /// The tool is running, but its rules do not cover us — the port is not in
-    /// its list, or our traffic leaves by an interface it did not hook.
-    NotQueued,
+    /// The tool is running, but its rules do not cover us.
+    NotQueued(NotCovered),
     /// The tool is running and its queue is not bound, or nothing could be read
     /// back about our flow.
     Unknown,
 }
 
-/// The state of the `nfqws2` package on this device.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Intercept {
-    /// Queue number the tool listens on, as resolved by its init script.
-    pub queue: Option<u32>,
-    /// `ctmark` of our own connection, when `nf_conntrack` had it.
-    pub mark: Option<u32>,
-    pub verdict: Verdict,
+/// Address family a run uses. The package covers the two with separate rules,
+/// so the verdict has to be asked for one of them by name: an IPv6 run must not
+/// be judged by what the v4 rules do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Family {
+    V4,
+    V6,
 }
 
-/// Measures how the `nfqws2` package treats a connection to `target`.
+/// The state of the `nfqws2` package on this device, as far as it concerns the
+/// detector's own traffic. Everything the notice can name is here; the queue
+/// number and the connection mark stay inside — they decide the verdict, they
+/// are not something to show a reader.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Intercept {
+    pub verdict: Verdict,
+    /// The policy the package looks for (`POLICY_NAME`), when its config names
+    /// one. `None` means the policy part of the verdict is unknown.
+    pub policy: Option<String>,
+    /// Interfaces the rules were attached to (`ISP_INTERFACE`, space separated).
+    pub rules_interfaces: Vec<String>,
+    /// The interface our own traffic leaves by — the kernel's default route for
+    /// the family, which is where a probe to a routable host goes.
+    pub our_interface: Option<String>,
+}
+
+/// Measures how the `nfqws2` package treats a connection of `family` to
+/// `target`.
 ///
-/// `None` when the package is not running on this device — the caller falls
-/// back to whatever else it knows about local bypass tools. `target` must be
-/// resolved by the caller: `net/` does not reach into `dns/`.
-pub async fn nfqws2(target: SocketAddr) -> Option<Intercept> {
+/// `None` when the package is not running on this device — there is nothing to
+/// say about interception, and the caller says nothing.
+///
+/// `target` is optional and only feeds the mark probe: a run whose family has
+/// no address for the chosen domain still gets a verdict from the package's own
+/// configuration, which is the half that says whether that family is covered at
+/// all. The caller resolves addresses — `net/` does not reach into `dns/`.
+pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Intercept> {
     if !pidfile_alive() {
         return None;
     }
+    let v6 = family == Family::V6;
+    let our_interface = if v6 { default_route_interface6() } else { default_route_interface() };
     let Some(conf) = conf_run() else {
         // The package is up but its resolved config is unreadable: say so
         // rather than claim a verdict the numbers do not support.
-        return Some(Intercept { queue: None, mark: None, verdict: Verdict::Unknown });
+        return Some(Intercept {
+            verdict: Verdict::Unknown,
+            policy: None,
+            rules_interfaces: Vec::new(),
+            our_interface,
+        });
     };
 
-    let mark = probe_mark(target).await;
+    let mark = match target {
+        Some(target) => probe_mark(target).await,
+        None => None,
+    };
     let verdict = if mark == Some(MARK_EXCLUDE) {
         Verdict::Excluded
     } else if !conf.queue.is_some_and(queue_bound) {
-        // Running, but nothing is listening on its queue: the packets queue and
-        // are accepted straight back out, which is not something to report as
-        // "processed".
+        // Running, but nothing is listening on its queue: our packets would be
+        // accepted straight back out, which is not "processed".
         Verdict::Unknown
-    } else if !conf.covers(target.port()) {
-        Verdict::NotQueued
+    } else if v6 && !conf.ipv6_enabled {
+        // The v4 rules can be perfect and this still holds: with IPV6_ENABLED=0
+        // the init script installs no ip6tables rules at all.
+        Verdict::NotQueued(NotCovered::Ipv6)
+    } else if our_interface.is_none() {
+        // Without knowing where our traffic leaves by, coverage cannot be
+        // judged at all.
+        Verdict::Unknown
+    } else if !conf.interfaces.contains(our_interface.as_ref()?) {
+        Verdict::NotQueued(NotCovered::Interface)
+    } else if !target.is_none_or(|addr| conf.ports.contains(&addr.port())) {
+        Verdict::NotQueued(NotCovered::Port)
     } else {
         Verdict::Processed
     };
-    Some(Intercept { queue: conf.queue, mark, verdict })
+    Some(Intercept { verdict, policy: conf.policy, rules_interfaces: conf.interfaces, our_interface })
 }
 
 /// The mark on our own connection, opened from an unprivileged source port.
 ///
 /// A failed or blocked connection is fine: the mark is set on the first packet,
-/// so the answer does not depend on the handshake completing.
+/// so the answer does not depend on the handshake completing. The socket's
+/// family is the target's: an IPv6 run must be judged by the IPv6 path, which
+/// the package covers or does not cover separately.
 async fn probe_mark(target: SocketAddr) -> Option<u32> {
     for _ in 0..PROBE_ATTEMPTS {
-        let Ok(socket) = tokio::net::TcpSocket::new_v4() else {
+        let v6 = target.is_ipv6();
+        let Ok(socket) = (if v6 {
+            tokio::net::TcpSocket::new_v6()
+        } else {
+            tokio::net::TcpSocket::new_v4()
+        }) else {
             return None;
         };
-        if socket.bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).is_err() {
+        let bind = if v6 {
+            SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0))
+        } else {
+            SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
+        };
+        if socket.bind(bind).is_err() {
             return None;
         }
         let Ok(local) = socket.local_addr() else {
@@ -145,19 +213,15 @@ fn pidfile_alive() -> bool {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ConfRun {
     queue: Option<u32>,
+    /// The access policy the package looks for (`POLICY_NAME`).
+    policy: Option<String>,
     /// Interfaces the rules were attached to (`ISP_INTERFACE`, space separated).
     interfaces: Vec<String>,
     /// Destination ports the rules queue (`TCP_PORTS`, `80,443` or `590:600`).
     ports: Vec<u16>,
-}
-
-impl ConfRun {
-    /// Whether the rules would take a connection to `port` out of *our*
-    /// interface. Both halves matter: the rules match on `-o <iface>` and on
-    /// the destination port, and either one missing means no interception.
-    fn covers(&self, port: u16) -> bool {
-        self.ports.contains(&port) && self.interfaces.iter().any(|iface| default_route_has(iface))
-    }
+    /// `IPV6_ENABLED`: with it off, the init script installs no ip6tables rules
+    /// and IPv6 traffic goes out untouched no matter what the v4 side does.
+    ipv6_enabled: bool,
 }
 
 fn conf_run() -> Option<ConfRun> {
@@ -165,7 +229,7 @@ fn conf_run() -> Option<ConfRun> {
     Some(parse_conf_run(&text))
 }
 
-/// Reads the three values this module needs out of the shell-sourced config.
+/// Reads the values this module needs out of the shell-sourced config.
 fn parse_conf_run(text: &str) -> ConfRun {
     let mut conf = ConfRun::default();
     for line in text.lines() {
@@ -175,6 +239,8 @@ fn parse_conf_run(text: &str) -> ConfRun {
         let value = value.trim().trim_matches('"');
         match key.trim() {
             "NFQUEUE_NUM" => conf.queue = value.parse::<u32>().ok(),
+            "IPV6_ENABLED" => conf.ipv6_enabled = value.trim() != "0" && !value.trim().is_empty(),
+            "POLICY_NAME" => conf.policy = (!value.is_empty()).then(|| value.to_string()),
             "ISP_INTERFACE" => {
                 conf.interfaces = value.split_whitespace().map(str::to_string).collect();
             }
@@ -217,25 +283,46 @@ fn queue_lines_contain(table: &str, queue: u32) -> bool {
     })
 }
 
-/// Whether the kernel's IPv4 default route goes out `iface`.
+/// The interface the kernel's IPv4 default route goes out.
 ///
-/// The probe opens an IPv4 socket to a routable host, so it leaves by the
-/// default route; the file lists `Iface Destination ...`, with an all-zero
-/// destination for the default.
-fn default_route_has(iface: &str) -> bool {
-    let Ok(text) = std::fs::read_to_string(ROUTE_PROC) else {
-        return false;
-    };
-    route_lines_have(&text, iface)
+/// The probe opens an IPv4 socket to a routable host, so it leaves this way;
+/// the file lists `Iface Destination ...`, with an all-zero destination for the
+/// default.
+fn default_route_interface() -> Option<String> {
+    let text = std::fs::read_to_string(ROUTE_PROC).ok()?;
+    route_default_interface(&text)
 }
 
-/// The parsing half of [`default_route_has`], on a table in memory.
-fn route_lines_have(table: &str, iface: &str) -> bool {
-    table.lines().skip(1).any(|line| {
+/// The parsing half of [`default_route_interface`], on a table in memory.
+fn route_default_interface(table: &str) -> Option<String> {
+    table.lines().skip(1).find_map(|line| {
         let mut fields = line.split_whitespace();
         match (fields.next(), fields.next()) {
-            (Some(name), Some(destination)) => name == iface && destination == "00000000",
-            _ => false,
+            (Some(name), Some("00000000")) => Some(name.to_string()),
+            _ => None,
+        }
+    })
+}
+
+/// The interface the kernel's IPv6 default route goes out.
+///
+/// A different file and a different shape from the v4 table: one line per
+/// route, `destination/prefix source/prefix nexthop metric ... flags iface`,
+/// with the destination written as 32 hex digits and the prefix as two.
+fn default_route_interface6() -> Option<String> {
+    let text = std::fs::read_to_string(ROUTE6_PROC).ok()?;
+    route6_default_interface(&text)
+}
+
+/// The parsing half of [`default_route_interface6`], on a table in memory.
+fn route6_default_interface(table: &str) -> Option<String> {
+    table.lines().find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let is_default = fields.first() == Some(&"00000000000000000000000000000000")
+            && fields.get(1) == Some(&"00");
+        match (is_default, fields.get(9)) {
+            (true, Some(iface)) if *iface != "lo" => Some((*iface).to_string()),
+            _ => None,
         }
     })
 }
@@ -256,10 +343,11 @@ fn conntrack_mark(local_port: u16, target: SocketAddr) -> Option<u32> {
 ///
 /// `None` for any line that is not ours: the entry carries both directions, so
 /// the source port alone would also match the reply tuple, whose port is the
-/// target's. Only an `ipv4 … tcp` line with our port, our address and the
-/// target's port and address is the connection the probe opened.
+/// target's. Only a line of our own address family, for TCP, with our port and
+/// the target's port and address, is the connection the probe opened.
 fn parse_conntrack_mark(line: &str, local_port: u16, target: SocketAddr) -> Option<u32> {
-    if !line.starts_with("ipv4") || !line.contains(" tcp ") {
+    let family = if target.is_ipv6() { "ipv6" } else { "ipv4" };
+    if !line.starts_with(family) || !line.contains(" tcp ") {
         return None;
     }
     let field = |name: &str, value: &str| {
@@ -281,13 +369,14 @@ mod tests {
     use super::*;
 
     /// The init script writes these lines verbatim; the queue number, the
-    /// interfaces and the port list are the three values this module needs.
+    /// policy name, the interfaces and the port list are what this module needs.
     #[test]
-    fn conf_run_yields_queue_interfaces_and_ports() {
+    fn conf_run_yields_queue_policy_interfaces_and_ports() {
         let text = "ISP_INTERFACE=\"wan0\"\nIPV6_ENABLED=0\nPOLICY_NAME=\"nfqws\"\n\
                     TCP_PORTS=80,443,1984\nNFQUEUE_NUM=300\n";
         let conf = parse_conf_run(text);
         assert_eq!(conf.queue, Some(300));
+        assert_eq!(conf.policy.as_deref(), Some("nfqws"));
         assert_eq!(conf.interfaces, ["wan0"]);
         assert_eq!(conf.ports, [80, 443, 1984]);
     }
@@ -298,6 +387,8 @@ mod tests {
         assert_eq!(conf.queue, Some(512));
         assert_eq!(conf.interfaces, ["wwan0", "nwg1"]);
         assert!(conf.ports.is_empty(), "no TCP_PORTS line");
+        assert_eq!(conf.policy, None, "no POLICY_NAME line");
+        assert_eq!(parse_conf_run("POLICY_NAME=\"\"\n").policy, None, "an empty name is no name");
     }
 
     /// Both notations appear in the package's own config: `TCP_PORTS` is a plain
@@ -311,28 +402,40 @@ mod tests {
         assert_eq!(parse_ports("abc,443"), [443], "garbage is skipped, not fatal");
     }
 
-    /// Coverage needs both halves: the port the rules queue, and the interface
-    /// they were attached to. Our own traffic leaves by the default route.
+    /// `IPV6_ENABLED` decides whether the package touches IPv6 at all, and the
+    /// init script treats anything but `0` as on.
     #[test]
-    fn coverage_requires_the_port_and_the_default_interface() {
-        let mut conf = ConfRun { queue: Some(300), interfaces: vec!["wan0".into()], ports: vec![443] };
-        assert!(!conf.covers(8443), "a port the rules do not queue");
-        conf.interfaces = vec!["definitely-not-an-interface".into()];
-        assert!(!conf.covers(443), "an interface the rules did not hook");
+    fn ipv6_flag_follows_the_config() {
+        assert!(parse_conf_run("IPV6_ENABLED=1\n").ipv6_enabled);
+        assert!(!parse_conf_run("IPV6_ENABLED=0\n").ipv6_enabled);
+        assert!(!parse_conf_run("ISP_INTERFACE=\"wan0\"\n").ipv6_enabled, "absent means off");
+    }
+
+    /// The v6 table is hex, one line per route; the default is the all-zero
+    /// destination with a zero prefix, and `lo` is not where our traffic leaves.
+    #[test]
+    fn ipv6_default_route_comes_from_its_own_table() {
+        let table = "\
+            00000000000000000000000000000000 00 00000000000000000000000000000000 00 \
+            00000000000000000000000000000000 00000400 00000001 00000000 00000003 lo\n\
+            00000000000000000000000000000000 00 00000000000000000000000000000000 00 \
+            00000000000000000000000000000000 00000400 00000001 00000000 00000003 wwan1\n\
+            2a020000000000000000000000000000 08 00000000000000000000000000000000 00 \
+            00000000000000000000000000000000 00000400 00000001 00000000 00000003 wwan1\n";
+        assert_eq!(route6_default_interface(table).as_deref(), Some("wwan1"));
+        assert_eq!(route6_default_interface(""), None, "no routes at all");
     }
 
     /// A default route line is the one with an all-zero destination; the header
-    /// line must not be mistaken for it.
+    /// line must not be mistaken for it, and the name is what the notice shows.
     #[test]
-    fn default_route_is_matched_by_name_and_zero_destination() {
+    fn default_route_interface_is_the_zero_destination_entry() {
         let table = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n\
-                     wan0\t00000000\t0101A8C0\t0003\t0\t0\t1000\t00000000\n\
-                     wwan1\t00000000\t00000000\t0003\t0\t0\t1000\t00000000\n\
-                     wan0\t0100000A\t00000000\t0001\t0\t0\t0\tFFFFFFFF\n";
-        assert!(route_lines_have(table, "wan0"), "a default route out of wan0");
-        assert!(route_lines_have(table, "wwan1"));
-        assert!(!route_lines_have(table, "Iface"), "the header is skipped");
-        assert!(!route_lines_have(table, "nwg0"));
+                     wwan1\t0101A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\n\
+                     wan0\t00000000\t0101A8C0\t0003\t0\t0\t1000\t00000000\n";
+        assert_eq!(route_default_interface(table).as_deref(), Some("wan0"));
+        assert_eq!(route_default_interface("Iface\tDestination\n"), None, "header only");
+        assert_eq!(route_default_interface("wan0\t0101A8C0\n"), None, "no default route");
     }
 
     /// The queue file lists bound queues; a queue number that is not there means
