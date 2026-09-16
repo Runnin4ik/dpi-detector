@@ -273,7 +273,7 @@ fn list_mode(pid: u32) -> bool {
 /// world, whatever the later profiles do.
 fn list_mode_in(args: &[String]) -> bool {
     for profile in profiles(args) {
-        if !takes_web(&profile.filters) {
+        if !profile.acts || !takes_web(&profile.filters) {
             continue;
         }
         return profile.listed;
@@ -287,6 +287,14 @@ struct Profile {
     filters: Vec<String>,
     /// Carries a positive hostlist or ipset filter.
     listed: bool,
+    /// Carries at least one `--lua-desync` instance.
+    ///
+    /// A profile without one does nothing to a packet, whatever its filters
+    /// say: processing walks a profile's instances (`docs/readme.md`), and the
+    /// package appends the mode's lists as a profile of their own whenever the
+    /// strategy variables are empty — a profile that would otherwise look like
+    /// it filters web traffic by a list while sending nothing through it.
+    acts: bool,
 }
 
 /// Splits an argv into profiles on `--new`. Options before the first `--new`
@@ -301,6 +309,8 @@ fn profiles(args: &[String]) -> Vec<Profile> {
         let profile = profiles.last_mut().expect("at least one profile");
         if arg.starts_with("--filter-") {
             profile.filters.push(arg.clone());
+        } else if arg.starts_with("--lua-desync") {
+            profile.acts = true;
         } else if is_list_filter(arg) {
             profile.listed = true;
         }
@@ -765,11 +775,19 @@ mod tests {
     /// how a strategy spells "no single addresses".
     #[test]
     fn exclusions_and_empty_ip_lists_do_not_count() {
-        let excluded = argv(&["--filter-tcp=443", "--hostlist-exclude=/tmp/exclude.list"]);
+        let excluded = argv(&[
+            "--filter-tcp=443",
+            "--hostlist-exclude=/tmp/exclude.list",
+            "--lua-desync=multisplit",
+        ]);
         assert!(!list_mode_in(&excluded));
-        let empty_ip = argv(&["--filter-tcp=443", "--ipset-ip=0.0.0.0"]);
+        let empty_ip = argv(&["--filter-tcp=443", "--ipset-ip=0.0.0.0", "--lua-desync=multisplit"]);
         assert!(!list_mode_in(&empty_ip));
-        let named = argv(&["--filter-tcp=443", "--hostlist-domains=example.com"]);
+        let named = argv(&[
+            "--filter-tcp=443",
+            "--hostlist-domains=example.com",
+            "--lua-desync=multisplit",
+        ]);
         assert!(list_mode_in(&named), "a literal domain list is still a list");
     }
 
@@ -777,8 +795,73 @@ mod tests {
     /// also live — covers whatever that profile takes.
     #[test]
     fn a_list_in_the_first_profile_counts() {
-        let first = argv(&["--hostlist=/tmp/user.list", "--filter-tcp=443"]);
+        let first = argv(&["--hostlist=/tmp/user.list", "--filter-tcp=443", "--lua-desync=multisplit"]);
         assert!(list_mode_in(&first));
+    }
+
+    /// How the package assembles argv for the stock strategies: the custom
+    /// profiles, then `$NFQWS_ARGS_UDP`, `$NFQWS_QUIC`, and finally
+    /// `$NFQWS_ARGS $NFQWS_EXTRA_ARGS` — the mode's lists land *in the same
+    /// profile* as the web strategy, so 80/443 is desynced for listed targets
+    /// only. This is the setup the check exists for.
+    #[test]
+    fn the_stock_layout_puts_the_mode_into_the_web_profile() {
+        let stock = argv(&[
+            "--filter-tcp=2053,2083,2087,2096,8443",
+            "--hostlist-domains=discord.media",
+            "--lua-desync=fake:blob=tls_google:repeats=8",
+            "--new",
+            "--filter-udp=19294-19344,50000-50100",
+            "--filter-l7=discord,stun",
+            "--lua-desync=fake:blob=discord_udp:repeats=6",
+            "--new",
+            "--filter-udp=443",
+            "--filter-l7=quic",
+            "--lua-desync=fake:blob=quic_google:repeats=11",
+            "--new",
+            "--filter-tcp=80,443",
+            "--filter-l7=http,tls",
+            "--lua-desync=fake:blob=stun_fake:repeats=8",
+            "--lua-desync=multisplit:pos=1:seqovl=664",
+            "--hostlist=/opt/etc/nfqws2/lists/user.list",
+            "--hostlist-auto=/opt/etc/nfqws2/lists/auto.list",
+            "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
+        ]);
+        assert!(list_mode_in(&stock));
+    }
+
+    /// With `NFQWS_ARGS` empty the mode becomes a profile of its own: no
+    /// filters and, more to the point, no `--lua-desync` — it takes no traffic
+    /// and sends none through a list, so nothing about a run is a mixture.
+    #[test]
+    fn a_mode_profile_without_a_desync_does_not_count() {
+        let empty_strategy = argv(&[
+            "--filter-tcp=80,443,1000-65535",
+            "--filter-l7=http,tls",
+            "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
+            "--lua-desync=fake:blob=tls_clienthello",
+            "--new",
+            "--hostlist=/opt/etc/nfqws2/lists/user.list",
+            "--hostlist-auto=/opt/etc/nfqws2/lists/auto.list",
+            "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
+            "--new",
+        ]);
+        assert!(!list_mode_in(&empty_strategy), "the web profile has no list of its own");
+    }
+
+    /// An auto-list profile takes only connections whose host is already known,
+    /// and the package puts it in the same profile as the web strategy — so a
+    /// run right after the mode was switched really is a mixture.
+    #[test]
+    fn an_auto_list_counts_as_a_list() {
+        let auto = argv(&[
+            "--filter-tcp=80,443",
+            "--filter-l7=http,tls",
+            "--lua-desync=fake:blob=tls_google",
+            "--hostlist-auto=/opt/etc/nfqws2/lists/auto.list",
+            "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
+        ]);
+        assert!(list_mode_in(&auto));
     }
 
     /// The main table captured on a Keenetic, with its provider host route and
