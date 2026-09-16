@@ -87,10 +87,27 @@ IFACE=$(ip route show default 2>/dev/null |
 [ -n "$IFACE" ] || IFACE=$(route -n 2>/dev/null | awk '$1 == "0.0.0.0" {print $8; exit}')
 [ -n "$IFACE" ] || { echo "не удалось определить интерфейс провайдера" >&2; exit 1; }
 
+# Перезапуск, который не полагается на `restart`: тот считает службу живой по
+# pgrep и может не тронуть демон, поднятый с подменённым конфигом. Гасим до
+# нуля процессов и только потом стартуем.
+nfqws2_alive() {
+    [ "$(ps | grep -c '[n]fqws2')" -gt 0 ]
+}
+
+restart_service() {
+    "$SERVICE" stop >/dev/null 2>&1
+    i=0
+    while [ "$i" -lt 10 ] && nfqws2_alive; do
+        sleep 1
+        i=$((i + 1))
+    done
+    "$SERVICE" start >/dev/null 2>&1
+}
+
 restore() {
     if [ -f "$BACKUP" ]; then
         cp "$BACKUP" "$CONF"
-        "$SERVICE" restart >/dev/null 2>&1
+        restart_service
         rm -f "$BACKUP" "$PATCHED" "$BENCH_PID"
         if sh -n "$CONF" 2>/dev/null; then
             echo "конфиг возвращён, служба перезапущена"
@@ -182,7 +199,7 @@ for strategy in "$STRAT_DIR"/*.conf; do
         continue
     fi
     cp "$PATCHED" "$CONF"
-    "$SERVICE" restart >/dev/null 2>&1
+    restart_service
 
     ready=no
     i=0
