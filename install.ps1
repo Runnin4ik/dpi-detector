@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $repo = "Runnin4ik/dpi-detector"
-$version = if ($env:DPI_VERSION) { $env:DPI_VERSION } else { "v5.0.0-alpha.15" }
+$version = if ($env:DPI_VERSION) { $env:DPI_VERSION } else { "v5.0.0-alpha.16" }
 
 # Architecture detection with 32-bit WoW64 fallback protection
 $rawArch = $env:PROCESSOR_ARCHITECTURE
