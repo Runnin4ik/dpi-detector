@@ -36,6 +36,7 @@ pub fn render_intercept_notice(msg: &Messages, found: Option<&Intercept>) -> Opt
         }
         Verdict::NotQueued(NotCovered::Port) => msg.intercept_ports.to_string(),
         Verdict::NotQueued(NotCovered::Ipv6) => msg.intercept_ipv6.to_string(),
+        Verdict::NotQueued(NotCovered::Tunnel) => msg.intercept_tunnel.to_string(),
         Verdict::Unknown => msg.intercept_unchecked.to_string(),
     };
     Some(format!("\n\x1b[33m{}\x1b[0m\n{}\n", body, RESTART_HINT))

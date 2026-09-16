@@ -89,6 +89,7 @@ pub struct Messages {
     pub intercept_interface: &'static str,
     pub intercept_ports: &'static str,
     pub intercept_ipv6: &'static str,
+    pub intercept_tunnel: &'static str,
     pub intercept_unchecked: &'static str,
 
     // DNS Endpoints & Availability

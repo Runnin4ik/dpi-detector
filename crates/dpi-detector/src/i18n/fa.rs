@@ -88,6 +88,10 @@ pub(crate) fn messages() -> Messages {
                          qavanin-e IPv6 nasb nemishavand - dar config IPV6_ENABLED=0 ast.\n\n\
                          Baraye inke obur rooy-e IPv6 ham kar konad, IPV6_ENABLED=1\n\
                          ra dar /opt/etc/nfqws2/nfqws2.conf bezarid, sepas:",
+        intercept_tunnel: "nfqws2 ejra mishavad, amma traffic-e detector ra nemibinad:\n\
+                           traffic-e ma az tunnel (VPN) miravad, amma qavanin rooy-e interface-e provider ast.\n\n\
+                           Traffic-e dakhel-e tunnel ra obur nemibinad: in target ra az tunnel birun biarid\n\
+                           ya interface-e tunnel ra be ISP_INTERFACE ezafe konid, sepas:",
         intercept_unchecked: "nfqws2 ejra mishavad, amma queue javab nemidahad - barresi nashod.\n\
                               Ehtemalan service hanuz bala nayamade, an ra restart konid:",
 

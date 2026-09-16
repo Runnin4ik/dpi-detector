@@ -89,6 +89,10 @@ pub(crate) fn messages() -> Messages {
                          没有安装 IPv6 规则 — 配置中 IPV6_ENABLED=0。\n\n\
                          要让绕过也适用于 IPv6，请把 IPV6_ENABLED=1\n\
                          写入 /opt/etc/nfqws2/nfqws2.conf，然后：",
+        intercept_tunnel: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
+                           我们的流量走隧道（VPN），而规则在运营商接口上。\n\n\
+                           隧道内的流量绕过看不到：请把该目标移出隧道，\n\
+                           或把隧道接口加入 ISP_INTERFACE，然后：",
         intercept_unchecked: "检测到 nfqws2 正在运行，但队列没有响应 — 检查失败。\n\
                               服务可能还没启动完成，请重启它：",
 

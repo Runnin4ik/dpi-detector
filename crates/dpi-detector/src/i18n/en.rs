@@ -89,6 +89,10 @@ pub(crate) fn messages() -> Messages {
                          no IPv6 rules are installed - the package config has IPV6_ENABLED=0.\n\n\
                          To have the bypass work over IPv6 too, set IPV6_ENABLED=1\n\
                          in /opt/etc/nfqws2/nfqws2.conf, then:",
+        intercept_tunnel: "nfqws2 is running, but it does not see the detector's traffic:\n\
+                           our traffic leaves through a tunnel (VPN), while its rules are on the provider interface.\n\n\
+                           Traffic inside a tunnel is out of the bypass's reach: take the target out of the tunnel\n\
+                           or add the tunnel interface to ISP_INTERFACE, then:",
         intercept_unchecked: "nfqws2 is running, but its queue is not answering - the check failed.\n\
                               The service may not have finished starting, restart it:",
 

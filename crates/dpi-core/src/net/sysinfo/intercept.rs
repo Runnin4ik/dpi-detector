@@ -32,8 +32,10 @@
 //! tests send.
 
 use std::io::{BufRead, BufReader};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
+
+use super::is_tun_name;
 
 /// The mark the package stamps on connections its access policy leaves alone
 /// (`MARK_EXCLUDE` in `etc/init.d/common`): the first packet of such a
@@ -67,6 +69,12 @@ pub enum NotCovered {
     /// Our traffic is IPv6 and the package installs no IPv6 rules at all
     /// (`IPV6_ENABLED=0`). The v4 rules can be perfect and this still holds.
     Ipv6,
+    /// Our traffic does not leave through any netfilter interface: it goes
+    /// through a tunnel. Measured, not inferred — the kernel's own record for
+    /// our flow says so (`no_if` beside `nmark=`/`sc=`, where an ordinary flow
+    /// carries `ifw=`/`ifl=`). A per-destination route into a VPN is invisible
+    /// to the default-route comparison, which is why this is read per flow.
+    Tunnel,
 }
 
 /// What became of our own traffic.
@@ -125,7 +133,13 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         return None;
     }
     let v6 = family == Family::V6;
-    let our_interface = if v6 { default_route_interface6() } else { default_route_interface() };
+    // Where our traffic actually goes for this target, then the tunnel question
+    // answers itself: a per-destination route into a VPN leaves the interface
+    // the rules were hooked to.
+    let our_interface = match target {
+        Some(target) => route_interface_for(target.ip()),
+        None => route_interface_for(if v6 { IpAddr::V6(Ipv6Addr::UNSPECIFIED) } else { IpAddr::V4(Ipv4Addr::UNSPECIFIED) }),
+    };
     let Some(conf) = conf_run() else {
         // The package is up but its resolved config is unreadable: say so
         // rather than claim a verdict the numbers do not support.
@@ -137,11 +151,11 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         });
     };
 
-    let mark = match target {
-        Some(target) => probe_mark(target).await,
-        None => None,
+    let flow = match target {
+        Some(target) => probe_flow(target).await,
+        None => Flow::default(),
     };
-    let verdict = if mark == Some(MARK_EXCLUDE) {
+    let verdict = if flow.mark == Some(MARK_EXCLUDE) {
         Verdict::Excluded
     } else if !conf.queue.is_some_and(queue_bound) {
         // Running, but nothing is listening on its queue: our packets would be
@@ -156,7 +170,14 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         // judged at all.
         Verdict::Unknown
     } else if !conf.interfaces.contains(our_interface.as_ref()?) {
-        Verdict::NotQueued(NotCovered::Interface)
+        // Same verdict either way, different advice: a tunnel is a routing
+        // decision, another provider interface is a configuration one.
+        let ours = our_interface.as_deref().unwrap_or_default();
+        if is_tun_name(ours) {
+            Verdict::NotQueued(NotCovered::Tunnel)
+        } else {
+            Verdict::NotQueued(NotCovered::Interface)
+        }
     } else if !target.is_none_or(|addr| conf.ports.contains(&addr.port())) {
         Verdict::NotQueued(NotCovered::Port)
     } else {
@@ -165,13 +186,20 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
     Some(Intercept { verdict, policy: conf.policy, rules_interfaces: conf.interfaces, our_interface })
 }
 
-/// The mark on our own connection, opened from an unprivileged source port.
+/// What the kernel says about the probe's own connection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Flow {
+    /// `ctmark`, when the entry had one.
+    mark: Option<u32>,
+}
+
+/// Opens a probe connection and reads its own record back.
 ///
 /// A failed or blocked connection is fine: the mark is set on the first packet,
 /// so the answer does not depend on the handshake completing. The socket's
 /// family is the target's: an IPv6 run must be judged by the IPv6 path, which
-/// the package covers or does not cover separately.
-async fn probe_mark(target: SocketAddr) -> Option<u32> {
+/// the package covers separately.
+async fn probe_flow(target: SocketAddr) -> Flow {
     for _ in 0..PROBE_ATTEMPTS {
         let v6 = target.is_ipv6();
         let Ok(socket) = (if v6 {
@@ -179,7 +207,7 @@ async fn probe_mark(target: SocketAddr) -> Option<u32> {
         } else {
             tokio::net::TcpSocket::new_v4()
         }) else {
-            return None;
+            return Flow::default();
         };
         let bind = if v6 {
             SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0))
@@ -187,17 +215,17 @@ async fn probe_mark(target: SocketAddr) -> Option<u32> {
             SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
         };
         if socket.bind(bind).is_err() {
-            return None;
+            return Flow::default();
         }
         let Ok(local) = socket.local_addr() else {
-            return None;
+            return Flow::default();
         };
         let _ = tokio::time::timeout(PROBE_WAIT, socket.connect(target)).await;
         if let Some(mark) = conntrack_mark(local.port(), target) {
-            return Some(mark);
+            return Flow { mark: Some(mark) };
         }
     }
-    None
+    Flow::default()
 }
 
 /// True when the package's pidfile names a live process.
@@ -283,48 +311,118 @@ fn queue_lines_contain(table: &str, queue: u32) -> bool {
     })
 }
 
-/// The interface the kernel's IPv4 default route goes out.
+/// The interface our traffic to `target` will leave by.
 ///
-/// The probe opens an IPv4 socket to a routable host, so it leaves this way;
-/// the file lists `Iface Destination ...`, with an all-zero destination for the
-/// default.
-fn default_route_interface() -> Option<String> {
-    let text = std::fs::read_to_string(ROUTE_PROC).ok()?;
-    route_default_interface(&text)
-}
-
-/// The parsing half of [`default_route_interface`], on a table in memory.
-fn route_default_interface(table: &str) -> Option<String> {
-    table.lines().skip(1).find_map(|line| {
-        let mut fields = line.split_whitespace();
-        match (fields.next(), fields.next()) {
-            (Some(name), Some("00000000")) => Some(name.to_string()),
-            _ => None,
+/// A route lookup, not the default route: a VPN is often reached by a
+/// per-destination route (`1.1.1.1 dev tun0`), and the default route still
+/// points at the provider in that case. Both files below hold the main table,
+/// the one our own traffic uses.
+///
+/// Not covered: policy routing (`ip rule` with a fwmark selecting another
+/// table) and the `local` table, so a lookup here can disagree with
+/// `ip route get` for the router's own addresses. Those are not the cases a
+/// probe of a remote host meets.
+fn route_interface_for(target: IpAddr) -> Option<String> {
+    match target {
+        IpAddr::V4(ip) => {
+            let text = std::fs::read_to_string(ROUTE_PROC).ok()?;
+            route_lookup_v4(&text, ip)
         }
-    })
+        IpAddr::V6(ip) => {
+            let text = std::fs::read_to_string(ROUTE6_PROC).ok()?;
+            route_lookup_v6(&text, ip)
+        }
+    }
 }
 
-/// The interface the kernel's IPv6 default route goes out.
+/// Longest-prefix match in `/proc/net/route`.
 ///
-/// A different file and a different shape from the v4 table: one line per
-/// route, `destination/prefix source/prefix nexthop metric ... flags iface`,
-/// with the destination written as 32 hex digits and the prefix as two.
-fn default_route_interface6() -> Option<String> {
-    let text = std::fs::read_to_string(ROUTE6_PROC).ok()?;
-    route6_default_interface(&text)
-}
-
-/// The parsing half of [`default_route_interface6`], on a table in memory.
-fn route6_default_interface(table: &str) -> Option<String> {
-    table.lines().find_map(|line| {
+/// `Iface Destination Gateway Flags RefCnt Use Metric Mask …`, with the
+/// addresses as 32-bit little-endian hex — `004DA8C0` is 192.168.77.0. Ties on
+/// prefix length go to the lower metric, as the kernel does.
+fn route_lookup_v4(table: &str, target: Ipv4Addr) -> Option<String> {
+    let ip = u32::from_be_bytes(target.octets());
+    let mut best: Option<(u32, u64, String)> = None;
+    for line in table.lines().skip(1) {
         let fields: Vec<&str> = line.split_whitespace().collect();
-        let is_default = fields.first() == Some(&"00000000000000000000000000000000")
-            && fields.get(1) == Some(&"00");
-        match (is_default, fields.get(9)) {
-            (true, Some(iface)) if *iface != "lo" => Some((*iface).to_string()),
-            _ => None,
+        let (Some(iface), Some(destination), Some(metric), Some(mask)) =
+            (fields.first(), fields.get(1), fields.get(6), fields.get(7))
+        else {
+            continue;
+        };
+        let (Some(destination), Some(mask)) = (le_hex_u32(destination), le_hex_u32(mask)) else {
+            continue;
+        };
+        if ip & mask != destination {
+            continue;
         }
-    })
+        let metric = u64::from_str_radix(metric, 16).unwrap_or(u64::MAX);
+        let prefix = mask.count_ones();
+        let better = match &best {
+            None => true,
+            Some((best_prefix, best_metric, _)) => {
+                prefix > *best_prefix || (prefix == *best_prefix && metric < *best_metric)
+            }
+        };
+        if better {
+            best = Some((prefix, metric, (*iface).to_string()));
+        }
+    }
+    best.map(|(_, _, iface)| iface)
+}
+
+/// A 32-bit address written little-endian in hex, as both route files do it.
+fn le_hex_u32(text: &str) -> Option<u32> {
+    u32::from_str_radix(text, 16).ok().map(u32::swap_bytes)
+}
+
+/// Longest-prefix match in `/proc/net/ipv6_route`.
+///
+/// `destination/plen source/plen nexthop metric … flags iface`, with the
+/// addresses as 32 hex digits in *network* order and the prefix length as two
+/// digits, so no byte swapping is needed here.
+fn route_lookup_v6(table: &str, target: Ipv6Addr) -> Option<String> {
+    let ip = u128::from_be_bytes(target.octets());
+    let mut best: Option<(u8, u64, String)> = None;
+    for line in table.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let (Some(destination), Some(plen), Some(metric), Some(iface)) =
+            (fields.first(), fields.get(1), fields.get(5), fields.get(9))
+        else {
+            continue;
+        };
+        let (Some(destination), Ok(prefix)) = (hex_u128(destination), u8::from_str_radix(plen, 16))
+        else {
+            continue;
+        };
+        if prefix > 128 {
+            continue;
+        }
+        // A /0 route matches everything, and shifting by 128 is not defined.
+        let matches = prefix == 0 || {
+            let masked = ip >> (128 - prefix) << (128 - prefix);
+            masked == destination
+        };
+        if !matches {
+            continue;
+        }
+        let metric = u64::from_str_radix(metric, 16).unwrap_or(u64::MAX);
+        let better = match &best {
+            None => true,
+            Some((best_prefix, best_metric, _)) => {
+                prefix > *best_prefix || (prefix == *best_prefix && metric < *best_metric)
+            }
+        };
+        if better {
+            best = Some((prefix, metric, (*iface).to_string()));
+        }
+    }
+    best.map(|(_, _, iface)| iface)
+}
+
+/// A 128-bit address written as 32 hex digits.
+fn hex_u128(text: &str) -> Option<u128> {
+    (text.len() == 32).then(|| u128::from_str_radix(text, 16).ok())?
 }
 
 /// `ctmark` of the connection from `local_port` to `target`, if conntrack has it.
@@ -345,6 +443,12 @@ fn conntrack_mark(local_port: u16, target: SocketAddr) -> Option<u32> {
 /// the source port alone would also match the reply tuple, whose port is the
 /// target's. Only a line of our own address family, for TCP, with our port and
 /// the target's port and address, is the connection the probe opened.
+///
+/// Keenetic adds its own fields to these lines (`nmark=`, `ifw=`, `no_if`), and
+/// they are deliberately *not* read as evidence of anything: `no_if` is printed
+/// for every locally originated flow, tunnel or not, so it says nothing about
+/// where the traffic went. Which interface it left by comes from the routing
+/// table instead, per destination.
 fn parse_conntrack_mark(line: &str, local_port: u16, target: SocketAddr) -> Option<u32> {
     let family = if target.is_ipv6() { "ipv6" } else { "ipv4" };
     if !line.starts_with(family) || !line.contains(" tcp ") {
@@ -411,33 +515,6 @@ mod tests {
         assert!(!parse_conf_run("ISP_INTERFACE=\"wan0\"\n").ipv6_enabled, "absent means off");
     }
 
-    /// The v6 table is hex, one line per route; the default is the all-zero
-    /// destination with a zero prefix, and `lo` is not where our traffic leaves.
-    #[test]
-    fn ipv6_default_route_comes_from_its_own_table() {
-        let table = "\
-            00000000000000000000000000000000 00 00000000000000000000000000000000 00 \
-            00000000000000000000000000000000 00000400 00000001 00000000 00000003 lo\n\
-            00000000000000000000000000000000 00 00000000000000000000000000000000 00 \
-            00000000000000000000000000000000 00000400 00000001 00000000 00000003 wwan1\n\
-            2a020000000000000000000000000000 08 00000000000000000000000000000000 00 \
-            00000000000000000000000000000000 00000400 00000001 00000000 00000003 wwan1\n";
-        assert_eq!(route6_default_interface(table).as_deref(), Some("wwan1"));
-        assert_eq!(route6_default_interface(""), None, "no routes at all");
-    }
-
-    /// A default route line is the one with an all-zero destination; the header
-    /// line must not be mistaken for it, and the name is what the notice shows.
-    #[test]
-    fn default_route_interface_is_the_zero_destination_entry() {
-        let table = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n\
-                     wwan1\t0101A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\n\
-                     wan0\t00000000\t0101A8C0\t0003\t0\t0\t1000\t00000000\n";
-        assert_eq!(route_default_interface(table).as_deref(), Some("wan0"));
-        assert_eq!(route_default_interface("Iface\tDestination\n"), None, "header only");
-        assert_eq!(route_default_interface("wan0\t0101A8C0\n"), None, "no default route");
-    }
-
     /// The queue file lists bound queues; a queue number that is not there means
     /// nothing is reading it.
     #[test]
@@ -460,10 +537,10 @@ mod tests {
     /// identify the connection the probe opened.
     #[test]
     fn conntrack_mark_requires_the_whole_tuple() {
-        let line = "ipv4 2 tcp 6 115 SYN_SENT src=100.90.171.97 dst=31.13.72.174 \
+        let line = "ipv4 2 tcp 6 115 SYN_SENT src=100.64.0.7 dst=31.13.72.174 \
                     sport=56678 dport=443 packets=4 bytes=240 [UNREPLIED] \
-                    src=31.13.72.174 dst=100.90.171.97 sport=443 dport=56678 \
-                    packets=0 bytes=0 [FASTNAT] mark=0 nmark=256 use=2";
+                    src=31.13.72.174 dst=100.64.0.7 sport=443 dport=56678 \
+                    packets=0 bytes=0 [FASTNAT] mark=0 nmark=256 sc=0 ifw=37 ifl=33 use=2";
         let target: SocketAddr = "31.13.72.174:443".parse().unwrap();
         assert_eq!(parse_conntrack_mark(line, 56678, target), Some(0));
         assert_eq!(parse_conntrack_mark(line, 4711, target), None, "another flow");
@@ -473,6 +550,66 @@ mod tests {
         assert_eq!(parse_conntrack_mark(&udp, 56678, target), None, "not TCP");
         let v6 = line.replace("ipv4", "ipv6");
         assert_eq!(parse_conntrack_mark(&v6, 56678, target), None, "not the family we probe");
+    }
+
+    /// Two records captured on a Keenetic, the provider one and a tunnelled one
+    /// for the same kind of probe. Keenetic's own fields differ — `ifw=`/`ifl=`
+    /// against `no_if` — and that difference is deliberately *not* used: `no_if`
+    /// is printed for every locally originated flow. Only the mark is read here.
+    #[test]
+    fn keenetic_flow_fields_do_not_change_the_mark() {
+        let routed = "ipv4 2 tcp 6 1174 ESTABLISHED src=192.168.77.5 dst=8.8.8.8 \
+                      sport=44836 dport=443 packets=1555 bytes=403810 src=8.8.8.8 \
+                      dst=100.64.0.7 sport=443 dport=44836 packets=2098 bytes=284515 \
+                      [ASSURED] [FASTNAT] [RTCACHE o33/r37] mark=0 nmark=256 sc=0 \
+                      ifw=37 ifl=33 mac=00:00:5e:00:53:01 slan attrs= use=2";
+        let tunnelled = "ipv4 2 tcp 6 94 SYN_SENT src=172.16.9.2 dst=1.1.1.1 \
+                         sport=51447 dport=443 packets=1 bytes=60 [UNREPLIED] src=1.1.1.1 \
+                         dst=172.16.9.2 sport=443 dport=51447 packets=0 bytes=0 [FASTNAT] \
+                         mark=0 nmark=0 sc=0 nomac swan no_if attrs= use=3";
+        let routed_target: SocketAddr = "8.8.8.8:443".parse().unwrap();
+        let tunnelled_target: SocketAddr = "1.1.1.1:443".parse().unwrap();
+        assert_eq!(parse_conntrack_mark(routed, 44836, routed_target), Some(0));
+        assert_eq!(parse_conntrack_mark(tunnelled, 51447, tunnelled_target), Some(0));
+    }
+
+    /// The main table captured on a Keenetic, with its provider host route and
+    /// a VPN host route. A lookup for a destination must pick the interface the
+    /// kernel would — the default route is *not* the answer for `1.1.1.1`.
+    #[test]
+    fn route_lookup_picks_the_interface_for_the_destination() {
+        let table = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n\
+                     ppp0\t00000000\t00000000\t0001\t0\t0\t1000\t00000000\t0\t0\t0\n\
+                     tun0\t01010101\t00000000\t0005\t0\t0\t1000\tFFFFFFFF\t0\t0\t0\n\
+                     br1\t00004D0A\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n\
+                     ppp0\t097100CB\t00000000\t0005\t0\t0\t0\tFFFFFFFF\t0\t0\t0\n\
+                     br0\t004DA8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n";
+        let iface = |ip: &str| route_lookup_v4(table, ip.parse().unwrap()).unwrap();
+        assert_eq!(iface("1.1.1.1"), "tun0", "a VPN host route wins over the default");
+        assert_eq!(iface("194.67.78.213"), "ppp0", "the default route");
+        assert_eq!(iface("203.0.113.9"), "ppp0", "its own host route");
+        assert_eq!(iface("10.77.0.7"), "br1", "a /24 out of the LAN");
+        assert_eq!(iface("192.168.77.50"), "br0");
+    }
+
+    /// A table with no matching route has no answer; the caller then says it
+    /// cannot tell rather than guessing.
+    #[test]
+    fn route_lookup_without_a_match_is_none() {
+        assert_eq!(route_lookup_v4("Iface\tDestination\n", "1.1.1.1".parse().unwrap()), None);
+    }
+
+    /// The v6 table is hex in network order with an explicit prefix length, and
+    /// it carries a VPN host route of its own.
+    #[test]
+    fn ipv6_route_lookup_picks_the_interface_for_the_destination() {
+        let table = "20010db8000100020003000400050006 80 00000000000000000000000000000000 00 \
+                     00000000000000000000000000000000 00000100 00000000 00000000 00000001 tun0\n\
+                     00000000000000000000000000000000 00 00000000000000000000000000000000 00 \
+                     00000000000000000000000000000000 000003e8 00000000 00000000 00000001 ppp0\n";
+        let iface = |ip: &str| route_lookup_v6(table, ip.parse().unwrap()).unwrap();
+        assert_eq!(iface("2001:db8:1:2:3:4:5:6"), "tun0");
+        assert_eq!(iface("2001:db8:dead::1"), "ppp0", "anything else falls to ::/0");
     }
 
     /// An excluded connection is what the package stamps before the queue, so
