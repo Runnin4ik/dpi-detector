@@ -2,7 +2,7 @@
 
 use crate::i18n::{Messages, fingerprint_label};
 use dpi_core::net::fingerprint::TlsFingerprint;
-use dpi_core::net::sysinfo::intercept::{Intercept, NotCovered, Verdict};
+use dpi_core::net::sysinfo::intercept::{Intercept, ListSource, NotCovered, Verdict};
 use dpi_core::profile::RegionProfile;
 
 use crate::tui::widgets::{BOX_WIDTH, panel_with};
@@ -21,9 +21,19 @@ pub fn render_intercept_notice(msg: &Messages, found: Option<&Intercept>) -> Opt
     let found = found?;
     let body = match &found.verdict {
         Verdict::Processed => return None,
-        Verdict::ListMode { filter, from_mode } => {
-            let template = if *from_mode { msg.intercept_list_mode } else { msg.intercept_list_mode_own };
-            template.replacen("{}", &filter.profile, 1).replacen("{}", &filter.option, 1)
+        Verdict::ListMode { filter, source } => {
+            let template = match source {
+                ListSource::Mode => msg.intercept_list_mode,
+                ListSource::Variable(_) | ListSource::Unknown => msg.intercept_list_mode_own,
+            };
+            let advice = match source {
+                ListSource::Variable(name) => name.as_str(),
+                _ => msg.intercept_strategy,
+            };
+            template
+                .replacen("{}", &filter.profile, 1)
+                .replacen("{}", &filter.option, 1)
+                .replacen("{}", advice, 1)
         }
         Verdict::Excluded => match found.policy.as_deref() {
             Some(policy) => msg.intercept_excluded.replacen("{}", policy, 1),
@@ -97,6 +107,7 @@ pub fn render_fingerprint_header(fp: TlsFingerprint, msg: &Messages) -> String {
 mod tests {
     use super::*;
     use crate::i18n::{get_messages, Language};
+    use dpi_core::net::sysinfo::intercept::ListFilter;
 
     fn found(verdict: Verdict) -> Intercept {
         Intercept {
@@ -143,6 +154,45 @@ mod tests {
         assert!(notice.contains("ISP_INTERFACE"), "with the key to change: {notice}");
         let ports = render_intercept_notice(&msg, Some(&found(Verdict::NotQueued(NotCovered::Port)))).unwrap();
         assert!(ports.contains("TCP_PORTS"), "{ports}");
+    }
+
+    /// The list-mode notice names the profile, the option and the variable the
+    /// option lives in: an ipset list is appended to a profile it is not written
+    /// in, so pointing a reader at `NFQWS_ARGS_CUSTOM` sends them to a line that
+    /// does not hold it. When the config names no variable, the wording still
+    /// has to read as a sentence.
+    #[test]
+    fn the_list_mode_notice_names_the_variable_the_filter_lives_in() {
+        let msg = get_messages(Language::En);
+        let filter = ListFilter {
+            profile: "tcp=443 l7=tls".to_string(),
+            option: "--ipset=/opt/etc/nfqws2/lists/ipset.list".to_string(),
+        };
+        let named = found(Verdict::ListMode {
+            filter: filter.clone(),
+            source: ListSource::Variable("NFQWS_ARGS_IPSET".to_string()),
+        });
+        let notice = render_intercept_notice(&msg, Some(&named)).unwrap();
+        assert!(notice.contains("tcp=443 l7=tls"), "{notice}");
+        assert!(notice.contains("--ipset=/opt/etc/nfqws2/lists/ipset.list"), "{notice}");
+        assert!(notice.contains("NFQWS_ARGS_IPSET"), "{notice}");
+        assert!(!notice.contains("{}"), "every placeholder is filled: {notice}");
+
+        let unknown = found(Verdict::ListMode { filter, source: ListSource::Unknown });
+        let notice = render_intercept_notice(&msg, Some(&unknown)).unwrap();
+        assert!(notice.contains(msg.intercept_strategy), "{notice}");
+        assert!(!notice.contains("{}"), "every placeholder is filled: {notice}");
+
+        let from_mode = found(Verdict::ListMode {
+            filter: ListFilter {
+                profile: "tcp=80,443 l7=http,tls".to_string(),
+                option: "--hostlist=/opt/etc/nfqws2/lists/user.list".to_string(),
+            },
+            source: ListSource::Mode,
+        });
+        let notice = render_intercept_notice(&msg, Some(&from_mode)).unwrap();
+        assert!(notice.contains("MODE_ALL"), "the mode recipe: {notice}");
+        assert!(!notice.contains("{}"), "every placeholder is filled: {notice}");
     }
 
     /// A package whose config never named a policy must not print empty quotes.

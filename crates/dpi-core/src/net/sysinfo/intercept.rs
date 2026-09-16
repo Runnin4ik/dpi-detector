@@ -91,7 +91,7 @@ pub enum Verdict {
     /// filtered part of it only — so a run's numbers are a mixture of bypassed
     /// and unbypassed, and a reader should know which filter to look at before
     /// reading them. Nothing is broken; this is a property of the strategy.
-    ListMode { filter: ListFilter, from_mode: bool },
+    ListMode { filter: ListFilter, source: ListSource },
     /// The tool is running and its queue is not bound, or nothing could be read
     /// back about our flow.
     Unknown,
@@ -188,7 +188,7 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         // the desync. Saying so before a run — and which filter to remove — is
         // the difference between "the bypass does not work" and "these numbers
         // are a mixture".
-        Verdict::ListMode { from_mode: list_from_mode(&filter.option), filter }
+        Verdict::ListMode { source: list_source(&filter.option), filter }
     } else {
         Verdict::Processed
     };
@@ -393,25 +393,104 @@ fn is_list_filter(arg: &str) -> bool {
         .any(|prefix| arg.starts_with(prefix))
 }
 
-/// Whether the offending option's value is one the package's modes define.
+/// Where the option that carries a list comes from.
 ///
-/// The install's modes live in the config (`MODE_LIST`, `MODE_ALL`, `MODE_AUTO`),
-/// and when a filter's value appears among them the advice is to switch the mode
-/// for the test rather than to edit the strategy: `MODE_ALL` is what the package
-/// ships for "everything except the exclude list".
-fn list_from_mode(option: &str) -> bool {
+/// The advice a reader gets depends on it, and the argv alone does not say: the
+/// init script appends the mode's lists to the web profile and the ipset lists
+/// to a profile of their own, so an option visible in a profile may be written
+/// in no profile at all. Reading the config back is what tells the two apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListSource {
+    /// A value the config's `MODE_*` lines define (`MODE_LIST`, `MODE_ALL`,
+    /// `MODE_AUTO`). Switching the mode is the test recipe: replacing
+    /// `MODE_AUTO`/`MODE_LIST` with `MODE_ALL` drops exactly this filter, which
+    /// is what the package ships for "everything except the exclude list".
+    Mode,
+    /// A variable of the config's strategy (`NFQWS_ARGS_IPSET`, `NFQWS_ARGS`,
+    /// …) — the one whose value carries the option, and therefore the one to
+    /// edit. An ipset list lives here and not in the profile the argv shows.
+    Variable(String),
+    /// Nowhere in the config: a hand-run argv, or a config that changed after
+    /// the service started. The profile and the option are still named.
+    Unknown,
+}
+
+/// Where a filter's option comes from, as the install's own config spells it.
+fn list_source(option: &str) -> ListSource {
+    match std::fs::read_to_string(CONF) {
+        Ok(conf) => list_source_in(&conf, option),
+        Err(_) => ListSource::Unknown,
+    }
+}
+
+/// The variables the init script assembles the argv from, in the order it
+/// appends them. A list filter sits in one of them, and naming it is the
+/// difference between "edit this variable" and "search the whole strategy".
+const STRATEGY_VARIABLES: [&str; 7] = [
+    "NFQWS_ARGS_CUSTOM",
+    "NFQWS_ARGS_UDP",
+    "NFQWS_ARGS_QUIC",
+    "NFQWS_ARGS_IPSET",
+    "NFQWS_ARGS",
+    "NFQWS_EXTRA_ARGS",
+    "NFQWS_BASE_ARGS",
+];
+
+/// The parsing half of [`list_source`], on a config in memory.
+fn list_source_in(conf: &str, option: &str) -> ListSource {
     let Some((_, value)) = option.split_once('=') else {
-        return false;
+        return ListSource::Unknown;
     };
     if value.is_empty() {
-        return false;
+        return ListSource::Unknown;
     }
-    let Ok(conf) = std::fs::read_to_string(CONF) else {
-        return false;
-    };
-    conf.lines()
-        .filter(|line| line.starts_with("MODE_"))
-        .any(|line| line.contains(value))
+    let variables = conf_variables(conf);
+    // A mode first: the same list can be written in a variable and referenced
+    // by the mode, and the mode is the cheaper thing for a reader to change.
+    if variables.iter().any(|(name, text)| name.starts_with("MODE_") && text.contains(value)) {
+        return ListSource::Mode;
+    }
+    for key in STRATEGY_VARIABLES {
+        if variables.iter().any(|(name, text)| name == key && text.contains(value)) {
+            return ListSource::Variable(key.to_string());
+        }
+    }
+    ListSource::Unknown
+}
+
+/// The `KEY=value` pairs of the shell-sourced config.
+///
+/// A value may run over several lines: `NFQWS_ARGS` holds every desync of a
+/// strategy and is never a single line, and a quoted value is closed by the
+/// quote rather than by the newline.
+fn conf_variables(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        let line = line.trim_start();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some((key, rest)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        let mut value = rest.trim().to_string();
+        if value.starts_with('"') && value.matches('"').count() % 2 == 1 {
+            for next in lines.by_ref() {
+                value.push('\n');
+                value.push_str(next);
+                if next.trim_end().ends_with('"') {
+                    break;
+                }
+            }
+        }
+        out.push((key.to_string(), value.trim_matches('"').to_string()));
+    }
+    out
 }
 
 /// The resolved config the init script writes: `KEY=value` or `KEY="value"`.
@@ -848,6 +927,39 @@ mod tests {
         assert!(list_mode_in(&first).is_some());
     }
 
+    /// A filter seen in a profile is traced back to the variable that carries
+    /// it, because that is what a reader has to edit: the mode's lists and the
+    /// ipset lists are appended to profiles they are not written in, and the
+    /// advice differs for each.
+    #[test]
+    fn a_filter_is_traced_to_the_variable_that_carries_it() {
+        let conf = "# strategy\n\
+                    MODE_LIST=\"--hostlist=/opt/etc/nfqws2/lists/user.list\"\n\
+                    MODE_ALL=\"--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list\"\n\
+                    NFQWS_ARGS_IPSET=\"--ipset=/opt/etc/nfqws2/lists/ipset.list --ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list\"\n\
+                    NFQWS_ARGS_CUSTOM=\"--filter-tcp=443 --filter-l7=tls\n\
+                    --hostlist-domains=googlevideo.com\n\
+                    --lua-desync=fake\"\n\
+                    NFQWS_EXTRA_ARGS=\"$MODE_LIST\"\n";
+        assert_eq!(
+            list_source_in(conf, "--hostlist=/opt/etc/nfqws2/lists/user.list"),
+            ListSource::Mode
+        );
+        assert_eq!(
+            list_source_in(conf, "--ipset=/opt/etc/nfqws2/lists/ipset.list"),
+            ListSource::Variable("NFQWS_ARGS_IPSET".to_string())
+        );
+        // The desyncs make NFQWS_ARGS_CUSTOM several lines long, and a list
+        // written inside it is still found.
+        assert_eq!(
+            list_source_in(conf, "--hostlist-domains=googlevideo.com"),
+            ListSource::Variable("NFQWS_ARGS_CUSTOM".to_string())
+        );
+        // A value the config no longer holds — it was edited after the service
+        // started — is left to the profile and the option to describe.
+        assert_eq!(list_source_in(conf, "--hostlist=/gone.list"), ListSource::Unknown);
+    }
+
     /// How the package assembles argv for the stock strategies: the custom
     /// profiles, then `$NFQWS_ARGS_UDP`, `$NFQWS_QUIC`, and finally
     /// `$NFQWS_ARGS $NFQWS_EXTRA_ARGS` — the mode's lists land *in the same
@@ -963,3 +1075,6 @@ mod tests {
         assert_eq!(parse_conntrack_mark(line, 39122, target), Some(MARK_EXCLUDE));
     }
 }
+
+
+

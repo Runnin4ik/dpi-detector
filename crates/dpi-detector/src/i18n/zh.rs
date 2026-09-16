@@ -100,7 +100,8 @@ pub(crate) fn messages() -> Messages {
         intercept_list_mode_own: "检测到 nfqws2 正在运行，但策略并不覆盖所有目标：\n\
                                   配置档案「{}」使用列表过滤：{}\n\n\
                                   部分检查会走绕过，部分不会。\n\
-                                  测试期间请从 NFQWS_ARGS_CUSTOM 的该档案中删除此过滤器，然后：",
+                                  测试期间请从 {} 中移除此过滤器，然后：",
+        intercept_strategy: "策略",
         intercept_unchecked: "检测到 nfqws2 正在运行，但队列没有响应 — 检查失败。\n\
                               服务可能还没启动完成，请重启它：",
 

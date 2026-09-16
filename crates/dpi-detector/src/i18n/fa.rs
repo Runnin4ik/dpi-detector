@@ -99,7 +99,8 @@ pub(crate) fn messages() -> Messages {
         intercept_list_mode_own: "nfqws2 ejra mishavad, amma strategy hame-ye target-ha ra nemigirad:\n\
                                    profile \"{}\" ba list filter mikonad: {}\n\n\
                                    Bakhshi az test-ha ba obur miravad va bakhshi na.\n\
-                                   Baraye test, in filter ra az profile dar NFQWS_ARGS_CUSTOM hazf konid, sepas:",
+                                   Baraye test, in filter ra az {} hazf konid, sepas:",
+        intercept_strategy: "strategy",
         intercept_unchecked: "nfqws2 ejra mishavad, amma queue javab nemidahad - barresi nashod.\n\
                               Ehtemalan service hanuz bala nayamade, an ra restart konid:",
 

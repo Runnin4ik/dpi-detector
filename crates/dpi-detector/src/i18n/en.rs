@@ -101,7 +101,8 @@ pub(crate) fn messages() -> Messages {
         intercept_list_mode_own: "nfqws2 is running, but its strategy does not cover every target:\n\
                                    profile \"{}\" filters by a list: {}\n\n\
                                    Some of what a run measures goes through the bypass and some does not.\n\
-                                   For the test, drop that filter from the profile in NFQWS_ARGS_CUSTOM, then:",
+                                   For the test, drop that filter from {}, then:",
+        intercept_strategy: "the strategy",
         intercept_unchecked: "nfqws2 is running, but its queue is not answering - the check failed.\n\
                               The service may not have finished starting, restart it:",
 

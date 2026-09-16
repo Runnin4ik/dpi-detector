@@ -91,7 +91,11 @@ pub struct Messages {
     pub intercept_ipv6: &'static str,
     pub intercept_tunnel: &'static str,
     pub intercept_list_mode: &'static str,
+    /// The same notice when the filter is written in a strategy variable; the
+    /// variable's name fills the third `{}`, and this word fills it when the
+    /// config does not name one.
     pub intercept_list_mode_own: &'static str,
+    pub intercept_strategy: &'static str,
     pub intercept_unchecked: &'static str,
 
     // DNS Endpoints & Availability
