@@ -52,6 +52,7 @@ PIDFILE=/opt/var/run/nfqws2.pid
 QUEUE=/proc/net/netfilter/nfnetlink_queue
 BACKUP=/tmp/bench-strategies-orig.conf
 PATCHED=/tmp/bench-strategies.conf
+BENCH_PID=/tmp/bench-strategies.pid
 
 usage() {
     sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'
@@ -90,14 +91,26 @@ restore() {
     if [ -f "$BACKUP" ]; then
         cp "$BACKUP" "$CONF"
         "$SERVICE" restart >/dev/null 2>&1
-        rm -f "$BACKUP" "$PATCHED"
-        echo "конфиг возвращён, служба перезапущена"
+        rm -f "$BACKUP" "$PATCHED" "$BENCH_PID"
+        if sh -n "$CONF" 2>/dev/null; then
+            echo "конфиг возвращён, служба перезапущена"
+        else
+            echo "ВНИМАНИЕ: возвращённый конфиг не проходит проверку" >&2
+        fi
     fi
 }
 trap 'restore; exit 130' INT TERM
 trap 'restore' EXIT
 
-cp "$CONF" "$BACKUP" || exit 1
+# Бэкап делается один раз за всё время: если он уже лежит (прошлый прогон
+# прервали), в нём исходный конфиг, и перезаписывать его текущим — уже
+# подменённым стратегией — нельзя, иначе восстанавливать будет нечего.
+if [ -f "$BACKUP" ]; then
+    echo "найден бэкап прошлого прогона: $BACKUP (в нём исходный конфиг)"
+else
+    cp "$CONF" "$BACKUP" || exit 1
+fi
+echo $$ > "$BENCH_PID"
 echo "интерфейс: $IFACE | стратегии: $STRAT_DIR | детектор: $BIN"
 [ -n "$DOMAINS" ] && echo "домены: $DOMAINS" || echo "домены: встроенный список детектора"
 [ "$RUNS" -gt 1 ] && echo "прогонов на стратегию: $RUNS (в таблице — лучший)"
@@ -111,12 +124,17 @@ queue_ready() {
 }
 
 # Позитивные фильтры по спискам — вон; исключения остаются.
+#
+# Кавычку в набор исключений добавили не зря: список часто стоит последним в
+# строке (`MODE_LIST="--hostlist=…"`), и шаблон без неё съедает закрывающую
+# кавычку — конфиг становится невалидным, служба не поднимается. Проверка
+# `sh -n` в вызывающем коде ловит такой патч до установки.
 patch_strategy() {
     tr -d '\r' < "$1" |
-        sed -e 's/--hostlist=[^[:space:]]*//g' \
-            -e 's/--hostlist-auto=[^[:space:]]*//g' \
-            -e 's/--hostlist-domains=[^[:space:]]*//g' \
-            -e 's/--ipset=[^[:space:]]*//g' \
+        sed -e 's/--hostlist=[^[:space:]"]*//g' \
+            -e 's/--hostlist-auto=[^[:space:]"]*//g' \
+            -e 's/--hostlist-domains=[^[:space:]"]*//g' \
+            -e 's/--ipset=[^[:space:]"]*//g' \
             -e "s|^ISP_INTERFACE=.*|ISP_INTERFACE=\"$IFACE\"|" \
             -e 's|^NFQWS_EXTRA_ARGS=.*|NFQWS_EXTRA_ARGS="$MODE_ALL"|' > "$PATCHED"
 }
@@ -158,6 +176,11 @@ for strategy in "$STRAT_DIR"/*.conf; do
     printf '%-22s ' "$name"
 
     patch_strategy "$strategy"
+    if ! sh -n "$PATCHED" 2>/dev/null; then
+        echo "патч сломал конфиг — стратегия пропущена"
+        printf '%s\tнет\t-\t-\t-\t-\t-\t-\tконфиг после правки невалиден\n' "$name" >> "$OUT/table.tsv"
+        continue
+    fi
     cp "$PATCHED" "$CONF"
     "$SERVICE" restart >/dev/null 2>&1
 
@@ -217,12 +240,13 @@ done
 
 # Таблица: сначала те, у кого больше прошло. Число выносится вперёд и
 # сортируется как первое поле — `sort -t` с табуляцией BusyBox понимает
-# не всегда, а тут разделитель по умолчанию.
+# не всегда, а слитную форму `-k1,1nr` он молча игнорирует: нужны отдельные
+# `-k1,1` и `-nr`.
 {
     head -1 "$OUT/table.tsv"
     tail -n +2 "$OUT/table.tsv" |
         awk -F'\t' '{print ($4 == "-" ? -1 : $4) "\t" $0}' |
-        sort -k1,1nr |
+        sort -k1,1 -nr |
         cut -f2-
 } > "$OUT/table.sorted.tsv"
 
