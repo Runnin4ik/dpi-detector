@@ -45,8 +45,8 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 use crate::classify::{
-    classify_connect_error_full, classify_ssl_error, ConnectionStage, DpiProbeStream, DpiProbeTracker,
-    Detail, DpiStatus,
+    classify_connect_error_full, classify_connect_error_icmp, classify_ssl_error, ConnectionStage,
+    DpiProbeStream, DpiProbeTracker, Detail, DpiStatus,
 };
 use crate::config::AppConfig;
 use crate::net::fingerprint::TlsFingerprint;
@@ -562,9 +562,8 @@ async fn connect_attempt(
             let tracker = DpiProbeTracker::new();
             Ok((DpiProbeStream::new(stream, tracker.clone()), tracker))
         }
-        Err(DialError::Io(e)) => {
-            let msg = e.to_string();
-            let (status, detail) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tcp_connect");
+        Err(DialError::Io { error, icmp }) => {
+            let (status, detail) = classify_connect_error_icmp(&error, icmp, 0, "tcp_connect");
             Err(BurstAttempt { status, detail, ms: ms(started) })
         }
         Err(DialError::Timeout) => Err(BurstAttempt {

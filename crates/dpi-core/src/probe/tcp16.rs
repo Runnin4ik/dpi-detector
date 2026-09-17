@@ -19,7 +19,8 @@ use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
 use crate::classify::{
-    classify_connect_error_full, classify_read_error, Detail, DpiStatus, ProbeMetrics,
+    classify_connect_error_full, classify_connect_error_icmp, classify_read_error, Detail,
+    DpiStatus, ProbeMetrics,
 };
 use crate::config::AppConfig;
 use crate::net::fingerprint::http_identity;
@@ -101,9 +102,8 @@ async fn connect_fat_target(
     let connect_stage = "tcp_connect";
     let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.fat_connect_timeout)).await {
         Ok(s) => s,
-        Err(DialError::Io(e)) => {
-            let msg = e.to_string();
-            let (s, d) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, connect_stage);
+        Err(DialError::Io { error, icmp }) => {
+            let (s, d) = classify_connect_error_icmp(&error, icmp, 0, connect_stage);
             return Err((s, d));
         }
         Err(DialError::Timeout) => {

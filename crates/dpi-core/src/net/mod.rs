@@ -9,3 +9,4 @@ pub mod netinfo;
 pub mod public_ip;
 pub mod sysinfo;
 pub mod tcp;
+pub(crate) mod icmp_err;

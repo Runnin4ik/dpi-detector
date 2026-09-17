@@ -2,7 +2,7 @@ use std::io;
 use super::alert;
 use super::detail::{AlertKind, Detail};
 use super::stack;
-use super::types::{ConnectionStage, DpiStatus};
+use super::types::{ConnectionStage, DpiStatus, IcmpCode};
 
 fn short_detail(msg: &str) -> String {
     let mut s: String = msg.chars().take(40).collect();
@@ -326,6 +326,38 @@ pub fn classify_connect_error_full(
     }
 
     (DpiStatus::Unknown, unclassified_detail(&full, err_msg))
+}
+
+/// Classifies a connect failure, refining the unreachable family with the ICMP
+/// message the kernel queued for it.
+///
+/// `EHOSTUNREACH` is one errno for a whole family of ICMP verdicts: "host
+/// unreachable", "host administratively prohibited" — what a provider's filter
+/// answers with — and the rest of the destination-unreachable codes all arrive
+/// as the same number. A caller that has the queued message passes it in; a
+/// caller that does not gets the errno's own verdict.
+pub fn classify_connect_error_icmp(
+    err: &io::Error,
+    icmp: Option<IcmpCode>,
+    bytes_read: usize,
+    stage: &str,
+) -> (DpiStatus, Detail) {
+    let (status, detail) = classify_connect_error_full(
+        &err.to_string(),
+        err.raw_os_error(),
+        Some(err.kind()),
+        bytes_read,
+        stage,
+    );
+    let refined = match (icmp, status) {
+        (Some(code), DpiStatus::HostUnreach | DpiStatus::NetUnreach)
+            if code == IcmpCode::ADMIN_PROHIBITED =>
+        {
+            Detail::IcmpAdminProhibited
+        }
+        _ => detail,
+    };
+    (status, refined)
 }
 
 /// Legacy io::Error-based entry point (stage unknown → tcp_connect).
@@ -697,6 +729,35 @@ mod tests {
         assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach));
         let (s, _) = classify_connect_error_full("Network is down (os error 100)", None, None, 0, "tcp_connect");
         assert_eq!(s, DpiStatus::NetUnreach);
+    }
+
+    /// `EHOSTUNREACH` on its own cannot say whether the route or a filter
+    /// refused the flow; the queued ICMP message can, and only the
+    /// administratively prohibited code earns its own detail.
+    #[test]
+    fn the_queued_icmp_message_refines_an_unreachable_host() {
+        let err = io::Error::from_raw_os_error(HOST_UNREACH);
+
+        let (s, d) =
+            classify_connect_error_icmp(&err, Some(IcmpCode::ADMIN_PROHIBITED), 0, "tcp_connect");
+        assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::IcmpAdminProhibited));
+
+        let host_unreachable = IcmpCode { icmp_type: 3, icmp_code: 1 };
+        let (s, d) = classify_connect_error_icmp(&err, Some(host_unreachable), 0, "tcp_connect");
+        assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach));
+
+        let (s, d) = classify_connect_error_icmp(&err, None, 0, "tcp_connect");
+        assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach));
+    }
+
+    /// The message refines an unreachable verdict and nothing else: a reset that
+    /// happens to carry an ICMP message is still a reset.
+    #[test]
+    fn a_queued_message_does_not_override_another_verdict() {
+        let err = io::Error::from_raw_os_error(104);
+        let (s, d) =
+            classify_connect_error_icmp(&err, Some(IcmpCode::ADMIN_PROHIBITED), 0, "tcp_connect");
+        assert_eq!((s, d), (DpiStatus::TcpRst, Detail::ConnReset));
     }
 
     /// The routers are MIPS, where the numbers are 148 and 128 and not the 113

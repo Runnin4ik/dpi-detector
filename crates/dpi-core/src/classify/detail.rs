@@ -96,6 +96,11 @@ pub enum Detail {
     TcpAborted,
     NetUnreach,
     HostUnreach,
+    /// ICMP destination-unreachable / administratively prohibited: the flow was
+    /// refused by policy somewhere on the path — in practice a provider's
+    /// filter. Kept apart from [`Detail::HostUnreach`] because the two arrive as
+    /// the same errno.
+    IcmpAdminProhibited,
     UnknownConnectionFailure,
     Ipv6Unsupported,
     Ipv6NotSupportedShort,
@@ -317,6 +322,7 @@ impl Detail {
             TcpAborted => Cow::Borrowed("tcp_connection_aborted"),
             NetUnreach => Cow::Borrowed("net_unreachable"),
             HostUnreach => Cow::Borrowed("host_unreachable"),
+            IcmpAdminProhibited => Cow::Borrowed("icmp_admin_prohibited"),
             UnknownConnectionFailure => Cow::Borrowed("unknown_connection_failure"),
             Ipv6Unsupported => Cow::Borrowed("ipv6_unsupported"),
             Ipv6NotSupportedShort => Cow::Borrowed("ipv6_not_supported"),

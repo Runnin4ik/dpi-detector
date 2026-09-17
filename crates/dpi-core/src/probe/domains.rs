@@ -20,7 +20,8 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 use crate::classify::{
-    classify_connect_error_full, classify_ssl_error, ConnectionStage, Detail, DpiStatus,
+    classify_connect_error_full, classify_connect_error_icmp, classify_ssl_error, ConnectionStage,
+    Detail, DpiStatus,
 };
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
@@ -147,9 +148,8 @@ pub async fn check_domain_tls(
     let fut = async {
         let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.connect_timeout)).await {
             Ok(s) => s,
-            Err(DialError::Io(e)) => {
-                let msg = e.to_string();
-                let (s, d) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tcp_connect");
+            Err(DialError::Io { error, icmp }) => {
+                let (s, d) = classify_connect_error_icmp(&error, icmp, 0, "tcp_connect");
                 return (s, d, 0usize);
             }
             Err(DialError::Timeout) => {
@@ -254,9 +254,8 @@ pub async fn check_http_injection(
         let addr = SocketAddr::new(host_ip, 80);
         let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.connect_timeout)).await {
             Ok(s) => s,
-            Err(DialError::Io(e)) => {
-                let msg = e.to_string();
-                let (s, d) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tcp_connect");
+            Err(DialError::Io { error, icmp }) => {
+                let (s, d) = classify_connect_error_icmp(&error, icmp, 0, "tcp_connect");
                 return HttpCheck { status: s, detail: d };
             }
             Err(DialError::Timeout) => {

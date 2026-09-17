@@ -27,6 +27,26 @@ impl ConnectionStage {
     }
 }
 
+/// An ICMP type/code pair, as the kernel reports it for a failed connection.
+///
+/// The errno cannot carry this on its own: `EHOSTUNREACH` is the same number for
+/// "host unreachable", "administratively prohibited" and the rest of the
+/// destination-unreachable family, and the difference decides whether the report
+/// blames the route or a filter on the path. A platform that hands the message
+/// over (Linux, through `IP_RECVERR`) fills this in; where it does not, the
+/// verdict stays the errno's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IcmpCode {
+    pub icmp_type: u8,
+    pub icmp_code: u8,
+}
+
+impl IcmpCode {
+    /// Destination unreachable / administratively prohibited: something on the
+    /// path refused the flow by policy — in practice a provider's filter.
+    pub const ADMIN_PROHIBITED: Self = Self { icmp_type: 3, icmp_code: 13 };
+}
+
 /// Probe statuses. `display_label()` is the Latin uppercase badge (Rule 4 — the
 /// same in every language), `as_str()` is the snake_case token `--json` carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

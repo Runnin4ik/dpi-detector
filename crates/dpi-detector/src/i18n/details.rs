@@ -86,6 +86,7 @@ pub fn detail_text(detail: &Detail, lang: Language) -> String {
         Detail::TcpAborted => t4(lang, "TCP соединение прервано", "Connection aborted", "连接被中止", "Ettesal laghv shod"),
         Detail::NetUnreach => t4(lang, "Нет маршрута (ICMP unreach)", "Net unreachable", "网络不可达", "Shabake dar dastras nist"),
         Detail::HostUnreach => t4(lang, "Нет маршрута до хоста", "Host unreachable", "主机不可达", "Mizban dar dastras nist"),
+        Detail::IcmpAdminProhibited => t4(lang, "ICMP: административно запрещено (фильтр провайдера)", "ICMP administratively prohibited (provider filter)", "ICMP 管理禁止（运营商过滤）", "ICMP admin prohibited (filter-e provider)"),
         Detail::Ipv6Unsupported => t4(lang, "IPv6 не поддерживается/отключён", "IPv6 not supported/disabled", "IPv6 不受支持或已禁用", "IPv6 poshtibani nemishavad ya ghayr-e fa'al ast"),
         Detail::Ipv6NotSupportedShort => t4(lang, "IPv6 не поддерживается", "IPv6 not supported", "IPv6 不受支持", "IPv6 poshtibani nemishavad"),
         // Composed: the head is itself a detail, the offset keeps its unit.
