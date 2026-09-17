@@ -30,6 +30,10 @@
 #   -w SEC   сколько ждать подъёма службы      (по умолчанию 5)
 #   -r N     сколько раз прогнать детектор на каждой стратегии и взять лучший
 #            результат (по умолчанию 1: у DPI есть разброс между прогонами)
+#   -T SEC   таймаут проверок детектора в секундах: кладёт config.yml с
+#            connect_timeout и read_timeout в рабочий каталог (по умолчанию
+#            у детектора 8 с на каждое; меньше — быстрее, но медленные
+#            соединения начнут падать в таймаут)
 #
 # Пример на 10 доменах:
 #   printf '%s\n' www.youtube.com discord.com gateway.discord.gg \
@@ -45,6 +49,7 @@ DOMAINS=""
 OUT=/tmp/strategy-bench
 WAIT=5
 RUNS=1
+TIMEOUT=""
 
 CONF=/opt/etc/nfqws2/nfqws2.conf
 SERVICE=/opt/etc/init.d/S51nfqws2
@@ -59,7 +64,7 @@ usage() {
     exit "${1:-0}"
 }
 
-while getopts "s:b:d:o:w:r:h" opt; do
+while getopts "s:b:d:o:w:r:T:h" opt; do
     case "$opt" in
         s) STRAT_DIR=$OPTARG ;;
         b) BIN=$OPTARG ;;
@@ -67,6 +72,7 @@ while getopts "s:b:d:o:w:r:h" opt; do
         o) OUT=$OPTARG ;;
         w) WAIT=$OPTARG ;;
         r) RUNS=$OPTARG ;;
+        T) TIMEOUT=$OPTARG ;;
         h) usage 0 ;;
         *) usage 1 ;;
     esac
@@ -78,6 +84,14 @@ done
 [ -f "$SERVICE" ] || { echo "нет службы nfqws2: $SERVICE" >&2; exit 1; }
 
 mkdir -p "$OUT" || exit 1
+
+# Детектор берёт таймауты из config.yml в текущем каталоге, поэтому для прогона
+# достаточно положить его рядом: остальные поля остаются на значениях по
+# умолчанию, а connect_timeout/read_timeout становятся заданными.
+if [ -n "$TIMEOUT" ]; then
+    printf 'connect_timeout: %s\nread_timeout: %s\n' "$TIMEOUT" "$TIMEOUT" > "$OUT/config.yml" || exit 1
+    echo "таймауты проверок: ${TIMEOUT}с (connect и read), через $OUT/config.yml"
+fi
 
 # Интерфейс, которым роутер выходит наружу: в стратегиях на его месте заглушка.
 # Поле после `dev`, а не по номеру: у Keenetic строка выглядит как
