@@ -216,6 +216,14 @@ const NET_UNREACH: i32 = libc::ENETUNREACH;
 const HOST_UNREACH: i32 = 10065; // WSAEHOSTUNREACH
 #[cfg(not(windows))]
 const HOST_UNREACH: i32 = libc::EHOSTUNREACH;
+#[cfg(windows)]
+const NET_DOWN: i32 = 10050; // WSAENETDOWN
+#[cfg(not(windows))]
+const NET_DOWN: i32 = libc::ENETDOWN;
+#[cfg(windows)]
+const HOST_DOWN: i32 = 10064; // WSAEHOSTDOWN
+#[cfg(not(windows))]
+const HOST_DOWN: i32 = libc::EHOSTDOWN;
 
 /// Classifies a TCP connection error: pool exhaustion, timeouts, DNS failures,
 /// TLS alerts surfacing inside connect errors, refusals, resets, aborts and
@@ -306,10 +314,10 @@ pub fn classify_connect_error_full(
         return timeout_at_stage(stage);
     }
 
-    if raw_os_error == Some(NET_UNREACH) || full.contains("network is unreachable") {
+    if matches!(raw_os_error, Some(NET_UNREACH) | Some(NET_DOWN)) || full.contains("network is unreachable") || full.contains("network is down") {
         return (DpiStatus::NetUnreach, Detail::NetUnreach);
     }
-    if raw_os_error == Some(HOST_UNREACH) || full.contains("no route to host") {
+    if matches!(raw_os_error, Some(HOST_UNREACH) | Some(HOST_DOWN)) || full.contains("no route to host") || full.contains("host is down") {
         return (DpiStatus::HostUnreach, Detail::HostUnreach);
     }
 
@@ -676,6 +684,19 @@ mod tests {
         assert_eq!((s, d), (DpiStatus::NetUnreach, Detail::NetUnreach));
         let (s, d) = classify_connect_error_full("", Some(HOST_UNREACH), None, 0, "tcp_connect");
         assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach));
+    }
+
+    /// "Down" is the same family as "unreachable" — the network or the host is
+    /// not there at all. A router with a flapping uplink meets `ENETDOWN`, and
+    /// reading it as an anonymous OS error hides the one thing a reader needs.
+    #[test]
+    fn down_and_unreachable_share_a_status() {
+        let (s, d) = classify_connect_error_full("", Some(NET_DOWN), None, 0, "tcp_connect");
+        assert_eq!((s, d), (DpiStatus::NetUnreach, Detail::NetUnreach));
+        let (s, d) = classify_connect_error_full("", Some(HOST_DOWN), None, 0, "tcp_connect");
+        assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach));
+        let (s, _) = classify_connect_error_full("Network is down (os error 100)", None, None, 0, "tcp_connect");
+        assert_eq!(s, DpiStatus::NetUnreach);
     }
 
     /// The routers are MIPS, where the numbers are 148 and 128 and not the 113
