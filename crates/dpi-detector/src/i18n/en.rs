@@ -89,12 +89,13 @@ pub(crate) fn messages() -> Messages {
                            traffic inside a tunnel is out of the bypass's reach: take the target out of the tunnel\n\
                            or add the tunnel interface to ISP_INTERFACE",
         intercept_list_mode: "Profile \"{}\" filters by a list: {}\n\
-                              that list comes from the working mode, so some of what a run measures goes\n\
-                              through the bypass and some does not: for the test, set MODE_ALL instead of\n\
-                              MODE_AUTO or MODE_LIST in NFQWS_EXTRA_ARGS",
+                              if our target is on that list, some of what a run measures goes through\n\
+                              the bypass and some does not, so the numbers are a mixture: for the test,\n\
+                              set MODE_ALL instead of MODE_AUTO or MODE_LIST in NFQWS_EXTRA_ARGS",
         intercept_list_mode_own: "Profile \"{}\" filters by a list: {}\n\
-                                  some of what a run measures goes through the bypass and some does not,\n\
-                                  so the numbers are a mixture: for the test, drop that filter from {}",
+                                  if our target is on that list, some of what a run measures goes through\n\
+                                  the bypass and some does not, so the numbers are a mixture: for the test,\n\
+                                  drop that filter from {}",
         intercept_strategy: "the strategy",
         intercept_unchecked_config: "The package's resolved config cannot be read, so nothing is known about its rules\n\
                                      check the package install and restart the service",

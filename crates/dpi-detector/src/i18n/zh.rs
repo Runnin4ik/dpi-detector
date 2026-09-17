@@ -84,10 +84,10 @@ pub(crate) fn messages() -> Messages {
         intercept_tunnel: "我们的流量走隧道（VPN），而规则在运营商接口上\n\
                            隧道内的流量绕过看不到：请把该目标移出隧道，或把隧道接口加入 ISP_INTERFACE",
         intercept_list_mode: "配置档案「{}」使用列表过滤：{}\n\
-                              这个列表来自工作模式，因此部分检查会走绕过，部分不会：\n\
+                              如果我们的目标在列表内，部分检查会走绕过，部分不会，结果会是混合的：\n\
                               测试期间请在 NFQWS_EXTRA_ARGS 中把 MODE_AUTO 或 MODE_LIST 换成 MODE_ALL",
         intercept_list_mode_own: "配置档案「{}」使用列表过滤：{}\n\
-                                  部分检查会走绕过，部分不会，结果会是混合的：\n\
+                                  如果我们的目标在列表内，部分检查会走绕过，部分不会，结果会是混合的：\n\
                                   测试期间请从 {} 中移除此过滤器",
         intercept_strategy: "策略",
         intercept_unchecked_config: "无法读取该包解析后的配置，因此对它的规则一无所知\n\

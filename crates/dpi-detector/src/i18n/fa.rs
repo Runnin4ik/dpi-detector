@@ -88,11 +88,13 @@ pub(crate) fn messages() -> Messages {
                            traffic-e dakhel-e tunnel ra obur nemibinad: in target ra az tunnel birun biarid\n\
                            ya interface-e tunnel ra be ISP_INTERFACE ezafe konid",
         intercept_list_mode: "Profile \"{}\" ba list filter mikonad: {}\n\
-                              in list az mode-e kari miayad, pas bakhshi az test-ha ba obur miravad va bakhshi na:\n\
-                              baraye test, dar NFQWS_EXTRA_ARGS be jaye MODE_AUTO ya MODE_LIST, MODE_ALL bezarid",
+                              agar target-e ma dar in list bashad, bakhshi az test-ha ba obur miravad\n\
+                              va bakhshi na, pas natayej mokhtalet mishavand: baraye test, dar\n\
+                              NFQWS_EXTRA_ARGS be jaye MODE_AUTO ya MODE_LIST, MODE_ALL bezarid",
         intercept_list_mode_own: "Profile \"{}\" ba list filter mikonad: {}\n\
-                                  bakhshi az test-ha ba obur miravad va bakhshi na, pas natayej mokhtalet mishavand:\n\
-                                  baraye test, in filter ra az {} hazf konid",
+                                  agar target-e ma dar in list bashad, bakhshi az test-ha ba obur miravad\n\
+                                  va bakhshi na, pas natayej mokhtalet mishavand: baraye test,\n\
+                                  in filter ra az {} hazf konid",
         intercept_strategy: "strategy",
         intercept_unchecked_config: "Config-e hal-shode-ye package khande nemishavad, pas hich chizi az qavanin-e an maloom nist\n\
                                      nasb-e package ra barrasi konid va service ra restart konid",
