@@ -88,9 +88,10 @@ pub(crate) fn messages() -> Messages {
                            dar config ezafe konid.",
         intercept_list_recipe: "Dar config strategy-hayi ba hostlist/ipset peyda shod, pas momken ast\n\
                                 target-haye test-e detector gerefte nashavand.\n\
-                                Baraye test-ha, moteghayyer-ha ra be in surat tanzim konid:",
+                                Baraye test-ha:",
         intercept_list_named: "Profile \"{}\" ba list filter mikonad: {}\n\
                                An ra baraye test-ha hazf konid.",
+        intercept_list_drop: "Az {} hazf konid: {}",
         intercept_unchecked_config: "Config-e hal-shode-ye package khande nemishavad, pas hich chizi az qavanin-e an maloom nist.\n\
                                      Nasb-e package ra barrasi konid.",
         intercept_unchecked_queue: "Package ejra mishavad, amma hich chizi be queue-e an bind nashode. Nfqws2 va dpi-detector ra restart konid.",

@@ -83,9 +83,10 @@ pub(crate) fn messages() -> Messages {
         intercept_tunnel: "检测器的流量部分或全部走隧道（VPN）。\n\
                            可以保持现状，或把隧道接口加入配置中的 ISP_INTERFACE。",
         intercept_list_recipe: "配置中发现了使用 hostlist/ipset 的策略，因此检测器测试的目标可能不会被接管。\n\
-                                测试期间请按以下方式设置变量：",
+                                测试期间：",
         intercept_list_named: "配置档案「{}」使用列表过滤：{}\n\
                                测试期间请移除它。",
+        intercept_list_drop: "请从 {} 中移除：{}",
         intercept_unchecked_config: "无法读取该包解析后的配置，因此对它的规则一无所知。\n\
                                      请检查包的安装。",
         intercept_unchecked_queue: "包正在运行，但队列没有绑定。请尝试重启 nfqws2 和 dpi-detector。",

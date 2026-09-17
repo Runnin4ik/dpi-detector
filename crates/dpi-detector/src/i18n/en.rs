@@ -88,9 +88,10 @@ pub(crate) fn messages() -> Messages {
                            Leave it as it is, or add the tunnel interface to ISP_INTERFACE in the config.",
         intercept_list_recipe: "The config has strategies using hostlist/ipset, so the targets the detector\n\
                                 tests may not be picked up.\n\
-                                For the tests, set the variables as follows:",
+                                For the tests:",
         intercept_list_named: "Profile \"{}\" filters by a list: {}\n\
                                Drop it for the tests.",
+        intercept_list_drop: "Drop from {}: {}",
         intercept_unchecked_config: "The package's resolved config cannot be read, so nothing is known about its rules.\n\
                                      Check the package install.",
         intercept_unchecked_queue: "The package is running, but nothing is bound to its queue. Try restarting nfqws2 and dpi-detector.",

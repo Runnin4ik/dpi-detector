@@ -2,7 +2,7 @@
 
 use crate::i18n::{Messages, fingerprint_label};
 use dpi_core::net::fingerprint::TlsFingerprint;
-use dpi_core::net::sysinfo::intercept::{Intercept, Problem, Unchecked};
+use dpi_core::net::sysinfo::intercept::{Intercept, ListFix, Problem, Unchecked};
 use dpi_core::profile::RegionProfile;
 
 use crate::tui::widgets::{asc, panel_with, BOX_WIDTH};
@@ -29,10 +29,24 @@ pub fn render_intercept_notice(msg: &Messages, found: Option<&Intercept>) -> Opt
         body.push('\n');
         body.push_str(&entry(&problem_text(msg, found, problem)));
         if let Problem::ListRecipe { fixes } = problem {
-            // Config lines, not prose: printed flush left, so they can be
-            // copied into the config exactly as they read here.
             for fix in fixes {
-                body.push_str(&format!("\n{}=\"{}\"", fix.variable, fix.value));
+                match fix {
+                    // Config lines, not prose: printed flush left, so they can
+                    // be copied into the config exactly as they read here.
+                    ListFix::Assign { variable, value } => {
+                        body.push_str(&format!("\n{variable}=\"{value}\""));
+                    }
+                    // A whole strategy is not pasted back: the options to drop
+                    // are prose, and they go under the entry like the rest.
+                    ListFix::Drop { variable, options } => {
+                        let options = options.join(" ");
+                        body.push('\n');
+                        body.push_str(&format!(
+                            "    {}",
+                            msg.intercept_list_drop.replacen("{}", variable, 1).replacen("{}", &options, 1)
+                        ));
+                    }
+                }
             }
         }
     }
@@ -236,18 +250,26 @@ mod tests {
         assert_eq!(body.matches(msg.intercept_after).count(), 1, "once, at the end: {body}");
     }
 
-    /// The recipe is config lines, not prose: they print flush left under the
-    /// entry, so they can be copied into the config exactly as they read.
+    /// The recipe prints two shapes: a one-line value as the config line to
+    /// paste, and a whole strategy as the options to drop from it. The first is
+    /// code and goes flush left; the second is prose and stays indented.
     #[test]
-    fn the_list_recipe_prints_config_lines_flush_left() {
+    fn the_list_recipe_prints_both_shapes() {
         use crate::render::strip_ansi;
         let msg = get_messages(Language::En);
         let state = found(vec![Problem::ListRecipe {
             fixes: vec![
-                ListFix { variable: "NFQWS_EXTRA_ARGS".to_string(), value: "$MODE_ALL".to_string() },
-                ListFix {
+                ListFix::Assign {
+                    variable: "NFQWS_EXTRA_ARGS".to_string(),
+                    value: "$MODE_ALL".to_string(),
+                },
+                ListFix::Assign {
                     variable: "NFQWS_ARGS_IPSET".to_string(),
                     value: "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list".to_string(),
+                },
+                ListFix::Drop {
+                    variable: "NFQWS_ARGS_CUSTOM".to_string(),
+                    options: vec!["--hostlist=/opt/etc/nfqws2/lists/google.list".to_string()],
                 },
             ],
         }]);
@@ -260,6 +282,10 @@ mod tests {
             ),
             "{body}"
         );
+        // The strategy is named, not pasted: the option to drop is what a reader
+        // can act on.
+        assert!(body.contains("Drop from NFQWS_ARGS_CUSTOM"), "{body}");
+        assert!(body.contains("--hostlist=/opt/etc/nfqws2/lists/google.list"), "{body}");
         assert!(!body.contains("{}"), "every placeholder is filled: {body}");
     }
 
@@ -325,7 +351,7 @@ mod tests {
             Problem::Ipv6,
             Problem::Port { missing: vec![80] },
             Problem::ListRecipe {
-                fixes: vec![ListFix {
+                fixes: vec![ListFix::Assign {
                     variable: "NFQWS_EXTRA_ARGS".to_string(),
                     value: "$MODE_ALL".to_string(),
                 }],
@@ -347,7 +373,7 @@ mod tests {
                 "    нет портов 80.",
                 "  • В конфиге найдены стратегии с использованием hostlist/ipset, поэтому тестируемые",
                 "    в детекторе цели могут не подхватываться.",
-                "    На время тестирования установите переменные следующим образом:",
+                "    На время тестирования:",
                 "NFQWS_EXTRA_ARGS=\"$MODE_ALL\"",
                 "",
                 "После применения изменений перезапустите nfqws2 и dpi-detector.",

@@ -95,14 +95,16 @@ pub enum Problem {
     ListNamed { profile: String, option: String },
 }
 
-/// One line of the test recipe: a config variable and the value to give it.
+/// One line of the test recipe: what to do with one config variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListFix {
-    /// The variable of the package's config (`NFQWS_ARGS_IPSET`, …).
-    pub variable: String,
-    /// What it should hold for the test: its current value minus the positive
-    /// list options, so everything else it carries stays.
-    pub value: String,
+pub enum ListFix {
+    /// Set the variable to this value — its own value minus the positive lists.
+    /// The value is a single line, so pasting it back is a one-line edit.
+    Assign { variable: String, value: String },
+    /// The variable holds a whole strategy over several profiles: pasting it
+    /// back would be a page of text, not advice, so the entry names the options
+    /// to drop from it instead.
+    Drop { variable: String, options: Vec<String> },
 }
 
 /// The check itself did not complete. Not a `Problem`: these are not things to
@@ -461,7 +463,10 @@ fn list_fixes(conf: &str, options: &[String]) -> (Vec<ListFix>, Vec<String>) {
         }
     }
     if mode {
-        fixes.push(ListFix { variable: MODE_VARIABLE.to_string(), value: "$MODE_ALL".to_string() });
+        fixes.push(ListFix::Assign {
+            variable: MODE_VARIABLE.to_string(),
+            value: "$MODE_ALL".to_string(),
+        });
     }
     for name in named {
         let current = variables
@@ -469,16 +474,27 @@ fn list_fixes(conf: &str, options: &[String]) -> (Vec<ListFix>, Vec<String>) {
             .find(|(variable, _)| *variable == name)
             .map(|(_, value)| value.as_str())
             .unwrap_or_default();
+        if current.contains('\n') {
+            // A value written over several lines is a strategy: several profiles,
+            // their filters and their desyncs. Handing that back is not advice,
+            // so the entry names what to drop instead.
+            let options = options
+                .iter()
+                .filter(|option| current.split_whitespace().any(|token| token == option.as_str()))
+                .cloned()
+                .collect();
+            fixes.push(ListFix::Drop { variable: name, options });
+            continue;
+        }
         let value = current
             .split_whitespace()
-            // A value written over several lines carries the shell's own line
-            // continuations: they join the lines in the config, they are not
-            // part of what the variable holds, and the recipe is one line.
+            // A one-line value still carries the shell's line continuations when
+            // the config broke it; they are not part of what the variable holds.
             .filter(|token| *token != "\\")
             .filter(|token| !options.iter().any(|option| option == token))
             .collect::<Vec<_>>()
             .join(" ");
-        fixes.push(ListFix { variable: name, value });
+        fixes.push(ListFix::Assign { variable: name, value });
     }
     (fixes, unnamed)
 }
@@ -1221,17 +1237,18 @@ mod tests {
         assert_eq!(list_source_in(conf, "--hostlist=/gone.list"), ListSource::Unknown);
     }
 
-    /// The recipe is a variable and the value to give it: the config's own value
-    /// minus the positive lists, with the shell's line continuations gone,
-    /// because what a reader pastes has to be a valid line.
+    /// The recipe is a variable and what to do with it. A one-line value comes
+    /// back as the line to set it to, with the exclude lists kept; a value that
+    /// is a whole strategy over several profiles does not, because pasting a
+    /// page of strategy back is not advice — only the option to drop is named.
     #[test]
-    fn the_recipe_keeps_everything_but_the_positive_lists() {
+    fn the_recipe_assigns_a_short_value_and_drops_from_a_strategy() {
         let conf = "# strategy\n\
                     MODE_LIST=\"--hostlist=/opt/etc/nfqws2/lists/user.list\"\n\
                     MODE_ALL=\"--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list\"\n\
                     NFQWS_ARGS_IPSET=\"--ipset=/opt/etc/nfqws2/lists/ipset.list --ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list\"\n\
                     NFQWS_ARGS_CUSTOM=\"--filter-tcp=443 --filter-l7=tls \\\n\
-                    --hostlist-domains=googlevideo.com \\\n\
+                    --hostlist=/opt/etc/nfqws2/lists/google.list \\\n\
                     --lua-desync=fake\"\n\
                     NFQWS_EXTRA_ARGS=\"$MODE_LIST\"\n";
         let (fixes, unnamed) = list_fixes(
@@ -1239,35 +1256,31 @@ mod tests {
             &[
                 "--hostlist=/opt/etc/nfqws2/lists/user.list".to_string(),
                 "--ipset=/opt/etc/nfqws2/lists/ipset.list".to_string(),
-                "--hostlist-domains=googlevideo.com".to_string(),
+                "--hostlist=/opt/etc/nfqws2/lists/google.list".to_string(),
             ],
         );
         assert!(unnamed.is_empty(), "{unnamed:?}");
-        // The mode's own switch comes first: it is the cheapest thing to change.
         assert_eq!(
-            fixes[0],
-            ListFix { variable: "NFQWS_EXTRA_ARGS".to_string(), value: "$MODE_ALL".to_string() }
+            fixes,
+            vec![
+                // The mode's own switch comes first: it is the cheapest thing to
+                // change.
+                ListFix::Assign {
+                    variable: "NFQWS_EXTRA_ARGS".to_string(),
+                    value: "$MODE_ALL".to_string(),
+                },
+                // A one-line variable comes back whole, minus the positive list.
+                ListFix::Assign {
+                    variable: "NFQWS_ARGS_IPSET".to_string(),
+                    value: "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list".to_string(),
+                },
+                // The strategy is several lines long, so it is not handed back.
+                ListFix::Drop {
+                    variable: "NFQWS_ARGS_CUSTOM".to_string(),
+                    options: vec!["--hostlist=/opt/etc/nfqws2/lists/google.list".to_string()],
+                },
+            ]
         );
-        let by_name = |name: &str| {
-            fixes
-                .iter()
-                .find(|fix| fix.variable == name)
-                .unwrap_or_else(|| panic!("no {name} in {fixes:?}"))
-                .value
-                .clone()
-        };
-        // The exclude list stays: it only ever widens what is desynced.
-        assert_eq!(
-            by_name("NFQWS_ARGS_IPSET"),
-            "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list"
-        );
-        // The desyncs stay, the list goes, and the continuation backslashes do
-        // not survive into a line a reader would paste.
-        let custom = by_name("NFQWS_ARGS_CUSTOM");
-        assert!(custom.starts_with("--filter-tcp=443 --filter-l7=tls"), "{custom}");
-        assert!(custom.ends_with("--lua-desync=fake"), "{custom}");
-        assert!(!custom.contains("googlevideo"), "{custom}");
-        assert!(!custom.contains('\\'), "{custom}");
     }
 
     /// An option the config does not carry is not invented into a recipe.
@@ -1492,9 +1505,9 @@ mod tests {
     fn the_list_recipe_and_the_unresolved_options_both_reach_the_entry() {
         let facts = Facts {
             profile: "tcp=443 l7=tls".to_string(),
-            list_fixes: vec![ListFix {
-                variable: "NFQWS_EXTRA_ARGS".to_string(),
-                value: "$MODE_ALL".to_string(),
+            list_fixes: vec![ListFix::Drop {
+                variable: "NFQWS_ARGS_CUSTOM".to_string(),
+                options: vec!["--hostlist=/opt/etc/nfqws2/lists/google.list".to_string()],
             }],
             list_unnamed: vec!["--ipset=/tmp/hand.list".to_string()],
             ..covered()
@@ -1503,9 +1516,9 @@ mod tests {
             judge(&facts).0,
             vec![
                 Problem::ListRecipe {
-                    fixes: vec![ListFix {
-                        variable: "NFQWS_EXTRA_ARGS".to_string(),
-                        value: "$MODE_ALL".to_string(),
+                    fixes: vec![ListFix::Drop {
+                        variable: "NFQWS_ARGS_CUSTOM".to_string(),
+                        options: vec!["--hostlist=/opt/etc/nfqws2/lists/google.list".to_string()],
                     }],
                 },
                 Problem::ListNamed {

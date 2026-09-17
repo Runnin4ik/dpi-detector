@@ -96,6 +96,9 @@ pub struct Messages {
     /// The strategy filters by lists and the config lines that drop them are
     /// known; the caller prints those lines under this.
     pub intercept_list_recipe: &'static str,
+    /// One variable of that recipe holds a whole strategy: `{}` is the variable
+    /// and `{}` the options to drop from it.
+    pub intercept_list_drop: &'static str,
     /// The same when the filter lives in no variable the detector can name:
     /// `{}` is the profile and `{}` the option.
     pub intercept_list_named: &'static str,
