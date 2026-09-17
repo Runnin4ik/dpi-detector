@@ -77,13 +77,16 @@ pub(crate) fn messages() -> Messages {
                                      测试期间请设置 POLICY_EXCLUDE=1，或把 POLICY_NAME 改成路由器不存在的策略名",
         intercept_interface: "规则在接口 {} 上，而我们的流量从 {} 出去。\n\
                               请把该接口加入包配置的 ISP_INTERFACE（多个用空格分隔）。",
-        intercept_ports: "流量绕过了 nfqws2，因为配置中的 TCP_PORTS 或 --filter-tcp 没有端口 {}。",
+        intercept_ports: "流量绕过了 nfqws2：端口 {} 不在{}中。",
+        intercept_ports_queue: "TCP_PORTS",
+        intercept_ports_filters: "--filter-tcp",
+        intercept_ports_both: "TCP_PORTS 和 --filter-tcp",
         intercept_ipv6: "检测器以 IPv6 运行，但配置中 IPV6_ENABLED=0。\n\
                          请把 IPV6_ENABLED=1 写入 /opt/etc/nfqws2/nfqws2.conf。",
         intercept_tunnel: "检测器的流量部分或全部走隧道（VPN）。\n\
                            可以保持现状，或把隧道接口加入配置中的 ISP_INTERFACE。",
         intercept_list_recipe: "配置中发现了使用 hostlist/ipset 的策略，因此检测器测试的目标可能不会被接管。\n\
-                                测试期间：",
+                                为了正确测试策略，测试期间请在配置中设置：",
         intercept_list_named: "配置档案「{}」使用列表过滤：{}\n\
                                测试期间请移除它。",
         intercept_list_drop: "请从 {} 中移除：{}",

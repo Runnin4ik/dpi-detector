@@ -80,15 +80,17 @@ pub(crate) fn messages() -> Messages {
         intercept_interface: "Правила висят на интерфейсе {}, а наш трафик уходит через {}.\n\
                               Добавьте этот интерфейс в ISP_INTERFACE в конфиге пакета\n\
                               (несколько — через пробел).",
-        intercept_ports: "Трафик идёт мимо nfqws2, потому что в конфиге в TCP_PORTS или --filter-tcp\n\
-                          нет портов {}.",
+        intercept_ports: "Трафик идёт мимо nfqws2: порта {} нет {}.",
+        intercept_ports_queue: "в TCP_PORTS",
+        intercept_ports_filters: "в --filter-tcp",
+        intercept_ports_both: "ни в TCP_PORTS, ни в --filter-tcp",
         intercept_ipv6: "Детектор запущен в режиме IPv6, но в конфиге стоит IPV6_ENABLED=0.\n\
                          Поставьте IPV6_ENABLED=1 в /opt/etc/nfqws2/nfqws2.conf.",
         intercept_tunnel: "Трафик детектора частично или полностью уходит через туннель (VPN).\n\
                            Оставьте как есть или добавьте интерфейс туннеля в ISP_INTERFACE в конфиге.",
         intercept_list_recipe: "В конфиге найдены стратегии с использованием hostlist/ipset, поэтому тестируемые\n\
                                 в детекторе цели могут не подхватываться.\n\
-                                На время тестирования:",
+                                Для правильной проверки стратегий на время тестирования установите в конфиге:",
         intercept_list_drop: "Уберите из {}: {}",
         intercept_list_named: "В профиле «{}» стоит фильтр по списку: {}\n\
                                Уберите его на время тестирования.",

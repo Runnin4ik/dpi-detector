@@ -80,15 +80,17 @@ pub(crate) fn messages() -> Messages {
         intercept_interface: "Its rules are on interface {}, while ours leaves through {}.\n\
                               Add that interface to ISP_INTERFACE in the package config\n\
                               (several are space separated).",
-        intercept_ports: "Traffic goes past nfqws2, because TCP_PORTS or --filter-tcp in the config\n\
-                          do not have ports {}.",
+        intercept_ports: "Traffic goes past nfqws2: port {} is missing {}.",
+        intercept_ports_queue: "from TCP_PORTS",
+        intercept_ports_filters: "from --filter-tcp",
+        intercept_ports_both: "from both TCP_PORTS and --filter-tcp",
         intercept_ipv6: "The detector runs over IPv6, but the config has IPV6_ENABLED=0.\n\
                          Set IPV6_ENABLED=1 in /opt/etc/nfqws2/nfqws2.conf.",
         intercept_tunnel: "The detector's traffic goes through a tunnel (VPN), partly or entirely.\n\
                            Leave it as it is, or add the tunnel interface to ISP_INTERFACE in the config.",
         intercept_list_recipe: "The config has strategies using hostlist/ipset, so the targets the detector\n\
                                 tests may not be picked up.\n\
-                                For the tests:",
+                                To test the strategies correctly, set the following in the config:",
         intercept_list_named: "Profile \"{}\" filters by a list: {}\n\
                                Drop it for the tests.",
         intercept_list_drop: "Drop from {}: {}",

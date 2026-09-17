@@ -79,8 +79,10 @@ pub(crate) fn messages() -> Messages {
         intercept_interface: "Qavanin rooy-e interface-e {} ast, amma traffic-e ma az {} miravad.\n\
                               In interface ra be ISP_INTERFACE dar config-e package ezafe konid\n\
                               (chand tai ba fasele).",
-        intercept_ports: "Traffic az nfqws2 obur mikonad, chun TCP_PORTS ya --filter-tcp dar config\n\
-                          port-e {} ra nadarad.",
+        intercept_ports: "Traffic az nfqws2 obur mikonad: port-e {} dar {} nist.",
+        intercept_ports_queue: "TCP_PORTS",
+        intercept_ports_filters: "--filter-tcp",
+        intercept_ports_both: "na TCP_PORTS na --filter-tcp",
         intercept_ipv6: "Detector rooy-e IPv6 ejra mishavad, amma dar config IPV6_ENABLED=0 ast.\n\
                          IPV6_ENABLED=1 ra dar /opt/etc/nfqws2/nfqws2.conf bezarid.",
         intercept_tunnel: "Traffic-e detector be tore koll ya ghesmatan az tunnel (VPN) miravad.\n\
@@ -88,7 +90,7 @@ pub(crate) fn messages() -> Messages {
                            dar config ezafe konid.",
         intercept_list_recipe: "Dar config strategy-hayi ba hostlist/ipset peyda shod, pas momken ast\n\
                                 target-haye test-e detector gerefte nashavand.\n\
-                                Baraye test-ha:",
+                                Baraye barrasi-e dorost-e strategy-ha, dar config bezarid:",
         intercept_list_named: "Profile \"{}\" ba list filter mikonad: {}\n\
                                An ra baraye test-ha hazf konid.",
         intercept_list_drop: "Az {} hazf konid: {}",

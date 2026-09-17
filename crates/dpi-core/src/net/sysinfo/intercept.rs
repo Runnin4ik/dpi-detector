@@ -77,10 +77,9 @@ pub enum Problem {
     /// carries `ifw=`/`ifl=`). A per-destination route into a VPN is invisible
     /// to the default-route comparison, which is why this is read per flow.
     Tunnel,
-    /// The ports the tests speak are not all covered: 80 or 443 is missing from
-    /// the package's `TCP_PORTS`, from the deciding profile's `--filter-tcp`, or
-    /// from both. Named, because which one is missing is what has to be added.
-    Port { missing: Vec<u16> },
+    /// A port the tests speak is not covered. Named per port and per side,
+    /// because a reader has to add it in the right place.
+    Port { port: u16, missing: Missing },
     /// Our traffic is IPv6 and the package installs no IPv6 rules at all
     /// (`IPV6_ENABLED=0`). The v4 rules can be perfect and this still holds.
     Ipv6,
@@ -93,6 +92,21 @@ pub enum Problem {
     /// The same, for a filter written in no config variable the detector can
     /// name: the profile and the option are pointed at instead.
     ListNamed { profile: String, option: String },
+}
+
+/// Where a test port is missing. A reader has to add it in the right place, and
+/// the two places are edited differently: the package's queue list or the
+/// strategy's own filters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Missing {
+    /// The package does not queue it (`TCP_PORTS`), so the kernel never sends it
+    /// to the queue.
+    Queue,
+    /// The package queues it, but no acting profile takes it — the connection
+    /// falls through every profile and goes out untouched.
+    Filters,
+    /// Neither side has it.
+    Both,
 }
 
 /// One line of the test recipe: what to do with one config variable.
@@ -224,14 +238,21 @@ fn judge(facts: &Facts) -> (Vec<Problem>, Vec<Unchecked>) {
     }
     // The tests speak HTTP on 80 and TLS on 443, and both have to get through:
     // the package queues what `TCP_PORTS` names, and some profile has to take
-    // the port. One missing on either side sends that half of a run past
-    // nfqws2, whatever else is right.
-    let missing: Vec<u16> = TEST_PORTS
-        .into_iter()
-        .filter(|port| !facts.tcp_ports.contains(port) || facts.untaken.contains(port))
-        .collect();
-    if !missing.is_empty() {
-        problems.push(Problem::Port { missing });
+    // the port. Each side is reported on its own, because that is what tells a
+    // reader where to add it.
+    for port in TEST_PORTS {
+        let missing = match (
+            facts.tcp_ports.contains(&port),
+            !facts.untaken.contains(&port),
+        ) {
+            (true, true) => None,
+            (false, false) => Some(Missing::Both),
+            (false, true) => Some(Missing::Queue),
+            (true, false) => Some(Missing::Filters),
+        };
+        if let Some(missing) = missing {
+            problems.push(Problem::Port { port, missing });
+        }
     }
     if !facts.list_fixes.is_empty() {
         // Interception is fine; the strategy is what decides which targets get
@@ -1511,7 +1532,10 @@ mod tests {
             ..covered()
         };
         let (problems, unchecked) = judge(&facts);
-        assert_eq!(problems, vec![Problem::Ipv6, Problem::Port { missing: vec![80] }]);
+        assert_eq!(
+            problems,
+            vec![Problem::Ipv6, Problem::Port { port: 80, missing: Missing::Both }]
+        );
         assert!(unchecked.is_empty(), "{unchecked:?}");
     }
 
@@ -1557,16 +1581,28 @@ mod tests {
     }
 
     /// Both ports the tests speak have to be queued by the package and taken by
-    /// some profile. Either side missing sends that half of a run past nfqws2,
-    /// and the entry names the port rather than "the port we use".
+    /// some profile, and each side is named on its own: that is what tells a
+    /// reader where to add the port.
     #[test]
     fn a_port_missing_from_either_side_is_named() {
         let not_queued = Facts { tcp_ports: vec![443], ..covered() };
-        assert_eq!(judge(&not_queued).0, vec![Problem::Port { missing: vec![80] }]);
+        assert_eq!(
+            judge(&not_queued).0,
+            vec![Problem::Port { port: 80, missing: Missing::Queue }]
+        );
         let not_taken = Facts { untaken: vec![443], ..covered() };
-        assert_eq!(judge(&not_taken).0, vec![Problem::Port { missing: vec![443] }]);
+        assert_eq!(
+            judge(&not_taken).0,
+            vec![Problem::Port { port: 443, missing: Missing::Filters }]
+        );
         let neither = Facts { tcp_ports: Vec::new(), untaken: vec![80, 443], ..covered() };
-        assert_eq!(judge(&neither).0, vec![Problem::Port { missing: vec![80, 443] }]);
+        assert_eq!(
+            judge(&neither).0,
+            vec![
+                Problem::Port { port: 80, missing: Missing::Both },
+                Problem::Port { port: 443, missing: Missing::Both },
+            ]
+        );
     }
 
     /// The list recipe reaches the entry as it was built: the judge does not

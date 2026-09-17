@@ -89,8 +89,12 @@ pub struct Messages {
     pub intercept_excluded: &'static str,
     pub intercept_excluded_unnamed: &'static str,
     pub intercept_interface: &'static str,
-    /// The ports the tests speak that nothing queues, comma separated.
+    /// The ports the tests speak that nothing queues or takes: `{}` is the port
+    /// and `{}` one of the three phrases below, which name the side.
     pub intercept_ports: &'static str,
+    pub intercept_ports_queue: &'static str,
+    pub intercept_ports_filters: &'static str,
+    pub intercept_ports_both: &'static str,
     pub intercept_ipv6: &'static str,
     pub intercept_tunnel: &'static str,
     /// The strategy filters by lists and the config lines that drop them are

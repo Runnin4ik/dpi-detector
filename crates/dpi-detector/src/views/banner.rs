@@ -2,7 +2,7 @@
 
 use crate::i18n::{Messages, fingerprint_label};
 use dpi_core::net::fingerprint::TlsFingerprint;
-use dpi_core::net::sysinfo::intercept::{Intercept, ListFix, Problem, Unchecked};
+use dpi_core::net::sysinfo::intercept::{Intercept, ListFix, Missing, Problem, Unchecked};
 use dpi_core::profile::RegionProfile;
 
 use crate::tui::widgets::{asc, panel_with, BOX_WIDTH};
@@ -93,9 +93,15 @@ fn problem_text(msg: &Messages, found: &Intercept, problem: &Problem) -> String 
             msg.intercept_interface.replacen("{}", &rules, 1).replacen("{}", &ours, 1)
         }
         Problem::Tunnel => msg.intercept_tunnel.to_string(),
-        Problem::Port { missing } => {
-            let ports: Vec<String> = missing.iter().map(u16::to_string).collect();
-            msg.intercept_ports.replacen("{}", &ports.join(", "), 1)
+        Problem::Port { port, missing } => {
+            let side = match missing {
+                Missing::Queue => msg.intercept_ports_queue,
+                Missing::Filters => msg.intercept_ports_filters,
+                Missing::Both => msg.intercept_ports_both,
+            };
+            msg.intercept_ports
+                .replacen("{}", &port.to_string(), 1)
+                .replacen("{}", side, 1)
         }
         Problem::Ipv6 => msg.intercept_ipv6.to_string(),
         Problem::ListRecipe { .. } => msg.intercept_list_recipe.to_string(),
@@ -215,20 +221,26 @@ mod tests {
         assert!(notice.contains("ISP_INTERFACE"), "with the key to change: {notice}");
     }
 
-    /// The port entry names the ports the tests speak that nothing queues: a
-    /// reader has to add exactly those, and "the port we use" leaves them
-    /// guessing which.
+    /// The port entry names the port and the side it is missing from: the
+    /// package's queue list and the strategy's filters are edited in different
+    /// places, so "TCP_PORTS or --filter-tcp" tells a reader nothing.
     #[test]
-    fn the_port_entry_names_the_missing_ports() {
+    fn the_port_entry_names_the_port_and_the_side() {
         let msg = get_messages(Language::En);
-        let both = found(vec![Problem::Port { missing: vec![80, 443] }]);
-        let notice = render_intercept_notice(&msg, Some(&both)).unwrap();
-        assert!(notice.contains("TCP_PORTS"), "{notice}");
-        assert!(notice.contains("80, 443"), "{notice}");
-        let one = found(vec![Problem::Port { missing: vec![80] }]);
-        let notice = render_intercept_notice(&msg, Some(&one)).unwrap();
-        assert!(notice.contains("80"), "{notice}");
-        assert!(!notice.contains("443"), "only what is missing: {notice}");
+        let side = |port: u16, missing: Missing| {
+            let state = found(vec![Problem::Port { port, missing }]);
+            render_intercept_notice(&msg, Some(&state)).unwrap()
+        };
+        let queue = side(80, Missing::Queue);
+        assert!(queue.contains("port 80"), "{queue}");
+        assert!(queue.contains("from TCP_PORTS"), "{queue}");
+        assert!(!queue.contains("--filter-tcp"), "one side only: {queue}");
+        let filters = side(443, Missing::Filters);
+        assert!(filters.contains("port 443"), "{filters}");
+        assert!(filters.contains("from --filter-tcp"), "{filters}");
+        assert!(!filters.contains("from TCP_PORTS"), "one side only: {filters}");
+        let both = side(80, Missing::Both);
+        assert!(both.contains("from both TCP_PORTS and --filter-tcp"), "{both}");
     }
 
     /// Two problems hold at once and the block says both, under one header: a
@@ -238,11 +250,14 @@ mod tests {
     fn several_problems_share_one_header() {
         use crate::render::strip_ansi;
         let msg = get_messages(Language::En);
-        let state = found(vec![Problem::Ipv6, Problem::Port { missing: vec![443] }]);
+        let state = found(vec![
+            Problem::Ipv6,
+            Problem::Port { port: 443, missing: Missing::Filters },
+        ]);
         let body = strip_ansi(&render_intercept_notice(&msg, Some(&state)).unwrap());
         assert_eq!(body.matches(msg.intercept_header).count(), 1, "printed once: {body}");
         assert!(body.contains("IPV6_ENABLED=0"), "{body}");
-        assert!(body.contains("TCP_PORTS"), "{body}");
+        assert!(body.contains("--filter-tcp"), "{body}");
         // Both entries are bullets of the same list, and what to do sits under
         // them rather than in a paragraph of its own.
         assert_eq!(body.matches("  • ").count(), 2, "{body}");
@@ -349,7 +364,7 @@ mod tests {
         let state = found(vec![
             Problem::Excluded,
             Problem::Ipv6,
-            Problem::Port { missing: vec![80] },
+            Problem::Port { port: 80, missing: Missing::Both },
             Problem::ListRecipe {
                 fixes: vec![ListFix::Assign {
                     variable: "NFQWS_EXTRA_ARGS".to_string(),
@@ -369,11 +384,10 @@ mod tests {
                 "    которого нет среди политик роутера",
                 "  • Детектор запущен в режиме IPv6, но в конфиге стоит IPV6_ENABLED=0.",
                 "    Поставьте IPV6_ENABLED=1 в /opt/etc/nfqws2/nfqws2.conf.",
-                "  • Трафик идёт мимо nfqws2, потому что в конфиге в TCP_PORTS или --filter-tcp",
-                "    нет портов 80.",
+                "  • Трафик идёт мимо nfqws2: порта 80 нет ни в TCP_PORTS, ни в --filter-tcp.",
                 "  • В конфиге найдены стратегии с использованием hostlist/ipset, поэтому тестируемые",
                 "    в детекторе цели могут не подхватываться.",
-                "    На время тестирования:",
+                "    Для правильной проверки стратегий на время тестирования установите в конфиге:",
                 "NFQWS_EXTRA_ARGS=\"$MODE_ALL\"",
                 "",
                 "После применения изменений перезапустите nfqws2 и dpi-detector.",
