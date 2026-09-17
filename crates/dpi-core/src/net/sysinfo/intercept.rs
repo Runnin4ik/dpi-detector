@@ -386,10 +386,10 @@ fn pidfile_pid() -> Option<u32> {
     std::path::Path::new(&format!("/proc/{pid}")).exists().then_some(pid)
 }
 
-/// The ports the detector's tests speak: HTTP on 80, TLS on 443, and DoT on 853,
-/// which the DNS test uses against resolvers. A run touches all three, so the
-/// strategy is asked about each of them by name.
-const TEST_PORTS: [u16; 3] = [80, 443, 853];
+/// The ports the detector's tests speak: HTTP on 80 and TLS on 443. The DNS test
+/// also reaches resolvers on 853, but DoT is a side road — a run's numbers are
+/// made on 80 and 443, and a notice about 853 says nothing about them.
+const TEST_PORTS: [u16; 2] = [80, 443];
 
 /// The variable the package's own mode lives in, and the mode that drops the
 /// list filtering: `MODE_ALL` is "everything the exclude lists do not cover",
@@ -1198,20 +1198,16 @@ mod tests {
             "--filter-l7=http,tls",
             "--lua-desync=multisplit",
         ]);
-        assert_eq!(strategy_in(&split).untaken, vec![853], "80 is taken by the second profile");
+        assert!(strategy_in(&split).untaken.is_empty(), "80 is taken by the second profile");
         let no_desync = argv(&[
             "--filter-tcp=443",
             "--lua-desync=multisplit",
             "--new",
             "--filter-tcp=80",
         ]);
-        assert_eq!(
-            strategy_in(&no_desync).untaken,
-            vec![80, 853],
-            "a profile that acts on nothing"
-        );
+        assert_eq!(strategy_in(&no_desync).untaken, vec![80], "a profile that acts on nothing");
         let only_tls = argv(&["--filter-tcp=443", "--lua-desync=multisplit"]);
-        assert_eq!(strategy_in(&only_tls).untaken, vec![80, 853]);
+        assert_eq!(strategy_in(&only_tls).untaken, vec![80]);
         let every_port = argv(&["--filter-l7=tls", "--lua-desync=multisplit"]);
         assert!(strategy_in(&every_port).untaken.is_empty(), "no port filter takes both");
     }
@@ -1496,7 +1492,7 @@ mod tests {
             ..covered()
         };
         let (problems, unchecked) = judge(&facts);
-        assert_eq!(problems, vec![Problem::Ipv6, Problem::Port { missing: vec![80, 853] }]);
+        assert_eq!(problems, vec![Problem::Ipv6, Problem::Port { missing: vec![80] }]);
         assert!(unchecked.is_empty(), "{unchecked:?}");
     }
 
@@ -1547,11 +1543,11 @@ mod tests {
     #[test]
     fn a_port_missing_from_either_side_is_named() {
         let not_queued = Facts { tcp_ports: vec![443], ..covered() };
-        assert_eq!(judge(&not_queued).0, vec![Problem::Port { missing: vec![80, 853] }]);
+        assert_eq!(judge(&not_queued).0, vec![Problem::Port { missing: vec![80] }]);
         let not_taken = Facts { untaken: vec![443], ..covered() };
         assert_eq!(judge(&not_taken).0, vec![Problem::Port { missing: vec![443] }]);
-        let neither = Facts { tcp_ports: Vec::new(), untaken: vec![80, 443, 853], ..covered() };
-        assert_eq!(judge(&neither).0, vec![Problem::Port { missing: vec![80, 443, 853] }]);
+        let neither = Facts { tcp_ports: Vec::new(), untaken: vec![80, 443], ..covered() };
+        assert_eq!(judge(&neither).0, vec![Problem::Port { missing: vec![80, 443] }]);
     }
 
     /// The list recipe reaches the entry as it was built: the judge does not
