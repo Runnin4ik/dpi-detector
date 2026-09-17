@@ -123,15 +123,15 @@ jobs:
       - name: Alias the MIPS unwinder under the name rustc asks for
         if: matrix.target == 'mipsel-unknown-linux-musl' || matrix.target == 'mips-unknown-linux-musl'
         run: |
-          mkdir -p target/static-unwind
-          docker run --rm -v "$PWD/target/static-unwind:/out" "ghcr.io/cross-rs/${{ matrix.target }}:0.2.5" \
+          mkdir -p "target/static-unwind-${{ matrix.target }}"
+          docker run --rm -v "$PWD/target/static-unwind-${{ matrix.target }}:/out" "ghcr.io/cross-rs/${{ matrix.target }}:0.2.5" \
             sh -c 'for cc in /usr/local/bin/*muslsf-gcc; do cp "$(dirname "$($cc -print-libgcc-file-name)")/libgcc_eh.a" /out/libunwind.a; done'
-          ls -l target/static-unwind/
+          ls -l "target/static-unwind-${{ matrix.target }}/"
 
       - name: Build with cross (MIPS & Cross targets)
         if: matrix.use_cross
         env:
-          RUSTFLAGS: "--cfg rustix_use_libc -C force-unwind-tables=no ${{ (matrix.target == 'mipsel-unknown-linux-musl' || matrix.target == 'mips-unknown-linux-musl') && '-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind' || '' }}"
+          RUSTFLAGS: "--cfg rustix_use_libc -C force-unwind-tables=no ${{ (matrix.target == 'mipsel-unknown-linux-musl' || matrix.target == 'mips-unknown-linux-musl') && '-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-${{ matrix.target }}' || '' }}"
         run: cross build --release --target ${{ matrix.target }}
 
       - name: Build with cargo (Windows 7 legacy)
