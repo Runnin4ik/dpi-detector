@@ -80,31 +80,32 @@ pub struct Messages {
     pub unavailable: &'static str,
 
     // Interception of this process's own traffic by nfqws2 on Keenetic. One
-    // header, then a list: every entry is the problem on its first line and the
-    // fix on the lines under it, so two problems are fixed in one pass. `{}`
-    // slots are the policy name, the two interface names and the list filter.
-    // The bullet, the indent and the restart command are added by the caller,
-    // so the command stays one path in every language.
+    // header, then a list: every entry is the problem on its first line and what
+    // to do about it on the lines under it. `{}` slots are the policy name, the
+    // two interface names, the missing ports and the list filter. The bullet,
+    // the indent and the config lines of the list recipe are added by the
+    // caller, so the recipe stays one shape in every language.
     pub intercept_header: &'static str,
     pub intercept_excluded: &'static str,
     pub intercept_excluded_unnamed: &'static str,
     pub intercept_interface: &'static str,
+    /// The ports the tests speak that nothing queues, comma separated.
     pub intercept_ports: &'static str,
     pub intercept_ipv6: &'static str,
     pub intercept_tunnel: &'static str,
-    pub intercept_list_mode: &'static str,
-    /// The same entry when the filter is written in a strategy variable; the
-    /// variable's name fills the third `{}`, and this word fills it when the
-    /// config does not name one.
-    pub intercept_list_mode_own: &'static str,
-    pub intercept_strategy: &'static str,
+    /// The strategy filters by lists and the config lines that drop them are
+    /// known; the caller prints those lines under this.
+    pub intercept_list_recipe: &'static str,
+    /// The same when the filter lives in no variable the detector can name:
+    /// `{}` is the profile and `{}` the option.
+    pub intercept_list_named: &'static str,
     /// The check did not complete. One entry per cause, and each stands alone:
     /// these are not config problems, so they carry no fix of the same kind.
     pub intercept_unchecked_config: &'static str,
     pub intercept_unchecked_queue: &'static str,
     pub intercept_unchecked_route: &'static str,
-    /// Leads the restart command, which every config fix needs.
-    pub intercept_then: &'static str,
+    /// Closes the block, once, after everything that needs a change.
+    pub intercept_after: &'static str,
 
     // DNS Endpoints & Availability
     pub subnet_label: &'static str,

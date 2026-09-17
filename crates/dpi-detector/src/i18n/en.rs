@@ -71,39 +71,32 @@ pub(crate) fn messages() -> Messages {
         unavailable: "unavailable",
 
         intercept_header: "nfqws2 is running, but there are problems:",
-        intercept_excluded: "The connection is excluded by the \"{}\" access policy\n\
-                             temporarily set POLICY_EXCLUDE=1 or point POLICY_NAME at a name\n\
-                             no policy uses",
-        intercept_excluded_unnamed: "The connection is excluded by the access policy\n\
-                                     temporarily set POLICY_EXCLUDE=1 or point POLICY_NAME at a name\n\
-                                     no policy uses",
-        intercept_interface: "Its rules are on interface {}, while ours leaves through {}\n\
-                              add that interface to ISP_INTERFACE in /opt/etc/nfqws2/nfqws2.conf\n\
-                              (several are space separated)",
-        intercept_ports: "It does not process the port we use\n\
-                          add the port to TCP_PORTS and to the strategy's --filter-tcp",
-        intercept_ipv6: "The detector runs over IPv6, but no IPv6 rules are installed:\n\
-                         the package config has IPV6_ENABLED=0\n\
-                         set IPV6_ENABLED=1 in /opt/etc/nfqws2/nfqws2.conf",
-        intercept_tunnel: "Our traffic leaves through a tunnel (VPN), while its rules are on the provider interface\n\
-                           traffic inside a tunnel is out of the bypass's reach: take the target out of the tunnel\n\
-                           or add the tunnel interface to ISP_INTERFACE",
-        intercept_list_mode: "Profile \"{}\" filters by a list: {}\n\
-                              if our target is on that list, some of what a run measures goes through\n\
-                              the bypass and some does not, so the numbers are a mixture: for the test,\n\
-                              set MODE_ALL instead of MODE_AUTO or MODE_LIST in NFQWS_EXTRA_ARGS",
-        intercept_list_mode_own: "Profile \"{}\" filters by a list: {}\n\
-                                  if our target is on that list, some of what a run measures goes through\n\
-                                  the bypass and some does not, so the numbers are a mixture: for the test,\n\
-                                  drop that filter from {}",
-        intercept_strategy: "the strategy",
-        intercept_unchecked_config: "The package's resolved config cannot be read, so nothing is known about its rules\n\
-                                     check the package install and restart the service",
-        intercept_unchecked_queue: "The package is running, but nothing is bound to its queue - it may not have\n\
-                                    finished starting; restart it",
+        intercept_excluded: "The detector's traffic is excluded by the \"{}\" access policy.\n\
+                             For the tests, set POLICY_EXCLUDE=1 or point POLICY_NAME at a name\n\
+                             no policy of the router uses",
+        intercept_excluded_unnamed: "The detector's traffic is excluded by the access policy.\n\
+                                     For the tests, set POLICY_EXCLUDE=1 or point POLICY_NAME at a name\n\
+                                     no policy of the router uses",
+        intercept_interface: "Its rules are on interface {}, while ours leaves through {}.\n\
+                              Add that interface to ISP_INTERFACE in the package config\n\
+                              (several are space separated).",
+        intercept_ports: "Traffic goes past nfqws2, because TCP_PORTS or --filter-tcp in the config\n\
+                          do not have ports {}.",
+        intercept_ipv6: "The detector runs over IPv6, but the config has IPV6_ENABLED=0.\n\
+                         Set IPV6_ENABLED=1 in /opt/etc/nfqws2/nfqws2.conf.",
+        intercept_tunnel: "The detector's traffic goes through a tunnel (VPN), partly or entirely.\n\
+                           Leave it as it is, or add the tunnel interface to ISP_INTERFACE in the config.",
+        intercept_list_recipe: "The config has strategies using hostlist/ipset, so the targets the detector\n\
+                                tests may not be picked up.\n\
+                                For the tests, set the variables as follows:",
+        intercept_list_named: "Profile \"{}\" filters by a list: {}\n\
+                               Drop it for the tests.",
+        intercept_unchecked_config: "The package's resolved config cannot be read, so nothing is known about its rules.\n\
+                                     Check the package install.",
+        intercept_unchecked_queue: "The package is running, but nothing is bound to its queue. Try restarting nfqws2 and dpi-detector.",
         intercept_unchecked_route: "The interface our traffic leaves by could not be determined,\n\
-                                    so coverage by interface cannot be checked",
-        intercept_then: "Then",
+                                    so coverage by interface cannot be checked.",
+        intercept_after: "Once the changes are in, restart nfqws2 and dpi-detector.",
 
 
         subnet_label: "Subnet:",

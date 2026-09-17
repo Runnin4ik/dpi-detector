@@ -2,7 +2,7 @@
 
 use crate::i18n::{Messages, fingerprint_label};
 use dpi_core::net::fingerprint::TlsFingerprint;
-use dpi_core::net::sysinfo::intercept::{Intercept, ListSource, Problem, Unchecked};
+use dpi_core::net::sysinfo::intercept::{Intercept, Problem, Unchecked};
 use dpi_core::profile::RegionProfile;
 
 use crate::tui::widgets::{asc, panel_with, BOX_WIDTH};
@@ -28,21 +28,27 @@ pub fn render_intercept_notice(msg: &Messages, found: Option<&Intercept>) -> Opt
     for problem in &found.problems {
         body.push('\n');
         body.push_str(&entry(&problem_text(msg, found, problem)));
+        if let Problem::ListRecipe { fixes } = problem {
+            // Config lines, not prose: printed flush left, so they can be
+            // copied into the config exactly as they read here.
+            for fix in fixes {
+                body.push_str(&format!("\n{}=\"{}\"", fix.variable, fix.value));
+            }
+        }
     }
     for unchecked in &found.unchecked {
         body.push('\n');
         body.push_str(&entry(&unchecked_text(msg, *unchecked)));
     }
     // A family the device has no route for is worth saying out loud, but there
-    // is nothing in the package to change about it, so the command stays out.
-    let restart =
+    // is nothing in the package to change about it, so nothing follows it.
+    let changed =
         !found.problems.is_empty() || found.unchecked.iter().any(|u| *u != Unchecked::Route);
-    let lead = if restart { format!("\n\n{}:", msg.intercept_then) } else { String::new() };
-    let command = if restart { format!("\n{RESTART_HINT}") } else { String::new() };
-    Some(format!("\n\x1b[33m{body}{lead}\x1b[0m{command}\n"))
+    let tail = if changed { format!("\n\n{}", msg.intercept_after) } else { String::new() };
+    Some(format!("\n\x1b[33m{body}{tail}\x1b[0m\n"))
 }
 
-/// One entry: the problem behind a bullet, its fix indented under it.
+/// One entry: the problem behind a bullet, what to do about it indented under.
 fn entry(text: &str) -> String {
     let bullet = asc("•");
     let mut out = String::new();
@@ -73,22 +79,16 @@ fn problem_text(msg: &Messages, found: &Intercept, problem: &Problem) -> String 
             msg.intercept_interface.replacen("{}", &rules, 1).replacen("{}", &ours, 1)
         }
         Problem::Tunnel => msg.intercept_tunnel.to_string(),
-        Problem::Port => msg.intercept_ports.to_string(),
-        Problem::Ipv6 => msg.intercept_ipv6.to_string(),
-        Problem::ListMode { filter, source } => {
-            let template = match source {
-                ListSource::Mode => msg.intercept_list_mode,
-                ListSource::Variable(_) | ListSource::Unknown => msg.intercept_list_mode_own,
-            };
-            let advice = match source {
-                ListSource::Variable(name) => name.as_str(),
-                _ => msg.intercept_strategy,
-            };
-            template
-                .replacen("{}", &filter.profile, 1)
-                .replacen("{}", &filter.option, 1)
-                .replacen("{}", advice, 1)
+        Problem::Port { missing } => {
+            let ports: Vec<String> = missing.iter().map(u16::to_string).collect();
+            msg.intercept_ports.replacen("{}", &ports.join(", "), 1)
         }
+        Problem::Ipv6 => msg.intercept_ipv6.to_string(),
+        Problem::ListRecipe { .. } => msg.intercept_list_recipe.to_string(),
+        Problem::ListNamed { profile, option } => msg
+            .intercept_list_named
+            .replacen("{}", profile, 1)
+            .replacen("{}", option, 1),
     }
 }
 
@@ -100,10 +100,6 @@ fn unchecked_text(msg: &Messages, unchecked: Unchecked) -> String {
         Unchecked::Route => msg.intercept_unchecked_route.to_string(),
     }
 }
-
-/// The one command every notice ends with. A path, not prose, so it is not a
-/// translation string.
-const RESTART_HINT: &str = "    /opt/etc/init.d/S51nfqws2 restart";
 
 pub fn render_banner(msg: &Messages, _profile: RegionProfile, badge: &str) -> String {
     let badge_colored = if badge.starts_with("✓") {
@@ -152,7 +148,7 @@ pub fn render_fingerprint_header(fp: TlsFingerprint, msg: &Messages) -> String {
 mod tests {
     use super::*;
     use crate::i18n::{get_messages, Language};
-    use dpi_core::net::sysinfo::intercept::ListFilter;
+    use dpi_core::net::sysinfo::intercept::ListFix;
 
     fn found(problems: Vec<Problem>) -> Intercept {
         Intercept {
@@ -181,21 +177,20 @@ mod tests {
         );
     }
 
-    /// A notice is a block: a blank line above and below, the text in between,
-    /// and the restart command last.
+    /// A notice is a block: a blank line above, the entries, a blank line, and
+    /// the fixed closing line.
     #[test]
-    fn a_notice_is_a_block_with_the_restart_command() {
+    fn a_notice_ends_with_the_fixed_line() {
         let msg = get_messages(Language::En);
         let notice = render_intercept_notice(&msg, Some(&found(vec![Problem::Excluded]))).unwrap();
         assert!(notice.starts_with('\n'), "{notice:?}");
-        assert!(notice.ends_with(RESTART_HINT) || notice.ends_with(&format!("{RESTART_HINT}\n")));
+        assert!(notice.trim_end().contains(msg.intercept_after), "{notice}");
         assert!(notice.contains("nfqws"), "the policy the package looks for: {notice}");
-        assert!(notice.trim_end().ends_with("restart") || notice.contains(RESTART_HINT));
         assert_eq!(notice.lines().filter(|l| l.is_empty()).count(), 2, "{notice}");
     }
 
     /// The interface case names both interfaces, so the reader knows what to
-    /// move where; the port case names neither.
+    /// move where.
     #[test]
     fn the_interface_case_shows_both_interfaces() {
         let msg = get_messages(Language::En);
@@ -204,8 +199,22 @@ mod tests {
         assert!(notice.contains("wan0"), "{notice}");
         assert!(notice.contains("wwan1"), "{notice}");
         assert!(notice.contains("ISP_INTERFACE"), "with the key to change: {notice}");
-        let ports = render_intercept_notice(&msg, Some(&found(vec![Problem::Port]))).unwrap();
-        assert!(ports.contains("TCP_PORTS"), "{ports}");
+    }
+
+    /// The port entry names the ports the tests speak that nothing queues: a
+    /// reader has to add exactly those, and "the port we use" leaves them
+    /// guessing which.
+    #[test]
+    fn the_port_entry_names_the_missing_ports() {
+        let msg = get_messages(Language::En);
+        let both = found(vec![Problem::Port { missing: vec![80, 443] }]);
+        let notice = render_intercept_notice(&msg, Some(&both)).unwrap();
+        assert!(notice.contains("TCP_PORTS"), "{notice}");
+        assert!(notice.contains("80, 443"), "{notice}");
+        let one = found(vec![Problem::Port { missing: vec![80] }]);
+        let notice = render_intercept_notice(&msg, Some(&one)).unwrap();
+        assert!(notice.contains("80"), "{notice}");
+        assert!(!notice.contains("443"), "only what is missing: {notice}");
     }
 
     /// Two problems hold at once and the block says both, under one header: a
@@ -215,21 +224,58 @@ mod tests {
     fn several_problems_share_one_header() {
         use crate::render::strip_ansi;
         let msg = get_messages(Language::En);
-        let notice =
-            render_intercept_notice(&msg, Some(&found(vec![Problem::Ipv6, Problem::Port]))).unwrap();
-        let body = strip_ansi(&notice);
-        assert_eq!(
-            body.matches(msg.intercept_header).count(),
-            1,
-            "the header is printed once: {body}"
-        );
+        let state = found(vec![Problem::Ipv6, Problem::Port { missing: vec![443] }]);
+        let body = strip_ansi(&render_intercept_notice(&msg, Some(&state)).unwrap());
+        assert_eq!(body.matches(msg.intercept_header).count(), 1, "printed once: {body}");
         assert!(body.contains("IPV6_ENABLED=0"), "{body}");
         assert!(body.contains("TCP_PORTS"), "{body}");
-        // Both entries are bullets of the same list, and the fixes sit under
-        // them rather than in a paragraph of their own.
+        // Both entries are bullets of the same list, and what to do sits under
+        // them rather than in a paragraph of its own.
         assert_eq!(body.matches("  • ").count(), 2, "{body}");
-        assert!(body.contains("\n    set IPV6_ENABLED=1"), "{body}");
-        assert_eq!(body.matches(msg.intercept_then).count(), 1, "one command: {body}");
+        assert!(body.contains("\n    Set IPV6_ENABLED=1"), "{body}");
+        assert_eq!(body.matches(msg.intercept_after).count(), 1, "once, at the end: {body}");
+    }
+
+    /// The recipe is config lines, not prose: they print flush left under the
+    /// entry, so they can be copied into the config exactly as they read.
+    #[test]
+    fn the_list_recipe_prints_config_lines_flush_left() {
+        use crate::render::strip_ansi;
+        let msg = get_messages(Language::En);
+        let state = found(vec![Problem::ListRecipe {
+            fixes: vec![
+                ListFix { variable: "NFQWS_EXTRA_ARGS".to_string(), value: "$MODE_ALL".to_string() },
+                ListFix {
+                    variable: "NFQWS_ARGS_IPSET".to_string(),
+                    value: "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list".to_string(),
+                },
+            ],
+        }]);
+        let body = strip_ansi(&render_intercept_notice(&msg, Some(&state)).unwrap());
+        assert!(body.contains("hostlist/ipset"), "{body}");
+        assert!(body.contains("\nNFQWS_EXTRA_ARGS=\"$MODE_ALL\"\n"), "no indent: {body}");
+        assert!(
+            body.contains(
+                "\nNFQWS_ARGS_IPSET=\"--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list\"\n"
+            ),
+            "{body}"
+        );
+        assert!(!body.contains("{}"), "every placeholder is filled: {body}");
+    }
+
+    /// When the filter lives in no variable the detector can name, the entry
+    /// points at the profile and the option instead of inventing a recipe.
+    #[test]
+    fn an_unnameable_filter_is_pointed_at() {
+        let msg = get_messages(Language::En);
+        let state = found(vec![Problem::ListNamed {
+            profile: "tcp=443 l7=tls".to_string(),
+            option: "--ipset=/opt/etc/nfqws2/lists/ipset.list".to_string(),
+        }]);
+        let notice = render_intercept_notice(&msg, Some(&state)).unwrap();
+        assert!(notice.contains("tcp=443 l7=tls"), "{notice}");
+        assert!(notice.contains("--ipset=/opt/etc/nfqws2/lists/ipset.list"), "{notice}");
+        assert!(!notice.contains("{}"), "every placeholder is filled: {notice}");
     }
 
     /// A check that did not complete is not a problem on the list, and an empty
@@ -246,52 +292,14 @@ mod tests {
     }
 
     /// A family the device has no route for is the one state with nothing to
-    /// change in the package, so it does not send the reader to the init script.
+    /// change in the package, so the closing line stays out.
     #[test]
-    fn an_unknown_route_alone_has_no_restart_command() {
+    fn an_unknown_route_alone_has_nothing_to_close_with() {
         let msg = get_messages(Language::En);
-        let notice = render_intercept_notice(&msg, Some(&unchecked(vec![Unchecked::Route]))).unwrap();
-        assert!(!notice.contains(RESTART_HINT), "{notice}");
+        let notice =
+            render_intercept_notice(&msg, Some(&unchecked(vec![Unchecked::Route]))).unwrap();
+        assert!(!notice.contains(msg.intercept_after), "{notice}");
         assert!(notice.contains("could not be determined"), "{notice}");
-    }
-
-    /// The list-mode notice names the profile, the option and the variable the
-    /// option lives in: an ipset list is appended to a profile it is not written
-    /// in, so pointing a reader at `NFQWS_ARGS_CUSTOM` sends them to a line that
-    /// does not hold it. When the config names no variable, the wording still
-    /// has to read as a sentence.
-    #[test]
-    fn the_list_mode_notice_names_the_variable_the_filter_lives_in() {
-        let msg = get_messages(Language::En);
-        let filter = ListFilter {
-            profile: "tcp=443 l7=tls".to_string(),
-            option: "--ipset=/opt/etc/nfqws2/lists/ipset.list".to_string(),
-        };
-        let named = found(vec![Problem::ListMode {
-            filter: filter.clone(),
-            source: ListSource::Variable("NFQWS_ARGS_IPSET".to_string()),
-        }]);
-        let notice = render_intercept_notice(&msg, Some(&named)).unwrap();
-        assert!(notice.contains("tcp=443 l7=tls"), "{notice}");
-        assert!(notice.contains("--ipset=/opt/etc/nfqws2/lists/ipset.list"), "{notice}");
-        assert!(notice.contains("NFQWS_ARGS_IPSET"), "{notice}");
-        assert!(!notice.contains("{}"), "every placeholder is filled: {notice}");
-
-        let unknown = found(vec![Problem::ListMode { filter, source: ListSource::Unknown }]);
-        let notice = render_intercept_notice(&msg, Some(&unknown)).unwrap();
-        assert!(notice.contains(msg.intercept_strategy), "{notice}");
-        assert!(!notice.contains("{}"), "every placeholder is filled: {notice}");
-
-        let from_mode = found(vec![Problem::ListMode {
-            filter: ListFilter {
-                profile: "tcp=80,443 l7=http,tls".to_string(),
-                option: "--hostlist=/opt/etc/nfqws2/lists/user.list".to_string(),
-            },
-            source: ListSource::Mode,
-        }]);
-        let notice = render_intercept_notice(&msg, Some(&from_mode)).unwrap();
-        assert!(notice.contains("MODE_ALL"), "the mode recipe: {notice}");
-        assert!(!notice.contains("{}"), "every placeholder is filled: {notice}");
     }
 
     /// A package whose config never named a policy must not print empty quotes.
@@ -306,32 +314,43 @@ mod tests {
     }
 
     /// The Russian blocks are the ones a Keenetic owner reads: the wording, the
-    /// bullets and the blank lines are what the report shows, so all three are
-    /// pinned — with two problems, under one header.
+    /// bullets, the config lines and the blank lines are what the report shows,
+    /// so all of them are pinned.
     #[test]
     fn russian_notice_reads_as_written() {
         use crate::render::strip_ansi;
         let msg = get_messages(Language::Ru);
-        let state = found(vec![Problem::Excluded, Problem::Ipv6]);
+        let state = found(vec![
+            Problem::Excluded,
+            Problem::Ipv6,
+            Problem::Port { missing: vec![80] },
+            Problem::ListRecipe {
+                fixes: vec![ListFix {
+                    variable: "NFQWS_EXTRA_ARGS".to_string(),
+                    value: "$MODE_ALL".to_string(),
+                }],
+            },
+        ]);
         let notice = render_intercept_notice(&msg, Some(&state)).unwrap();
-        let body: Vec<String> = strip_ansi(&notice)
-            .lines()
-            .filter(|line| !line.contains("init.d"))
-            .map(str::to_string)
-            .collect();
+        let body: Vec<String> = strip_ansi(&notice).lines().map(str::to_string).collect();
         assert_eq!(
             body,
             vec![
                 "",
                 "Обнаружен включённый nfqws2, но есть проблемы:",
-                "  • Соединение исключено политикой доступа «nfqws»",
-                "    временно поставьте POLICY_EXCLUDE=1 или укажите свой POLICY_NAME,",
+                "  • Трафик детектора исключён политикой доступа «nfqws».",
+                "    На время тестов поставьте POLICY_EXCLUDE=1 или укажите свой POLICY_NAME,",
                 "    которого нет среди политик роутера",
-                "  • Детектор запущен в режиме IPv6, но правила для IPv6 не ставятся:",
-                "    в конфиге пакета IPV6_ENABLED=0",
-                "    поставьте IPV6_ENABLED=1 в /opt/etc/nfqws2/nfqws2.conf",
+                "  • Детектор запущен в режиме IPv6, но в конфиге стоит IPV6_ENABLED=0.",
+                "    Поставьте IPV6_ENABLED=1 в /opt/etc/nfqws2/nfqws2.conf.",
+                "  • Трафик идёт мимо nfqws2, потому что в конфиге в TCP_PORTS или --filter-tcp",
+                "    нет портов 80.",
+                "  • В конфиге найдены стратегии с использованием hostlist/ipset, поэтому тестируемые",
+                "    в детекторе цели могут не подхватываться.",
+                "    На время тестирования установите переменные следующим образом:",
+                "NFQWS_EXTRA_ARGS=\"$MODE_ALL\"",
                 "",
-                "Затем:",
+                "После применения изменений перезапустите nfqws2 и dpi-detector.",
             ],
             "{notice}"
         );
