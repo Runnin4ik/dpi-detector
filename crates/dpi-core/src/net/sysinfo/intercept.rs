@@ -59,42 +59,49 @@ const PROBE_WAIT: Duration = Duration::from_millis(150);
 /// connection is still being created.
 const PROBE_ATTEMPTS: usize = 2;
 
-/// Why the rules do not take our traffic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NotCovered {
+/// One reason the package does not process the detector's own traffic. The
+/// answer is a list of these rather than a single value: the reasons are
+/// independent, and a reader who fixes one only to meet the next has paid a
+/// round trip for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Problem {
+    /// The access policy excluded our connection before the queue.
+    Excluded,
     /// Our traffic leaves by an interface the rules were not attached to — a
-    /// tunnel, a second uplink. The common case on a router that routes its own
-    /// traffic somewhere else.
+    /// second uplink. The common case on a router that routes its own traffic
+    /// somewhere else.
     Interface,
-    /// The port our probe uses is not in the package's `TCP_PORTS`.
-    Port,
-    /// Our traffic is IPv6 and the package installs no IPv6 rules at all
-    /// (`IPV6_ENABLED=0`). The v4 rules can be perfect and this still holds.
-    Ipv6,
     /// Our traffic does not leave through any netfilter interface: it goes
     /// through a tunnel. Measured, not inferred — the kernel's own record for
     /// our flow says so (`no_if` beside `nmark=`/`sc=`, where an ordinary flow
     /// carries `ifw=`/`ifl=`). A per-destination route into a VPN is invisible
     /// to the default-route comparison, which is why this is read per flow.
     Tunnel,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Verdict {
-    /// The tool's rules cover the port and interface our traffic uses, and the
-    /// policy did not mark the connection: the desync sees these packets.
-    Processed,
-    /// The access policy excluded our connection before the queue.
-    Excluded,
-    /// The tool is running, but its rules do not cover us.
-    NotQueued(NotCovered),
+    /// The port our probe uses is not in the package's `TCP_PORTS`.
+    Port,
+    /// Our traffic is IPv6 and the package installs no IPv6 rules at all
+    /// (`IPV6_ENABLED=0`). The v4 rules can be perfect and this still holds.
+    Ipv6,
     /// The rules take our traffic, but the strategy applies the desync to a
     /// filtered part of it only — so a run's numbers are a mixture of bypassed
     /// and unbypassed, and a reader should know which filter to look at before
     /// reading them. Nothing is broken; this is a property of the strategy.
     ListMode { filter: ListFilter, source: ListSource },
-    /// The tool is running and its queue is not bound, or nothing could be read
-    /// back about our flow.
-    Unknown,
+}
+
+/// The check itself did not complete. Not a `Problem`: these are not things to
+/// fix in the package's config, they are the reasons the list above is shorter
+/// than the truth, or empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unchecked {
+    /// The package's resolved config could not be read, so nothing is known
+    /// about its rules.
+    Config,
+    /// The package is running but nothing is bound to its queue.
+    Queue,
+    /// The interface our own traffic leaves by could not be determined, so
+    /// coverage by interface cannot be judged.
+    Route,
 }
 
 /// Address family a run uses. The package covers the two with separate rules,
@@ -108,11 +115,16 @@ pub enum Family {
 
 /// The state of the `nfqws2` package on this device, as far as it concerns the
 /// detector's own traffic. Everything the notice can name is here; the queue
-/// number and the connection mark stay inside — they decide the verdict, they
+/// number and the connection mark stay inside — they decide the answer, they
 /// are not something to show a reader.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Intercept {
-    pub verdict: Verdict,
+    /// Every reason that holds, in the order a reader should fix them.
+    pub problems: Vec<Problem>,
+    /// Non-empty when the check itself did not complete, so the list above is
+    /// shorter than the truth or empty. Never a reason on the list: nothing in
+    /// the package's config is wrong about it.
+    pub unchecked: Vec<Unchecked>,
     /// The policy the package looks for (`POLICY_NAME`), when its config names
     /// one. `None` means the policy part of the verdict is unknown.
     pub policy: Option<String>,
@@ -121,6 +133,85 @@ pub struct Intercept {
     /// The interface our own traffic leaves by — the kernel's default route for
     /// the family, which is where a probe to a routable host goes.
     pub our_interface: Option<String>,
+}
+
+/// The facts the judgement rests on. Gathered before it so the judgement itself
+/// can be tested without a router under it.
+#[derive(Debug, Default)]
+struct Facts {
+    /// The run is IPv6.
+    v6: bool,
+    /// The package installs IPv6 rules at all (`IPV6_ENABLED`).
+    ipv6_enabled: bool,
+    /// Something is bound to the package's queue.
+    queue_bound: bool,
+    /// Interfaces the rules were attached to.
+    rules_interfaces: Vec<String>,
+    /// The interface our own traffic leaves by, when the route is known.
+    our_interface: Option<String>,
+    /// The port our probe used, when there was a target to probe.
+    our_port: Option<u16>,
+    /// Ports the rules queue.
+    ports: Vec<u16>,
+    /// The kernel marked our connection as excluded by the access policy.
+    excluded: bool,
+    /// The strategy's list filter, when it has one.
+    list_mode: Option<(ListFilter, ListSource)>,
+}
+
+/// What the facts mean. Every reason that holds is collected rather than the
+/// first one returned: they are independent, and a reader who fixes one only to
+/// meet the next has paid a round trip for it.
+///
+/// Ordered the way they are fixed — the policy decides above the queue, then
+/// the config that keeps the queue from seeing us, then the strategy's filter.
+fn judge(facts: &Facts) -> (Vec<Problem>, Vec<Unchecked>) {
+    let mut problems = Vec::new();
+    let mut unchecked = Vec::new();
+
+    if facts.excluded {
+        // The policy stamps the mark on the first packet, above the queue:
+        // whatever the rules say about the port and the interface, this
+        // connection never reaches them. The config is still reported beside it
+        // — the exclusion is fixed in the policy, and the next problem is
+        // waiting behind it.
+        problems.push(Problem::Excluded);
+    }
+    if !facts.queue_bound {
+        // Running, but nothing is listening on its queue: our packets would be
+        // accepted straight back out, which is not "processed". Said as well as
+        // the config, not instead of it: the usual cause is a service that has
+        // not finished starting, and the config problems would still be there
+        // after the restart.
+        unchecked.push(Unchecked::Queue);
+    }
+    if facts.v6 && !facts.ipv6_enabled {
+        // The v4 rules can be perfect and this still holds: with IPV6_ENABLED=0
+        // the init script installs no ip6tables rules at all.
+        problems.push(Problem::Ipv6);
+    }
+    match facts.our_interface.as_deref() {
+        // Without knowing where our traffic leaves by, coverage by interface
+        // cannot be judged at all.
+        None => unchecked.push(Unchecked::Route),
+        Some(ours) if !facts.rules_interfaces.iter().any(|rules| rules == ours) => {
+            // Same outcome either way, different advice: a tunnel is a routing
+            // decision, another provider interface is a configuration one.
+            problems.push(if is_tun_name(ours) { Problem::Tunnel } else { Problem::Interface });
+        }
+        Some(_) => {}
+    }
+    if facts.our_port.is_some_and(|port| !facts.ports.contains(&port)) {
+        problems.push(Problem::Port);
+    }
+    if let Some((filter, source)) = &facts.list_mode {
+        // Interception is fine; the strategy is what decides which targets get
+        // the desync. Saying so before a run — and which filter to remove — is
+        // the difference between "the bypass does not work" and "these numbers
+        // are a mixture".
+        problems.push(Problem::ListMode { filter: filter.clone(), source: source.clone() });
+    }
+    (problems, unchecked)
 }
 
 /// Measures how the `nfqws2` package treats a connection of `family` to
@@ -147,7 +238,8 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         // The package is up but its resolved config is unreadable: say so
         // rather than claim a verdict the numbers do not support.
         return Some(Intercept {
-            verdict: Verdict::Unknown,
+            problems: Vec::new(),
+            unchecked: vec![Unchecked::Config],
             policy: None,
             rules_interfaces: Vec::new(),
             our_interface,
@@ -158,41 +250,25 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         Some(target) => probe_flow(target).await,
         None => Flow::default(),
     };
-    let verdict = if flow.mark == Some(MARK_EXCLUDE) {
-        Verdict::Excluded
-    } else if !conf.queue.is_some_and(queue_bound) {
-        // Running, but nothing is listening on its queue: our packets would be
-        // accepted straight back out, which is not "processed".
-        Verdict::Unknown
-    } else if v6 && !conf.ipv6_enabled {
-        // The v4 rules can be perfect and this still holds: with IPV6_ENABLED=0
-        // the init script installs no ip6tables rules at all.
-        Verdict::NotQueued(NotCovered::Ipv6)
-    } else if our_interface.is_none() {
-        // Without knowing where our traffic leaves by, coverage cannot be
-        // judged at all.
-        Verdict::Unknown
-    } else if !conf.interfaces.contains(our_interface.as_ref()?) {
-        // Same verdict either way, different advice: a tunnel is a routing
-        // decision, another provider interface is a configuration one.
-        let ours = our_interface.as_deref().unwrap_or_default();
-        if is_tun_name(ours) {
-            Verdict::NotQueued(NotCovered::Tunnel)
-        } else {
-            Verdict::NotQueued(NotCovered::Interface)
-        }
-    } else if !target.is_none_or(|addr| conf.ports.contains(&addr.port())) {
-        Verdict::NotQueued(NotCovered::Port)
-    } else if let Some(filter) = list_mode(pid) {
-        // Interception is fine; the strategy is what decides which targets get
-        // the desync. Saying so before a run — and which filter to remove — is
-        // the difference between "the bypass does not work" and "these numbers
-        // are a mixture".
-        Verdict::ListMode { source: list_source(&filter.option), filter }
-    } else {
-        Verdict::Processed
+    let facts = Facts {
+        v6,
+        ipv6_enabled: conf.ipv6_enabled,
+        queue_bound: conf.queue.is_some_and(queue_bound),
+        rules_interfaces: conf.interfaces,
+        our_interface,
+        our_port: target.map(|addr| addr.port()),
+        ports: conf.ports,
+        excluded: flow.mark == Some(MARK_EXCLUDE),
+        list_mode: list_mode(pid).map(|filter| (filter.clone(), list_source(&filter.option))),
     };
-    Some(Intercept { verdict, policy: conf.policy, rules_interfaces: conf.interfaces, our_interface })
+    let (problems, unchecked) = judge(&facts);
+    Some(Intercept {
+        problems,
+        unchecked,
+        policy: conf.policy,
+        rules_interfaces: facts.rules_interfaces,
+        our_interface: facts.our_interface,
+    })
 }
 
 /// What the kernel says about the probe's own connection.
@@ -1073,6 +1149,86 @@ mod tests {
                     dport=39122 mark=536870912 use=1";
         let target: SocketAddr = "142.250.74.14:443".parse().unwrap();
         assert_eq!(parse_conntrack_mark(line, 39122, target), Some(MARK_EXCLUDE));
+    }
+
+    /// The facts of a package that covers us: queue bound, rules on the
+    /// interface our traffic leaves by, our port queued.
+    fn covered() -> Facts {
+        Facts {
+            queue_bound: true,
+            rules_interfaces: vec!["eth3".to_string()],
+            our_interface: Some("eth3".to_string()),
+            our_port: Some(443),
+            ports: vec![80, 443],
+            ..Facts::default()
+        }
+    }
+
+    /// Nothing wrong and nothing unchecked: the caller prints nothing at all.
+    #[test]
+    fn a_covered_connection_has_no_problems() {
+        let (problems, unchecked) = judge(&covered());
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(unchecked.is_empty(), "{unchecked:?}");
+    }
+
+    /// The reasons are independent, so a config with two of them reports both:
+    /// fixing them one per run is what the list exists to avoid.
+    #[test]
+    fn every_reason_that_holds_is_reported() {
+        let facts = Facts { v6: true, ipv6_enabled: false, our_port: Some(8443), ..covered() };
+        let (problems, unchecked) = judge(&facts);
+        assert_eq!(problems, vec![Problem::Ipv6, Problem::Port]);
+        assert!(unchecked.is_empty(), "{unchecked:?}");
+    }
+
+    /// The policy decides above the queue, so the exclusion is the first reason
+    /// — and the config behind it is still reported, because it is the next
+    /// thing the reader meets once the policy is fixed.
+    #[test]
+    fn an_exclusion_does_not_hide_the_config_behind_it() {
+        let facts = Facts { excluded: true, v6: true, ipv6_enabled: false, ..covered() };
+        let (problems, unchecked) = judge(&facts);
+        assert_eq!(problems, vec![Problem::Excluded, Problem::Ipv6]);
+        assert!(unchecked.is_empty(), "{unchecked:?}");
+    }
+
+    /// A tunnel and a plain second uplink reach the queue the same way and are
+    /// fixed differently, so they are different reasons.
+    #[test]
+    fn a_tunnel_is_named_as_one() {
+        let facts = Facts { our_interface: Some("tun0".to_string()), ..covered() };
+        assert_eq!(judge(&facts).0, vec![Problem::Tunnel]);
+    }
+
+    /// An unbound queue is a reason the check did not complete, not a reason on
+    /// the list: nothing in the config is wrong about a service that has not
+    /// finished starting. The config problems are still reported beside it, so
+    /// a reader who restarts does not have to come back for them.
+    #[test]
+    fn an_unbound_queue_is_reported_beside_the_config() {
+        let facts = Facts { queue_bound: false, v6: true, ipv6_enabled: false, ..covered() };
+        let (problems, unchecked) = judge(&facts);
+        assert_eq!(problems, vec![Problem::Ipv6]);
+        assert_eq!(unchecked, vec![Unchecked::Queue]);
+    }
+
+    /// Without a route for the family the interface question cannot be asked,
+    /// and that has to be visible: an empty list must not read as "clean".
+    #[test]
+    fn an_unknown_route_is_named_as_unchecked() {
+        let facts = Facts { our_interface: None, ..covered() };
+        let (problems, unchecked) = judge(&facts);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(unchecked, vec![Unchecked::Route]);
+    }
+
+    /// A target is not always there — an IPv6 run of a domain with no AAAA
+    /// record has none — and the port question is then not asked at all.
+    #[test]
+    fn a_run_without_a_target_skips_the_port_question() {
+        let facts = Facts { our_port: None, ports: Vec::new(), ..covered() };
+        assert!(judge(&facts).0.is_empty(), "no port to compare");
     }
 }
 

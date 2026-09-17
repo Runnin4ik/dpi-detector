@@ -79,11 +79,13 @@ pub struct Messages {
     pub not_detected: &'static str,
     pub unavailable: &'static str,
 
-    // Interception of this process's own traffic by nfqws2 on Keenetic.
-    // Multi-line blocks, printed after the menu selection with a blank line
-    // around them; `{}` slots are the policy name and the two interface names.
-    // The restart command is appended by the caller, so it stays one path in
-    // every language.
+    // Interception of this process's own traffic by nfqws2 on Keenetic. One
+    // header, then a list: every entry is the problem on its first line and the
+    // fix on the lines under it, so two problems are fixed in one pass. `{}`
+    // slots are the policy name, the two interface names and the list filter.
+    // The bullet, the indent and the restart command are added by the caller,
+    // so the command stays one path in every language.
+    pub intercept_header: &'static str,
     pub intercept_excluded: &'static str,
     pub intercept_excluded_unnamed: &'static str,
     pub intercept_interface: &'static str,
@@ -91,12 +93,18 @@ pub struct Messages {
     pub intercept_ipv6: &'static str,
     pub intercept_tunnel: &'static str,
     pub intercept_list_mode: &'static str,
-    /// The same notice when the filter is written in a strategy variable; the
+    /// The same entry when the filter is written in a strategy variable; the
     /// variable's name fills the third `{}`, and this word fills it when the
     /// config does not name one.
     pub intercept_list_mode_own: &'static str,
     pub intercept_strategy: &'static str,
-    pub intercept_unchecked: &'static str,
+    /// The check did not complete. One entry per cause, and each stands alone:
+    /// these are not config problems, so they carry no fix of the same kind.
+    pub intercept_unchecked_config: &'static str,
+    pub intercept_unchecked_queue: &'static str,
+    pub intercept_unchecked_route: &'static str,
+    /// Leads the restart command, which every config fix needs.
+    pub intercept_then: &'static str,
 
     // DNS Endpoints & Availability
     pub subnet_label: &'static str,

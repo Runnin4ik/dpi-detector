@@ -69,40 +69,38 @@ pub(crate) fn messages() -> Messages {
         not_detected: "peyda nashod",
         unavailable: "dar dastras nist",
 
-        intercept_excluded: "nfqws2 ejra mishavad, amma traffic-e detector ra nemibinad:\n\
-                             ettefasl tavasot-e policy-e dastresi \"{}\" mostasna shod.\n\n\
-                             Baraye inke obur be khode router ham ezafe shavad, movaqqatan POLICY_EXCLUDE=1\n\
-                             ra bezarid ya POLICY_NAME ra be esmi ke vojood nadarad taghir dahid, sepas:",
-        intercept_excluded_unnamed: "nfqws2 ejra mishavad, amma traffic-e detector ra nemibinad:\n\
-                                     ettefasl tavasot-e policy-e dastresi mostasna shod.\n\n\
-                                     Baraye inke obur be khode router ham ezafe shavad, movaqqatan POLICY_EXCLUDE=1\n\
-                                     ra bezarid ya POLICY_NAME ra be esmi ke vojood nadarad taghir dahid, sepas:",
-        intercept_interface: "nfqws2 ejra mishavad, amma traffic-e detector ra nemibinad:\n\
-                              qavanin rooy-e interface-e {} ast, amma traffic-e ma az {} miravad.\n\n\
-                              Baraye inke obur traffic-e ma ra ham begirad, in interface ra be ISP_INTERFACE\n\
-                              ezafe konid (/opt/etc/nfqws2/nfqws2.conf, chand tai ba fasele), sepas:",
-        intercept_ports: "nfqws2 ejra mishavad, amma traffic-e detector ra nemibinad:\n\
-                          porti ke ma estefade mikonim ra pardazesh nemikonad.\n\n\
-                          Port ra be TCP_PORTS va be --filter-tcp-e strategy ezafe konid, sepas:",
-        intercept_ipv6: "nfqws2 ejra mishavad, amma traffic-e detector ra nemibinad:\n\
-                         qavanin-e IPv6 nasb nemishavand - dar config IPV6_ENABLED=0 ast.\n\n\
-                         Baraye inke obur rooy-e IPv6 ham kar konad, IPV6_ENABLED=1\n\
-                         ra dar /opt/etc/nfqws2/nfqws2.conf bezarid, sepas:",
-        intercept_tunnel: "nfqws2 ejra mishavad, amma traffic-e detector ra nemibinad:\n\
-                           traffic-e ma az tunnel (VPN) miravad, amma qavanin rooy-e interface-e provider ast.\n\n\
-                           Traffic-e dakhel-e tunnel ra obur nemibinad: in target ra az tunnel birun biarid\n\
-                           ya interface-e tunnel ra be ISP_INTERFACE ezafe konid, sepas:",
-        intercept_list_mode: "nfqws2 ejra mishavad, amma strategy hame-ye target-ha ra nemigirad:\n\
-                              profile \"{}\" ba list filter mikonad: {}\n\n\
-                              In list az mode-e kari miayad, pas bakhshi az test-ha ba obur miravad va bakhshi na.\n\
-                              Baraye test, dar NFQWS_EXTRA_ARGS be jaye MODE_AUTO ya MODE_LIST, MODE_ALL bezarid, sepas:",
-        intercept_list_mode_own: "nfqws2 ejra mishavad, amma strategy hame-ye target-ha ra nemigirad:\n\
-                                   profile \"{}\" ba list filter mikonad: {}\n\n\
-                                   Bakhshi az test-ha ba obur miravad va bakhshi na.\n\
-                                   Baraye test, in filter ra az {} hazf konid, sepas:",
+        intercept_header: "nfqws2 ejra mishavad, amma in moshkelat vojood darad:",
+        intercept_excluded: "Ettefasl tavasot-e policy-e dastresi \"{}\" mostasna shod\n\
+                             movaqqatan POLICY_EXCLUDE=1 ra bezarid ya POLICY_NAME ra be esmi ke\n\
+                             hich policy-i estefade nemikonad taghir dahid",
+        intercept_excluded_unnamed: "Ettefasl tavasot-e policy-e dastresi mostasna shod\n\
+                                     movaqqatan POLICY_EXCLUDE=1 ra bezarid ya POLICY_NAME ra be esmi ke\n\
+                                     hich policy-i estefade nemikonad taghir dahid",
+        intercept_interface: "Qavanin rooy-e interface-e {} ast, amma traffic-e ma az {} miravad\n\
+                              in interface ra be ISP_INTERFACE dar /opt/etc/nfqws2/nfqws2.conf ezafe konid\n\
+                              (chand tai ba fasele)",
+        intercept_ports: "Porti ke ma estefade mikonim ra pardazesh nemikonad\n\
+                          port ra be TCP_PORTS va be --filter-tcp-e strategy ezafe konid",
+        intercept_ipv6: "Detector rooy-e IPv6 ejra mishavad, amma qavanin-e IPv6 nasb nemishavand:\n\
+                         dar config IPV6_ENABLED=0 ast\n\
+                         IPV6_ENABLED=1 ra dar /opt/etc/nfqws2/nfqws2.conf bezarid",
+        intercept_tunnel: "Traffic-e ma az tunnel (VPN) miravad, amma qavanin rooy-e interface-e provider ast\n\
+                           traffic-e dakhel-e tunnel ra obur nemibinad: in target ra az tunnel birun biarid\n\
+                           ya interface-e tunnel ra be ISP_INTERFACE ezafe konid",
+        intercept_list_mode: "Profile \"{}\" ba list filter mikonad: {}\n\
+                              in list az mode-e kari miayad, pas bakhshi az test-ha ba obur miravad va bakhshi na:\n\
+                              baraye test, dar NFQWS_EXTRA_ARGS be jaye MODE_AUTO ya MODE_LIST, MODE_ALL bezarid",
+        intercept_list_mode_own: "Profile \"{}\" ba list filter mikonad: {}\n\
+                                  bakhshi az test-ha ba obur miravad va bakhshi na, pas natayej mokhtalet mishavand:\n\
+                                  baraye test, in filter ra az {} hazf konid",
         intercept_strategy: "strategy",
-        intercept_unchecked: "nfqws2 ejra mishavad, amma queue javab nemidahad - barresi nashod.\n\
-                              Ehtemalan service hanuz bala nayamade, an ra restart konid:",
+        intercept_unchecked_config: "Config-e hal-shode-ye package khande nemishavad, pas hich chizi az qavanin-e an maloom nist\n\
+                                     nasb-e package ra barrasi konid va service ra restart konid",
+        intercept_unchecked_queue: "Package ejra mishavad, amma hich chizi be queue-e an bind nashode - momken ast\n\
+                                    service hanuz bala nayamade bashad; an ra restart konid",
+        intercept_unchecked_route: "Interface-i ke traffic-e ma az an miravad taeen nashod,\n\
+                                    pas poshhesh-e interface ra nemitavan barrasi kard",
+        intercept_then: "Sepas",
 
         subnet_label: "Subnet:",
         ttlb_label: "TTLB:",

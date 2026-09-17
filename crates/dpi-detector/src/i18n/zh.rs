@@ -70,40 +70,33 @@ pub(crate) fn messages() -> Messages {
         not_detected: "未检测到",
         unavailable: "不可用",
 
-        intercept_excluded: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
-                             连接被访问策略「{}」排除。\n\n\
-                             要让绕过也适用于路由器本身，可临时设置 POLICY_EXCLUDE=1，\n\
-                             或把 POLICY_NAME 改成不存在的名字，然后：",
-        intercept_excluded_unnamed: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
-                                     连接被访问策略排除。\n\n\
-                                     要让绕过也适用于路由器本身，可临时设置 POLICY_EXCLUDE=1，\n\
-                                     或把 POLICY_NAME 改成不存在的名字，然后：",
-        intercept_interface: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
-                              规则在接口 {} 上，而我们的流量从 {} 出去。\n\n\
-                              要让绕过覆盖我们的流量，请把该接口加入 ISP_INTERFACE\n\
-                              （/opt/etc/nfqws2/nfqws2.conf，多个用空格分隔），然后：",
-        intercept_ports: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
-                          它不处理我们使用的端口。\n\n\
-                          请把端口加入 TCP_PORTS 和策略的 --filter-tcp，然后：",
-        intercept_ipv6: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
-                         没有安装 IPv6 规则 — 配置中 IPV6_ENABLED=0。\n\n\
-                         要让绕过也适用于 IPv6，请把 IPV6_ENABLED=1\n\
-                         写入 /opt/etc/nfqws2/nfqws2.conf，然后：",
-        intercept_tunnel: "检测到 nfqws2 正在运行，但看不到检测器的流量：\n\
-                           我们的流量走隧道（VPN），而规则在运营商接口上。\n\n\
-                           隧道内的流量绕过看不到：请把该目标移出隧道，\n\
-                           或把隧道接口加入 ISP_INTERFACE，然后：",
-        intercept_list_mode: "检测到 nfqws2 正在运行，但策略并不覆盖所有目标：\n\
-                              配置档案「{}」使用列表过滤：{}\n\n\
-                              这个列表来自工作模式，因此部分检查会走绕过，部分不会。\n\
-                              测试期间请在 NFQWS_EXTRA_ARGS 中把 MODE_AUTO 或 MODE_LIST 换成 MODE_ALL，然后：",
-        intercept_list_mode_own: "检测到 nfqws2 正在运行，但策略并不覆盖所有目标：\n\
-                                  配置档案「{}」使用列表过滤：{}\n\n\
-                                  部分检查会走绕过，部分不会。\n\
-                                  测试期间请从 {} 中移除此过滤器，然后：",
+        intercept_header: "检测到 nfqws2 正在运行，但存在以下问题：",
+        intercept_excluded: "连接被访问策略「{}」排除\n\
+                             可临时设置 POLICY_EXCLUDE=1，或把 POLICY_NAME 改成不存在的名字",
+        intercept_excluded_unnamed: "连接被访问策略排除\n\
+                                     可临时设置 POLICY_EXCLUDE=1，或把 POLICY_NAME 改成不存在的名字",
+        intercept_interface: "规则在接口 {} 上，而我们的流量从 {} 出去\n\
+                              请把该接口加入 /opt/etc/nfqws2/nfqws2.conf 的 ISP_INTERFACE（多个用空格分隔）",
+        intercept_ports: "它不处理我们使用的端口\n\
+                          请把端口加入 TCP_PORTS 和策略的 --filter-tcp",
+        intercept_ipv6: "检测器以 IPv6 运行，但没有安装 IPv6 规则：配置中 IPV6_ENABLED=0\n\
+                         请把 IPV6_ENABLED=1 写入 /opt/etc/nfqws2/nfqws2.conf",
+        intercept_tunnel: "我们的流量走隧道（VPN），而规则在运营商接口上\n\
+                           隧道内的流量绕过看不到：请把该目标移出隧道，或把隧道接口加入 ISP_INTERFACE",
+        intercept_list_mode: "配置档案「{}」使用列表过滤：{}\n\
+                              这个列表来自工作模式，因此部分检查会走绕过，部分不会：\n\
+                              测试期间请在 NFQWS_EXTRA_ARGS 中把 MODE_AUTO 或 MODE_LIST 换成 MODE_ALL",
+        intercept_list_mode_own: "配置档案「{}」使用列表过滤：{}\n\
+                                  部分检查会走绕过，部分不会，结果会是混合的：\n\
+                                  测试期间请从 {} 中移除此过滤器",
         intercept_strategy: "策略",
-        intercept_unchecked: "检测到 nfqws2 正在运行，但队列没有响应 — 检查失败。\n\
-                              服务可能还没启动完成，请重启它：",
+        intercept_unchecked_config: "无法读取该包解析后的配置，因此对它的规则一无所知\n\
+                                     请检查包的安装并重启服务",
+        intercept_unchecked_queue: "包正在运行，但队列没有绑定 — 服务可能还没启动完成\n\
+                                    请重启它",
+        intercept_unchecked_route: "无法确定我们的流量从哪个接口出去，\n\
+                                    因此无法检查接口覆盖情况",
+        intercept_then: "然后",
 
 
         subnet_label: "子网:",

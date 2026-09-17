@@ -9,4 +9,4 @@ pub use crate::net::public_ip::fetch_public_ips;
 pub use crate::net::sysinfo::{
     detect_bypass_tools, flag_emoji, get_system_dns, ipv6_supported, is_tun_name, SystemDnsInfo,
 };
-pub use crate::net::sysinfo::intercept::{nfqws2, Family, Intercept, NotCovered, Verdict};
+pub use crate::net::sysinfo::intercept::{nfqws2, Family, Intercept, Problem, Unchecked};

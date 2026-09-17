@@ -70,41 +70,39 @@ pub(crate) fn messages() -> Messages {
         not_detected: "not detected",
         unavailable: "unavailable",
 
-        intercept_excluded: "nfqws2 is running, but it does not see the detector's traffic:\n\
-                             the connection is excluded by the \"{}\" access policy.\n\n\
-                             To have the bypass apply to the router itself, temporarily set POLICY_EXCLUDE=1\n\
-                             or point POLICY_NAME at a name no policy uses, then:",
-        intercept_excluded_unnamed: "nfqws2 is running, but it does not see the detector's traffic:\n\
-                                     the connection is excluded by the access policy.\n\n\
-                                     To have the bypass apply to the router itself, temporarily set POLICY_EXCLUDE=1\n\
-                                     or point POLICY_NAME at a name no policy uses, then:",
-        intercept_interface: "nfqws2 is running, but it does not see the detector's traffic:\n\
-                              its rules are on interface {}, while ours leaves through {}.\n\n\
-                              To have the bypass cover our traffic, add that interface to ISP_INTERFACE\n\
-                              in /opt/etc/nfqws2/nfqws2.conf (several are space separated), then:",
-        intercept_ports: "nfqws2 is running, but it does not see the detector's traffic:\n\
-                          it does not process the port we use.\n\n\
-                          Add the port to TCP_PORTS and to the strategy's --filter-tcp, then:",
-        intercept_ipv6: "nfqws2 is running, but it does not see the detector's traffic:\n\
-                         no IPv6 rules are installed - the package config has IPV6_ENABLED=0.\n\n\
-                         To have the bypass work over IPv6 too, set IPV6_ENABLED=1\n\
-                         in /opt/etc/nfqws2/nfqws2.conf, then:",
-        intercept_tunnel: "nfqws2 is running, but it does not see the detector's traffic:\n\
-                           our traffic leaves through a tunnel (VPN), while its rules are on the provider interface.\n\n\
-                           Traffic inside a tunnel is out of the bypass's reach: take the target out of the tunnel\n\
-                           or add the tunnel interface to ISP_INTERFACE, then:",
-        intercept_list_mode: "nfqws2 is running, but its strategy does not cover every target:\n\
-                              profile \"{}\" filters by a list: {}\n\n\
-                              That list comes from the working mode, so some of what a run measures\n\
-                              goes through the bypass and some does not. For the test, set MODE_ALL instead\n\
-                              of MODE_AUTO or MODE_LIST in NFQWS_EXTRA_ARGS, then:",
-        intercept_list_mode_own: "nfqws2 is running, but its strategy does not cover every target:\n\
-                                   profile \"{}\" filters by a list: {}\n\n\
-                                   Some of what a run measures goes through the bypass and some does not.\n\
-                                   For the test, drop that filter from {}, then:",
+        intercept_header: "nfqws2 is running, but there are problems:",
+        intercept_excluded: "The connection is excluded by the \"{}\" access policy\n\
+                             temporarily set POLICY_EXCLUDE=1 or point POLICY_NAME at a name\n\
+                             no policy uses",
+        intercept_excluded_unnamed: "The connection is excluded by the access policy\n\
+                                     temporarily set POLICY_EXCLUDE=1 or point POLICY_NAME at a name\n\
+                                     no policy uses",
+        intercept_interface: "Its rules are on interface {}, while ours leaves through {}\n\
+                              add that interface to ISP_INTERFACE in /opt/etc/nfqws2/nfqws2.conf\n\
+                              (several are space separated)",
+        intercept_ports: "It does not process the port we use\n\
+                          add the port to TCP_PORTS and to the strategy's --filter-tcp",
+        intercept_ipv6: "The detector runs over IPv6, but no IPv6 rules are installed:\n\
+                         the package config has IPV6_ENABLED=0\n\
+                         set IPV6_ENABLED=1 in /opt/etc/nfqws2/nfqws2.conf",
+        intercept_tunnel: "Our traffic leaves through a tunnel (VPN), while its rules are on the provider interface\n\
+                           traffic inside a tunnel is out of the bypass's reach: take the target out of the tunnel\n\
+                           or add the tunnel interface to ISP_INTERFACE",
+        intercept_list_mode: "Profile \"{}\" filters by a list: {}\n\
+                              that list comes from the working mode, so some of what a run measures goes\n\
+                              through the bypass and some does not: for the test, set MODE_ALL instead of\n\
+                              MODE_AUTO or MODE_LIST in NFQWS_EXTRA_ARGS",
+        intercept_list_mode_own: "Profile \"{}\" filters by a list: {}\n\
+                                  some of what a run measures goes through the bypass and some does not,\n\
+                                  so the numbers are a mixture: for the test, drop that filter from {}",
         intercept_strategy: "the strategy",
-        intercept_unchecked: "nfqws2 is running, but its queue is not answering - the check failed.\n\
-                              The service may not have finished starting, restart it:",
+        intercept_unchecked_config: "The package's resolved config cannot be read, so nothing is known about its rules\n\
+                                     check the package install and restart the service",
+        intercept_unchecked_queue: "The package is running, but nothing is bound to its queue - it may not have\n\
+                                    finished starting; restart it",
+        intercept_unchecked_route: "The interface our traffic leaves by could not be determined,\n\
+                                    so coverage by interface cannot be checked",
+        intercept_then: "Then",
 
 
         subnet_label: "Subnet:",
