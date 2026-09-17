@@ -201,19 +201,36 @@ if target_supports_upx "$BASE_TARGET"; then
   esac
 fi
 
+# Every downloader is tried by running it, never by asking `command -v`: BusyBox
+# hush — the shell Padavan and several other stock firmwares give root — has no
+# `command` builtin, so a PATH test reports a working wget as absent and the
+# install stops before it tries a single mirror. Both are attempted because
+# neither is guaranteed to work: a stock firmware may have only a wget, a box
+# with Entware may have only a curl, and either may be built without TLS.
 download_file() {
   _url="$1"
   _dest="$2"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null || \
-    curl -kfsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null
-  elif command -v wget >/dev/null 2>&1; then
-    wget -q --timeout=4 -O "$_dest" "$_url" 2>/dev/null || \
-    wget -q --no-check-certificate --timeout=4 -O "$_dest" "$_url" 2>/dev/null
-  else
-    echo "Error: neither curl nor wget found in PATH." >&2
-    exit 1
+  rm -f "$_dest" 2>/dev/null || true
+
+  # curl: --connect-timeout/--max-time are understood by every curl; the second
+  # attempt drops the certificate check for boxes with no CA bundle.
+  if curl -fsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null ||
+     curl -kfsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null; then
+    [ -s "$_dest" ] && return 0
   fi
+
+  # wget: BusyBox knows neither --timeout nor --no-check-certificate, so the
+  # first form is for GNU wget and the second is what every wget accepts.
+  if wget -q --timeout=4 -O "$_dest" "$_url" 2>/dev/null ||
+     wget -q -O "$_dest" "$_url" 2>/dev/null; then
+    [ -s "$_dest" ] && return 0
+  fi
+
+  # Say why when the reason is that neither tool is installed at all.
+  if ! curl --version >/dev/null 2>&1 && ! wget --help >/dev/null 2>&1; then
+    echo "Error: neither curl nor wget found in PATH." >&2
+  fi
+  return 1
 }
 
 build_url_list() {

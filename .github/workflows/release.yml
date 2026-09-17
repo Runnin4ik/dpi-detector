@@ -107,10 +107,31 @@ jobs:
         run: |
           curl -fsSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz | tar -xz -C ~/.cargo/bin
           chmod +x ~/.cargo/bin/cross
+      # The MIPS musl targets are dynamic by default — rust-std ships no
+      # self-contained libc for them, so Cross.toml builds their std from
+      # source — and their interpreter (/lib/ld-musl-mipsel-sf.so.1) exists on
+      # Entware but not on stock firmwares such as Padavan, where a dynamic
+      # binary fails with "/bin/sh: ./dpi-detector: not found". Every other musl
+      # target here is static already, so the flags stay on the two that need
+      # them: `+crt-static` links libc from the toolchain's sysroot and
+      # `link-self-contained=no` stops rustc from looking for the crt objects it
+      # does not ship for MIPS. rustc then asks the linker for `-lunwind`, which
+      # the musl.cc toolchain does not have: its unwinder is GCC's, in
+      # `libgcc_eh.a`, and holds the same `_Unwind_*` symbols. The step below
+      # copies that archive under the requested name into the mounted
+      # workspace, which `-L` adds to the linker's search path.
+      - name: Alias the MIPS unwinder under the name rustc asks for
+        if: matrix.target == 'mipsel-unknown-linux-musl' || matrix.target == 'mips-unknown-linux-musl'
+        run: |
+          mkdir -p target/static-unwind
+          docker run --rm -v "$PWD/target/static-unwind:/out" "ghcr.io/cross-rs/${{ matrix.target }}:0.2.5" \
+            sh -c 'for cc in /usr/local/bin/*muslsf-gcc; do cp "$(dirname "$($cc -print-libgcc-file-name)")/libgcc_eh.a" /out/libunwind.a; done'
+          ls -l target/static-unwind/
+
       - name: Build with cross (MIPS & Cross targets)
         if: matrix.use_cross
         env:
-          RUSTFLAGS: "--cfg rustix_use_libc -C force-unwind-tables=no"
+          RUSTFLAGS: "--cfg rustix_use_libc -C force-unwind-tables=no ${{ (matrix.target == 'mipsel-unknown-linux-musl' || matrix.target == 'mips-unknown-linux-musl') && '-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind' || '' }}"
         run: cross build --release --target ${{ matrix.target }}
 
       - name: Build with cargo (Windows 7 legacy)
