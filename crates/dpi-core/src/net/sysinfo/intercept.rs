@@ -171,15 +171,13 @@ struct Facts {
     excluded: bool,
     /// Ports the package queues (`TCP_PORTS`).
     tcp_ports: Vec<u16>,
-    /// The deciding profile as the argv spells its filters (`tcp=443 l7=tls`).
-    profile: String,
-    /// The web ports no acting profile takes.
+    /// The test ports no acting profile takes.
     untaken: Vec<u16>,
-    /// Config lines that drop the deciding profile's lists for a test.
+    /// Config lines that drop the lists which can filter a run.
     list_fixes: Vec<ListFix>,
-    /// Positive list options of that profile that live in no variable the
-    /// detector can name.
-    list_unnamed: Vec<String>,
+    /// List options that live in no variable the detector can name, with the
+    /// profile each one sits in.
+    list_unnamed: Vec<(String, String)>,
 }
 
 /// What the facts mean. Every reason that holds is collected rather than the
@@ -228,7 +226,7 @@ fn judge(facts: &Facts) -> (Vec<Problem>, Vec<Unchecked>) {
     // the package queues what `TCP_PORTS` names, and some profile has to take
     // the port. One missing on either side sends that half of a run past
     // nfqws2, whatever else is right.
-    let missing: Vec<u16> = WEB_PORTS
+    let missing: Vec<u16> = TEST_PORTS
         .into_iter()
         .filter(|port| !facts.tcp_ports.contains(port) || facts.untaken.contains(port))
         .collect();
@@ -240,8 +238,8 @@ fn judge(facts: &Facts) -> (Vec<Problem>, Vec<Unchecked>) {
         // the desync. The recipe, not the concept, is what a reader can act on.
         problems.push(Problem::ListRecipe { fixes: facts.list_fixes.clone() });
     }
-    for option in &facts.list_unnamed {
-        problems.push(Problem::ListNamed { profile: facts.profile.clone(), option: option.clone() });
+    for (profile, option) in &facts.list_unnamed {
+        problems.push(Problem::ListNamed { profile: profile.clone(), option: option.clone() });
     }
     (problems, unchecked)
 }
@@ -283,11 +281,38 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         None => Flow::default(),
     };
     let strategy = strategy(pid);
+    // Every list that can filter a run, across the profiles that decide the
+    // ports it speaks. Deduplicated: two ports can meet the same profile, and
+    // naming its filter twice says nothing new.
+    let mut options: Vec<(String, String)> = Vec::new();
+    for deciding in &strategy.deciding {
+        for option in &deciding.list_options {
+            let pair = (deciding.profile.clone(), option.clone());
+            if !options.contains(&pair) {
+                options.push(pair);
+            }
+        }
+    }
     // The recipe needs the config the service was started from; without it the
     // options are still named, just not resolved to a variable.
     let (list_fixes, list_unnamed) = match std::fs::read_to_string(CONF) {
-        Ok(conf) => list_fixes(&conf, &strategy.list_options),
-        Err(_) => (Vec::new(), strategy.list_options.clone()),
+        Ok(conf) => {
+            let flat: Vec<String> = options.iter().map(|(_, option)| option.clone()).collect();
+            let (fixes, unnamed) = list_fixes(&conf, &flat);
+            let named = unnamed
+                .into_iter()
+                .map(|option| {
+                    let profile = options
+                        .iter()
+                        .find(|(_, held)| *held == option)
+                        .map(|(profile, _)| profile.clone())
+                        .unwrap_or_default();
+                    (profile, option)
+                })
+                .collect();
+            (fixes, named)
+        }
+        Err(_) => (Vec::new(), options),
     };
     let facts = Facts {
         v6,
@@ -297,7 +322,6 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         our_interface,
         excluded: flow.mark == Some(MARK_EXCLUDE),
         tcp_ports: conf.ports,
-        profile: strategy.profile,
         untaken: strategy.untaken,
         list_fixes,
         list_unnamed,
@@ -362,25 +386,34 @@ fn pidfile_pid() -> Option<u32> {
     std::path::Path::new(&format!("/proc/{pid}")).exists().then_some(pid)
 }
 
-/// The ports the tests speak: HTTP on 80, TLS on 443.
-const WEB_PORTS: [u16; 2] = [80, 443];
+/// The ports the detector's tests speak: HTTP on 80, TLS on 443, and DoT on 853,
+/// which the DNS test uses against resolvers. A run touches all three, so the
+/// strategy is asked about each of them by name.
+const TEST_PORTS: [u16; 3] = [80, 443, 853];
 
 /// The variable the package's own mode lives in, and the mode that drops the
 /// list filtering: `MODE_ALL` is "everything the exclude lists do not cover",
 /// which is what a test wants.
 const MODE_VARIABLE: &str = "NFQWS_EXTRA_ARGS";
 
-/// What the deciding profile does to a web run: the ports it takes and the
-/// lists it filters by. Read from the live argv rather than the config, so it is
-/// what the package resolved.
-#[derive(Debug, Default)]
-struct Strategy {
-    /// The deciding profile's own filters, as the argv spells them:
-    /// `tcp=443 l7=tls`.
+/// The profile that decides a connection to one of the ports the tests speak,
+/// and the lists it filters by.
+#[derive(Debug)]
+struct Deciding {
+    /// The profile's own filters, as the argv spells them: `tcp=443 l7=tls`.
     profile: String,
     /// Its positive list options, in the order written.
     list_options: Vec<String>,
-    /// The web ports no acting profile takes, so nothing desyncs them.
+}
+
+/// What the running strategy does to a test run: one deciding profile per port
+/// it speaks, and the ports nothing takes.
+#[derive(Debug, Default)]
+struct Strategy {
+    /// A run speaks several ports and can meet a different profile on each, so
+    /// the answer is per port rather than one profile for the whole run.
+    deciding: Vec<Deciding>,
+    /// The test ports no acting profile takes, so nothing desyncs them.
     untaken: Vec<u16>,
 }
 
@@ -421,19 +454,22 @@ fn strategy(pid: u32) -> Strategy {
 /// profile that could take the traffic, without checking the host against the
 /// list.
 fn strategy_in(args: &[String]) -> Strategy {
-    for profile in profiles(args) {
-        if !profile.acts || !takes_web(&profile.filters) {
-            continue;
+    let profiles = profiles(args);
+    let mut deciding = Vec::new();
+    let mut untaken = Vec::new();
+    for port in TEST_PORTS {
+        // The first profile that takes a connection to this port handles it, and
+        // the later ones never see it — asked per port, because a run speaks
+        // three and a profile can take one of them without taking the others.
+        match profiles.iter().find(|profile| profile.acts && takes_port(&profile.filters, port)) {
+            Some(profile) => deciding.push(Deciding {
+                profile: profile_label(&profile.filters),
+                list_options: profile.list_options.clone(),
+            }),
+            None => untaken.push(port),
         }
-        // The first profile that takes our traffic desyncs everything it takes,
-        // and the later ones never see it.
-        return Strategy {
-            profile: profile_label(&profile.filters),
-            list_options: profile.list_options,
-            untaken: untaken_ports(args),
-        };
     }
-    Strategy { untaken: untaken_ports(args), ..Strategy::default() }
+    Strategy { deciding, untaken }
 }
 
 /// The config lines that drop a profile's positive lists for a test.
@@ -447,28 +483,44 @@ fn strategy_in(args: &[String]) -> Strategy {
 /// name: a hand-run argv, or a config that changed after the service started.
 fn list_fixes(conf: &str, options: &[String]) -> (Vec<ListFix>, Vec<String>) {
     let variables = conf_variables(conf);
-    let mut fixes = Vec::new();
-    let mut unnamed = Vec::new();
-    let mut named: Vec<String> = Vec::new();
+    // Per variable, the options that have to leave it. An option can be written
+    // in several variables and appears in the argv once per variable, so the
+    // recipe is built per variable rather than per option.
+    let mut per_variable: Vec<(String, Vec<String>)> = Vec::new();
     let mut mode = false;
+    let mut unnamed = Vec::new();
     for option in options {
-        match list_source_in(conf, option) {
-            ListSource::Mode => mode = true,
-            ListSource::Variable(name) => {
-                if !named.contains(&name) {
-                    named.push(name);
+        let sources = list_sources_in(conf, option);
+        if sources.is_empty() {
+            // A hand-run argv, or a config that changed after the service
+            // started: the option is named, but no recipe is invented for it.
+            unnamed.push(option.clone());
+            continue;
+        }
+        for source in sources {
+            match source {
+                ListSource::Mode => mode = true,
+                ListSource::Variable(name) => {
+                    match per_variable.iter_mut().find(|(variable, _)| *variable == name) {
+                        Some((_, held)) => {
+                            if !held.contains(option) {
+                                held.push(option.clone());
+                            }
+                        }
+                        None => per_variable.push((name, vec![option.clone()])),
+                    }
                 }
             }
-            ListSource::Unknown => unnamed.push(option.clone()),
         }
     }
+    let mut fixes = Vec::new();
     if mode {
         fixes.push(ListFix::Assign {
             variable: MODE_VARIABLE.to_string(),
             value: "$MODE_ALL".to_string(),
         });
     }
-    for name in named {
+    for (name, held) in per_variable {
         let current = variables
             .iter()
             .find(|(variable, _)| *variable == name)
@@ -478,12 +530,7 @@ fn list_fixes(conf: &str, options: &[String]) -> (Vec<ListFix>, Vec<String>) {
             // A value written over several lines is a strategy: several profiles,
             // their filters and their desyncs. Handing that back is not advice,
             // so the entry names what to drop instead.
-            let options = options
-                .iter()
-                .filter(|option| current.split_whitespace().any(|token| token == option.as_str()))
-                .cloned()
-                .collect();
-            fixes.push(ListFix::Drop { variable: name, options });
+            fixes.push(ListFix::Drop { variable: name, options: held });
             continue;
         }
         let value = current
@@ -491,7 +538,7 @@ fn list_fixes(conf: &str, options: &[String]) -> (Vec<ListFix>, Vec<String>) {
             // A one-line value still carries the shell's line continuations when
             // the config broke it; they are not part of what the variable holds.
             .filter(|token| *token != "\\")
-            .filter(|token| !options.iter().any(|option| option == token))
+            .filter(|token| !held.iter().any(|option| option == token))
             .collect::<Vec<_>>()
             .join(" ");
         fixes.push(ListFix::Assign { variable: name, value });
@@ -584,27 +631,6 @@ fn takes_port(filters: &[String], port: u16) -> bool {
     true
 }
 
-/// Whether a profile's filters would take a web connection at all: HTTP on 80
-/// or TLS on 443, the two the tests speak.
-fn takes_web(filters: &[String]) -> bool {
-    takes_port(filters, 80) || takes_port(filters, 443)
-}
-
-/// The web ports no acting profile takes.
-///
-/// A port missing from the deciding profile is not enough to call it uncovered:
-/// a connection the first profile does not take falls through to the next, so
-/// what matters is whether *any* profile that does something takes it.
-fn untaken_ports(args: &[String]) -> Vec<u16> {
-    let profiles = profiles(args);
-    WEB_PORTS
-        .into_iter()
-        .filter(|port| {
-            !profiles.iter().any(|profile| profile.acts && takes_port(&profile.filters, *port))
-        })
-        .collect()
-}
-
 /// A *positive* list filter: the exclusions only ever widen what is desynced,
 /// and `--ipset-ip=0.0.0.0` is how a strategy says "no single addresses".
 fn is_list_filter(arg: &str) -> bool {
@@ -621,10 +647,10 @@ fn is_list_filter(arg: &str) -> bool {
 
 /// Where the option that carries a list comes from.
 ///
-/// The advice a reader gets depends on it, and the argv alone does not say: the
-/// init script appends the mode's lists to the web profile and the ipset lists
-/// to a profile of their own, so an option visible in a profile may be written
-/// in no profile at all. Reading the config back is what tells the two apart.
+/// The argv alone does not say: the init script appends the mode's lists to the
+/// web profile and the ipset lists to profiles of their own, so an option
+/// visible in a profile may be written in no profile at all. Reading the config
+/// back is what tells them apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ListSource {
     /// A value the config's `MODE_*` lines define (`MODE_LIST`, `MODE_ALL`,
@@ -633,12 +659,8 @@ enum ListSource {
     /// is what the package ships for "everything except the exclude list".
     Mode,
     /// A variable of the config's strategy (`NFQWS_ARGS_IPSET`, `NFQWS_ARGS`,
-    /// …) — the one whose value carries the option, and therefore the one to
-    /// edit. An ipset list lives here and not in the profile the argv shows.
+    /// …) — one whose value carries the option, and therefore one to edit.
     Variable(String),
-    /// Nowhere in the config: a hand-run argv, or a config that changed after
-    /// the service started. The profile and the option are still named.
-    Unknown,
 }
 
 /// The variables the init script assembles the argv from, in the order it
@@ -654,26 +676,31 @@ const STRATEGY_VARIABLES: [&str; 7] = [
     "NFQWS_BASE_ARGS",
 ];
 
-/// The parsing half of [`list_source`], on a config in memory.
-fn list_source_in(conf: &str, option: &str) -> ListSource {
+/// The parsing half of [`list_sources_in`], on a config in memory: every
+/// variable that carries the option, in the order the init script appends them.
+///
+/// Every one of them, not the first: an option written in two variables appears
+/// in the argv twice, and dropping it from one leaves the other filtering.
+fn list_sources_in(conf: &str, option: &str) -> Vec<ListSource> {
     let Some((_, value)) = option.split_once('=') else {
-        return ListSource::Unknown;
+        return Vec::new();
     };
     if value.is_empty() {
-        return ListSource::Unknown;
+        return Vec::new();
     }
     let variables = conf_variables(conf);
+    let mut out = Vec::new();
     // A mode first: the same list can be written in a variable and referenced
     // by the mode, and the mode is the cheaper thing for a reader to change.
     if variables.iter().any(|(name, text)| name.starts_with("MODE_") && text.contains(value)) {
-        return ListSource::Mode;
+        out.push(ListSource::Mode);
     }
     for key in STRATEGY_VARIABLES {
         if variables.iter().any(|(name, text)| name == key && text.contains(value)) {
-            return ListSource::Variable(key.to_string());
+            out.push(ListSource::Variable(key.to_string()));
         }
     }
-    ListSource::Unknown
+    out
 }
 
 /// The `KEY=value` pairs of the shell-sourced config.
@@ -1051,10 +1078,18 @@ mod tests {
         args.iter().map(|arg| (*arg).to_string()).collect()
     }
 
-    /// The deciding profile's positive list options, which is what most of these
-    /// tests ask about.
+    /// Every positive list option that can filter a run, which is what most of
+    /// these tests ask about.
     fn lists(args: &[String]) -> Vec<String> {
-        strategy_in(args).list_options
+        let mut out: Vec<String> = Vec::new();
+        for deciding in strategy_in(args).deciding {
+            for option in deciding.list_options {
+                if !out.contains(&option) {
+                    out.push(option);
+                }
+            }
+        }
+        out
     }
 
     /// The profile layout of a real strategy on a Keenetic: QUIC, then a
@@ -1105,9 +1140,10 @@ mod tests {
             "--lua-desync=hostfakesplit:repeats=8",
             "--new",
         ]);
-        let strategy = strategy_in(&listed);
-        assert_eq!(strategy.profile, "tcp=443 l7=tls");
-        let option = strategy.list_options.first().expect("the TLS profile filters by ipset");
+        let deciding = strategy_in(&listed).deciding;
+        assert_eq!(deciding.len(), 1, "only 443 is taken by a profile that acts");
+        assert_eq!(deciding[0].profile, "tcp=443 l7=tls");
+        let option = deciding[0].list_options.first().expect("the TLS profile filters by ipset");
         assert!(option.starts_with("--ipset="), "{option}");
     }
 
@@ -1126,12 +1162,12 @@ mod tests {
             "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
             "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
         ]);
-        let strategy = strategy_in(&two);
-        let options = strategy.list_options;
+        let options = lists(&two);
         assert_eq!(options.len(), 2, "both positive lists, no exclusions: {options:?}");
         assert!(options[0].starts_with("--hostlist="), "{options:?}");
         assert!(options[1].starts_with("--hostlist-auto="), "{options:?}");
-        assert_eq!(strategy.profile, "tcp=80,443 l7=http,tls");
+        let deciding = strategy_in(&two).deciding;
+        assert_eq!(deciding[0].profile, "tcp=80,443 l7=http,tls");
     }
 
     /// Filters of one profile are all required: a TLS-on-443 profile does not
@@ -1162,16 +1198,20 @@ mod tests {
             "--filter-l7=http,tls",
             "--lua-desync=multisplit",
         ]);
-        assert!(strategy_in(&split).untaken.is_empty(), "80 is taken by the second profile");
+        assert_eq!(strategy_in(&split).untaken, vec![853], "80 is taken by the second profile");
         let no_desync = argv(&[
             "--filter-tcp=443",
             "--lua-desync=multisplit",
             "--new",
             "--filter-tcp=80",
         ]);
-        assert_eq!(strategy_in(&no_desync).untaken, vec![80], "a profile that acts on nothing");
+        assert_eq!(
+            strategy_in(&no_desync).untaken,
+            vec![80, 853],
+            "a profile that acts on nothing"
+        );
         let only_tls = argv(&["--filter-tcp=443", "--lua-desync=multisplit"]);
-        assert_eq!(strategy_in(&only_tls).untaken, vec![80]);
+        assert_eq!(strategy_in(&only_tls).untaken, vec![80, 853]);
         let every_port = argv(&["--filter-l7=tls", "--lua-desync=multisplit"]);
         assert!(strategy_in(&every_port).untaken.is_empty(), "no port filter takes both");
     }
@@ -1213,28 +1253,38 @@ mod tests {
         let conf = "# strategy\n\
                     MODE_LIST=\"--hostlist=/opt/etc/nfqws2/lists/user.list\"\n\
                     MODE_ALL=\"--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list\"\n\
-                    NFQWS_ARGS_IPSET=\"--ipset=/opt/etc/nfqws2/lists/ipset.list --ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list\"\n\
+                    NFQWS_ARGS_IPSET=\"--ipset=/opt/etc/nfqws2/lists/ipset.list --hostlist=/opt/etc/nfqws2/lists/both.list --ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list\"\n\
                     NFQWS_ARGS_CUSTOM=\"--filter-tcp=443 --filter-l7=tls\n\
                     --hostlist-domains=googlevideo.com\n\
+                    --hostlist=/opt/etc/nfqws2/lists/both.list\n\
                     --lua-desync=fake\"\n\
                     NFQWS_EXTRA_ARGS=\"$MODE_LIST\"\n";
         assert_eq!(
-            list_source_in(conf, "--hostlist=/opt/etc/nfqws2/lists/user.list"),
-            ListSource::Mode
+            list_sources_in(conf, "--hostlist=/opt/etc/nfqws2/lists/user.list"),
+            vec![ListSource::Mode]
         );
         assert_eq!(
-            list_source_in(conf, "--ipset=/opt/etc/nfqws2/lists/ipset.list"),
-            ListSource::Variable("NFQWS_ARGS_IPSET".to_string())
+            list_sources_in(conf, "--ipset=/opt/etc/nfqws2/lists/ipset.list"),
+            vec![ListSource::Variable("NFQWS_ARGS_IPSET".to_string())]
         );
         // The desyncs make NFQWS_ARGS_CUSTOM several lines long, and a list
         // written inside it is still found.
         assert_eq!(
-            list_source_in(conf, "--hostlist-domains=googlevideo.com"),
-            ListSource::Variable("NFQWS_ARGS_CUSTOM".to_string())
+            list_sources_in(conf, "--hostlist-domains=googlevideo.com"),
+            vec![ListSource::Variable("NFQWS_ARGS_CUSTOM".to_string())]
+        );
+        // Written in two variables, it appears in the argv twice: dropping it
+        // from one leaves the other filtering, so both are reported.
+        assert_eq!(
+            list_sources_in(conf, "--hostlist=/opt/etc/nfqws2/lists/both.list"),
+            vec![
+                ListSource::Variable("NFQWS_ARGS_CUSTOM".to_string()),
+                ListSource::Variable("NFQWS_ARGS_IPSET".to_string()),
+            ]
         );
         // A value the config no longer holds — it was edited after the service
         // started — is left to the profile and the option to describe.
-        assert_eq!(list_source_in(conf, "--hostlist=/gone.list"), ListSource::Unknown);
+        assert!(list_sources_in(conf, "--hostlist=/gone.list").is_empty());
     }
 
     /// The recipe is a variable and what to do with it. A one-line value comes
@@ -1246,9 +1296,10 @@ mod tests {
         let conf = "# strategy\n\
                     MODE_LIST=\"--hostlist=/opt/etc/nfqws2/lists/user.list\"\n\
                     MODE_ALL=\"--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list\"\n\
-                    NFQWS_ARGS_IPSET=\"--ipset=/opt/etc/nfqws2/lists/ipset.list --ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list\"\n\
+                    NFQWS_ARGS_IPSET=\"--ipset=/opt/etc/nfqws2/lists/ipset.list --hostlist=/opt/etc/nfqws2/lists/both.list --ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list\"\n\
                     NFQWS_ARGS_CUSTOM=\"--filter-tcp=443 --filter-l7=tls \\\n\
                     --hostlist=/opt/etc/nfqws2/lists/google.list \\\n\
+                    --hostlist=/opt/etc/nfqws2/lists/both.list \\\n\
                     --lua-desync=fake\"\n\
                     NFQWS_EXTRA_ARGS=\"$MODE_LIST\"\n";
         let (fixes, unnamed) = list_fixes(
@@ -1257,6 +1308,7 @@ mod tests {
                 "--hostlist=/opt/etc/nfqws2/lists/user.list".to_string(),
                 "--ipset=/opt/etc/nfqws2/lists/ipset.list".to_string(),
                 "--hostlist=/opt/etc/nfqws2/lists/google.list".to_string(),
+                "--hostlist=/opt/etc/nfqws2/lists/both.list".to_string(),
             ],
         );
         assert!(unnamed.is_empty(), "{unnamed:?}");
@@ -1269,7 +1321,7 @@ mod tests {
                     variable: "NFQWS_EXTRA_ARGS".to_string(),
                     value: "$MODE_ALL".to_string(),
                 },
-                // A one-line variable comes back whole, minus the positive list.
+                // A one-line variable comes back whole, minus the positive lists.
                 ListFix::Assign {
                     variable: "NFQWS_ARGS_IPSET".to_string(),
                     value: "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list".to_string(),
@@ -1277,7 +1329,10 @@ mod tests {
                 // The strategy is several lines long, so it is not handed back.
                 ListFix::Drop {
                     variable: "NFQWS_ARGS_CUSTOM".to_string(),
-                    options: vec!["--hostlist=/opt/etc/nfqws2/lists/google.list".to_string()],
+                    options: vec![
+                        "--hostlist=/opt/etc/nfqws2/lists/google.list".to_string(),
+                        "--hostlist=/opt/etc/nfqws2/lists/both.list".to_string(),
+                    ],
                 },
             ]
         );
@@ -1414,7 +1469,7 @@ mod tests {
             queue_bound: true,
             rules_interfaces: vec!["eth3".to_string()],
             our_interface: Some("eth3".to_string()),
-            tcp_ports: vec![80, 443],
+            tcp_ports: vec![80, 443, 853],
             ..Facts::default()
         }
     }
@@ -1441,7 +1496,7 @@ mod tests {
             ..covered()
         };
         let (problems, unchecked) = judge(&facts);
-        assert_eq!(problems, vec![Problem::Ipv6, Problem::Port { missing: vec![80] }]);
+        assert_eq!(problems, vec![Problem::Ipv6, Problem::Port { missing: vec![80, 853] }]);
         assert!(unchecked.is_empty(), "{unchecked:?}");
     }
 
@@ -1492,11 +1547,11 @@ mod tests {
     #[test]
     fn a_port_missing_from_either_side_is_named() {
         let not_queued = Facts { tcp_ports: vec![443], ..covered() };
-        assert_eq!(judge(&not_queued).0, vec![Problem::Port { missing: vec![80] }]);
+        assert_eq!(judge(&not_queued).0, vec![Problem::Port { missing: vec![80, 853] }]);
         let not_taken = Facts { untaken: vec![443], ..covered() };
         assert_eq!(judge(&not_taken).0, vec![Problem::Port { missing: vec![443] }]);
-        let neither = Facts { tcp_ports: Vec::new(), untaken: vec![80, 443], ..covered() };
-        assert_eq!(judge(&neither).0, vec![Problem::Port { missing: vec![80, 443] }]);
+        let neither = Facts { tcp_ports: Vec::new(), untaken: vec![80, 443, 853], ..covered() };
+        assert_eq!(judge(&neither).0, vec![Problem::Port { missing: vec![80, 443, 853] }]);
     }
 
     /// The list recipe reaches the entry as it was built: the judge does not
@@ -1504,12 +1559,14 @@ mod tests {
     #[test]
     fn the_list_recipe_and_the_unresolved_options_both_reach_the_entry() {
         let facts = Facts {
-            profile: "tcp=443 l7=tls".to_string(),
             list_fixes: vec![ListFix::Drop {
                 variable: "NFQWS_ARGS_CUSTOM".to_string(),
                 options: vec!["--hostlist=/opt/etc/nfqws2/lists/google.list".to_string()],
             }],
-            list_unnamed: vec!["--ipset=/tmp/hand.list".to_string()],
+            list_unnamed: vec![(
+                "tcp=443 l7=tls".to_string(),
+                "--ipset=/tmp/hand.list".to_string(),
+            )],
             ..covered()
         };
         assert_eq!(
