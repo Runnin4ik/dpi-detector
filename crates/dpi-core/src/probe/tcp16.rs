@@ -5,6 +5,7 @@
 //! step, 10 × 4 KB = 40 KB total). A break inside the DPI window
 //! (`tcp_block_min_kb`..`tcp_block_max_kb`) is reported as DETECTED.
 
+use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -28,9 +29,17 @@ use crate::probe::http::{
 use crate::net::tcp::{dial_tcp, DialError};
 use crate::net::tls::{create_tls_config, TlsProfile};
 
+/// The X-Pad bytes. Seeded from the OS once per run: a constant seed made
+/// every probe of every user pad with the same 4 KB header, which is a
+/// signature a censor can match to block the tool itself rather than the
+/// traffic it measures.
 fn random_pool(size: usize) -> Vec<u8> {
     // xorshift64* — deterministic PRNG, no extra deps, ASCII alphanumerics
-    let mut state: u64 = 0x9E3779B97F4A7C15;
+    let mut state: u64 = rand::random();
+    if state == 0 {
+        // xorshift never leaves zero once there.
+        state = 0x9E3779B97F4A7C15;
+    }
     let mut out = Vec::with_capacity(size);
     while out.len() < size {
         state ^= state >> 12;
@@ -47,15 +56,39 @@ fn random_pool(size: usize) -> Vec<u8> {
     out
 }
 
-/// The X-Pad pool is byte-identical in every probe — `random_pool` is seeded
-/// with a constant — so one pool per process replaces one per probe: 100 KB
-/// instead of 100 KB × concurrency (5 MB at the shipped 50), with the same
-/// bytes on the wire. It stays an `OnceLock` rather than a `LazyLock` because
-/// its size is the configured `fat_random_pool_size`, known only at runtime.
+/// One pool per process, not one per probe: 100 KB instead of 100 KB ×
+/// concurrency (5 MB at the shipped 50). It stays an `OnceLock` rather than a
+/// `LazyLock` because its size is the configured `fat_random_pool_size`, known
+/// only at runtime.
 static PAD_POOL: OnceLock<Vec<u8>> = OnceLock::new();
 
 fn pad_pool(size: usize) -> &'static [u8] {
     PAD_POOL.get_or_init(|| random_pool(size))
+}
+
+/// Which connection is being padded. A target keeps its bytes for the run, and
+/// two targets do not pad alike, so the same slice does not travel to every
+/// destination from every user.
+fn conn_key(ip: IpAddr, port: u16, sni: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    ip.hash(&mut h);
+    port.hash(&mut h);
+    sni.hash(&mut h);
+    h.finish()
+}
+
+/// Where in the pool a chunk's padding starts. Within one connection every
+/// chunk must take a different slice: HTTP/2 compresses headers, so an
+/// identical value is HPACK-indexed after its first use and stops reaching the
+/// wire, and the probe would upload far less than its chunk count claims while
+/// still reporting the window it thinks it crossed. The step and the pool size
+/// are coprime (7919 is prime and does not divide 96000), so rotating the
+/// start by connection keeps the slices of one connection distinct.
+fn pad_offset(max_start: usize, chunk: usize, conn: u64) -> usize {
+    if max_start == 0 {
+        return 0;
+    }
+    (conn as usize).wrapping_add(chunk.wrapping_mul(7919)) % max_start
 }
 
 async fn connect_fat_target(
@@ -165,6 +198,7 @@ pub async fn probe_tcp_16_20(
     let mut rtt_samples: Vec<f64> = Vec::new();
 
     let pool = pad_pool(cfg.fat_random_pool_size.max(chunk_size + 1));
+    let conn = conn_key(target_ip, port, sni);
 
     let host_val = if !sni.is_empty() {
         sni.to_string()
@@ -201,7 +235,7 @@ pub async fn probe_tcp_16_20(
 
         let pad_str = if i > 0 {
             let max_start = pool.len().saturating_sub(chunk_size);
-            let start_idx = ((i * 7919) % max_start.max(1)).min(max_start);
+            let start_idx = pad_offset(max_start, i, conn);
             Some(String::from_utf8_lossy(&pool[start_idx..start_idx + chunk_size]).into_owned())
         } else {
             None
@@ -358,13 +392,51 @@ mod tests {
         assert!(pool.iter().all(|b| b.is_ascii_alphanumeric()));
     }
 
-    /// The pool is shared by every probe now, so what goes into the X-Pad has
-    /// to stay what a per-probe pool would have produced: same size, same
-    /// bytes. A drift here changes the fingerprint on the wire silently.
+    /// The pool is seeded per run, so two pools must not come out alike: a
+    /// constant seed is what put the same 4 KB header on the wire for every
+    /// user, every target and every run.
     #[test]
-    fn shared_pad_pool_holds_the_same_bytes_as_a_fresh_pool() {
-        let size = 100_000;
-        assert_eq!(pad_pool(size), random_pool(size).as_slice());
+    fn pool_bytes_differ_between_pools() {
+        assert_ne!(random_pool(64), random_pool(64));
+    }
+
+    /// One pool per process: rebuilding it per probe is what made 50
+    /// concurrent probes hold 5 MB of identical padding.
+    #[test]
+    fn pad_pool_is_built_once() {
+        assert_eq!(pad_pool(4_000), pad_pool(4_000));
+    }
+
+    /// Every chunk of one connection must take its own slice: HTTP/2 indexes a
+    /// repeated header value after its first use, so an identical pad stops
+    /// reaching the wire and the probe under-uploads what it counts.
+    #[test]
+    fn chunks_of_one_connection_use_distinct_slices() {
+        let (pool_len, chunk) = (100_000usize, 4_000usize);
+        let max_start = pool_len - chunk;
+        let conn = conn_key("192.0.2.1".parse().unwrap(), 443, "example.com");
+        let mut seen: Vec<usize> = Vec::new();
+        for i in 1..10 {
+            let off = pad_offset(max_start, i, conn);
+            assert!(off + chunk <= pool_len, "смещение {off} вышло за пул");
+            assert!(!seen.contains(&off), "чанк {i} повторил смещение {off}");
+            seen.push(off);
+        }
+    }
+
+    /// Targets must not pad alike, or one captured connection describes every
+    /// connection the tool makes.
+    #[test]
+    fn different_targets_spread_over_the_pool() {
+        let max_start = 96_000;
+        let mut offsets = std::collections::HashSet::new();
+        for n in 1..=64u8 {
+            let key = conn_key(IpAddr::from([192, 0, 2, n]), 443, "example.com");
+            offsets.insert(pad_offset(max_start, 1, key));
+        }
+        // A collision or two over 96000 slots is possible; one shared slice is
+        // not.
+        assert!(offsets.len() >= 60, "смещений всего {}", offsets.len());
     }
 
     #[test]
