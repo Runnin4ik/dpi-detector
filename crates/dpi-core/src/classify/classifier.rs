@@ -193,6 +193,25 @@ fn timeout_at_stage(stage: &str) -> (DpiStatus, Detail) {
     }
 }
 
+/// The errno values of the unreachable family, per architecture.
+///
+/// MIPS numbers its errors differently from the generic table (`EHOSTUNREACH`
+/// is 148 there against 113 on x86_64, `ENETUNREACH` 128 against 101), and the
+/// detector runs on mipsel routers, so x86 numbers alone left both cases to the
+/// message text. That matters more here than for the other errors: Rust has no
+/// stable `ErrorKind` for either (`io::ErrorKind::HostUnreachable` is behind
+/// `io_error_more`), while refused, reset, aborted and timed out all arrive as
+/// their own `kind` on every architecture — which is why only these two are
+/// spelled out numerically.
+#[cfg(any(target_arch = "mips", target_arch = "mips64"))]
+const NET_UNREACH: [i32; 2] = [128, 10051];
+#[cfg(not(any(target_arch = "mips", target_arch = "mips64")))]
+const NET_UNREACH: [i32; 2] = [101, 10051];
+#[cfg(any(target_arch = "mips", target_arch = "mips64"))]
+const HOST_UNREACH: [i32; 2] = [148, 10065];
+#[cfg(not(any(target_arch = "mips", target_arch = "mips64")))]
+const HOST_UNREACH: [i32; 2] = [113, 10065];
+
 /// Classifies a TCP connection error: pool exhaustion, timeouts, DNS failures,
 /// TLS alerts surfacing inside connect errors, refusals, resets, aborts and
 /// unreachable hosts/routes.
@@ -282,10 +301,10 @@ pub fn classify_connect_error_full(
         return timeout_at_stage(stage);
     }
 
-    if matches!(raw_os_error, Some(101) | Some(10051)) || full.contains("network is unreachable") {
+    if raw_os_error.is_some_and(|code| NET_UNREACH.contains(&code)) || full.contains("network is unreachable") {
         return (DpiStatus::NetUnreach, Detail::NetUnreach);
     }
-    if matches!(raw_os_error, Some(113) | Some(10065)) || full.contains("no route to host") {
+    if raw_os_error.is_some_and(|code| HOST_UNREACH.contains(&code)) || full.contains("no route to host") {
         return (DpiStatus::HostUnreach, Detail::HostUnreach);
     }
 
@@ -642,4 +661,32 @@ mod tests {
         );
         assert_eq!(s, DpiStatus::DnsFail);
     }
+
+    /// The unreachable family is decided by the errno alone: Rust has no stable
+    /// `ErrorKind` for either case, so a bare code with no message must still
+    /// reach the status instead of falling through to `OsErr`.
+    #[test]
+    fn unreachable_errnos_classify_without_a_message() {
+        for code in NET_UNREACH {
+            let (s, d) = classify_connect_error_full("", Some(code), None, 0, "tcp_connect");
+            assert_eq!((s, d), (DpiStatus::NetUnreach, Detail::NetUnreach), "errno {code}");
+        }
+        for code in HOST_UNREACH {
+            let (s, d) = classify_connect_error_full("", Some(code), None, 0, "tcp_connect");
+            assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach), "errno {code}");
+        }
+    }
+
+    /// The routers are MIPS, where `EHOSTUNREACH` is 148 and not the 113 the
+    /// generic table uses. Pinned by hand because the numbers of the other
+    /// architecture cannot be reached from here.
+    #[cfg(any(target_arch = "mips", target_arch = "mips64"))]
+    #[test]
+    fn a_mips_host_unreachable_is_not_an_unknown_os_error() {
+        let (s, d) = classify_connect_error_full("", Some(148), None, 0, "tcp_connect");
+        assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach));
+        let (s, _) = classify_connect_error_full("", Some(128), None, 0, "tcp_connect");
+        assert_eq!(s, DpiStatus::NetUnreach);
+    }
 }
+
