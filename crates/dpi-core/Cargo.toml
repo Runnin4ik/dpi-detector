@@ -30,6 +30,11 @@ brotli-decompressor = { workspace = true }
 zlib-rs = { workspace = true }
 tracing = { workspace = true }
 url = "2.5"
+# Only for the errno constants the classifier compares against: they are the
+# platform's own numbers, and hardcoding them per architecture is how the MIPS
+# (and macOS, and SPARC) values got missed. Already in the graph through
+# `rustix` and `crossterm`, so this adds no code to the binary.
+libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 [dev-dependencies]

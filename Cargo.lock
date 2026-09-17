@@ -526,6 +526,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
  "ml-kem",
  "parking_lot",
  "rand",
