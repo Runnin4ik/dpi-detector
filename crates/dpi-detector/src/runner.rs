@@ -752,9 +752,13 @@ pub(crate) async fn run_test_suite(
             .as_ref()
             .map(|p| (p.on_phase)(dpi_core::PhaseId::Tcp16, tcp_items.len()));
         let mut handles = Vec::new();
+        // One config for every task instead of one per target: the shipped
+        // config carries the whole DNS server list, and 104 clones of it were
+        // alive at once while the tasks queued on the semaphore.
+        let cfg_arc = Arc::new(cfg.clone());
         for item in tcp_items {
             let item = item.clone();
-            let cfg_c = cfg.clone();
+            let cfg_c = Arc::clone(&cfg_arc);
             let sem_c = Arc::clone(&sem);
             handles.push(tokio::spawn(async move {
                 let port = item.port;

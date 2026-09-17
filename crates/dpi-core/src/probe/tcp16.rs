@@ -6,6 +6,7 @@
 //! (`tcp_block_min_kb`..`tcp_block_max_kb`) is reported as DETECTED.
 
 use std::net::{IpAddr, SocketAddr};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use http_body_util::BodyExt;
 
@@ -44,6 +45,17 @@ fn random_pool(size: usize) -> Vec<u8> {
         }
     }
     out
+}
+
+/// The X-Pad pool is byte-identical in every probe — `random_pool` is seeded
+/// with a constant — so one pool per process replaces one per probe: 100 KB
+/// instead of 100 KB × concurrency (5 MB at the shipped 50), with the same
+/// bytes on the wire. It stays an `OnceLock` rather than a `LazyLock` because
+/// its size is the configured `fat_random_pool_size`, known only at runtime.
+static PAD_POOL: OnceLock<Vec<u8>> = OnceLock::new();
+
+fn pad_pool(size: usize) -> &'static [u8] {
+    PAD_POOL.get_or_init(|| random_pool(size))
 }
 
 async fn connect_fat_target(
@@ -152,7 +164,7 @@ pub async fn probe_tcp_16_20(
     let mut measured_rtt = hint_rtt;
     let mut rtt_samples: Vec<f64> = Vec::new();
 
-    let pool = random_pool(cfg.fat_random_pool_size.max(chunk_size + 1));
+    let pool = pad_pool(cfg.fat_random_pool_size.max(chunk_size + 1));
 
     let host_val = if !sni.is_empty() {
         sni.to_string()
@@ -344,6 +356,15 @@ mod tests {
         let pool = random_pool(1000);
         assert_eq!(pool.len(), 1000);
         assert!(pool.iter().all(|b| b.is_ascii_alphanumeric()));
+    }
+
+    /// The pool is shared by every probe now, so what goes into the X-Pad has
+    /// to stay what a per-probe pool would have produced: same size, same
+    /// bytes. A drift here changes the fingerprint on the wire silently.
+    #[test]
+    fn shared_pad_pool_holds_the_same_bytes_as_a_fresh_pool() {
+        let size = 100_000;
+        assert_eq!(pad_pool(size), random_pool(size).as_slice());
     }
 
     #[test]

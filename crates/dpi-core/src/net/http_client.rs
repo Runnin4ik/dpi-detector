@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use http_body_util::{BodyExt, Empty};
+use http_body_util::{BodyExt, Empty, Limited};
 use hyper::body::Bytes;
 use hyper::header::{ACCEPT, HOST, USER_AGENT};
 use hyper::{Method, Request};
@@ -17,6 +17,10 @@ use url::Url;
 
 use crate::net::tcp::set_no_delay;
 use crate::net::tls::{create_tls_config, TlsProfile};
+
+/// The callers of this client read a public-IP echo or a version manifest, so
+/// a megabyte is generous; anything larger is a broken or hostile server.
+const MAX_BODY: usize = 1 << 20;
 
 /// Simple, pure-Rust HTTP/HTTPS GET returning text content (capped at 64 KB).
 pub async fn http_get_text(url_str: &str, timeout_dur: Duration) -> Result<String, String> {
@@ -118,6 +122,14 @@ where
         .get(hyper::header::LOCATION)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    let body = resp.into_body().collect().await.map_err(|e| e.to_string())?.to_bytes().to_vec();
+    // The callers read a public-IP echo or a version manifest, so a cap costs
+    // nothing and stops a hostile or broken server from making the tool buffer
+    // a whole body in memory (Rule 2: never buffer a full stream).
+    let body = Limited::new(resp.into_body(), MAX_BODY)
+        .collect()
+        .await
+        .map_err(|e| e.to_string())?
+        .to_bytes()
+        .to_vec();
     Ok((status, location, body))
 }

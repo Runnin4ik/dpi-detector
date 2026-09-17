@@ -96,6 +96,10 @@ pub async fn run_whitelist_sni(
     if port443.is_empty() {
         return WhitelistReport::default();
     }
+    // One config for every probe task instead of one per target and per SNI
+    // candidate: each clone carries the whole DNS server list, and the clones
+    // pile up while the tasks wait on the semaphore.
+    let cfg_arc = Arc::new(cfg.clone());
     let tick_base = phases
         .as_ref()
         .map(|p| (p.on_phase)(crate::PhaseId::SniBase, port443.len()));
@@ -107,7 +111,7 @@ pub async fn run_whitelist_sni(
     let mut handles = Vec::new();
     for item in &port443 {
         let item = (*item).clone();
-        let cfg = cfg.clone();
+        let cfg = Arc::clone(&cfg_arc);
         let sem = Arc::clone(sem);
         handles.push(tokio::spawn(async move {
             let default_sni = if cfg.fat_default_sni.is_empty() {
@@ -185,7 +189,7 @@ pub async fn run_whitelist_sni(
     });
 
     for cand in &detected {
-        let verdict = probe_as(cand, clean_sni, &sni_index, cfg, sem, batch_size, top_n).await;
+        let verdict = probe_as(cand, clean_sni, &sni_index, &cfg_arc, sem, batch_size, top_n).await;
         if let Some(t) = tick_as.as_ref() {
             t();
         }
@@ -206,7 +210,7 @@ async fn probe_as(
     cand: &AsCandidate,
     clean_sni: &[(String, usize)],
     sni_index: &HashMap<&str, usize>,
-    cfg: &AppConfig,
+    cfg: &Arc<AppConfig>,
     sem: &Arc<Semaphore>,
     batch_size: usize,
     top_n: usize,
@@ -236,7 +240,7 @@ async fn probe_as(
             let mut handles = Vec::new();
             for (sni, _num) in batch {
                 let sni = sni.clone();
-                let cfg = cfg.clone();
+                let cfg = Arc::clone(cfg);
                 let sem = Arc::clone(sem);
                 let ip = cand.ip.clone();
                 let rtt = cand.rtt;
