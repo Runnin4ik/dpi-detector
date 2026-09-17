@@ -395,6 +395,7 @@ const TEST_PORTS: [u16; 2] = [80, 443];
 /// list filtering: `MODE_ALL` is "everything the exclude lists do not cover",
 /// which is what a test wants.
 const MODE_VARIABLE: &str = "NFQWS_EXTRA_ARGS";
+const MODE_ALL: &str = "$MODE_ALL";
 
 /// The profile that decides a connection to one of the ports the tests speak,
 /// and the lists it filters by.
@@ -487,7 +488,6 @@ fn list_fixes(conf: &str, options: &[String]) -> (Vec<ListFix>, Vec<String>) {
     // in several variables and appears in the argv once per variable, so the
     // recipe is built per variable rather than per option.
     let mut per_variable: Vec<(String, Vec<String>)> = Vec::new();
-    let mut mode = false;
     let mut unnamed = Vec::new();
     for option in options {
         let sources = list_sources_in(conf, option);
@@ -499,7 +499,9 @@ fn list_fixes(conf: &str, options: &[String]) -> (Vec<ListFix>, Vec<String>) {
         }
         for source in sources {
             match source {
-                ListSource::Mode => mode = true,
+                // Handled below, on the variable's own value rather than on
+                // where the lists landed in the argv.
+                ListSource::Mode => {}
                 ListSource::Variable(name) => {
                     match per_variable.iter_mut().find(|(variable, _)| *variable == name) {
                         Some((_, held)) => {
@@ -514,12 +516,6 @@ fn list_fixes(conf: &str, options: &[String]) -> (Vec<ListFix>, Vec<String>) {
         }
     }
     let mut fixes = Vec::new();
-    if mode {
-        fixes.push(ListFix::Assign {
-            variable: MODE_VARIABLE.to_string(),
-            value: "$MODE_ALL".to_string(),
-        });
-    }
     for (name, held) in per_variable {
         let current = variables
             .iter()
@@ -542,6 +538,21 @@ fn list_fixes(conf: &str, options: &[String]) -> (Vec<ListFix>, Vec<String>) {
             .collect::<Vec<_>>()
             .join(" ");
         fixes.push(ListFix::Assign { variable: name, value });
+    }
+    // The mode is checked on its own value rather than on which profile its lists
+    // reached: with `MODE_AUTO` the package hands a connection to the auto-list
+    // profile as soon as it knows the host, which changes what a run measures
+    // even where the argv does not show the lists — and a strategy built on
+    // `MODE_ALL` is the one a test is meant to measure.
+    let mode_value = variables
+        .iter()
+        .find(|(name, _)| name == MODE_VARIABLE)
+        .map(|(_, value)| value.trim());
+    if mode_value != Some(MODE_ALL) {
+        fixes.push(ListFix::Assign {
+            variable: MODE_VARIABLE.to_string(),
+            value: MODE_ALL.to_string(),
+        });
     }
     (fixes, unnamed)
 }
@@ -1311,12 +1322,6 @@ mod tests {
         assert_eq!(
             fixes,
             vec![
-                // The mode's own switch comes first: it is the cheapest thing to
-                // change.
-                ListFix::Assign {
-                    variable: "NFQWS_EXTRA_ARGS".to_string(),
-                    value: "$MODE_ALL".to_string(),
-                },
                 // A one-line variable comes back whole, minus the positive lists.
                 ListFix::Assign {
                     variable: "NFQWS_ARGS_IPSET".to_string(),
@@ -1330,16 +1335,30 @@ mod tests {
                         "--hostlist=/opt/etc/nfqws2/lists/both.list".to_string(),
                     ],
                 },
+                // The mode is last, and comes from its own value: `$MODE_LIST`
+                // is not `$MODE_ALL`, so a test wants it switched.
+                ListFix::Assign {
+                    variable: "NFQWS_EXTRA_ARGS".to_string(),
+                    value: "$MODE_ALL".to_string(),
+                },
             ]
         );
     }
 
-    /// An option the config does not carry is not invented into a recipe.
+    /// An option the config does not carry is not invented into a recipe. The
+    /// mode is still checked: its variable is absent here, which is not
+    /// `$MODE_ALL`, so switching it is part of the recipe.
     #[test]
     fn an_option_in_no_variable_is_reported_unnamed() {
         let conf = "NFQWS_ARGS=\"--lua-desync=fake\"\n";
         let (fixes, unnamed) = list_fixes(conf, &["--ipset=/tmp/hand.list".to_string()]);
-        assert!(fixes.is_empty(), "{fixes:?}");
+        assert_eq!(
+            fixes,
+            vec![ListFix::Assign {
+                variable: "NFQWS_EXTRA_ARGS".to_string(),
+                value: "$MODE_ALL".to_string(),
+            }]
+        );
         assert_eq!(unnamed, vec!["--ipset=/tmp/hand.list".to_string()]);
     }
 
