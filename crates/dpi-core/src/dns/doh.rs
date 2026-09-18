@@ -7,7 +7,6 @@ use hyper::header::{ACCEPT, CONTENT_TYPE, HOST, USER_AGENT};
 use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
-use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use url::Url;
@@ -68,7 +67,7 @@ pub async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Result<(D
             stage: "resolve",
             detail: "no address".to_string(),
         })?;
-    let tcp = timeout(timeout_dur, TcpStream::connect(&addr))
+    let tcp = timeout(timeout_dur, crate::net::bind::tcp_connect(&addr))
         .await
         .map_err(|_| DnsError::ConnectFault {
             stage: "tcp_connect",

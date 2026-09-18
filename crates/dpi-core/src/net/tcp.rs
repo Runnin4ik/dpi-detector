@@ -46,7 +46,7 @@ pub async fn dial_tcp(addr: &SocketAddr, timeout_dur: Duration) -> Result<TcpStr
 /// A failed TCP connect leaves no ICMP message on the socket — the error queue
 /// stays empty — so the verdict comes from the watcher that reads the wire.
 async fn connect(addr: &SocketAddr) -> Result<TcpStream, DialError> {
-    match TcpStream::connect(addr).await {
+    match crate::net::bind::tcp_connect(addr).await {
         Ok(stream) => Ok(stream),
         Err(error) => {
             let icmp = icmp_err::verdict_wait(addr.ip()).await;

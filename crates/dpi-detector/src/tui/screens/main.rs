@@ -31,6 +31,9 @@ pub struct MenuSelection {
     pub concurrency: usize,
     pub language: Language,
     pub tls_fingerprint: TlsFingerprint,
+    /// The interface the probes leave through, when the user picked one: `None`
+    /// is the routing table.
+    pub interface: Option<String>,
 }
 
 pub enum MenuResult {
@@ -120,6 +123,22 @@ async fn run_menu_loop(
         .iter()
         .position(|&f| f == cfg.fingerprint())
         .unwrap_or(0);
+    // Interfaces a probe can actually leave through, and index 0 for the routing
+    // table — the answer every run gave before this row existed. The list is read
+    // once: it cannot change while the menu is open in any way that matters, and
+    // re-reading it on every keypress would make the cursor jump under the user.
+    let ifaces: Vec<dpi_core::net::bind::BindTarget> = dpi_core::net::bind::interfaces()
+        .iter()
+        .filter_map(|i| dpi_core::net::bind::resolve(&i.name))
+        .collect();
+    let mut iface_idx = dpi_core::net::bind::target()
+        .and_then(|t| {
+            ifaces
+                .iter()
+                .position(|i| i.name == t.name)
+                .map(|pos| pos + 1)
+        })
+        .unwrap_or(0);
     let v6_supported = ipv6_supported();
 
     let mut selected_tests: HashSet<char> = HashSet::new(); // empty by default
@@ -139,7 +158,7 @@ async fn run_menu_loop(
     let mut notice: Option<String> = None;
     let mut reader = EventStream::new();
     loop {
-        let offset = 4;
+        let offset = 5;
         let test_options = get_test_options(&msg);
         let total_rows = offset + test_options.len();
 
@@ -157,6 +176,10 @@ async fn run_menu_loop(
                 &test_options,
                 &selected_tests,
                 &msg,
+                iface_idx
+                    .checked_sub(1)
+                    .and_then(|pos| ifaces.get(pos))
+                    .map_or_else(|| msg.menu_interface_auto.to_string(), |target| target.label.clone()),
                 profile,
                 &live_badge,
                 notice.as_deref(),
@@ -231,12 +254,15 @@ async fn run_menu_loop(
                         current_lang = all[next_idx];
                         msg = get_messages(current_lang);
                     } else if cursor == 1 {
+                        let slots = ifaces.len() + 1;
+                        iface_idx = (iface_idx + slots - 1) % slots;
+                    } else if cursor == 2 {
                         if v6_supported {
                             ip_version = if ip_version == "ipv4" { "ipv6".to_string() } else { "ipv4".to_string() };
                         }
-                    } else if cursor == 2 {
-                        conc_idx = (conc_idx + presets.len() - 1) % presets.len();
                     } else if cursor == 3 {
+                        conc_idx = (conc_idx + presets.len() - 1) % presets.len();
+                    } else if cursor == 4 {
                         fp_idx = (fp_idx + TlsFingerprint::ALL.len() - 1) % TlsFingerprint::ALL.len();
                     } else if cursor >= offset {
                         let t_idx = cursor - offset;
@@ -261,12 +287,14 @@ async fn run_menu_loop(
                         current_lang = all[next_idx];
                         msg = get_messages(current_lang);
                     } else if cursor == 1 {
+                        iface_idx = (iface_idx + 1) % (ifaces.len() + 1);
+                    } else if cursor == 2 {
                         if v6_supported {
                             ip_version = if ip_version == "ipv4" { "ipv6".to_string() } else { "ipv4".to_string() };
                         }
-                    } else if cursor == 2 {
-                        conc_idx = (conc_idx + 1) % presets.len();
                     } else if cursor == 3 {
+                        conc_idx = (conc_idx + 1) % presets.len();
+                    } else if cursor == 4 {
                         fp_idx = (fp_idx + 1) % TlsFingerprint::ALL.len();
                     } else if cursor >= offset {
                         let t_idx = cursor - offset;
@@ -287,12 +315,14 @@ async fn run_menu_loop(
                         current_lang = all[next_idx];
                         msg = get_messages(current_lang);
                     } else if cursor == 1 {
+                        iface_idx = (iface_idx + 1) % (ifaces.len() + 1);
+                    } else if cursor == 2 {
                         if v6_supported {
                             ip_version = if ip_version == "ipv4" { "ipv6".to_string() } else { "ipv4".to_string() };
                         }
-                    } else if cursor == 2 {
-                        conc_idx = (conc_idx + 1) % presets.len();
                     } else if cursor == 3 {
+                        conc_idx = (conc_idx + 1) % presets.len();
+                    } else if cursor == 4 {
                         fp_idx = (fp_idx + 1) % TlsFingerprint::ALL.len();
                     } else if cursor >= offset {
                         let t_idx = cursor - offset;
@@ -324,6 +354,10 @@ async fn run_menu_loop(
                         concurrency: presets[conc_idx],
                         language: current_lang,
                         tls_fingerprint: TlsFingerprint::ALL[fp_idx],
+                        interface: iface_idx
+                            .checked_sub(1)
+                            .and_then(|pos| ifaces.get(pos))
+                            .map(|target| target.name.clone()),
                     });
                 }
 
@@ -364,6 +398,7 @@ fn draw_menu(
     test_options: &[(char, &str)],
     selected_tests: &HashSet<char>,
     msg: &Messages,
+    iface_value: String,
     profile: RegionProfile,
     badge: &str,
     notice: Option<&str>,
@@ -375,7 +410,7 @@ fn draw_menu(
         rows.push(clean_output(row));
     }
     let mut lines = Vec::new();
-    let offset = 4;
+    let offset = 5;
 
     // Language row
     let lang_opts = Language::ALL
@@ -393,6 +428,12 @@ fn draw_menu(
     let lang_cursor = if cursor == 0 { "►" } else { " " };
     let lang_lbl = format!("{}:", msg.menu_language.trim_end_matches(':'));
     lines.push(format!("  {} {} {}", lang_cursor, pad_width(&lang_lbl, 16), lang_opts));
+
+    // Interface row: a cycler rather than a radio list, because a router reports
+    // dozens of interfaces and the panel has one line for them.
+    let iface_cursor = if cursor == 1 { "►" } else { " " };
+    let iface_lbl = format!("{}:", msg.menu_interface.trim_end_matches(':'));
+    lines.push(format!("  {} {} < {} >", iface_cursor, pad_width(&iface_lbl, 16), iface_value));
 
     // IP version row
     let ip_opts = if v6_supported {
@@ -628,9 +669,11 @@ mod tests {
             concurrency: 50,
             language: Language::Ru,
             tls_fingerprint: TlsFingerprint::Rustls,
+            interface: None,
         };
         assert_eq!(sel.language, Language::Ru);
         assert_eq!(sel.selected_tests, "123");
+        assert!(sel.interface.is_none(), "the routing table is the default");
     }
 
     #[test]

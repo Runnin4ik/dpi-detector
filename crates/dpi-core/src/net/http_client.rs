@@ -10,7 +10,6 @@ use hyper::header::{ACCEPT, HOST, USER_AGENT};
 use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
-use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use url::Url;
@@ -63,7 +62,7 @@ async fn http_get_once(url: &Url, timeout_dur: Duration) -> Result<(u16, Option<
 
     let execute = async {
         let addr = format!("{}:{}", host, port);
-        let tcp = TcpStream::connect(&addr)
+        let tcp = crate::net::bind::connect_host(&host, port)
             .await
             .map_err(|e| format!("Connect to {} failed: {}", addr, e))?;
         set_no_delay(&tcp);

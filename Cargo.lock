@@ -546,6 +546,7 @@ dependencies = [
  "tracing",
  "url",
  "webpki-roots",
+ "windows-sys 0.59.0",
  "winreg",
  "x25519-dalek",
  "zlib-rs",

@@ -1,6 +1,5 @@
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
-use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
 use super::socks::{associate_socks5_udp, unwrap_socks_udp, wrap_socks_udp, SocksProxyConfig};
@@ -22,12 +21,7 @@ pub async fn probe_udp_dns(
     let resp_bytes = if let Some(proxy) = socks_proxy {
         // Run via SOCKS5 UDP relay
         let (relay_addr, _tcp_stream) = associate_socks5_udp(proxy).await?;
-        let bind_addr = if relay_addr.is_ipv6() {
-            "[::]:0"
-        } else {
-            "0.0.0.0:0"
-        };
-        let socket = UdpSocket::bind(bind_addr)
+        let socket = crate::net::bind::udp_socket(&relay_addr)
             .await
             .map_err(|e| DnsError::Io(e.to_string()))?;
 
@@ -47,12 +41,7 @@ pub async fn probe_udp_dns(
         unwrapped.to_vec()
     } else {
         // Direct UDP
-        let bind_addr = if server.is_ipv6() {
-            "[::]:0"
-        } else {
-            "0.0.0.0:0"
-        };
-        let socket = UdpSocket::bind(bind_addr)
+        let socket = crate::net::bind::udp_socket(&server)
             .await
             .map_err(|e| DnsError::Io(e.to_string()))?;
 

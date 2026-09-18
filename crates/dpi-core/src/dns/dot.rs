@@ -89,7 +89,7 @@ impl DotSession {
         let addr: SocketAddr = format!("{}:{}", connect_host, port)
             .parse()
             .map_err(|e| DnsError::Io(format!("bad DoT address: {}", e)))?;
-        let tcp = timeout(timeout_dur, TcpStream::connect(&addr))
+        let tcp = timeout(timeout_dur, crate::net::bind::tcp_connect(&addr))
             .await
             .map_err(|_| DnsError::ConnectFault {
                 stage: "tcp_connect",

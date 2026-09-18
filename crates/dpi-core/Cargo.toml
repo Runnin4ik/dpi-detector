@@ -41,6 +41,14 @@ url = "2.5"
 libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# `GetAdaptersAddresses` for the interface list a bind can use: the kernel's own
+# answer, already in the graph through tokio, so naming it here adds no build.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+] }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 # Test-only: the round-trip test needs a real encoder to produce the payloads

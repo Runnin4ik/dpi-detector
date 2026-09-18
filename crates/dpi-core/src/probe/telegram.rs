@@ -16,7 +16,6 @@ use hyper::header::{HOST, USER_AGENT};
 use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
-use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
@@ -69,7 +68,7 @@ pub async fn probe_telegram_dc(dc: &TelegramDc, timeout_dur: Duration) -> Telegr
 
     match addr_str.parse::<SocketAddr>() {
         Ok(sock_addr) => {
-            match timeout(timeout_dur, TcpStream::connect(sock_addr)).await {
+            match timeout(timeout_dur, crate::net::bind::tcp_connect(&sock_addr)).await {
                 Ok(Ok(stream)) => {
                     set_no_delay(&stream);
                     let latency = start.elapsed().as_millis() as u64;
@@ -190,7 +189,7 @@ fn split_url(url: &str) -> Option<(String, String)> {
 
 async fn tls_get(host: &str, path: &str, user_agent: &str) -> Option<(impl Body<Data = Bytes, Error = hyper::Error> + Unpin, impl FnOnce() + Send)> {
     let addr = resolve_host(host, 443, Duration::from_secs(10)).await.ok()?.into_iter().next()?;
-    let tcp = TcpStream::connect(addr).await.ok()?;
+    let tcp = crate::net::bind::tcp_connect(&addr).await.ok()?;
     set_no_delay(&tcp);
     let connector = TlsConnector::from(create_tls_config(&TlsProfile::default()));
     let server_name = ServerName::try_from(host.to_string()).ok()?;
@@ -373,7 +372,7 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
         },
         cfg.telegram_upload_port,
     );
-    let tcp = match timeout(Duration::from_secs_f64(8.0), TcpStream::connect(&addr)).await {
+    let tcp = match timeout(Duration::from_secs_f64(8.0), crate::net::bind::tcp_connect(&addr)).await {
         Ok(Ok(s)) => {
             set_no_delay(&s);
             s

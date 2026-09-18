@@ -260,6 +260,18 @@ async fn main() {
     if let Some(c) = args.concurrency {
         cfg.max_concurrent = c;
     }
+    // Which interface the probes leave through. A name that matches nothing is
+    // fatal: carrying on would test the routing table while the user believes the
+    // tunnel is being tested, and that is a wrong answer rather than a warning.
+    if let Some(sel) = &args.iface {
+        match dpi_core::net::bind::resolve(sel) {
+            Some(target) => dpi_core::net::bind::set_target(Some(target)),
+            None => {
+                eprintln!("{}", msg.iface_unknown.replacen("{}", sel, 1));
+                std::process::exit(2);
+            }
+        }
+    }
 
 
     let level = if args.verbose {
@@ -427,6 +439,13 @@ async fn main() {
                 tls_fingerprint = sel.tls_fingerprint;
                 lang = sel.language;
                 msg = get_messages(lang);
+                // The row is what the user just chose, so it has the last word
+                // over `--iface`; `None` means the routing table and clears any
+                // target the flag had set.
+                match &sel.interface {
+                    Some(name) => dpi_core::net::bind::set_target(dpi_core::net::bind::resolve(name)),
+                    None => dpi_core::net::bind::set_target(None),
+                }
             }
             MenuResult::Quit => return,
         }

@@ -21,6 +21,10 @@ pub struct Messages {
 
     pub menu_title: &'static str,
     pub menu_language: &'static str,
+    /// Menu row: which interface the probes leave through, and the value that
+    /// means the routing table decides.
+    pub menu_interface: &'static str,
+    pub menu_interface_auto: &'static str,
     pub menu_ip_version: &'static str,
     pub menu_concurrency: &'static str,
     pub menu_hw_row: &'static str,
@@ -272,6 +276,10 @@ pub struct Messages {
     pub cli_profile: &'static str,
     pub cli_legend: &'static str,
     pub cli_proxy: &'static str,
+    /// `--iface`: which interface probes leave through.
+    pub cli_iface: &'static str,
+    /// Fatal: a name that matched no interface, one `{}`.
+    pub iface_unknown: &'static str,
     pub cli_concurrency: &'static str,
     pub cli_domain: &'static str,
     pub cli_output: &'static str,

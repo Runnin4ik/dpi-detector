@@ -108,7 +108,7 @@ pub async fn associate_socks5_udp(
     proxy: &SocksProxyConfig,
 ) -> Result<(SocketAddr, TcpStream), DnsError> {
     let addr = format!("{}:{}", proxy.host, proxy.port);
-    let mut tcp = TcpStream::connect(&addr)
+    let mut tcp = crate::net::bind::connect_host(&proxy.host, proxy.port)
         .await
         .map_err(|e| DnsError::Socks5(format!("TCP connect to {} failed: {}", addr, e)))?;
     set_no_delay(&tcp);

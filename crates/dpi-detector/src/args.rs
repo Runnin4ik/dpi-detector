@@ -15,6 +15,9 @@ pub struct CliArgs {
     pub profile: String,
     pub legend: bool,
     pub proxy: Option<String>,
+    /// Interface probes leave through: a device name (`wg0`, `opkgtun10`) or one
+    /// of its addresses. Unset means the routing table decides.
+    pub iface: Option<String>,
     pub concurrency: Option<usize>,
     pub domain: Vec<String>,
     pub output: Option<String>,
@@ -95,6 +98,14 @@ pub fn command(msg: &Messages) -> Command {
                 .value_name("URL")
                 .help_heading(msg.cli_options_heading)
                 .help(msg.cli_proxy),
+        )
+        .arg(
+            Arg::new("iface")
+                .short('i')
+                .long("iface")
+                .value_name("NAME")
+                .help_heading(msg.cli_options_heading)
+                .help(msg.cli_iface),
         )
         .arg(
             Arg::new("concurrency")
@@ -223,6 +234,7 @@ pub fn parse_cli(lang: Language) -> CliArgs {
         profile: m.get_one::<String>("profile").cloned().unwrap_or_else(|| "ru".to_string()),
         legend: m.get_flag("legend"),
         proxy: m.get_one::<String>("proxy").cloned(),
+        iface: m.get_one::<String>("iface").cloned(),
         concurrency: m.get_one::<usize>("concurrency").copied(),
         domain: m.get_many::<String>("domain").map(|v| v.cloned().collect()).unwrap_or_default(),
         output: m.get_one::<String>("output").cloned(),
