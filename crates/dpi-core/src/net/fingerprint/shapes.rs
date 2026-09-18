@@ -21,10 +21,10 @@ use super::h2::{
     SAFARI18_H2, SAFARI184_IOS_H2, SAFARI260_H2, SAFARI_H2,
 };
 use super::identity::{
-    CHROME120_HEADERS, CHROME131_ANDROID_HEADERS, CHROME131_HEADERS, CHROME133_HEADERS,
-    CHROME136_HEADERS, CHROME99_ANDROID_HEADERS, CHROME_HEADERS, EDGE101_HEADERS,
-    FIREFOX135_HEADERS, FIREFOX144_HEADERS, FIREFOX_HEADERS, SAFARI153_HEADERS, SAFARI184_IOS_HEADERS,
-    SAFARI18_HEADERS, SAFARI260_HEADERS, SAFARI260_IOS_HEADERS, SAFARI_HEADERS, TOR_HEADERS,
+    CHROME120_HEADERS, CHROME131_ANDROID_HEADERS, CHROME131_HEADERS, CHROME146_HEADERS,
+    CHROME99_ANDROID_HEADERS, CHROME_HEADERS, EDGE101_HEADERS, FIREFOX144_HEADERS, FIREFOX_HEADERS,
+    SAFARI153_HEADERS, SAFARI184_IOS_HEADERS, SAFARI18_HEADERS, SAFARI260_HEADERS,
+    SAFARI260_IOS_HEADERS, SAFARI_HEADERS, TOR_HEADERS,
 };
 use super::TlsFingerprint;
 
@@ -53,11 +53,6 @@ pub(crate) struct TlsShape {
     /// bundle a shape is pinned to, and the capture it was read out of. Reads in
     /// `--legend`, and is the reason a pin can be re-measured.
     pub(crate) source: &'static str,
-    /// Names the parsers accept in addition to `code`, lowercase.
-    pub(crate) aliases: &'static [&'static str],
-    /// The `curl-impersonate` wrapper names that emit this shape, when the
-    /// bundle's own names are accepted as well.
-    pub(crate) curl: Option<CurlNames>,
     /// The untouched rustls hello: no profile is installed, nobody is
     /// impersonated, and every earlier measurement was taken with it.
     pub(crate) baseline: bool,
@@ -154,33 +149,6 @@ pub(crate) struct TlsShape {
     pub(crate) headers: Option<&'static [(&'static str, &'static str)]>,
     /// The HTTP/2 preface, `None` for the baseline (hyper's own defaults).
     pub(crate) h2: Option<&'static H2Fingerprint>,
-}
-
-/// The `curl-impersonate` names that emit a shape.
-///
-/// The forum that reported the TSPU fingerprints names the profiles after the
-/// bundle, so those names are accepted — but only where this build reproduces
-/// the hello they describe, and the same hello can be sent by more than one
-/// release: a name selects the *shape*, and the record's own identity is what a
-/// probe presents with it. `curl_chrome119`/`123` therefore answer as Chrome
-/// 120's record, `curl_chrome142`/`145`/`146` as 136's, and `curl_chrome100…107`
-/// as 107's, each measured by capturing the wrapper itself.
-///
-/// A name is rejected rather than mapped to a neighbour where the hello differs:
-/// `curl_chrome110`/`116` permute an extension set this build sends in a fixed
-/// order (Chrome 107's, without ECH), `curl_chrome124` carries a set no record
-/// has, and a name whose device suffix does not match the record's identity is a
-/// different client — `curl_chrome131_android` is Chrome 131's hello with an
-/// Android UA and `sec-ch-ua-platform: "Android"`, and `curl_safari172_ios` is
-/// Safari 15.5's hello behind an iOS identity no record carries, so the suffix
-/// every device arm carries is part of the name.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum CurlNames {
-    /// Every numbered profile of these prefixes up to and including the
-    /// version, whose name ends in one of `suffixes` right after the digits.
-    UpTo(&'static [&'static str], u16, &'static [&'static str]),
-    /// Only the versions named, because the bundle changes shape between them.
-    Only(&'static [&'static str], &'static [u16], &'static [&'static str]),
 }
 
 /// Chrome 99–107's cipher list, which Chrome 133 keeps and Edge 99–101 sends
@@ -723,7 +691,7 @@ const FIREFOX_TLS_EXT_ORDER: &[u16] = &[
 /// Firefox 135–144's extension order: 133's with
 /// `signed_certificate_timestamp` after `delegated_credentials`, which is the
 /// single extension Firefox added in between.
-const FIREFOX135_TLS_EXT_ORDER: &[u16] = &[
+const FIREFOX144_TLS_EXT_ORDER: &[u16] = &[
     EXT_SERVER_NAME,
     EXT_EXTENDED_MASTER_SECRET,
     EXT_RENEGOTIATION_INFO,
@@ -805,8 +773,6 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         token: "RUSTLS",
         label: "RUSTLS",
         source: "rustls (unmodified)",
-        aliases: &["rustls", "default", "none"],
-        curl: None,
         baseline: true,
         ciphers: &[],
         groups: &[],
@@ -865,13 +831,11 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // listed here as deviations are the bundle's own since the pass that closed
     // them (`--tls-key-shares-limit 3`, `zlib, brotli, zstd`, `8:1`/`9:1`).
     TlsShape {
-        variant: TlsFingerprint::Firefox,
-        code: "firefox",
+        variant: TlsFingerprint::Firefox133,
+        code: "firefox133",
         token: "FIREFOX",
         label: "FIREFOX 133",
-        source: "curl_firefox133 (curl-impersonate v2.2.2)",
-        aliases: &["firefox", "firefox-like", "firefox133"],
-        curl: Some(CurlNames::Only(&["curl_firefox"], &[133], &[""])),
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: FIREFOX_TLS_CIPHERS,
         groups: FIREFOX_TLS_GROUPS,
@@ -919,13 +883,11 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // `encrypted_client_hello` (Chrome 107 predates it). See
     // `tests::bundle_versions_match_their_ja3`.
     TlsShape {
-        variant: TlsFingerprint::Chrome,
-        code: "chrome",
+        variant: TlsFingerprint::Chrome107,
+        code: "chrome107",
         token: "CHROME",
         label: "CHROME 107",
-        source: "curl_chrome107 (curl-impersonate v2.2.2)",
-        aliases: &["chrome", "chrome99", "chrome107"],
-        curl: Some(CurlNames::UpTo(&["curl_chrome"], 107, &[""])),
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_GROUPS,
@@ -973,13 +935,11 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // report's older bundle versions, and the flagship "Safari" the TSPU rule
     // names.
     TlsShape {
-        variant: TlsFingerprint::Safari,
-        code: "safari",
+        variant: TlsFingerprint::Safari155,
+        code: "safari155",
         token: "SAFARI",
         label: "SAFARI 155",
-        source: "curl_safari155 (curl-impersonate v2.2.2)",
-        aliases: &["safari", "safari155", "safari170"],
-        curl: Some(CurlNames::Only(&["curl_safari"], &[155, 170], &[""])),
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: SAFARI_TLS_CIPHERS,
         groups: SAFARI_TLS_GROUPS,
@@ -1009,69 +969,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         headers: Some(SAFARI_HEADERS),
         h2: Some(&SAFARI_H2),
     },
-    // Chrome 133, as `curl_chrome133a` of curl-impersonate v2.2.3 sends it and
-    // as uTLS `HelloChrome_133` (v1.8.2, unchanged on master) defines it. Both
-    // sources agree on every list; uTLS supplies the extension *order* the
-    // bundle cannot, because Chromium permutes it per connection.
-    //
-    // What differs from Chrome 107: the hybrid `X25519MLKEM768` group leads the
-    // list (and is shared, so the hello carries an ML-KEM and an X25519 share),
-    // ALPS moves to its new code point 17613 (`HelloChrome_131` is the same
-    // shape with the old 17513 — that is why 131 is not an alias), padding is
-    // gone, and `accept-encoding` gained `zstd`.
-    //
-    // The two things a shuffling, ECH-carrying client means for this build:
-    //
-    // * `encrypted_client_hello` (65037) is sent as GREASE, like the wrapper's
-    //   own `--ech true` (see the Firefox record);
-    // * the extension order is shuffled per connection, so the tests pin the
-    //   extension *set* and the JA4 rather than a whole JA3 string: JA3 of this
-    //   shape differs between two connections of the real browser too.
-    // * the order below is uTLS's pre-shuffle list, and the profile now shuffles
-    //   it per connection the way Chromium does (`TlsShape::permute_extensions`,
-    //   BoringSSL's `ssl_setup_extension_permutation`): a real Chrome 133 sends
-    //   one of many orders and its JA3 differs per connection, which this build
-    //   now reproduces. JA4, which sorts what it hashes, stays the stable key.
-    TlsShape {
-        variant: TlsFingerprint::Chrome133,
-        code: "chrome133",
-        token: "CHROME",
-        label: "CHROME 133",
-        source: "curl_chrome133a (curl-impersonate v2.2.3) / uTLS HelloChrome_133 (v1.8.2)",
-        aliases: &["chrome133", "chrome133a"],
-        curl: Some(CurlNames::Only(&["curl_chrome"], &[133], &["", "a"])),
-        baseline: false,
-        ciphers: CHROME_TLS_CIPHERS,
-        groups: CHROME_TLS_PQ_GROUPS,
-        sig_algs: CHROME_TLS_SIG_ALGS,
-        ext_order: CHROME_ALPS_NEW_EXT_ORDER,
-        raw_exts: CHROME_ALPS_NEW_RAW_EXTS,
-        suppress: &[],
-        drop13: &[
-            EXT_EXTENDED_MASTER_SECRET,
-            EXT_RENEGOTIATION_INFO,
-            EXT_EC_POINT_FORMATS,
-            EXT_SESSION_TICKET,
-        ],
-        // No padding in this shape, so only the version list and ALPS go.
-        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS_NEW],
-        alpn: H2_AND_HTTP11,
-        // Chrome 110+ stopped padding: the captured 133 hello is far past the
-        // 256-byte floor anyway, with an ML-KEM share in it.
-        padding_to: None,
-        grease: true,
-        permute_extensions: true,
-        ech: true,
-        priority_on_h1: false,
-        cert_compression: BROTLI,
-        key_share_groups: None,
-        pq: true,
-        legacy_versions: &[],
-        headers: Some(CHROME133_HEADERS),
-        h2: Some(&CHROME120_H2),
-    },
-    // Safari 18.0, as `curl_safari180` of curl-impersonate v2.2.3 sends it (and
-    // 18.4, `curl_safari184`, which sends the same hello).
+    // Safari 18.0, as `curl_safari180` sends it.
     //
     // The cipher, group and extension lists are Safari 15.5's, but the
     // *signature schemes* are not: Safari 18 dropped `ecdsa_sha1`, and JA4 —
@@ -1081,18 +979,22 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // bundle's; the duplicate `rsa_pss_rsae_sha384` was missing for the same
     // reason. Both are in [`SAFARI18_TLS_SIG_ALGS`] now.
     //
+    // Safari 18.4's *desktop* wrapper, `curl_safari184`, sends this TLS hello
+    // with a different h2 preface (`2:0;3:100;4:2097152;9:1` — no
+    // `SETTINGS_ENABLE_CONNECT_PROTOCOL`, where 18.0 sends `8:1;9:1`), so the
+    // two are separate clients below the hello and this record is 18.0's. The
+    // iOS 18.4 wrapper is [`TlsFingerprint::Safari184Ios`].
+    //
     // It answers the question the older Safari row cannot: whether a *current*
     // Safari is treated like the version the forum report named. The HTTP
-    // identity is the 18.x one (`Version/18.0`, a `priority` header,
+    // identity is 18.0's (`Version/18.0`, a `priority` header,
     // `en-US,en;q=0.9`), and the preface is Safari's own.
     TlsShape {
-        variant: TlsFingerprint::Safari18,
-        code: "safari18",
+        variant: TlsFingerprint::Safari180,
+        code: "safari180",
         token: "SAFARI",
-        label: "SAFARI 18",
-        source: "curl_safari180 / curl_safari184 (curl-impersonate v2.2.2)",
-        aliases: &["safari18", "safari180", "safari184"],
-        curl: Some(CurlNames::Only(&["curl_safari"], &[180, 184], &[""])),
+        label: "SAFARI 180",
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: SAFARI_TLS_CIPHERS,
         groups: SAFARI_TLS_GROUPS,
@@ -1124,13 +1026,11 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // record, and so is the one h2 difference — Edge sends no
     // `SETTINGS_ENABLE_PUSH`.
     TlsShape {
-        variant: TlsFingerprint::Edge,
+        variant: TlsFingerprint::Edge101,
         code: "edge101",
         token: "EDGE",
         label: "EDGE 101",
-        source: "curl_edge101 (curl-impersonate v2.2.3) / uTLS HelloEdge_106 (v1.8.2)",
-        aliases: &["edge", "edge99", "edge101"],
-        curl: Some(CurlNames::Only(&["curl_edge"], &[99, 101], &[""])),
+        source: "curl-impersonate v2.2.3 / uTLS HelloEdge_106 (v1.8.2)",
         baseline: false,
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_GROUPS,
@@ -1178,9 +1078,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         code: "chrome99android",
         token: "CHROME",
         label: "CHROME 99 ANDROID",
-        source: "curl_chrome99_android (curl-impersonate v2.2.2)",
-        aliases: &["chrome99android", "chrome99_android", "chrome-android"],
-        curl: Some(CurlNames::Only(&["curl_chrome"], &[99], &["_android"])),
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_GROUPS,
@@ -1226,19 +1124,17 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // the client itself sends on three connections out of four, never a shape it
     // never sends — the gap is a frequency, not a shape.
     //
-    // `curl_chrome119` and `curl_chrome123` send this hello under their own UA and
-    // are accepted as it: a name selects the *shape*, the way `curl_chrome100…107`
-    // did on Chrome 107's record, and the identity stays the record's own.
-    // Measured — each wrapper captured through a local listener — all three send
-    // one cipher list, group list, signature-scheme list and extension set.
+    // `curl_chrome119` and `curl_chrome123` send this hello under their own
+    // UAs, and they are not separate profiles here: a profile is one hello plus
+    // one identity, and the identity this record carries is 120's. Measured —
+    // each wrapper captured through a local listener — all three send one cipher
+    // list, group list, signature-scheme list and extension set.
     TlsShape {
         variant: TlsFingerprint::Chrome120,
         code: "chrome120",
         token: "CHROME",
         label: "CHROME 120",
-        source: "curl_chrome120 (curl-impersonate v2.2.2)",
-        aliases: &["chrome120"],
-        curl: Some(CurlNames::Only(&["curl_chrome"], &[119, 120, 123], &[""])),
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_GROUPS,
@@ -1267,22 +1163,20 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         headers: Some(CHROME120_HEADERS),
         h2: Some(&CHROME120_H2),
     },
-    // Chrome 131, as `curl_chrome131` sends it: Chrome 133's shape one
-    // code point earlier — the hybrid group leads the list and is shared, ALPS
-    // is still at 17513, and there is no padding.
+    // Chrome 131, as `curl_chrome131` sends it: Chrome 146's shape with ALPS
+    // one code point earlier — the hybrid group leads the list and is shared,
+    // ALPS is still at 17513, and there is no padding.
     //
     // It is the profile that separates the two halves of the "post-quantum
-    // group" question a censor can read: 131 and 133 differ in the ALPS code
-    // point and in nothing a JA3 carries, so a site that blocks 133 and passes
+    // group" question a censor can read: 131 and 146 differ in the ALPS code
+    // point and in nothing a JA3 carries, so a site that blocks 146 and passes
     // 131 is reacting to something other than the group.
     TlsShape {
         variant: TlsFingerprint::Chrome131,
         code: "chrome131",
         token: "CHROME",
         label: "CHROME 131",
-        source: "curl_chrome131 (curl-impersonate v2.2.2)",
-        aliases: &["chrome131"],
-        curl: Some(CurlNames::Only(&["curl_chrome"], &[131], &[""])),
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_PQ_GROUPS,
@@ -1323,9 +1217,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         code: "chrome131android",
         token: "CHROME",
         label: "CHROME 131 ANDROID",
-        source: "curl_chrome131_android (curl-impersonate v2.2.2)",
-        aliases: &["chrome131android", "chrome131_android"],
-        curl: Some(CurlNames::Only(&["curl_chrome"], &[131], &["_android"])),
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_GROUPS,
@@ -1353,24 +1245,27 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         headers: Some(CHROME131_ANDROID_HEADERS),
         h2: Some(&CHROME120_H2),
     },
-    // Chrome 136, as `curl_chrome136` sends it: the newest desktop Chromium in
-    // this bundle, and the same hello as Chrome 133 (the bundle's own capture
-    // says so in one line — "The only difference from Chrome 131 is:
-    // X25519Kyber768 was replaced by MLKEM" — and `curl_chrome142`,
-    // `curl_chrome145` and `curl_chrome146` send it too, 133 through 146 sharing
-    // one extension set with ALPS at 17613).
+    // Chrome 146, as `curl_chrome146` sends it: the newest desktop Chromium in
+    // this bundle, and the only desktop Chrome profile past 131.
     //
-    // The same Hello, a newer identity: this is the profile that answers
-    // "is the browser I actually run blocked" for a Chrome past 133, at the cost
-    // of one more list of headers.
+    // Chrome 133, 136, 142, 145 and 146 send one hello — the same cipher, group,
+    // signature-scheme and extension lists, the same JA4
+    // (`t13d1516h2_8daaf6152771_d8a2da3f94cd`), the same h2 preface and the same
+    // header names; only the version in the UA and the `sec-ch-ua` brand list
+    // differ, which is the identity. Nothing a middlebox could match on
+    // distinguishes them, so one record covers the five, with the newest
+    // identity: four names for one shape would multiply the burst report by four
+    // and tell the same story four times.
+    //
+    // Where the chain breaks it is kept: Chrome 107 shuffles nothing, Chrome 120
+    // adds ECH, Chrome 131 adds the hybrid group, and this one moves ALPS to
+    // 17613.
     TlsShape {
-        variant: TlsFingerprint::Chrome136,
-        code: "chrome136",
+        variant: TlsFingerprint::Chrome146,
+        code: "chrome146",
         token: "CHROME",
-        label: "CHROME 136",
-        source: "curl_chrome136 (curl-impersonate v2.2.2)",
-        aliases: &["chrome136"],
-        curl: Some(CurlNames::Only(&["curl_chrome"], &[136, 142, 145, 146], &[""])),
+        label: "CHROME 146",
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_PQ_GROUPS,
@@ -1395,69 +1290,30 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         key_share_groups: None,
         pq: true,
         legacy_versions: &[],
-        headers: Some(CHROME136_HEADERS),
+        headers: Some(CHROME146_HEADERS),
         h2: Some(&CHROME120_H2),
-    },
-    // Firefox 135, as `curl_firefox135` sends it: Firefox 133's hello plus
-    // `signed_certificate_timestamp` (18) between `delegated_credentials` and
-    // `key_share`.
-    //
-    // One extension is the whole difference, and it is the one the plan called
-    // out as a shape this build could not reproduce: 18 is a body this profile
-    // already writes for Chrome, so it costs a record rather than a patch. What
-    // used to be listed here as deviations — ECH, the zstd code point, the third
-    // key share — is the bundle's own since the passes that closed them.
-    TlsShape {
-        variant: TlsFingerprint::Firefox135,
-        code: "firefox135",
-        token: "FIREFOX",
-        label: "FIREFOX 135",
-        source: "curl_firefox135 (curl-impersonate v2.2.2)",
-        aliases: &["firefox135"],
-        curl: Some(CurlNames::Only(&["curl_firefox"], &[135], &[""])),
-        baseline: false,
-        ciphers: FIREFOX_TLS_CIPHERS,
-        groups: FIREFOX_TLS_GROUPS,
-        sig_algs: FIREFOX_TLS_SIG_ALGS,
-        ext_order: FIREFOX135_TLS_EXT_ORDER,
-        raw_exts: FIREFOX_TLS_RAW_EXTS,
-        suppress: &[],
-        drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
-        drop12: &[EXT_SUPPORTED_VERSIONS],
-        alpn: H2_AND_HTTP11,
-        padding_to: None,
-        grease: false,
-        permute_extensions: false,
-        ech: true,
-        priority_on_h1: true,
-        cert_compression: FIREFOX_COMPRESSION,
-        key_share_groups: Some(FIREFOX_KEY_SHARE_GROUPS),
-        pq: true,
-        legacy_versions: &[],
-        headers: Some(FIREFOX135_HEADERS),
-        h2: Some(&FIREFOX_H2),
     },
     // Firefox 144, as `curl_firefox144` sends it (the wrapper is a one-liner —
     // `--impersonate firefox144` — and the bundle's `firefox_144.0.0_linux`
     // capture is the reading of it this record is pinned to).
     //
-    // The hello is Firefox 135's byte for byte; what a DPI middlebox can read
-    // differently is the identity, which is the reason to carry both.
-    // `curl_firefox147` sends the same hello again and is not accepted, for the
-    // same reason 119/123 are not: the UA is part of what a probe presents.
+    // The hello is Firefox 133's plus `signed_certificate_timestamp` (18),
+    // between `delegated_credentials` and `key_share` — the one extension the
+    // plan called out as a shape this build could not reproduce before, and the
+    // reason the 133 record stays separate: a middlebox that reacts to 18 alone
+    // reads the two as different clients. Firefox 135 and 147 send this same
+    // hello, so they are one profile here, under the newest identity.
     TlsShape {
         variant: TlsFingerprint::Firefox144,
         code: "firefox144",
         token: "FIREFOX",
         label: "FIREFOX 144",
-        source: "curl_firefox144 (curl-impersonate v2.2.2)",
-        aliases: &["firefox144"],
-        curl: Some(CurlNames::Only(&["curl_firefox"], &[144, 147], &[""])),
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: FIREFOX_TLS_CIPHERS,
         groups: FIREFOX_TLS_GROUPS,
         sig_algs: FIREFOX_TLS_SIG_ALGS,
-        ext_order: FIREFOX135_TLS_EXT_ORDER,
+        ext_order: FIREFOX144_TLS_EXT_ORDER,
         raw_exts: FIREFOX_TLS_RAW_EXTS,
         suppress: &[],
         drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
@@ -1488,9 +1344,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         code: "safari153",
         token: "SAFARI",
         label: "SAFARI 153",
-        source: "curl_safari153 (curl-impersonate v2.2.2)",
-        aliases: &["safari153"],
-        curl: Some(CurlNames::Only(&["curl_safari"], &[153], &[""])),
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: SAFARI153_TLS_CIPHERS,
         groups: SAFARI_TLS_GROUPS,
@@ -1517,19 +1371,16 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // Safari 18.4 on iOS, as `curl_safari184_ios` sends it: the 18.x hello
     // behind an iPhone's identity.
     //
-    // The TLS shape is [`TlsFingerprint::Safari18`]'s — same lists, same
-    // preface — and the identity is what the row is for: the iOS UA, its own
-    // `priority`, and the Safari 18 h2 preface. `curl_safari180_ios` and
-    // `curl_safari172_ios` are not accepted: their UAs name versions this build
-    // does not present.
+    // The TLS shape is [`TlsFingerprint::Safari180`]'s — same lists — and the
+    // identity and the h2 preface are what the row is for: the iOS UA, its own
+    // `priority`, and a preface with `9:1` and no `8:1`, which is what the iOS
+    // 18.4 build sends.
     TlsShape {
         variant: TlsFingerprint::Safari184Ios,
         code: "safari184ios",
         token: "SAFARI",
         label: "SAFARI 184 IOS",
-        source: "curl_safari184_ios (curl-impersonate v2.2.2)",
-        aliases: &["safari184ios", "safari184_ios", "ios"],
-        curl: Some(CurlNames::Only(&["curl_safari"], &[184], &["_ios"])),
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: SAFARI_TLS_CIPHERS,
         groups: SAFARI_TLS_GROUPS,
@@ -1565,10 +1416,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         variant: TlsFingerprint::Safari260,
         code: "safari260",
         token: "SAFARI",
-        label: "SAFARI 26",
-        source: "curl_safari260 (curl-impersonate v2.2.2)",
-        aliases: &["safari26", "safari260"],
-        curl: Some(CurlNames::Only(&["curl_safari"], &[260], &[""])),
+        label: "SAFARI 260",
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: SAFARI260_TLS_CIPHERS,
         groups: SAFARI_TLS_PQ_GROUPS,
@@ -1606,10 +1455,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         variant: TlsFingerprint::Safari260Ios,
         code: "safari260ios",
         token: "SAFARI",
-        label: "SAFARI 26 IOS",
-        source: "curl_safari260_ios (curl-impersonate v2.2.2)",
-        aliases: &["safari260ios", "safari260_ios"],
-        curl: Some(CurlNames::Only(&["curl_safari"], &[260], &["_ios"])),
+        label: "SAFARI 260 IOS",
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: SAFARI_TLS_CIPHERS,
         groups: SAFARI_TLS_GROUPS,
@@ -1649,9 +1496,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         code: "tor145",
         token: "TOR",
         label: "TOR 145",
-        source: "curl_tor145 (curl-impersonate v2.2.2)",
-        aliases: &["tor", "tor145", "tor-browser"],
-        curl: Some(CurlNames::Only(&["curl_tor"], &[145], &[""])),
+        source: "curl-impersonate v2.2.2",
         baseline: false,
         ciphers: TOR_TLS_CIPHERS,
         groups: TOR_TLS_GROUPS,
@@ -1682,43 +1527,14 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     },
 ];
 
-impl CurlNames {
-    /// True when `value` names one of the bundle profiles that emit this shape.
-    fn matches(&self, value: &str) -> bool {
-        match self {
-            CurlNames::UpTo(prefixes, max, suffixes) => prefixes.iter().any(|prefix| {
-                curl_version(value, prefix, suffixes).is_some_and(|version| version <= *max)
-            }),
-            CurlNames::Only(prefixes, versions, suffixes) => prefixes.iter().any(|prefix| {
-                curl_version(value, prefix, suffixes).is_some_and(|v| versions.contains(&v))
-            }),
-        }
-    }
-}
-
-/// The numeric version in a `curl_*` profile name, if it has one and the name
-/// carries one of `suffixes` right after the digits.
-///
-/// `curl_chrome107` → 107 with the empty suffix, `curl_chrome99_android` → 99
-/// with `_android`, `curl_chrome133a` → 133 with `a`, `curl_chrome99` → `None`
-/// for the Android suffixes. The suffix is checked because the wrappers that
-/// carry one differ in their identity, not in their hello: a record that
-/// reproduces one must not answer to the other.
-fn curl_version(value: &str, prefix: &str, suffixes: &[&str]) -> Option<u16> {
-    let rest = value.strip_prefix(prefix)?;
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() || !suffixes.iter().any(|suffix| *suffix == &rest[digits.len()..]) {
-        return None;
-    }
-    digits.parse().ok()
-}
-
 impl TlsShape {
-    /// True when `value` (already lowercased and trimmed) names this shape —
-    /// either by one of its own names or by a bundle profile it reproduces.
+    /// True when `value` (already lowercased and trimmed) names this record.
+    ///
+    /// One name per record: the `code`, which is also what the config file, the
+    /// JSON and `--legend` carry, so there is nothing here that can resolve to a
+    /// different version than it says.
     pub(crate) fn matches_name(&self, value: &str) -> bool {
-        self.aliases.contains(&value)
-            || self.curl.as_ref().is_some_and(|curl| curl.matches(value))
+        self.code == value
     }
 
     /// The ClientHello shape rustls writes for this record, `None` for the
@@ -1763,7 +1579,7 @@ pub(crate) const EXT_SUPPORTED_VERSIONS: u16 = 43;
 pub(crate) const EXT_PSK_KEY_EXCHANGE_MODES: u16 = 45;
 pub(crate) const EXT_KEY_SHARE: u16 = 51;
 pub(crate) const EXT_RENEGOTIATION_INFO: u16 = 65281;
-/// `encrypted_client_hello` (draft-ietf-tls-esni), the extension nine shapes
+/// `encrypted_client_hello` (draft-ietf-tls-esni), the extension seven shapes
 /// carry as GREASE.
 pub(crate) const EXT_ENCRYPTED_CLIENT_HELLO: u16 = 65037;
 /// Chrome's ALPS (draft-vvv-tls-alps), as Chrome 107 and Safari send it.

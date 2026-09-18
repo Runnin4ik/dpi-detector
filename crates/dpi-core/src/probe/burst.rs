@@ -807,7 +807,7 @@ mod tests {
     /// the axis is about, and must not be reported as a plain success.
     #[test]
     fn the_tls13_axis_offers_both_versions_and_answers_a_downgrade() {
-        let chrome = TlsFingerprint::Chrome;
+        let chrome = TlsFingerprint::Chrome107;
         assert_eq!(
             offer_for(BurstTlsVersion::Tls13And12, chrome).version,
             crate::net::tls::TlsVersion::Any
@@ -909,7 +909,7 @@ mod tests {
             let profile = if sent == ciphers.0 {
                 TlsFingerprint::Rustls
             } else if sent == ciphers.1 {
-                TlsFingerprint::Chrome
+                TlsFingerprint::Chrome107
             } else {
                 witness.unexpected.lock().push(ja3);
                 continue;
@@ -945,7 +945,7 @@ mod tests {
         let fast_addr = fast_listener.local_addr().expect("addr");
 
         let axis = BurstTlsVersion::default();
-        let ciphers = (hello_ciphers(TlsFingerprint::Rustls, axis), hello_ciphers(TlsFingerprint::Chrome, axis));
+        let ciphers = (hello_ciphers(TlsFingerprint::Rustls, axis), hello_ciphers(TlsFingerprint::Chrome107, axis));
         let witness = Witness::default();
         let slow = tokio::spawn(stand(
             0,
@@ -961,7 +961,7 @@ mod tests {
             BurstTarget { domain: "slow.example".to_string(), address: Some(slow_addr) },
             BurstTarget { domain: "fast.example".to_string(), address: Some(fast_addr) },
         ];
-        let plan = settings(2, 4000, vec![TlsFingerprint::Rustls, TlsFingerprint::Chrome]);
+        let plan = settings(2, 4000, vec![TlsFingerprint::Rustls, TlsFingerprint::Chrome107]);
         // The live line the runner draws comes from the observer: a round must
         // be announced once, in the order the profiles are fired, or the line
         // would name a shape that is not on the wire.
@@ -1001,7 +1001,7 @@ mod tests {
             *rounds.started.lock().expect("lock"),
             vec![
                 (TlsFingerprint::Rustls, 0, 2, 2),
-                (TlsFingerprint::Chrome, 1, 2, 2),
+                (TlsFingerprint::Chrome107, 1, 2, 2),
             ]
         );
         assert_eq!(rounds.finished.load(Ordering::SeqCst), 4, "one tick per host per round");
@@ -1012,8 +1012,8 @@ mod tests {
         assert_eq!(
             probed,
             vec![
-                "chrome fast.example x2",
-                "chrome slow.example x2",
+                "chrome107 fast.example x2",
+                "chrome107 slow.example x2",
                 "rustls fast.example x2",
                 "rustls slow.example x2",
             ]
@@ -1021,7 +1021,7 @@ mod tests {
         assert_eq!(reports.len(), 2);
         for report in &reports {
             let shapes: Vec<TlsFingerprint> = report.profiles.iter().map(|p| p.fingerprint).collect();
-            assert_eq!(shapes, vec![TlsFingerprint::Rustls, TlsFingerprint::Chrome], "{report:?}");
+            assert_eq!(shapes, vec![TlsFingerprint::Rustls, TlsFingerprint::Chrome107], "{report:?}");
             for profile in &report.profiles {
                 assert_eq!(profile.attempts.len(), 2);
             }
@@ -1104,7 +1104,7 @@ mod tests {
     #[test]
     fn failure_counts_group_by_status_and_order_by_count() {
         let report = BurstProfileReport {
-            fingerprint: TlsFingerprint::Chrome,
+            fingerprint: TlsFingerprint::Chrome107,
             attempts: vec![
                 BurstAttempt { status: DpiStatus::Ok, detail: Detail::None, ms: 10 },
                 BurstAttempt { status: DpiStatus::TlsRst, detail: Detail::RstHello, ms: 11 },
@@ -1126,7 +1126,7 @@ mod tests {
         );
 
         let clean = BurstProfileReport {
-            fingerprint: TlsFingerprint::Firefox,
+            fingerprint: TlsFingerprint::Firefox133,
             attempts: vec![BurstAttempt { status: DpiStatus::Ok, detail: Detail::None, ms: 10 }],
         };
         assert!(clean.failure_counts().is_empty());
@@ -1160,7 +1160,7 @@ mod tests {
             profiles: vec![
                 profile(TlsFingerprint::Rustls, vec![DpiStatus::TlsDropped, DpiStatus::TlsDropped]),
                 profile(
-                    TlsFingerprint::Chrome,
+                    TlsFingerprint::Chrome107,
                     vec![DpiStatus::TlsRst, DpiStatus::TlsDropped, DpiStatus::Ok],
                 ),
             ],

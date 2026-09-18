@@ -991,8 +991,8 @@ mod tests {
         use crate::net::fingerprint::TlsFingerprint;
 
         let mut cfg = AppConfig::default();
-        assert!(cfg.user_agent_for(TlsFingerprint::Chrome).contains("Chrome/107.0.0.0"));
-        assert!(cfg.user_agent_for(TlsFingerprint::Firefox).contains("Firefox/133.0"));
+        assert!(cfg.user_agent_for(TlsFingerprint::Chrome107).contains("Chrome/107.0.0.0"));
+        assert!(cfg.user_agent_for(TlsFingerprint::Firefox133).contains("Firefox/133.0"));
         assert_eq!(cfg.user_agent_for(TlsFingerprint::Rustls), DEFAULT_USER_AGENT);
 
         cfg.user_agent = "my-probe/1.0".to_string();

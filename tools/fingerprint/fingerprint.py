@@ -83,18 +83,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 PROFILES = [
     ("rustls", None, None),
-    ("firefox", "curl_firefox133", "firefox_133.0.3_linux.yaml"),
-    ("chrome", "curl_chrome107", "chrome_107.0.5304.107_win10.yaml"),
-    ("safari", "curl_safari155", "safari_15.5_macos12.4.yaml"),
-    ("chrome133", "curl_chrome133a", "chrome_133.0.6943.55.yaml"),
-    ("safari18", "curl_safari180", "safari_18.0_macOS.yaml"),
+    ("firefox133", "curl_firefox133", "firefox_133.0.3_linux.yaml"),
+    ("chrome107", "curl_chrome107", "chrome_107.0.5304.107_win10.yaml"),
+    ("safari155", "curl_safari155", "safari_15.5_macos12.4.yaml"),
+    ("safari180", "curl_safari180", "safari_18.0_macOS.yaml"),
     ("edge101", "curl_edge101", "edge_101.0.1210.47_win10.yaml"),
     ("chrome99android", "curl_chrome99_android", "chrome_99.0.4844.73_android12-pixel6.yaml"),
     ("chrome120", "curl_chrome120", "chrome_120.0.6099.109_macOS.yaml"),
     ("chrome131", "curl_chrome131", "chrome_131.0.6778.86.yaml"),
     ("chrome131android", "curl_chrome131_android", "chrome_131.0.6778.81_android.yaml"),
-    ("chrome136", "curl_chrome136", "chrome_136.0.7103.93.yaml"),
-    ("firefox135", "curl_firefox135", "firefox_135.0.1_linux.yaml"),
+    # 133-146 send one hello, so the newest wrapper stands for the line and the
+    # fork publishes no capture for it — the pin is the wrapper itself.
+    ("chrome146", "curl_chrome146", None),
     ("firefox144", "curl_firefox144", "firefox_144.0.0_linux.yaml"),
     ("safari153", "curl_safari153", "safari_15.3_macos11.6.4.yaml"),
     ("safari184ios", "curl_safari184_ios", "safari_18.4_iOS.yaml"),

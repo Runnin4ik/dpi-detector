@@ -405,7 +405,7 @@ mod tests {
         // A browser profile is named by its token and the version it
         // reproduces (rule 4: Latin, never translated), and the caveat follows
         // verbatim from i18n rather than being pinned here a second time.
-        let firefox = render_fingerprint_header(TlsFingerprint::Firefox, &en);
+        let firefox = render_fingerprint_header(TlsFingerprint::Firefox133, &en);
         assert!(firefox.starts_with("Fingerprint: FIREFOX 133"), "{firefox}");
         assert!(firefox.contains(en.fingerprint_note), "{firefox}");
         // The baseline has no caveat: nobody is impersonated, nothing to warn

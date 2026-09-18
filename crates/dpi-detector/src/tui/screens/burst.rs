@@ -526,13 +526,13 @@ mod tests {
         // A single-profile selection is what the cycler shows after a press: the
         // position counts the `all` entry, so CHROME is the fourth of five — and
         // it is named with the version it reproduces, not with the bare family.
-        let chrome = [TlsFingerprint::Chrome];
+        let chrome = [TlsFingerprint::Chrome107];
         let single = burst_settings_rows(
             &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12Only, BurstAlpn::Http2, "", false, &chrome, profile_index_of(&chrome), 35,
         );
         let chrome_position = TlsFingerprint::DEFAULT_SET
             .iter()
-            .position(|f| *f == TlsFingerprint::Chrome)
+            .position(|f| *f == TlsFingerprint::Chrome107)
             .expect("the cycler lists chrome")
             + 2;
         assert!(
@@ -583,7 +583,7 @@ mod tests {
     #[test]
     fn burst_domain_box_paints_its_state() {
         let msg = get_messages(Language::Ru);
-        let all = vec![TlsFingerprint::Chrome];
+        let all = vec![TlsFingerprint::Chrome107];
         let box_row = |editing: bool, text: &str| {
             burst_settings_rows(
                 &msg,

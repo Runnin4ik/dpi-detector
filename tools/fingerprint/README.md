@@ -7,11 +7,11 @@ whenever its data changes.
 
 ```
 python tools/fingerprint/fingerprint.py all                 # every stage, every profile
-python tools/fingerprint/fingerprint.py all safari18        # one profile
+python tools/fingerprint/fingerprint.py all safari180        # one profile
 python tools/fingerprint/fingerprint.py hello-diff --summary
 python tools/fingerprint/fingerprint.py echo-diff chrome131
 python tools/fingerprint/fingerprint.py headers-diff --summary
-python tools/fingerprint/fingerprint.py flags chrome136     # what the wrapper itself names
+python tools/fingerprint/fingerprint.py flags chrome146     # what the wrapper itself names
 ```
 
 Outputs land in `target/fingerprint/` (dumps, captured bytes, echo reports, the

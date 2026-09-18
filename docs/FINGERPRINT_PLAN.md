@@ -62,32 +62,12 @@ net/fingerprint/
 └── tests.rs      // пины JA3/JA4 и структурные тесты
 ```
 
-Один профиль — одна запись данных:
-
-```rust
-struct TlsShape {
-    code: &'static str,               // "chrome133" — JSON, конфиг, round-trip
-    token: &'static str,              // "CHROME" — таблицы и логи (Rule 4)
-    label: &'static str,              // "CHROME 133" — заголовки, где есть место версии
-    family: Family,                   // Chrome | Firefox | Safari | Edge | Other
-    source: &'static str,             // "curl_chrome133 (lexiforest v2.2.2)" — версия источника
-    ciphers: &'static [u16],
-    groups: &'static [u16],
-    key_shares: &'static [u16],       // группы, для которых шлём шар (может быть ⊂ groups)
-    sig_algs: &'static [u16],
-    ext_order: &'static [Ext],        // с маркерами GREASE на своих позициях
-    raw_exts: &'static [(u16, &'static [u8])],
-    suppress: &'static [u16],
-    alpn: &'static [&'static [u8]],
-    versions: &'static [u16],         // supported_versions + legacy-фолбэки
-    padding_to: Option<usize>,        // Chrome: Some(512)
-    grease: bool,
-    cert_compression: &'static [u16],
-    pq: bool,                         // нужен провайдер с X25519MLKEM768
-    aliases: &'static [&'static str], // "curl_chrome133", "chrome133"
-}
-
-static SHAPES: &[TlsShape] = &[ /* ... */ ];
+Один профиль — одна запись данных (`crates/dpi-core/src/net/fingerprint/shapes.rs`,
+`struct TlsShape`) и одно имя. `code` — это и имя для `--fingerprint` и
+`config.yml`, и значение ключа `tls_fingerprint` в `--json`, и то, что печатает
+`--legend`; алиасов и имён обёрток нет, потому что имя без версии или с чужой
+версией скрывает, какого клиента прогон на самом деле измерил. Исключение —
+`rustls`: у контрольной формы версии клиента нет.
 ```
 
 `ClientHelloProfile` собирается из записи одним билдером; `SPECS`, `ALL`, `parse`, `parse_list`,
@@ -212,10 +192,10 @@ header protection по RFC 9001 §5.4 с тест-векторами §A.2, (2) 
   `fingerprint_table_is_total` сверяет его с таблицей в обе стороны.
   Байты четырёх прежних профилей не изменились: пины JA3/JA4
   (`bundle_versions_match_their_ja3` / `_ja4`) те же, JSON тестов 1–6 — тот же.
-* **M1 (новые профили).** `chrome133` (`curl_chrome133a` v2.2.3 + uTLS
-  `HelloChrome_133` v1.8.2), `safari18` (`curl_safari180`) и `edge101`
+* **M1 (новые профили).** `chrome146` (тогда — 133-я: `curl_chrome133a` v2.2.3 +
+  uTLS `HelloChrome_133` v1.8.2), `safari180` (`curl_safari180`) и `edge101`
   (`curl_edge101` + uTLS `HelloEdge_106`).
-  * Edge и Safari 18 называют те же TLS-списки, что `chrome` и `safari`: у
+  * Edge и Safari 18 называют те же TLS-списки, что `chrome107` и `safari155`: у
     бандла тот же JA3 (`safari_18.0_macOS` публикует `ja3_hash`
     `773906b0efdefa24a7f2b8eb6985bf37`, его же вернул `tls.peet.ws`), поэтому
     их пины — пины старших записей, а `profiles_that_share_a_tls_shape_send_the_same_hello`
@@ -224,10 +204,10 @@ header protection по RFC 9001 §5.4 с тест-векторами §A.2, (2) 
     шаром), ALPS на новом кодпойнте 17613, без padding. Опубликованный
     `ja3_text` бандла для 133 снят с базы Chrome 131 (файл сам это оговаривает)
     и расходится с обёрткой по кодпойнту ALPS, поэтому порядок расширений взят
-    из uTLS, ECH опущен (как у `firefox`), а JA4 пинится по частям: счётчики и
+    из uTLS, ECH опущен (как у `firefox133`), а JA4 пинится по частям: счётчики и
     хеш шифров (`8daaf6152771` — публикуемый для Chrome 133+) из источника,
     хеш расширений — наш (`_LESS_ECH`).
-  * Живые прогоны: `liveany chrome133` и `liveany safari18` проходят на
+  * Живые прогоны: `liveany chrome146` и `liveany safari18` проходят на
     `tls.peet.ws`, `cloudflare.com`, `www.google.com`, `www.wikipedia.org`,
     `www.microsoft.com`, `dns.google`, `hub.docker.com`, `danbooru.donmai.us`;
     `peet` подтверждает akamai-фингерпринт преамбул (`1:65536;2:0;4:6291456;6:262144|…`
@@ -262,11 +242,11 @@ header protection по RFC 9001 §5.4 с тест-векторами §A.2, (2) 
 | `chrome120` | `curl_chrome120` | без padding, ALPS ещё на 17513, появился ECH |
 | `chrome131` | `curl_chrome131` | гибридная группа + ALPS на старом кодпойнте |
 | `chrome131android` | `curl_chrome131_android` | то же без гибридной группы |
-| `chrome136` | `curl_chrome136` | форма Chrome 133 под текущим UA |
-| `firefox135`, `firefox144` | `curl_firefox135`, `curl_firefox144` | SCT (18) после delegated credentials |
+| `chrome146` | `curl_chrome146` | форма 133–146 под самым новым UA |
+| `firefox144` | `curl_firefox144` (135 и 147 шлют тот же hello) | SCT (18) после delegated credentials |
 | `safari153` | `curl_safari153` | 26 шифров вместо 20, без `compress_certificate` |
 | `safari184ios` | `curl_safari184_ios` | форма 18.x за iOS-UA |
-| `safari26`, `safari26ios` | `curl_safari260`, `curl_safari260_ios` | гибридная группа, переставленные TLS 1.3-шифры, приоритета в запросе нет; у iOS — X25519 первым и padding |
+| `safari260`, `safari26ios` | `curl_safari260`, `curl_safari260_ios` | гибридная группа, переставленные TLS 1.3-шифры, приоритета в запросе нет; у iOS — X25519 первым и padding |
 | `tor145` | `curl_tor145` | Firefox 128 ESR без GREASE и без `compress_certificate` |
 
 Что нашлось по дороге и починено (не только добавлено):
@@ -275,15 +255,15 @@ header protection по RFC 9001 §5.4 с тест-векторами §A.2, (2) 
   BoringSSL отправляет дубль на провод: у `curl_safari153/155` в списке
   подписей 11 схем, а не 10 (`SAFARI_TLS_SIG_ALGS` теперь их и содержит).
   Заодно выяснилось, что Safari 18 выкинул `ecdsa_sha1`, поэтому у 18.x-записей
-  свой список (`SAFARI18_TLS_SIG_ALGS`) — раньше `safari18` называл списки 15.5,
+  свой список (`SAFARI18_TLS_SIG_ALGS`) — раньше `safari180` называл списки 15.5,
   и его JA4-хеш расширений был нашим, а не бандловым
   (`14788d8d241b` у 15.5 против `e42f34c56612` у 18.0). Обе ошибки видел только
   JA4: JA3 не хеширует списки подписей.
 * **Суффикс устройства в имени.** `curl_chrome99_android` и `curl_chrome99` —
   разные клиенты (UA и `sec-ch-ua-platform`), поэтому `CurlNames` теперь требует,
   чтобы имя после версии заканчивалось ожидаемым суффиксом: до этого
-  `curl_chrome99_android` разрешался в `chrome` и шёл с оконным UA.
-  `curl_chrome133a` разрешается в `chrome133` по суффиксу `a`.
+  `curl_chrome99_android` разрешался в `chrome107` и шёл с оконным UA.
+  `curl_chrome133a` разрешается в `chrome146` по суффиксу `a`.
 * **Пустой список сжатия сертификата.** Профиль, чей клиент не заявляет
   `compress_certificate` (Safari 15.3, Tor 14.5), до этого получал расширение 27
   с пустым списком алгоритмов — то есть заявлял то, чего не шлёт оригинал. Патч
@@ -297,16 +277,16 @@ header protection по RFC 9001 §5.4 с тест-векторами §A.2, (2) 
 бандлом (`dump` + `cargo test -p dpi-core fingerprint`: JA3 и JA4, где клиент не
 перемешивает расширения), полный живой свип по шести хостам для всех двенадцати,
 плюс SCT-хосты (`hub.docker.com`, `danbooru.donmai.us`) — ок у всех, и
-`standby-rezka.tv`: у гласящих GREASE форм — `IllegalParameter`, у `firefox135`,
+`standby-rezka.tv`: у гласящих GREASE форм — `IllegalParameter`, у `firefox144`,
 `firefox144` и `tor145`, которые не гласят, — `OK`. `tls.peet.ws` подтвердил
 JA3/JA4 каждой новой формы, а у `safari184ios` — ещё и опубликованный
 `ja3_hash 773906b0efdefa24a7f2b8eb6985bf37` из захвата `safari_18.0_macOS`.
 
 Замечание к §9, строка про GREASE. Измерено 2026-09-18: `standby-rezka.tv`
 отвечает `fatal alert: IllegalParameter` **всем** профилям, которые гласят
-GREASE (`chrome`, `safari`, `edge101`, `chrome133`, `safari18`), тогда как
-`rustls` и `firefox` (не гласят) проходят. Это поведение хоста, а не регрессия
-этих записей: байты `chrome`/`safari` не менялись (их пины JA3/JA4 те же), и
+GREASE (`chrome107`, `safari155`, `edge101`, `chrome146`, `safari180`), тогда как
+`rustls` и `firefox133` (не гласят) проходят. Это поведение хоста, а не регрессия
+этих записей: байты `chrome107`/`safari155` не менялись (их пины JA3/JA4 те же), и
 набор падающих форм в точности совпадает с набором гласящих. Хост остаётся в
 живом свипе именно поэтому.
 
@@ -322,8 +302,8 @@ GREASE (`chrome`, `safari`, `edge101`, `chrome133`, `safari18`), тогда ка
 как и обёртка (`--http2-pseudo-headers-order "msap"`), и захват форка
 (`safari_18.0_macOS.yaml`: `pseudo=method,scheme,authority,path`), и сам бандл на
 проводе отправляют `m,s,a,p`. Порядок псевдозаголовков не видит ни один хеш
-ClientHello, а сэмпловые тесты пинили его только для `chrome`, `firefox` и
-`safari` 15.5 — то есть для трёх записей из девятнадцати. Исправлено; теперь это
+ClientHello, а сэмпловые тесты пинили его только для `chrome107`, `firefox133` и
+`safari155` 15.5 — то есть для трёх записей из девятнадцати. Исправлено; теперь это
 пинет один сплошной тест `every_h2_preface_matches_the_wrapper_it_copies`
 (настройки с их порядком, окно, порядок псевдозаголовков и приоритет для каждой
 записи с преамбулой), и он падал на старом значении.
@@ -332,8 +312,8 @@ ClientHello, а сэмпловые тесты пинили его только �
 
 * **Байты рукопожатий.** Оба клиента идут на один локальный слушатель с одним
   SNI (`localhost`), затем сравниваются тела всех расширений, длина padding,
-  список сжатия, доли ключа. Побайтово совпали девять записей: `chrome`,
-  `safari`, `safari18`, `edge101`, `chrome99android`, `safari153`,
+  список сжатия, доли ключа. Побайтово совпали девять записей: `chrome107`,
+  `safari155`, `safari180`, `edge101`, `chrome99android`, `safari153`,
   `safari184ios`, `safari260`, `safari260ios` (517/517, 1536/1536 байт).
   Остальные отличаются только перечисленным ниже.
 * **Эхо-сервис** (`tls.peet.ws/api/all`), оба клиента по очереди: JA3, JA4,
@@ -402,7 +382,7 @@ ClientHello, а сэмпловые тесты пинили его только �
   вариант `Setting`, разбор, кодирование, `Debug`), а setter для id 8 был только
   у серверного билдера — добавлен клиентский. Патч `hyper` — два поля в
   `proto::h2::client::Config` и два сеттера на `client::conn::http2::Builder`
-  (шаблон тот же, что у `settings_order`). Данные: `safari18` шлёт `8:1;9:1`,
+  (шаблон тот же, что у `settings_order`). Данные: `safari180` шлёт `8:1;9:1`,
   `safari184ios`/`safari260`/`safari260ios` — только `9:1` (и обёртка, и захват
   форка говорят одно и то же: у iOS-сборки 18.4 настройки `8` нет вовсе).
 * **Регистр имён заголовков в HTTP/1.1.** hyper умел писать исходный регистр с
@@ -410,7 +390,7 @@ ClientHello, а сэмпловые тесты пинили его только �
   патч делает тип и его `default`/`append` публичными. Данные: имена в
   `identity.rs` теперь записаны так, как их пишет клиент (`Sec-Fetch-Site`,
   `Accept-Encoding`, `TE`, `Te` у `curl_firefox144` — у него обёртка однострочная,
-  а бандл пишет `Te`; и всё в нижнем регистре у `safari18` и новее), а
+  а бандл пишет `Te`; и всё в нижнем регистре у `safari180` и новее), а
   `probe::http` собирает из них карту и кладёт в расширения запроса. `Host`
   добавляет билдер — в карте он записан с большой буквы, как у curl.
 * **`priority` в h1.** Обёртки называют `-H "Priority: u=0, i"` у всех, но curl
@@ -469,7 +449,7 @@ Chrome 110+ (воспроизводить распределение — отд�
   недопустимо. Цена — **+61.5 КиБ** к релизному бинарнику (4 093 952 → 4 156 928
   байт), то есть +1.5 %.
 * **ECH в форме GREASE.** Все девять записей с `--ech true`
-  (`chrome120/131/131android/133/136`, `firefox`, `firefox135/144`, `tor145`)
+  (`chrome120/131/131android/133/136`, `firefox133`, `firefox135/144`, `tor145`)
   шлют `encrypted_client_hello` так же, как их обёртки: настоящего
   `ECHConfigList` у curl нет (нужен DoH или `--ecl:`), поэтому на провод уходит
   заготовка по §6.2 черновика. Реализация — `net/tls.rs` (`EchMode::Grease`) над
@@ -484,7 +464,7 @@ Chrome 110+ (воспроизводить распределение — отд�
 
 Проверено: все девятнадцать профилей идут `liveany` на `cloudflare.com`,
 `www.google.com`, `dns.google` и `tls.peet.ws` — `OK`, TLS 1.3, `h2`; у
-`firefox` и `tor145` JA3 и JA4 совпали с бандлом (`2d692a4485ca…`/
+`firefox133` и `tor145` JA3 и JA4 совпали с бандлом (`2d692a4485ca…`/
 `t13d1716h2_5b57614c22b0_eeeea6562960` и `0faf2a91198d…`/
 `t13d1513h2_8daaf6152771_748f4c70de1c`), у пяти хромов совпал JA4, а JA3 гуляет —
 как у настоящего Chrome. Тесты: `cargo test --workspace` (184 + 58), `clippy`
@@ -573,8 +553,8 @@ Chrome 110+ (воспроизводить распределение — отд�
   Firefox-строки и Tor; у пяти тасующих хромов расходятся только `tls.ja3` и
   `tls.ja3_hash` — перемешивание, которое и у бандла даёт новую строку на каждое
   соединение. JA4 совпал у всех, `chrome120` и `chrome131android` в том числе.
-* `hello-diff` — `SAME` у тринадцати, включая четыре строки с ECH (`firefox`,
-  `firefox135`, `firefox144`, `tor145`): тело сравнивается по объявленной длине,
+* `hello-diff` — `SAME` у тринадцати, включая четыре строки с ECH (`firefox133`,
+  `firefox144`, `firefox144`, `tor145`): тело сравнивается по объявленной длине,
   а не по случайным байтам. У пяти тасующих хромов остаётся `extensions DIFF` —
   это порядок; расхождение размеров теперь кратно 32 и равно разнице тел ECH
   (`chrome120`: 497 против 561 в том прогоне).
@@ -587,3 +567,37 @@ Chrome 110+ (воспроизводить распределение — отд�
 Релизный бинарник не изменился: **4 166 656 байт** — вместо кодирования
 внутреннего hello теперь те же четыре константы и сложение, тот же путь кода, что
 и раньше.
+
+### Один профиль на форму и имена с версией (2026-09-18, третий проход)
+
+**Правило.** В наборе остаются записи, отличающиеся друг от друга чем-то, на что
+может среагировать middlebox; из нескольких версий с одинаковой формой остаётся
+самая новая. Замерено через `tls.peet.ws` по каждой обёртке: у `curl_chrome133a`,
+`136`, `142`, `145` и `146` совпадают JA4
+(`t13d1516h2_8daaf6152771_d8a2da3f94cd`), peetprint, akamai-отпечаток h2, все кадры
+преамбулы, имена заголовков и все TLS-списки — различаются только версия в
+`User-Agent` и список брендов в `sec-ch-ua`. Поэтому пять записей свёрнуты в одну,
+`chrome146`, с идентичностью 146-й; у Firefox так же: `curl_firefox135` и
+`curl_firefox144` совпадают полностью, кроме версии в UA, — остаётся `firefox144`.
+Там, где цепочка рвётся, записи остаются: 107 (фиксированный порядок, без ECH) →
+120 (ECH, перемешивание) → 131 (гибридная группа) → 146 (ALPS на 17613).
+
+**Имена.** Имя профиля — ровно один `code`, и у клиента в нём всегда стоит версия
+(`chrome146`, `firefox144`, `tor145`); без версии остаётся только `rustls`, у
+которой версии клиента нет. Имена обёрток (`curl_*`) и старые имена без версии
+(`firefox`, `chrome`, `safari`, `tor`, `edge`) отвергаются, и вместе с ними удалена
+вся машинерия `CurlNames`: имя, разрешающееся не в ту версию, чем называется, хуже
+неразрешающегося — оно молча измеряет другого клиента. Алиасы (`chrome99`,
+`safari170`, `safari184`, `chrome131_android`, `safari184_ios`) убраны по той же
+причине и по факту: у `curl_safari170` другая преамбула h2, чем у `curl_safari155`
+(`SETTINGS 2:0;4:…;3:100` против `4:…;3:100`) — это другой клиент ниже hello, а не
+второе имя той же формы.
+
+**Проверено.** `headers chrome146` + `headers-diff chrome146` — блок запроса
+совпадает с `curl_chrome146` побайтово (639 байт, 13 заголовков: имена, регистр и
+порядок); `hello chrome146` — 1751 против 1751 байта у бандла; `hello-diff
+firefox144` — `SAME`; `--legend` печатает семнадцать профилей без токенов
+обёрток. Тесты: `cargo test --workspace` (184 + 58) и `clippy --workspace
+--all-targets` без предупреждений; в тестах появился
+`profile_names_are_unique_lowercase_and_versioned`, который требует версию в имени
+каждого клиентского профиля.

@@ -75,32 +75,6 @@ pub(crate) const SAFARI18_HEADERS: &[(&str, &str)] = &[
     ("priority", "u=0, i"),
     ("accept-encoding", "gzip, deflate, br"),
 ];
-
-/// Chrome 133 headers, in `curl_chrome133a.bat` order. Two headers Chrome 107
-/// does not send: `accept-encoding` gained `zstd`, and `priority` is new. The
-/// `accept` list ends in `q=0.7` where 107's ends in `q=0.9`.
-pub(crate) const CHROME133_HEADERS: &[(&str, &str)] = &[
-    ("sec-ch-ua", r#""Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133""#),
-    ("sec-ch-ua-mobile", "?0"),
-    ("sec-ch-ua-platform", r#""macOS""#),
-    ("Upgrade-Insecure-Requests", "1"),
-    (
-        "User-Agent",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-    ),
-    (
-        "Accept",
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    ),
-    ("Sec-Fetch-Site", "none"),
-    ("Sec-Fetch-Mode", "navigate"),
-    ("Sec-Fetch-User", "?1"),
-    ("Sec-Fetch-Dest", "document"),
-    ("Accept-Encoding", "gzip, deflate, br, zstd"),
-    ("Accept-Language", "en-US,en;q=0.9"),
-    ("priority", "u=0, i"),
-];
-
 /// Edge 101 headers, in `curl_edge101.bat` order. Edge is Chromium with its own
 /// `User-Agent`, `sec-ch-ua` and `sec-ch-ua-platform`; the TLS shape is Chrome's
 /// (see `shapes::CHROME_TLS_*`), so the identity is what tells the two apart.
@@ -291,16 +265,19 @@ pub(crate) const CHROME131_ANDROID_HEADERS: &[(&str, &str)] = &[
     ("priority", "u=0, i"),
 ];
 
-/// Chrome 136 headers, in `curl_chrome136.bat` order: Chrome 133's set with the
-/// 136 brand list (`"Chromium"` first, `"Not(A:Brand";v="99"` last) and UA.
-pub(crate) const CHROME136_HEADERS: &[(&str, &str)] = &[
-    ("sec-ch-ua", r#""Chromium";v="136", "Google Chrome";v="136", "Not(A:Brand";v="99""#),
+/// Chrome 146 headers: the block Chrome 133–146 send, with the 146 brand list
+/// and UA — the whole difference between those clients. Measured against the
+/// echo service, where `curl_chrome146` reports the same JA4, peetprint, h2
+/// frames and header names as `curl_chrome136` and differs in these two values
+/// alone.
+pub(crate) const CHROME146_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#""Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146""#),
     ("sec-ch-ua-mobile", "?0"),
     ("sec-ch-ua-platform", r#""macOS""#),
     ("Upgrade-Insecure-Requests", "1"),
     (
         "User-Agent",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
     ),
     (
         "Accept",
@@ -317,23 +294,6 @@ pub(crate) const CHROME136_HEADERS: &[(&str, &str)] = &[
 
 /// Firefox 135 headers, in `curl_firefox135.bat` order: Firefox 133's set with
 /// the version it names.
-pub(crate) const FIREFOX135_HEADERS: &[(&str, &str)] = &[
-    (
-        "User-Agent",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:135.0) Gecko/20100101 Firefox/135.0",
-    ),
-    ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
-    ("Accept-Language", "en-US,en;q=0.5"),
-    ("Accept-Encoding", "gzip, deflate, br, zstd"),
-    ("Upgrade-Insecure-Requests", "1"),
-    ("Sec-Fetch-Dest", "document"),
-    ("Sec-Fetch-Mode", "navigate"),
-    ("Sec-Fetch-Site", "none"),
-    ("Sec-Fetch-User", "?1"),
-    ("Priority", "u=0, i"),
-    ("TE", "Trailers"),
-];
-
 /// Firefox 144 headers. `curl_firefox144.bat` is `--impersonate firefox144`, so
 /// the list comes from the bundle's own `firefox_144.0.0_linux` capture, which
 /// is the same set with 144 in the UA. The `TE` spelling comes from that

@@ -38,20 +38,18 @@ const GREASE_PAYLOAD_LENGTHS: [usize; 4] = [144, 176, 208, 240];
 /// for the clients that send it there, which the second column pins.
 #[test]
 fn every_identity_is_spelled_the_way_its_client_writes_it() {
-    let expected: [(TlsFingerprint, &str, bool); 19] = [
+    let expected: [(TlsFingerprint, &str, bool); 17] = [
         (TlsFingerprint::Rustls, "accept-encoding", false),
-        (TlsFingerprint::Firefox, "Accept-Encoding", true),
-        (TlsFingerprint::Chrome, "Accept-Encoding", false),
-        (TlsFingerprint::Safari, "Accept-Encoding", false),
-        (TlsFingerprint::Chrome133, "Accept-Encoding", false),
-        (TlsFingerprint::Safari18, "accept-encoding", false),
-        (TlsFingerprint::Edge, "Accept-Encoding", false),
+        (TlsFingerprint::Firefox133, "Accept-Encoding", true),
+        (TlsFingerprint::Chrome107, "Accept-Encoding", false),
+        (TlsFingerprint::Safari155, "Accept-Encoding", false),
+        (TlsFingerprint::Chrome146, "Accept-Encoding", false),
+        (TlsFingerprint::Safari180, "accept-encoding", false),
+        (TlsFingerprint::Edge101, "Accept-Encoding", false),
         (TlsFingerprint::Chrome99Android, "Accept-Encoding", false),
         (TlsFingerprint::Chrome120, "Accept-Encoding", false),
         (TlsFingerprint::Chrome131, "Accept-Encoding", false),
         (TlsFingerprint::Chrome131Android, "Accept-Encoding", false),
-        (TlsFingerprint::Chrome136, "Accept-Encoding", false),
-        (TlsFingerprint::Firefox135, "Accept-Encoding", true),
         (TlsFingerprint::Firefox144, "Accept-Encoding", true),
         (TlsFingerprint::Safari153, "Accept-Encoding", false),
         (TlsFingerprint::Safari184Ios, "accept-encoding", false),
@@ -96,18 +94,17 @@ fn every_profile_sends_the_key_shares_its_wrapper_asks_for() {
 
     let expected = [
         (TlsFingerprint::Rustls, "29"),
-        (TlsFingerprint::Firefox, "4588,29,23"),
-        (TlsFingerprint::Chrome, "29"),
-        (TlsFingerprint::Safari, "29"),
-        (TlsFingerprint::Chrome133, "4588,29"),
-        (TlsFingerprint::Safari18, "29"),
-        (TlsFingerprint::Edge, "29"),
+        (TlsFingerprint::Firefox133, "4588,29,23"),
+        (TlsFingerprint::Chrome107, "29"),
+        (TlsFingerprint::Safari155, "29"),
+        (TlsFingerprint::Chrome146, "4588,29"),
+        (TlsFingerprint::Safari180, "29"),
+        (TlsFingerprint::Edge101, "29"),
         (TlsFingerprint::Chrome99Android, "29"),
         (TlsFingerprint::Chrome120, "29"),
         (TlsFingerprint::Chrome131, "4588,29"),
         (TlsFingerprint::Chrome131Android, "29"),
-        (TlsFingerprint::Chrome136, "4588,29"),
-        (TlsFingerprint::Firefox135, "4588,29,23"),
+        (TlsFingerprint::Chrome146, "4588,29"),
         (TlsFingerprint::Firefox144, "4588,29,23"),
         (TlsFingerprint::Safari153, "29"),
         (TlsFingerprint::Safari184Ios, "29"),
@@ -234,20 +231,19 @@ fn the_shuffling_shapes_are_the_chromium_ones_from_110_on() {
     permuting.sort_unstable();
     assert_eq!(
         permuting,
-        ["chrome120", "chrome131", "chrome131android", "chrome133", "chrome136"]
+        ["chrome120", "chrome131", "chrome131android", "chrome146"]
     );
 }
 
-/// The nine shapes whose client carries `encrypted_client_hello`, and the body
+/// The seven shapes whose client carries `encrypted_client_hello`, and the body
 /// they carry.
 ///
 /// The list is the wrappers that name `--ech true` — `curl_chrome120`,
-/// `curl_chrome131`, `curl_chrome131_android`, `curl_chrome133`,
-/// `curl_chrome136`, `curl_firefox133`, `curl_firefox135`, `curl_tor145` — and
-/// `firefox144`, whose wrapper is the one-line `--impersonate firefox144` and
-/// whose hello carries the extension all the same. Every one of them is GREASE:
-/// curl needs DoH or an explicit `--ecl:` to have a real config, and no wrapper
-/// passes either.
+/// `curl_chrome131`, `curl_chrome131_android`, `curl_chrome146`, `curl_firefox133`,
+/// `curl_tor145` — and `firefox144`, whose wrapper is the one-line
+/// `--impersonate firefox144` and whose hello carries the extension all the
+/// same. Every one of them is GREASE: curl needs DoH or an explicit `--ecl:` to
+/// have a real config, and no wrapper passes either.
 ///
 /// The body is the GREASE form of draft-ietf-tls-esni §6.2 — outer, a cipher
 /// suite, a random `config_id`, an `enc` of the KEM's public-key length, and a
@@ -345,10 +341,8 @@ fn the_ech_shapes_carry_the_grease_extension_and_the_others_do_not() {
             "chrome120",
             "chrome131",
             "chrome131android",
-            "chrome133",
-            "chrome136",
-            "firefox",
-            "firefox135",
+            "chrome146",
+            "firefox133",
             "firefox144",
             "tor145",
         ]
@@ -361,18 +355,17 @@ fn the_ech_shapes_carry_the_grease_extension_and_the_others_do_not() {
 #[test]
 fn http_identity_names_the_version_the_hello_imitates() {
     for (fingerprint, marker) in [
-        (TlsFingerprint::Chrome, "Chrome/107.0.0.0"),
-        (TlsFingerprint::Firefox, "Firefox/133.0"),
-        (TlsFingerprint::Safari, "Version/15.5"),
-        (TlsFingerprint::Chrome133, "Chrome/133.0.0.0"),
-        (TlsFingerprint::Safari18, "Version/18.0"),
-        (TlsFingerprint::Edge, "Edg/101.0.1210.47"),
+        (TlsFingerprint::Chrome107, "Chrome/107.0.0.0"),
+        (TlsFingerprint::Firefox133, "Firefox/133.0"),
+        (TlsFingerprint::Safari155, "Version/15.5"),
+        
+        (TlsFingerprint::Safari180, "Version/18.0"),
+        (TlsFingerprint::Edge101, "Edg/101.0.1210.47"),
         (TlsFingerprint::Chrome99Android, "Chrome/99.0.4844.58 Mobile"),
         (TlsFingerprint::Chrome120, "Chrome/120.0.0.0"),
         (TlsFingerprint::Chrome131, "Chrome/131.0.0.0"),
         (TlsFingerprint::Chrome131Android, "Chrome/131.0.0.0 Mobile"),
-        (TlsFingerprint::Chrome136, "Chrome/136.0.0.0"),
-        (TlsFingerprint::Firefox135, "Firefox/135.0"),
+        (TlsFingerprint::Chrome146, "Chrome/146.0.0.0"),
         (TlsFingerprint::Firefox144, "Firefox/144.0"),
         (TlsFingerprint::Safari153, "Version/15.3"),
         (TlsFingerprint::Safari184Ios, "Version/18.4 Mobile"),
@@ -405,20 +398,18 @@ fn http_identity_names_the_version_the_hello_imitates() {
             .find(|(name, _)| name.eq_ignore_ascii_case("accept-encoding"))
             .expect("every identity states its encoding");
         let expected = match fingerprint {
-            TlsFingerprint::Firefox
-            | TlsFingerprint::Chrome133
+            TlsFingerprint::Firefox133
+            | TlsFingerprint::Chrome146
             | TlsFingerprint::Chrome131
             | TlsFingerprint::Chrome131Android
-            | TlsFingerprint::Chrome136
-            | TlsFingerprint::Firefox135
             | TlsFingerprint::Firefox144
             | TlsFingerprint::Safari260
             | TlsFingerprint::Safari260Ios
             | TlsFingerprint::Tor145 => "gzip, deflate, br, zstd",
-            TlsFingerprint::Chrome
-            | TlsFingerprint::Safari
-            | TlsFingerprint::Safari18
-            | TlsFingerprint::Edge
+            TlsFingerprint::Chrome107
+            | TlsFingerprint::Safari155
+            | TlsFingerprint::Safari180
+            | TlsFingerprint::Edge101
             | TlsFingerprint::Chrome99Android
             | TlsFingerprint::Chrome120
             | TlsFingerprint::Safari153
@@ -501,22 +492,21 @@ fn every_h2_preface_matches_the_wrapper_it_copies() {
     /// header order, request priority.
     type Row = (TlsFingerprint, &'static str, u32, PseudoOrder, Option<(u16, bool)>);
 
-    let expected: [Row; 18] = [
-        (TlsFingerprint::Firefox, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
-        (TlsFingerprint::Firefox135, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
+    let expected: [Row; 17] = [
+        (TlsFingerprint::Firefox133, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
         (TlsFingerprint::Firefox144, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
         (TlsFingerprint::Tor145, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
-        (TlsFingerprint::Chrome, "1:65536;2:0;3:1000;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Chrome107, "1:65536;2:0;3:1000;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Chrome99Android, "1:65536;3:1000;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
-        (TlsFingerprint::Edge, "1:65536;3:1000;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Edge101, "1:65536;3:1000;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Chrome120, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Chrome131, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Chrome131Android, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
-        (TlsFingerprint::Chrome133, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
-        (TlsFingerprint::Chrome136, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
-        (TlsFingerprint::Safari, "4:4194304;3:100", 10_485_760, MethodSchemePathAuthority, Some((255, false))),
+        (TlsFingerprint::Chrome146, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Chrome146, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Safari155, "4:4194304;3:100", 10_485_760, MethodSchemePathAuthority, Some((255, false))),
         (TlsFingerprint::Safari153, "4:4194304;3:100", 10_485_760, MethodSchemePathAuthority, Some((255, false))),
-        (TlsFingerprint::Safari18, "2:0;3:100;4:2097152;8:1;9:1", 10_420_225, MethodSchemeAuthorityPath, Some((256, false))),
+        (TlsFingerprint::Safari180, "2:0;3:100;4:2097152;8:1;9:1", 10_420_225, MethodSchemeAuthorityPath, Some((256, false))),
         (TlsFingerprint::Safari184Ios, "2:0;3:100;4:2097152;9:1", 10_420_225, MethodSchemeAuthorityPath, Some((256, false))),
         (TlsFingerprint::Safari260, "2:0;3:100;4:2097152;9:1", 10_420_225, MethodSchemeAuthorityPath, None),
         (TlsFingerprint::Safari260Ios, "2:0;3:100;4:2097152;9:1", 10_420_225, MethodSchemeAuthorityPath, None),
@@ -538,13 +528,13 @@ fn every_h2_preface_matches_the_wrapper_it_copies() {
 /// to say which one.
 #[test]
 fn display_labels_name_the_pinned_version() {
-    assert_eq!(TlsFingerprint::Firefox.display_label(), "FIREFOX 133");
-    assert_eq!(TlsFingerprint::Chrome.display_label(), "CHROME 107");
-    assert_eq!(TlsFingerprint::Safari.display_label(), "SAFARI 155");
+    assert_eq!(TlsFingerprint::Firefox133.display_label(), "FIREFOX 133");
+    assert_eq!(TlsFingerprint::Chrome107.display_label(), "CHROME 107");
+    assert_eq!(TlsFingerprint::Safari155.display_label(), "SAFARI 155");
     assert_eq!(TlsFingerprint::Rustls.display_label(), "RUSTLS");
-    assert_eq!(TlsFingerprint::Chrome133.display_label(), "CHROME 133");
-    assert_eq!(TlsFingerprint::Safari18.display_label(), "SAFARI 18");
-    assert_eq!(TlsFingerprint::Edge.display_label(), "EDGE 101");
+    assert_eq!(TlsFingerprint::Chrome146.display_label(), "CHROME 146");
+    assert_eq!(TlsFingerprint::Safari180.display_label(), "SAFARI 180");
+    assert_eq!(TlsFingerprint::Edge101.display_label(), "EDGE 101");
     for fp in TlsFingerprint::ALL {
         assert!(fp.display_label().starts_with(fp.token()), "{fp:?}");
         assert!(fp.display_label().is_ascii(), "{fp:?}");
@@ -554,95 +544,79 @@ fn display_labels_name_the_pinned_version() {
 #[test]
 fn fingerprint_tokens_are_stable() {
     assert_eq!(TlsFingerprint::Rustls.token(), "RUSTLS");
-    assert_eq!(TlsFingerprint::Firefox.token(), "FIREFOX");
+    assert_eq!(TlsFingerprint::Firefox133.token(), "FIREFOX");
     assert_eq!(TlsFingerprint::Rustls.code(), "rustls");
-    assert_eq!(TlsFingerprint::Firefox.code(), "firefox");
+    assert_eq!(TlsFingerprint::Firefox133.code(), "firefox133");
     assert_eq!(TlsFingerprint::default(), TlsFingerprint::Rustls);
 }
 
 #[test]
 fn fingerprint_parses_known_values_and_rejects_others() {
     assert_eq!(TlsFingerprint::parse("rustls"), Some(TlsFingerprint::Rustls));
-    assert_eq!(TlsFingerprint::parse("FIREFOX"), Some(TlsFingerprint::Firefox));
-    assert_eq!(TlsFingerprint::parse(" firefox "), Some(TlsFingerprint::Firefox));
-    // The old name is gone rather than aliased: a config or a script that
-    // still says `custom` is told it is unknown instead of silently measuring
-    // the same profile under a name the tool no longer prints.
-    assert_eq!(TlsFingerprint::parse("custom"), None);
-    assert_eq!(TlsFingerprint::parse("chrome"), Some(TlsFingerprint::Chrome));
-    assert_eq!(TlsFingerprint::parse("safari"), Some(TlsFingerprint::Safari));
-    // The names the fingerprint-blocking report uses are accepted when the
-    // shape is the one a profile here reproduces, and rejected otherwise.
-    assert_eq!(
-        TlsFingerprint::parse("curl_chrome107"),
-        Some(TlsFingerprint::Chrome)
-    );
-    // Edge is Chromium but not Chrome: the bundle's own Edge names map to the
-    // Edge record, whose header set is what tells the two clients apart.
-    assert_eq!(
-        TlsFingerprint::parse("curl_edge101"),
-        Some(TlsFingerprint::Edge)
-    );
-    assert_eq!(TlsFingerprint::parse("edge"), Some(TlsFingerprint::Edge));
-    assert_eq!(TlsFingerprint::parse("chrome133"), Some(TlsFingerprint::Chrome133));
-    assert_eq!(TlsFingerprint::parse("curl_chrome133a"), Some(TlsFingerprint::Chrome133));
-    assert_eq!(TlsFingerprint::parse("safari18"), Some(TlsFingerprint::Safari18));
-    assert_eq!(TlsFingerprint::parse("curl_safari180"), Some(TlsFingerprint::Safari18));
-    // Every shape M4 added answers to its own bundle name, and to no other
-    // version's: `curl_chrome131` used to be rejected (the hello is Chrome
-    // 133's with ALPS one code point earlier, which this build now sends) and
-    // `curl_chrome120` used not to be accepted at all.
-    assert_eq!(
-        TlsFingerprint::parse("curl_firefox133"),
-        Some(TlsFingerprint::Firefox)
-    );
+    assert_eq!(TlsFingerprint::parse("FIREFOX144"), Some(TlsFingerprint::Firefox144));
+    assert_eq!(TlsFingerprint::parse(" firefox144 "), Some(TlsFingerprint::Firefox144));
+    // The unnumbered names are gone rather than aliased: a config or a script
+    // that still says `firefox` is told it is unknown instead of silently
+    // measuring a version it does not name.
+    for old in ["firefox", "chrome", "safari", "tor", "edge", "custom"] {
+        assert_eq!(TlsFingerprint::parse(old), None, "{old} must not resolve");
+    }
+    // One name per record, and it is the code `--legend` prints and `--json`
+    // carries. The control shape is the one name with no version in it.
     for (name, fingerprint) in [
+        ("chrome107", TlsFingerprint::Chrome107),
         ("chrome99android", TlsFingerprint::Chrome99Android),
-        ("curl_chrome99_android", TlsFingerprint::Chrome99Android),
-        ("curl_chrome119", TlsFingerprint::Chrome120),
-        ("curl_chrome120", TlsFingerprint::Chrome120),
-        ("curl_chrome123", TlsFingerprint::Chrome120),
-        ("curl_chrome131", TlsFingerprint::Chrome131),
-        ("curl_chrome131_android", TlsFingerprint::Chrome131Android),
-        ("curl_chrome136", TlsFingerprint::Chrome136),
-        ("curl_chrome142", TlsFingerprint::Chrome136),
-        ("curl_chrome145", TlsFingerprint::Chrome136),
-        ("curl_chrome146", TlsFingerprint::Chrome136),
-        ("curl_firefox135", TlsFingerprint::Firefox135),
-        ("curl_firefox144", TlsFingerprint::Firefox144),
-        ("curl_firefox147", TlsFingerprint::Firefox144),
-        ("curl_safari153", TlsFingerprint::Safari153),
-        ("curl_safari184_ios", TlsFingerprint::Safari184Ios),
-        ("curl_safari260", TlsFingerprint::Safari260),
-        ("curl_safari260_ios", TlsFingerprint::Safari260Ios),
-        ("curl_tor145", TlsFingerprint::Tor145),
-        ("tor", TlsFingerprint::Tor145),
+        ("chrome120", TlsFingerprint::Chrome120),
+        ("chrome131", TlsFingerprint::Chrome131),
+        ("chrome131android", TlsFingerprint::Chrome131Android),
+        ("chrome146", TlsFingerprint::Chrome146),
+        ("firefox133", TlsFingerprint::Firefox133),
+        ("firefox144", TlsFingerprint::Firefox144),
+        ("safari155", TlsFingerprint::Safari155),
+        ("safari153", TlsFingerprint::Safari153),
+        ("safari180", TlsFingerprint::Safari180),
+        ("safari184ios", TlsFingerprint::Safari184Ios),
+        ("safari260", TlsFingerprint::Safari260),
+        ("safari260ios", TlsFingerprint::Safari260Ios),
+        ("edge101", TlsFingerprint::Edge101),
+        ("tor145", TlsFingerprint::Tor145),
     ] {
         assert_eq!(TlsFingerprint::parse(name), Some(fingerprint), "{name}");
+        assert_eq!(
+            TlsFingerprint::parse(&name.to_ascii_uppercase()),
+            Some(fingerprint),
+            "{name} in caps"
+        );
     }
-    // The desktop wrapper of a device profile is a different identity, so the
-    // device suffix is part of the name: `curl_chrome99_android` is not
-    // `curl_chrome99` and vice versa.
-    assert_eq!(TlsFingerprint::parse("curl_chrome99"), Some(TlsFingerprint::Chrome));
-    assert_eq!(TlsFingerprint::parse("curl_safari184"), Some(TlsFingerprint::Safari18));
-    assert_eq!(TlsFingerprint::parse("safari184"), Some(TlsFingerprint::Safari18));
-    assert_eq!(
-        TlsFingerprint::parse("curl_safari155"),
-        Some(TlsFingerprint::Safari)
-    );
-    // Shapes no record sends, measured wrapper by wrapper: 110 and 116 permute
-    // Chrome 107's set, which this build sends in a fixed order, 124 carries a
-    // set no record has, and `curl_safari172_ios` carries an iOS identity no
-    // record has. The prefix alone carries no version at all.
-    assert_eq!(TlsFingerprint::parse("curl_chrome110"), None);
-    assert_eq!(TlsFingerprint::parse("curl_chrome116"), None);
-    assert_eq!(TlsFingerprint::parse("curl_chrome124"), None);
-    assert_eq!(TlsFingerprint::parse("curl_safari172_ios"), None);
-    assert_eq!(TlsFingerprint::parse("curl_chrome"), None);
+    // The bundle's wrapper names are rejected, and so is every unnumbered or
+    // non-matching spelling: a name that resolves to a client version other
+    // than the one it says is worse than a name that does not resolve — the
+    // first silently measures another client, the second is reported.
+    for name in [
+        "curl_chrome107",
+        "curl_chrome120",
+        "curl_chrome146",
+        "curl_firefox133",
+        "curl_firefox147",
+        "curl_safari155",
+        "curl_safari184_ios",
+        "curl_edge101",
+        "curl_tor145",
+        "chrome99",
+        "chrome133",
+        "firefox135",
+        "safari170",
+        "safari184",
+        "safari184_ios",
+        "chrome131_android",
+        "chrome",
+    ] {
+        assert_eq!(TlsFingerprint::parse(name), None, "{name} must not resolve");
+    }
     assert_eq!(TlsFingerprint::parse(""), None);
 }
 
-/// Test 6 takes a *list* of profiles; `all` and the curl aliases must work,
+/// Test 6 takes a *list* of profiles; `all` and the profile codes must work,
 /// and an unrecognised token must be reported rather than silently swapped
 /// for a different set.
 #[test]
@@ -650,19 +624,22 @@ fn fingerprint_list_parsing() {
     assert_eq!(TlsFingerprint::parse_list("all").0, TlsFingerprint::ALL.to_vec());
     assert_eq!(TlsFingerprint::parse_list("").0, TlsFingerprint::ALL.to_vec());
     assert_eq!(
-        TlsFingerprint::parse_list("chrome, safari").0,
-        vec![TlsFingerprint::Chrome, TlsFingerprint::Safari]
+        TlsFingerprint::parse_list("chrome107, safari155").0,
+        vec![TlsFingerprint::Chrome107, TlsFingerprint::Safari155]
     );
-    assert_eq!(TlsFingerprint::parse_list("curl_chrome107").0, vec![TlsFingerprint::Chrome]);
     // Duplicates collapse, order is kept.
     assert_eq!(
-        TlsFingerprint::parse_list("safari safari rustls").0,
-        vec![TlsFingerprint::Safari, TlsFingerprint::Rustls]
+        TlsFingerprint::parse_list("safari155 safari155 rustls").0,
+        vec![TlsFingerprint::Safari155, TlsFingerprint::Rustls]
     );
     // Mixed: the known half runs, the rest is reported.
-    let (known, unknown) = TlsFingerprint::parse_list("firefox,bogus");
-    assert_eq!(known, vec![TlsFingerprint::Firefox]);
+    let (known, unknown) = TlsFingerprint::parse_list("firefox133,bogus");
+    assert_eq!(known, vec![TlsFingerprint::Firefox133]);
     assert_eq!(unknown, vec!["bogus".to_string()]);
+    // A wrapper name is exactly as unknown as any other typo, and it is
+    // reported rather than mapped to the version it names.
+    let (_, unknown) = TlsFingerprint::parse_list("curl_chrome107");
+    assert_eq!(unknown, vec!["curl_chrome107".to_string()]);
     // Nothing recognised: fall back to all, still reporting what was wrong.
     let (known, unknown) = TlsFingerprint::parse_list("bogus");
     assert_eq!(known, TlsFingerprint::ALL.to_vec());
@@ -690,23 +667,25 @@ fn fingerprint_table_is_total() {
     }
 }
 
-/// A name may belong to one shape only, and names are matched lowercase: a
-/// second record claiming `chrome` would make the parser's answer depend on
-/// table order.
+/// One name per record, lowercase, and — apart from the control shape — the
+/// name carries the version it sends: a second record claiming `chrome146`
+/// would make the parser's answer depend on table order, and a name without a
+/// number would hide which version a probe presented.
 #[test]
-fn profile_names_are_unique_and_lowercase() {
+fn profile_names_are_unique_lowercase_and_versioned() {
     let mut seen: Vec<&str> = Vec::new();
     for shape in SHAPES {
         assert_eq!(shape.code, shape.code.to_ascii_lowercase(), "{}: code is lowercase", shape.code);
         assert!(!shape.source.is_empty(), "{}: a record states where it came from", shape.code);
-        // The canonical name has to be one of the accepted ones: the parsers
-        // and the config validator both go through this list.
-        assert!(shape.aliases.contains(&shape.code), "{}: the code is not an alias", shape.code);
-        for name in shape.aliases {
-            assert_eq!(*name, name.to_ascii_lowercase(), "{}: alias {name} is lowercase", shape.code);
-            assert!(!seen.contains(name), "{name} is claimed twice");
-            seen.push(name);
+        assert!(!seen.contains(&shape.code), "{} is claimed twice", shape.code);
+        if shape.variant != TlsFingerprint::Rustls {
+            assert!(
+                shape.code.chars().any(|c| c.is_ascii_digit()),
+                "{}: a client profile's name carries its version",
+                shape.code
+            );
         }
+        seen.push(shape.code);
     }
 }
 
@@ -768,7 +747,7 @@ fn the_baseline_is_the_only_shape_that_impersonates_nobody() {
 /// signed_certificate_timestamp out), and nothing suppressed.
 #[test]
 fn firefox_profile_matches_the_shape_it_is_pinned_to() {
-    let profile = hello_profile(TlsFingerprint::Firefox).expect("firefox installs a profile");
+    let profile = hello_profile(TlsFingerprint::Firefox133).expect("firefox installs a profile");
 
     assert_eq!(profile.cipher_suites.as_ref().map(|c| c.len()), Some(17));
     assert_eq!(profile.groups.as_ref().and_then(|g| g.first()), Some(&4588));
@@ -914,11 +893,10 @@ fn bundle_versions_match_their_ja3() {
         (
             TlsVersion::Any,
             &[
-                (TlsFingerprint::Chrome, CHROME_107),
-                (TlsFingerprint::Safari, SAFARI_155),
-                (TlsFingerprint::Firefox, FIREFOX_133),
+                (TlsFingerprint::Chrome107, CHROME_107),
+                (TlsFingerprint::Safari155, SAFARI_155),
+                (TlsFingerprint::Firefox133, FIREFOX_133),
                 (TlsFingerprint::Chrome99Android, CHROME_107),
-                (TlsFingerprint::Firefox135, FIREFOX_135),
                 (TlsFingerprint::Firefox144, FIREFOX_135),
                 (TlsFingerprint::Safari153, SAFARI_153),
                 (TlsFingerprint::Safari184Ios, SAFARI_180),
@@ -930,17 +908,17 @@ fn bundle_versions_match_their_ja3() {
         (
             TlsVersion::Tls13,
             &[
-                (TlsFingerprint::Chrome, CHROME_107_TLS13),
-                (TlsFingerprint::Safari, SAFARI_155_TLS13),
-                (TlsFingerprint::Firefox, FIREFOX_133_TLS13),
+                (TlsFingerprint::Chrome107, CHROME_107_TLS13),
+                (TlsFingerprint::Safari155, SAFARI_155_TLS13),
+                (TlsFingerprint::Firefox133, FIREFOX_133_TLS13),
             ],
         ),
         (
             TlsVersion::Tls12,
             &[
-                (TlsFingerprint::Chrome, CHROME_107_TLS12),
-                (TlsFingerprint::Safari, SAFARI_155_TLS12),
-                (TlsFingerprint::Firefox, FIREFOX_133_TLS12),
+                (TlsFingerprint::Chrome107, CHROME_107_TLS12),
+                (TlsFingerprint::Safari155, SAFARI_155_TLS12),
+                (TlsFingerprint::Firefox133, FIREFOX_133_TLS12),
             ],
         ),
     ];
@@ -961,7 +939,7 @@ fn bundle_versions_match_their_ja3() {
     // floor, so it carries no padding at all: the bundle's 1.2 hellos measure
     // 198 and 210 bytes against our 185 and 199 (the `compress_certificate`
     // difference), all of them well under the floor.
-    for fingerprint in [TlsFingerprint::Chrome, TlsFingerprint::Safari] {
+    for fingerprint in [TlsFingerprint::Chrome107, TlsFingerprint::Safari155] {
         for version in [TlsVersion::Any, TlsVersion::Tls13] {
             let (_, length) = client_hello_of(fingerprint, version);
             assert_eq!(length, 512, "{fingerprint} hello ({version:?})");
@@ -1011,11 +989,11 @@ fn bundle_versions_match_their_ja4() {
         (TlsVersion::Tls13, CHROME_107_TLS13, SAFARI_155_TLS13, FIREFOX_133_TLS13),
         (TlsVersion::Tls12, CHROME_107_TLS12, SAFARI_155_TLS12, FIREFOX_133_TLS12),
     ] {
-        let (_, _, got) = client_hello_full(TlsFingerprint::Chrome, version);
+        let (_, _, got) = client_hello_full(TlsFingerprint::Chrome107, version);
         assert_eq!(got, chrome, "chrome ({version:?})");
-        let (_, _, got) = client_hello_full(TlsFingerprint::Safari, version);
+        let (_, _, got) = client_hello_full(TlsFingerprint::Safari155, version);
         assert_eq!(got, safari, "safari ({version:?})");
-        let (_, _, got) = client_hello_full(TlsFingerprint::Firefox, version);
+        let (_, _, got) = client_hello_full(TlsFingerprint::Firefox133, version);
         assert_eq!(got, firefox, "firefox ({version:?})");
     }
 }
@@ -1037,7 +1015,7 @@ fn bundle_versions_match_their_ja4() {
 /// versions are derived the same way: the 1.3 hello drops what belongs to the
 /// 1.2 era, the 1.2 hello drops `supported_versions` and ALPS.
 #[test]
-fn chrome_133_matches_the_utls_list_it_is_derived_from() {
+fn chrome_146_matches_the_utls_list_it_is_derived_from() {
     const CHROME_133_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-\
          49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17613-65037,\
          4588-29-23-24,0";
@@ -1052,9 +1030,9 @@ fn chrome_133_matches_the_utls_list_it_is_derived_from() {
         (TlsVersion::Tls12, CHROME_133_TLS12),
     ] {
         assert_eq!(
-            order_independent_ja3(&client_hello_of(TlsFingerprint::Chrome133, version).0),
+            order_independent_ja3(&client_hello_of(TlsFingerprint::Chrome146, version).0),
             order_independent_ja3(expected),
-            "chrome133 ({version:?})"
+            "{version:?}"
         );
     }
 }
@@ -1072,10 +1050,10 @@ fn chrome_133_matches_the_utls_list_it_is_derived_from() {
 ///   in a fixed sorted order, and no public database says which set a Chrome
 ///   133 behind an ECH-less resolver sent.
 #[test]
-fn chrome_133_ja4_pins_the_parts_a_source_covers() {
+fn chrome_146_ja4_pins_the_parts_a_source_covers() {
     const CHROME_133_JA4: &str = "t13d1516h2_8daaf6152771_d8a2da3f94cd";
 
-    let (_, _, ja4) = client_hello_full(TlsFingerprint::Chrome133, TlsVersion::Any);
+    let (_, _, ja4) = client_hello_full(TlsFingerprint::Chrome146, TlsVersion::Any);
     assert!(ja4.starts_with("t13d1516h2_"), "{ja4}");
     assert_eq!(
         ja4.split('_').nth(1),
@@ -1125,15 +1103,14 @@ fn profiles_that_share_a_tls_shape_send_the_same_hello() {
     };
 
     for version in [TlsVersion::Any, TlsVersion::Tls13, TlsVersion::Tls12] {
-        same(TlsFingerprint::Edge, TlsFingerprint::Chrome, version);
+        same(TlsFingerprint::Edge101, TlsFingerprint::Chrome107, version);
         // The M4 rows that are an identity rather than a hello: Chrome 99's
         // Android build, Chrome 136 (which is Chrome 133's shape), Safari 18.4
         // on iOS and Firefox 144.
         for (left, right) in [
-            (TlsFingerprint::Chrome99Android, TlsFingerprint::Chrome),
-            (TlsFingerprint::Chrome136, TlsFingerprint::Chrome133),
-            (TlsFingerprint::Safari184Ios, TlsFingerprint::Safari18),
-            (TlsFingerprint::Firefox144, TlsFingerprint::Firefox135),
+            (TlsFingerprint::Chrome99Android, TlsFingerprint::Chrome107),
+            (TlsFingerprint::Chrome146, TlsFingerprint::Chrome146),
+            (TlsFingerprint::Safari184Ios, TlsFingerprint::Safari180),
         ] {
             same(left, right, version);
         }
@@ -1184,8 +1161,7 @@ fn added_shapes_match_the_captures_they_were_read_from() {
         (TlsFingerprint::Chrome120, "t13d1516h2_8daaf6152771_02713d6af862", "8daaf6152771"),
         (TlsFingerprint::Chrome131, "t13d1516h2_8daaf6152771_02713d6af862", "8daaf6152771"),
         (TlsFingerprint::Chrome131Android, "t13d1516h2_8daaf6152771_02713d6af862", "8daaf6152771"),
-        (TlsFingerprint::Chrome136, "t13d1516h2_8daaf6152771_d8a2da3f94cd", "8daaf6152771"),
-        (TlsFingerprint::Firefox135, "t13d1717h2_5b57614c22b0_3cbfd9057e0d", "5b57614c22b0"),
+        (TlsFingerprint::Chrome146, "t13d1516h2_8daaf6152771_d8a2da3f94cd", "8daaf6152771"),
         (TlsFingerprint::Firefox144, "t13d1717h2_5b57614c22b0_3cbfd9057e0d", "5b57614c22b0"),
         (TlsFingerprint::Tor145, "t13d1513h2_8daaf6152771_748f4c70de1c", "8daaf6152771"),
     ] {
@@ -1198,8 +1174,8 @@ fn added_shapes_match_the_captures_they_were_read_from() {
     // carries. Both shuffle a GREASE ECH body whose length is drawn per
     // connection, so the comparison is the sorted extension list and the two
     // hashes — the length is not a property of the shape.
-    let ours = client_hello_full(TlsFingerprint::Chrome136, TlsVersion::Any);
-    let theirs = client_hello_full(TlsFingerprint::Chrome133, TlsVersion::Any);
+    let ours = client_hello_full(TlsFingerprint::Chrome146, TlsVersion::Any);
+    let theirs = client_hello_full(TlsFingerprint::Chrome146, TlsVersion::Any);
     assert_eq!(
         (order_independent_ja3(&ours.0), ours.2),
         (order_independent_ja3(&theirs.0), theirs.2),
@@ -1216,9 +1192,9 @@ fn added_shapes_match_the_captures_they_were_read_from() {
 fn pinned_tls_version_and_alpn_reach_the_hello() {
     let hello = |tls12_only: bool, alpn: Option<Vec<Vec<u8>>>| {
         let mut profile = if tls12_only {
-            TlsProfile::insecure(TlsFingerprint::Chrome).tls12()
+            TlsProfile::insecure(TlsFingerprint::Chrome107).tls12()
         } else {
-            TlsProfile::insecure(TlsFingerprint::Chrome).tls13()
+            TlsProfile::insecure(TlsFingerprint::Chrome107).tls13()
         };
         if let Some(alpn) = alpn {
             profile = profile.alpn(alpn);
@@ -1355,17 +1331,17 @@ fn is_grease_version(value: u16) -> bool {
 /// given the hybrid group — a group the original does not offer would change
 /// the fingerprint being reproduced.
 #[test]
-fn curl_family_profiles_do_not_use_the_pq_provider() {
-    assert!(!needs_pq(TlsFingerprint::Chrome));
-    assert!(!needs_pq(TlsFingerprint::Safari));
-    assert!(needs_pq(TlsFingerprint::Firefox));
+fn the_legacy_profiles_do_not_use_the_pq_provider() {
+    assert!(!needs_pq(TlsFingerprint::Chrome107));
+    assert!(!needs_pq(TlsFingerprint::Safari155));
+    assert!(needs_pq(TlsFingerprint::Firefox133));
     // Chrome 133 offers X25519MLKEM768 first, so it needs the provider that can
     // share a key over it; Edge and Safari 18 predate the hybrid group.
-    assert!(needs_pq(TlsFingerprint::Chrome133));
-    assert!(!needs_pq(TlsFingerprint::Safari18));
-    assert!(!needs_pq(TlsFingerprint::Edge));
-    assert!(advertises_cert_compression(TlsFingerprint::Chrome));
-    assert!(advertises_cert_compression(TlsFingerprint::Safari));
+    assert!(needs_pq(TlsFingerprint::Chrome146));
+    assert!(!needs_pq(TlsFingerprint::Safari180));
+    assert!(!needs_pq(TlsFingerprint::Edge101));
+    assert!(advertises_cert_compression(TlsFingerprint::Chrome107));
+    assert!(advertises_cert_compression(TlsFingerprint::Safari155));
     assert!(!advertises_cert_compression(TlsFingerprint::Rustls));
 }
 
@@ -1379,13 +1355,13 @@ fn curl_family_profiles_do_not_use_the_pq_provider() {
 #[test]
 fn the_decompressor_list_follows_the_profile() {
     for (name, fingerprint, advertises) in [
-        ("Rustls", TlsFingerprint::Rustls, false),
-        ("Firefox", TlsFingerprint::Firefox, true),
-        ("Chrome", TlsFingerprint::Chrome, true),
-        ("Safari", TlsFingerprint::Safari, true),
-        ("Chrome133", TlsFingerprint::Chrome133, true),
-        ("Safari18", TlsFingerprint::Safari18, true),
-        ("Edge", TlsFingerprint::Edge, true),
+        ("rustls", TlsFingerprint::Rustls, false),
+        ("firefox133", TlsFingerprint::Firefox133, true),
+        ("chrome107", TlsFingerprint::Chrome107, true),
+        ("safari155", TlsFingerprint::Safari155, true),
+        ("chrome146", TlsFingerprint::Chrome146, true),
+        ("safari180", TlsFingerprint::Safari180, true),
+        ("edge101", TlsFingerprint::Edge101, true),
     ] {
         let config = create_tls_config(&TlsProfile::insecure(fingerprint).tls13());
         assert_eq!(

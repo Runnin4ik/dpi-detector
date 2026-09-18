@@ -20,14 +20,14 @@
 //!
 //! * [`TlsFingerprint::Rustls`] — the untouched default. Every measurement the
 //!   tool has ever taken was taken with this, so it stays the baseline.
-//! * [`TlsFingerprint::Firefox`], [`TlsFingerprint::Chrome`],
-//!   [`TlsFingerprint::Safari`] — the shapes the Russian TSPU has been
+//! * [`TlsFingerprint::Firefox133`], [`TlsFingerprint::Chrome107`],
+//!   [`TlsFingerprint::Safari155`] — the shapes the Russian TSPU has been
 //!   *reported* to block, and the Firefox-shaped client reportedly not to: the
 //!   JA3s of the `curl-impersonate` bundles the forum report names. They exist
 //!   to answer "is this site blocked for me, or only for clients that look like
 //!   `curl_chrome107`?".
-//! * [`TlsFingerprint::Chrome133`], [`TlsFingerprint::Safari18`],
-//!   [`TlsFingerprint::Edge`] — current releases of the same clients: Chrome
+//! * [`TlsFingerprint::Chrome146`], [`TlsFingerprint::Safari180`],
+//!   [`TlsFingerprint::Edge101`] — current releases of the same clients: Chrome
 //!   133's hello is a different shape (hybrid post-quantum group, ALPS at its
 //!   new code point), while Safari 18 and Edge send the TLS shape their older
 //!   rows already reproduce behind a current identity.
@@ -132,49 +132,48 @@ pub enum TlsFingerprint {
     /// Untouched rustls: the historical baseline.
     #[default]
     Rustls,
-    /// `curl_firefox133`-shaped: Firefox 133's own ClientHello.
-    Firefox,
-    /// `curl_chrome99..116` / `curl_edge99,101`-shaped (reported TSPU trigger).
-    Chrome,
-    /// `curl_safari15.5..18.4`-shaped (reported TSPU trigger).
-    Safari,
-    /// `curl_chrome133a`-shaped: the newest Chrome the bundle reproduces.
-    Chrome133,
-    /// `curl_safari180`-shaped: Safari 18.0 — the same hello as [`Self::Safari`],
-    /// the identity and preface of the current release.
-    Safari18,
-    /// `curl_edge99,101`-shaped: Chromium's hello behind Edge's identity.
-    Edge,
-    /// `curl_chrome99_android`-shaped: Chrome 99's hello behind a Pixel 6's
-    /// identity.
+    /// Firefox 133's own ClientHello (`curl_firefox133` in the bundle).
+    Firefox133,
+    /// Chrome 107's (`curl_chrome107`): the reported TSPU trigger.
+    Chrome107,
+    /// Safari 15.5's (`curl_safari155`), 20 ciphers and no `zstd`.
+    Safari155,
+    /// Safari 18.0's (`curl_safari180`): Safari 15.5's hello with the 18.x
+    /// signature schemes, the newer identity and Safari's own preface.
+    Safari180,
+    /// Edge 101's (`curl_edge101`): Chromium's hello behind Edge's identity.
+    Edge101,
+    /// Chrome 99's on Android (`curl_chrome99_android`): Chrome 107's hello
+    /// behind a Pixel 6's identity.
     Chrome99Android,
-    /// `curl_chrome120`-shaped: the first Chromium release here with no padding
-    /// extension and with ECH (which this build omits).
+    /// Chrome 120's (`curl_chrome120`): the first release here whose hello
+    /// carries ECH (as GREASE) and shuffles its extension order per connection.
     Chrome120,
-    /// `curl_chrome131`-shaped: the hybrid group and ALPS at its old code point.
+    /// Chrome 131's (`curl_chrome131`): the hybrid group, ALPS at 17513.
     Chrome131,
-    /// `curl_chrome131_android`-shaped: Chrome 131 on a phone, no hybrid group.
+    /// Chrome 131's on Android (`curl_chrome131_android`): the same shape
+    /// without the hybrid group, behind the phone's identity.
     Chrome131Android,
-    /// `curl_chrome136`-shaped: Chrome 133's hello under the current identity.
-    Chrome136,
-    /// `curl_firefox135`-shaped: Firefox 133's hello plus a certificate
-    /// timestamp extension.
-    Firefox135,
-    /// `curl_firefox144`-shaped: the same hello under the current identity.
+    /// Chrome 146's (`curl_chrome146`): the newest desktop Chromium in the
+    /// bundle. Chrome 133 through 146 send one hello — same JA4, same extension
+    /// set, same h2 preface — so a single record covers them, under the newest
+    /// identity; keeping four names for it would only multiply the report.
+    Chrome146,
+    /// Firefox 144's (`curl_firefox144`): Firefox 133's hello plus a certificate
+    /// timestamp extension. Firefox 135 and 147 send the same hello.
     Firefox144,
-    /// `curl_safari153`-shaped: Safari 15.3, whose cipher list is 15.5's plus six
-    /// CBC/SHA-256 suites.
+    /// Safari 15.3's (`curl_safari153`): 15.5's hello with six more suites and
+    /// no `compress_certificate`.
     Safari153,
-    /// `curl_safari184_ios`-shaped: Safari 18.4's hello behind an iPhone's
-    /// identity.
+    /// Safari 18.4's on iOS (`curl_safari184_ios`): Safari 18's hello behind an
+    /// iPhone's identity.
     Safari184Ios,
-    /// `curl_safari260`-shaped: Safari 26.0 with the hybrid group, no padding and
-    /// no request priority.
+    /// Safari 26.0's (`curl_safari260`): the hybrid group, no padding and no
+    /// request priority.
     Safari260,
-    /// `curl_safari260_ios`-shaped: Safari 26.0's hello on iOS, which keeps
-    /// X25519 first and pads to 512 bytes.
+    /// Safari 26.0's on iOS (`curl_safari260_ios`): X25519 first, padding back.
     Safari260Ios,
-    /// `curl_tor145`-shaped: Tor Browser 14.5's Firefox 128 ESR hello, ungreased.
+    /// Tor Browser 14.5's (`curl_tor145`): Firefox 128 ESR's hello, ungreased.
     Tor145,
 }
 
@@ -212,12 +211,14 @@ impl TlsFingerprint {
     /// Parses a configured value. `None` for anything unknown, so callers can
     /// warn and fall back instead of silently changing what gets measured.
     ///
-    /// Both the canonical names and the `curl-impersonate` ones are accepted,
-    /// the latter only where this build reproduces the shape they name: a
-    /// bundle profile whose JA3 differs (`curl_chrome110+` shuffles the
-    /// extension order, `curl_safari260` offers the post-quantum group,
-    /// `curl_firefox135+` adds SCT) is rejected rather than mapped to a
-    /// neighbouring profile.
+    /// One name per record, and the name is the `code` `--legend` prints and
+    /// `--json` carries — `chrome146`, `firefox144`, `tor145`. The bundle's
+    /// `curl_*` wrapper names are not accepted: a name that resolves to a
+    /// different client version than it says (the wrappers name 133, 135, 142,
+    /// 145 … for hellos this build sends as a single newest profile) is worse
+    /// than a name that does not resolve, and the wrappers disagree with each
+    /// other below the hello as well (`curl_safari170` sends a different h2
+    /// preface than `curl_safari155`).
     pub fn parse(value: &str) -> Option<Self> {
         let value = value.trim().to_ascii_lowercase();
         SHAPES
@@ -236,20 +237,18 @@ impl TlsFingerprint {
     /// older and newer releases of the same clients plus the mobile, Tor and
     /// missing-version shapes, selectable one at a time (`--fingerprint`) or as
     /// a burst list (`--burst-profiles all`).
-    pub const ALL: [TlsFingerprint; 19] = [
+    pub const ALL: [TlsFingerprint; 17] = [
         Self::Rustls,
-        Self::Firefox,
-        Self::Chrome,
-        Self::Safari,
-        Self::Chrome133,
-        Self::Safari18,
-        Self::Edge,
+        Self::Firefox133,
+        Self::Chrome107,
+        Self::Safari155,
+        Self::Safari180,
+        Self::Edge101,
         Self::Chrome99Android,
         Self::Chrome120,
         Self::Chrome131,
         Self::Chrome131Android,
-        Self::Chrome136,
-        Self::Firefox135,
+        Self::Chrome146,
         Self::Firefox144,
         Self::Safari153,
         Self::Safari184Ios,
@@ -267,18 +266,18 @@ impl TlsFingerprint {
     /// stays the explicit way to ask for everything, however many that is.
     pub const DEFAULT_SET: [TlsFingerprint; 7] = [
         Self::Rustls,
-        Self::Firefox,
-        Self::Chrome,
-        Self::Safari,
-        Self::Chrome133,
-        Self::Safari18,
-        Self::Edge,
+        Self::Firefox133,
+        Self::Chrome107,
+        Self::Safari155,
+        Self::Chrome146,
+        Self::Safari180,
+        Self::Edge101,
     ];
 
-    /// Parses a profile list for test 6: `all`, or comma/space separated names
-    /// (including the `curl_*` aliases). Unknown tokens come back separately so
-    /// the caller can warn instead of silently running a different test than the
-    /// one that was asked for; an empty or all-unknown list means `all`.
+    /// Parses a profile list for test 6: `all`, or comma/space separated names.
+    /// Unknown tokens come back separately so the caller can warn instead of
+    /// silently running a different test than the one that was asked for; an
+    /// empty or all-unknown list means `all`.
     pub fn parse_list(value: &str) -> (Vec<Self>, Vec<String>) {
         let mut out: Vec<Self> = Vec::new();
         let mut unknown: Vec<String> = Vec::new();
