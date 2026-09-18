@@ -407,6 +407,10 @@ DNS_KNOWN_RESOLVER_NAMES:
   - "woodynet"
   - "e1-emea"
   - "gtt-backbone"
+  # Сеть, через которую отвечают наши же резолверы: 84.200.69.80 (DNS Watch)
+  # выходит через First Colo, 4.2.2.1/.2 и 209.244.0.4 — через Level 3.
+  - "level3"
+  - "firstcolo"
   # Бренды резолверов: белый org всегда зелёный.
   - "cloudflare"
   - "quad9"

@@ -162,7 +162,7 @@ fn d_dns_known_resolver_names() -> Vec<String> {
         "google", "cloudflarenet", "i3dnet", "cdn77", "alibaba-cn-net",
         "as-vultr", "cdnext", "xtom", "tencent-net-ap-cn", "misaka-cis-as",
         "as-anexia", "ru-jsciot", "yandex", "cisco", "woodynet",
-        "e1-emea", "gtt-backbone",
+        "e1-emea", "gtt-backbone", "level3", "firstcolo",
         // Resolver-brand tokens, substring-matched against the egress ASN name:
         // a whitelisted org is always green, even if a sibling endpoint
         // of the same brand was hijacked elsewhere.
@@ -1119,7 +1119,7 @@ mod tests {
         assert_eq!(cfg.concurrency_presets, vec![1, 5, 20, 50, 100]);
         assert_eq!(cfg.cymru_doh_servers.len(), 5);
         assert_eq!(cfg.ip6_lookup_urls.len(), 4);
-        assert_eq!(cfg.dns_known_resolver_names.len(), 29);
+        assert_eq!(cfg.dns_known_resolver_names.len(), 31);
         assert!(cfg.dns_known_resolver_names.contains(&"google".to_string()));
         assert!(cfg.dns_known_resolver_names.contains(&"yandex".to_string()));
         assert_eq!(cfg.dns_hijack_exempt_resolvers, vec!["MSK-IX", "НСДИ"]);

@@ -519,4 +519,54 @@ mod tests {
             "no org answer is white, not red: {out}"
         );
     }
+
+    /// The networks our own resolvers answer through are on the shipped list, so
+    /// their egress reads green: a row the config asks for must not look like a
+    /// substitution. The list is what decides this, so the test reads `config.yml`
+    /// itself — a token dropped from it turns a configured resolver red again.
+    #[test]
+    fn the_shipped_list_whitelists_our_resolvers_egress() {
+        use dpi_core::probe::dns_avail::{DnsAvailReport, ProbeKey, ProbeKind};
+        use std::collections::HashMap;
+
+        let cfg = AppConfig::from_yaml_str(include_str!("../../../../config.yml"));
+        let names = [("DNS Watch", "198.51.100.1"), ("Level 3", "198.51.100.2")];
+        let mut report = DnsAvailReport {
+            allowed: vec!["vk.ru".to_string()],
+            udp_servers: names
+                .iter()
+                .map(|(name, addr)| (addr.to_string(), name.to_string(), 53))
+                .collect(),
+            all_names: names.iter().map(|(name, _)| name.to_string()).collect(),
+            ..Default::default()
+        };
+        for (name, addr, egress, org) in [
+            ("DNS Watch", "198.51.100.1", "203.0.113.1", "DE-FIRSTCOLO"),
+            ("Level 3", "198.51.100.2", "203.0.113.2", "LEVEL3"),
+        ] {
+            let key = ProbeKey {
+                kind: ProbeKind::Udp,
+                addr: addr.to_string(),
+                name: name.to_string(),
+            };
+            let mut dm = HashMap::new();
+            dm.insert("vk.ru".to_string(), Some(10.0));
+            report.raw.insert(key, dm);
+            report.egress.insert(
+                (addr.to_string(), name.to_string()),
+                Some(egress.parse().unwrap()),
+            );
+            report.org_names.insert(egress.to_string(), org.to_string());
+        }
+        let out =
+            render_dns_availability(&report, &cfg, &crate::i18n::get_messages(crate::i18n::Language::Ru));
+        assert!(
+            out.contains("\x1b[32m198.51.100.1→DE-FIRSTCOLO"),
+            "DNS Watch answers through First Colo, and that is green: {out}"
+        );
+        assert!(
+            out.contains("\x1b[32m198.51.100.2→LEVEL3"),
+            "Level 3 answers through its own network, and that is green: {out}"
+        );
+    }
 }
