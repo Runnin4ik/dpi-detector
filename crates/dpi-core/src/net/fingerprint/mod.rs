@@ -72,11 +72,11 @@
 //!   request's priority are the client's own.
 //! * `chrome123` and `chrome131android` are the only shapes whose hello can fall
 //!   under the 512-byte floor a browser pads to — 497 bytes with the shortest
-//!   GREASE ECH body — and this build never pads there: the profile's
-//!   `padding_to` measures the hello before rustls appends the typed ECH body, so
-//!   a slot for it overshoots by the whole body (803 bytes against the bundle's
-//!   517). What goes out is the unpadded hello the same client sends on three
-//!   connections out of four, so the gap is a frequency, not a shape.
+//!   GREASE ECH body — and both are padded there the way BoringSSL does it: the
+//!   padding slot counts the extensions that follow it (the ECH the encoder
+//!   appends last), so the message lands on 512 exactly, and the other three body
+//!   lengths leave it above the floor with no padding at all. Both outcomes are
+//!   the client's own: it pads on one connection in four.
 //! * A hello whose version is pinned for isolation — test 2's two columns and
 //!   test 6's TLS 1.2 axis — advertises one version where the client it
 //!   imitates sends two or more (`[GREASE, 0x0304]` instead of

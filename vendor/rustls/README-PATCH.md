@@ -44,7 +44,7 @@ their patched rustls rejected valid server configurations.
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 0.23.43 — 1311 lines across 10
+`PATCH.diff` is the exact diff against pristine 0.23.43 — 1357 lines across 10
 files, one of them new (`src/client/hello_profile.rs`). It applies to a pristine
 copy with `patch -p1` (`patch -p1 --binary` was run against the crates.io source
 before this file was replaced, and the result compared against this tree with
@@ -142,7 +142,11 @@ failing handshake or a real mismatched fingerprint, not a theoretical concern:
   post-processing cannot, because only the encoder knows how long the message is.
   The extension is omitted when the hello is already that large, as BoringSSL
   does. Reproducing the `curl-impersonate` chrome/safari JA3s exactly depends on
-  this.
+  this. The slot counts the extensions written *after* it, too: ECH is appended
+  last (TLS 1.3 requires it) and Chrome shuffles the order, so the encoder writes
+  the tail into a scratch buffer first and sizes the pad against the finished
+  hello — without that it overshot by the whole ECH body, which is how the two
+  Chrome shapes that fall under the floor came to send an unpadded hello.
 * **GREASE extensions need positions, not just a flag.** The `grease` flag adds a
   GREASE cipher and group, but a GREASE *extension* has to sit at an exact spot in
   the order (Chrome opens and closes its list with one), and its value is drawn

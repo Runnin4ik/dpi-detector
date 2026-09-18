@@ -1194,6 +1194,23 @@ impl ClientExtensions<'_> {
 
         order
     }
+
+    /// Encodes one extension of the hello into `out`.
+    ///
+    /// Split out of the `Codec` implementation so the extensions that follow the
+    /// padding slot can be measured in a scratch buffer before the slot is
+    /// written.
+    fn encode_extension(&self, item: ExtensionType, out: &mut Vec<u8>) {
+        // dpi-detector patch: verbatim extensions first — they exist only where
+        // rustls has no typed field, so this cannot duplicate.
+        if let Some((_, raw)) = self.raw_extensions.iter().find(|(t, _)| *t == item) {
+            item.encode(out);
+            (raw.len() as u16).encode(out);
+            out.extend_from_slice(raw);
+            return;
+        }
+        self.encode_one(item, out);
+    }
 }
 
 impl<'a> Codec<'a> for ClientExtensions<'a> {
@@ -1205,8 +1222,25 @@ impl<'a> Codec<'a> for ClientExtensions<'a> {
         }
 
         let body = LengthPrefixedBuffer::new(ListLength::U16, bytes);
-        for item in order {
-            if item == ExtensionType::Padding && self.padding_to.is_some() {
+
+        // dpi-detector patch: BoringSSL sizes the padding against the *finished*
+        // hello, and the extensions the profile puts after the padding slot are
+        // written after it — ECH, its outer-extensions companion, the PSK, and
+        // Chrome shuffles the whole order anyway, so the slot is not last. They
+        // are encoded into a scratch buffer first so the slot can count them: a
+        // slot that ignored them overshot by the whole ECH body (803 bytes on
+        // the wire against the bundle's 517, which a length-based matcher sees).
+        let padding_at = self
+            .padding_to
+            .and_then(|_| order.iter().position(|item| *item == ExtensionType::Padding));
+        let tail_from = padding_at.map_or(order.len(), |at| at + 1);
+        let mut tail = Vec::new();
+        for item in order[tail_from..].iter() {
+            self.encode_extension(*item, &mut tail);
+        }
+
+        for (index, item) in order.iter().enumerate() {
+            if Some(index) == padding_at {
                 // dpi-detector patch: pad the hello the way browsers do
                 // (RFC 7685), so extension 21 is present in JA3/JA4 exactly as
                 // it is for Chrome. The target is the *handshake message*: the
@@ -1214,8 +1248,10 @@ impl<'a> Codec<'a> for ClientExtensions<'a> {
                 // exactly 512 bytes on the wire (record 517), and an earlier
                 // `+ 9` here — meant to account for the handshake and record
                 // headers — overshot by nine bytes (message 521, record 526),
-                // which any length-based matcher can see.
-                let len = (self.padding_to.unwrap_or(0) as usize).saturating_sub(body.buf.len() + 4);
+                // which any length-based matcher can see. A hello already over
+                // the target takes no padding, exactly as BoringSSL leaves it.
+                let len = (self.padding_to.unwrap_or(0) as usize)
+                    .saturating_sub(body.buf.len() + 4 + tail.len());
                 if len > 0 {
                     item.encode(body.buf);
                     (len as u16).encode(body.buf);
@@ -1223,16 +1259,14 @@ impl<'a> Codec<'a> for ClientExtensions<'a> {
                 }
                 continue;
             }
-            // dpi-detector patch: verbatim extensions first — they exist only
-            // where rustls has no typed field, so this cannot duplicate.
-            if let Some((_, raw)) = self.raw_extensions.iter().find(|(t, _)| *t == item) {
-                item.encode(body.buf);
-                (raw.len() as u16).encode(body.buf);
-                body.buf.extend_from_slice(raw);
+            if index >= tail_from {
+                // Encoded into `tail` above, and written after the padding slot.
                 continue;
             }
-            self.encode_one(item, body.buf);
+            self.encode_extension(*item, body.buf);
         }
+
+        body.buf.extend_from_slice(&tail);
     }
 
     fn read(r: &mut Reader<'a>) -> Result<Self, InvalidMessage> {

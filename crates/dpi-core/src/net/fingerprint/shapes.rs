@@ -376,9 +376,9 @@ const SAFARI_TLS_RAW_EXTS: &[(u16, &[u8])] = &[
 /// `HelloChrome_120`/`HelloChrome_131` name the rest in exactly this order.
 /// Chromium permutes per connection, so this is one order out of the
 /// distribution the same way Chrome 133's is: the tests pin the extension *set*
-/// and the order-insensitive JA4. Chrome 120 and 131 Android would carry one
-/// under the 512-byte floor — the client pads there with the shortest GREASE ECH
-/// body — and they do not here, for the reason in the Chrome 120 record.
+/// and the order-insensitive JA4. The two records whose hello can fall under the
+/// 512-byte floor name the padding slot too
+/// ([`CHROME_PADDING_AND_ECH_EXT_ORDER`]).
 const CHROME_NO_PADDING_EXT_ORDER: &[u16] = &[
     GREASE_EXTENSION_MARKER,
     EXT_SERVER_NAME,
@@ -397,6 +397,35 @@ const CHROME_NO_PADDING_EXT_ORDER: &[u16] = &[
     EXT_COMPRESS_CERTIFICATE,
     EXT_APPLICATION_SETTINGS,
     GREASE_EXTENSION_MARKER,
+    EXT_ENCRYPTED_CLIENT_HELLO,
+];
+
+/// Chrome 119–131's extension order where the hello can fall under the floor:
+/// Chrome 99–107's list — padding slot included — plus the ECH the wrapper sends.
+///
+/// BoringSSL's table has the padding slot and adds ECH outside it, so the order
+/// names padding before the ECH the encoder appends; `curl_chrome123` and
+/// `curl_chrome131_android` both pad when the shortest GREASE ECH body leaves
+/// them at 497 bytes, and both carry extension 21 on those connections.
+const CHROME_PADDING_AND_ECH_EXT_ORDER: &[u16] = &[
+    GREASE_EXTENSION_MARKER,
+    EXT_SERVER_NAME,
+    EXT_EXTENDED_MASTER_SECRET,
+    EXT_RENEGOTIATION_INFO,
+    EXT_SUPPORTED_GROUPS,
+    EXT_EC_POINT_FORMATS,
+    EXT_SESSION_TICKET,
+    EXT_ALPN,
+    EXT_STATUS_REQUEST,
+    EXT_SIGNATURE_ALGORITHMS,
+    EXT_SCT,
+    EXT_KEY_SHARE,
+    EXT_PSK_KEY_EXCHANGE_MODES,
+    EXT_SUPPORTED_VERSIONS,
+    EXT_COMPRESS_CERTIFICATE,
+    EXT_APPLICATION_SETTINGS,
+    GREASE_EXTENSION_MARKER,
+    EXT_PADDING,
     EXT_ENCRYPTED_CLIENT_HELLO,
 ];
 
@@ -1234,13 +1263,13 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // one per family.
     //
     // This and Chrome 131 Android are the two shapes whose hello can fall under
-    // the 512-byte floor: with the shortest GREASE ECH body it is 497 bytes, and
-    // the client pads there — 16 bytes of padding bring it to 517, measured on
-    // the wrapper. We do not: the profile's `padding_to` measures the hello
-    // before rustls appends the typed ECH body, so a slot here overshoots by the
-    // whole body (803 bytes against 517). The hello is then the *unpadded* value
-    // the client itself sends on three connections out of four, never a shape it
-    // never sends — the gap is a frequency, not a shape.
+    // the 512-byte floor: with the shortest GREASE ECH body it comes to 497
+    // bytes, and BoringSSL pads there — 16 bytes of padding bring it to the 512
+    // the bundle's hellos measure, and the extension is part of the JA3/JA4 the
+    // client sends. The padding slot counts the extensions that follow it
+    // (`vendor/rustls`, `ClientExtensions::encode`), so what goes out is that
+    // padded hello, and the other three body lengths leave the hello above the
+    // floor exactly as they do for the client.
     //
     // `curl_chrome119` and `curl_chrome120` send this hello under their own
     // UAs, and they are not separate profiles here: a profile is one hello plus
@@ -1259,7 +1288,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_GROUPS,
         sig_algs: CHROME_TLS_SIG_ALGS,
-        ext_order: CHROME_NO_PADDING_EXT_ORDER,
+        ext_order: CHROME_PADDING_AND_ECH_EXT_ORDER,
         raw_exts: CHROME_TLS_RAW_EXTS,
         suppress: &[],
         drop13: &[
@@ -1268,10 +1297,11 @@ pub(crate) static SHAPES: &[TlsShape] = &[
             EXT_EC_POINT_FORMATS,
             EXT_SESSION_TICKET,
         ],
-        // No padding in the order, so only the version list and ALPS go.
-        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS],
+        // The padding extension goes with the pinned 1.2 hello, ALPS and the
+        // version list with it.
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING],
         alpn: H2_AND_HTTP11,
-        padding_to: None,
+        padding_to: Some(512),
         grease: true,
         permute_extensions: true,
         ech: true,
@@ -1342,7 +1372,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_GROUPS,
         sig_algs: CHROME_TLS_SIG_ALGS,
-        ext_order: CHROME_NO_PADDING_EXT_ORDER,
+        ext_order: CHROME_PADDING_AND_ECH_EXT_ORDER,
         raw_exts: CHROME_TLS_RAW_EXTS,
         suppress: &[],
         drop13: &[
@@ -1351,9 +1381,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
             EXT_EC_POINT_FORMATS,
             EXT_SESSION_TICKET,
         ],
-        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS],
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING],
         alpn: H2_AND_HTTP11,
-        padding_to: None,
+        padding_to: Some(512),
         grease: true,
         permute_extensions: true,
         ech: true,

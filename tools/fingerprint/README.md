@@ -72,13 +72,14 @@ These are deliberate. Anything *else* it reports is a bug.
   is reported as a difference.
 * **Padding under the 512-byte floor, on two shapes.** `chrome123` and
   `chrome131android` reach 497 bytes with the shortest GREASE ECH body, and
-  `curl_chrome123`/`curl_chrome131_android` pad there — 16 bytes, to 517 — while
-  this build never does: the profile's `padding_to` is measured before rustls
-  appends the typed ECH body, so a slot for it overshoots by the whole body.
-  When the bundle draws that shortest body, `hello-diff` reports one extension
-  more on its side and `captures` can report the same set difference; every other
-  body length leaves both hellos above the floor. What we send is the unpadded
-  hello the client sends on three connections out of four.
+  `curl_chrome123`/`curl_chrome131_android` pad there — to 517 — as this build
+  now does too: the padding slot counts the extensions that follow it. Which of
+  the four body lengths a run draws is per-connection randomness on both sides,
+  so the two clients pad on different connections and `hello-diff` reports one
+  extension more on whichever side padded — `extensions DIFF` with sizes 517
+  against 561, never a smaller hello on our side. The same coin flip makes
+  `echo-diff` report a JA3 difference for these two shapes more often than for
+  the other shufflers, since the padding extension is part of JA3 and JA4.
 * **Extension order, in the byte diff only.** The five Chrome 110+ records
   shuffle their extension order per connection because their wrapper names
   `--tls-permute-extensions`, and the bundle's own captures do too. `hello-diff`

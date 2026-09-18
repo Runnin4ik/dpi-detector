@@ -1183,9 +1183,7 @@ fn added_shapes_match_the_captures_they_were_read_from() {
     // which is the one part a wrong cipher list moves silently.
     for (fingerprint, ours, cipher_hash) in [
         (TlsFingerprint::Chrome116, "t13d1516h2_8daaf6152771_e5627efa2ab1", "8daaf6152771"),
-        (TlsFingerprint::Chrome123, "t13d1516h2_8daaf6152771_02713d6af862", "8daaf6152771"),
         (TlsFingerprint::Chrome131, "t13d1516h2_8daaf6152771_02713d6af862", "8daaf6152771"),
-        (TlsFingerprint::Chrome131Android, "t13d1516h2_8daaf6152771_02713d6af862", "8daaf6152771"),
         (TlsFingerprint::Chrome146, "t13d1516h2_8daaf6152771_d8a2da3f94cd", "8daaf6152771"),
         (TlsFingerprint::Firefox147, "t13d1717h2_5b57614c22b0_3cbfd9057e0d", "5b57614c22b0"),
         (TlsFingerprint::Tor145, "t13d1513h2_8daaf6152771_748f4c70de1c", "8daaf6152771"),
@@ -1193,6 +1191,29 @@ fn added_shapes_match_the_captures_they_were_read_from() {
         let (_, _, got) = client_hello_full(fingerprint, TlsVersion::Any);
         assert_eq!(got.split('_').nth(1), Some(cipher_hash), "{fingerprint}: the source's cipher hash");
         assert_eq!(got, ours, "{fingerprint}: our extension hash");
+    }
+
+    // The two shapes whose hello can fall under the 512-byte floor carry the
+    // padding slot on the connections where the shortest GREASE ECH body lands
+    // them there, and that extension is part of JA4 — so both values are the
+    // source's own: `curl_chrome131_android` measures 16 extensions on one
+    // connection and 17 on the next, with exactly these two hashes.
+    for (fingerprint, ours, padded) in [
+        (
+            TlsFingerprint::Chrome123,
+            "t13d1516h2_8daaf6152771_02713d6af862",
+            "t13d1517h2_8daaf6152771_b1ff8ab2d16f",
+        ),
+        (
+            TlsFingerprint::Chrome131Android,
+            "t13d1516h2_8daaf6152771_02713d6af862",
+            "t13d1517h2_8daaf6152771_b1ff8ab2d16f",
+        ),
+    ] {
+        let (_, length, got) = client_hello_full(fingerprint, TlsVersion::Any);
+        let expected = if length == 512 { padded } else { ours };
+        assert_eq!(got, expected, "{fingerprint}: {length}-byte hello");
+        assert_eq!(got.split('_').nth(1), Some("8daaf6152771"), "{fingerprint}: cipher hash");
     }
 
     // Chrome 133's hello, which 136 shares: the pin is the one that test
@@ -1311,7 +1332,15 @@ fn grease_version_leads_supported_versions() {
             assert_eq!(browser, expected, "{fp:?} does not grease");
         }
         if shape.padding_to == Some(512) {
-            assert_eq!(record, 512 + 5, "{fp:?}: the padded hello must stay 512 bytes");
+            // A hello that can fall under the floor is padded to it exactly, and
+            // one already above it is left alone — the ECH-carrying records draw
+            // the GREASE body from four lengths, so three of them clear the floor
+            // on their own. Either way the message never lands under it.
+            if shape.ech {
+                assert!(record >= 512 + 5, "{fp:?}: {record} bytes is under the padding floor");
+            } else {
+                assert_eq!(record, 512 + 5, "{fp:?}: the padded hello must stay 512 bytes");
+            }
         } else {
             // No padding extension: the hello is past the 256-byte floor
             // BoringSSL pads above on its own, so nothing is lost by leaving it
