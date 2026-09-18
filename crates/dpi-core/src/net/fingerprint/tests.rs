@@ -92,107 +92,99 @@ fn http_identity_names_the_version_the_hello_imitates() {
     assert_eq!(baseline.headers, [("accept-encoding", "identity")]);
 }
 
-/// The h2 preface is what the pinned wrapper configures through
-/// `--http2-settings` / `--http2-window-update`; the increment h2 puts on the
-/// wire is the connection window minus the protocol's 65535 default.
+/// Every profile's h2 shape against the wrapper it copies: the settings that go
+/// out and the order they go out in, the connection window, the request's
+/// pseudo-header order, and the priority its `HEADERS` frame carries.
+///
+/// Read from each wrapper's own flags — `--http2-settings`,
+/// `--http2-window-update`, `--http2-pseudo-headers-order`,
+/// `--http2-stream-weight` / `--http2-stream-exclusive`, `--http2-no-priority` —
+/// and cross-checked against what the bundle itself sends to an echo service
+/// (`tools/fingerprint/fingerprint.py echo-diff`). Safari 18 and 26 name `8:1`
+/// and `9:1`, which this build cannot put on the wire: neither h2 nor hyper
+/// exposes them (see `vendor/h2/README-PATCH.md`), so they are absent by design.
+///
+/// One table rather than a sample per field, because the fields are what a
+/// profile *is*: sampling Chrome, Firefox and Safari 15.5 is how Safari 18 kept
+/// a pseudo-header order of `m,s,p,a` against the `m,s,a,p` its wrapper, its
+/// capture and the bundle all send.
 #[test]
-fn h2_preface_matches_the_wrapper_it_is_pinned_to() {
-    let chrome = h2_fingerprint(TlsFingerprint::Chrome).expect("chrome tunes h2");
-    assert_eq!(chrome.header_table_size, Some(65_536));
-    assert_eq!(chrome.max_concurrent_streams, Some(1000));
-    assert_eq!(chrome.initial_window_size, 6_291_456);
-    assert_eq!(chrome.max_frame_size, None, "Chrome advertises no MAX_FRAME_SIZE");
-    assert_eq!(chrome.connection_window - 65_535, 15_663_105);
-
-    let firefox = h2_fingerprint(TlsFingerprint::Firefox).expect("firefox tunes h2");
-    assert_eq!(firefox.header_table_size, Some(65_536));
-    assert_eq!(firefox.initial_window_size, 131_072);
-    assert_eq!(firefox.max_frame_size, Some(16_384));
-    assert_eq!(firefox.connection_window - 65_535, 12_517_377);
-
-    let safari = h2_fingerprint(TlsFingerprint::Safari).expect("safari tunes h2");
-    assert_eq!(safari.header_table_size, None, "Safari sends no HEADER_TABLE_SIZE");
-    assert_eq!(safari.max_concurrent_streams, Some(100));
-    assert_eq!(safari.initial_window_size, 4_194_304);
-    assert_eq!(safari.connection_window - 65_535, 10_485_760);
-
-    assert!(h2_fingerprint(TlsFingerprint::Rustls).is_none(), "the baseline keeps hyper's defaults");
-}
-
-/// The request shape is measured, not guessed: each triple is what the
-/// bundle named in its `.bat` and what it put on the wire (decrypted with the
-/// bundle's `SSLKEYLOGFILE`). Chrome 107 sends no
-/// `--http2-pseudo-headers-order`, Firefox 133 `"mpas"` and Safari 155
-/// `"mspa"`; all three take the PRIORITY flag on the request's `HEADERS`.
-#[test]
-fn h2_request_shape_matches_the_wrapper_it_is_pinned_to() {
+fn every_h2_preface_matches_the_wrapper_it_copies() {
+    use ::h2::client::PseudoOrder;
     use ::h2::client::PseudoOrder::*;
 
-    let chrome = h2_fingerprint(TlsFingerprint::Chrome).expect("chrome tunes h2");
-    assert_eq!(chrome.pseudo_order, MethodAuthoritySchemePath);
-    assert_eq!(chrome.priority, Some((256, true)));
-
-    let firefox = h2_fingerprint(TlsFingerprint::Firefox).expect("firefox tunes h2");
-    assert_eq!(firefox.pseudo_order, MethodPathAuthorityScheme);
-    assert_eq!(firefox.priority, Some((42, false)));
-
-    let safari = h2_fingerprint(TlsFingerprint::Safari).expect("safari tunes h2");
-    assert_eq!(safari.pseudo_order, MethodSchemePathAuthority);
-    assert_eq!(safari.priority, Some((255, false)));
-}
-
-/// Which settings a preface carries is part of the shape: Chrome sends
-/// `SETTINGS_MAX_HEADER_LIST_SIZE = 262144` and `SETTINGS_ENABLE_PUSH = 0`,
-/// Firefox the push setting but no header-list size, Safari neither.
-#[test]
-fn h2_preface_settings_match_the_wrapper_they_are_pinned_to() {
-    let chrome = h2_fingerprint(TlsFingerprint::Chrome).expect("chrome tunes h2");
-    assert_eq!(chrome.max_header_list_size, Some(262_144));
-    assert_eq!(chrome.enable_push, Some(false));
-
-    let firefox = h2_fingerprint(TlsFingerprint::Firefox).expect("firefox tunes h2");
-    assert_eq!(firefox.max_header_list_size, None, "Firefox sends no header-list size");
-    assert_eq!(firefox.enable_push, Some(false));
-
-    let safari = h2_fingerprint(TlsFingerprint::Safari).expect("safari tunes h2");
-    assert_eq!(safari.max_header_list_size, None, "Safari sends no header-list size");
-    assert_eq!(safari.enable_push, None, "Safari sends no push setting");
-    assert_eq!(safari.settings_order, [4, 3], "Safari lists the window before the stream cap");
-
-    // Chrome 133 dropped MAX_CONCURRENT_STREAMS; Edge leaves out ENABLE_PUSH;
-    // Safari 18 sends neither a header-table size nor a header-list size, and
-    // lists its settings in ascending order.
-    let chrome133 = h2_fingerprint(TlsFingerprint::Chrome133).expect("chrome133 tunes h2");
-    assert_eq!(chrome133.max_concurrent_streams, None, "Chrome 133 sends no stream cap");
-    assert_eq!(chrome133.connection_window - 65_535, 15_663_105);
-
-    let edge = h2_fingerprint(TlsFingerprint::Edge).expect("edge tunes h2");
-    assert_eq!(edge.enable_push, None, "Edge sends no push setting");
-    assert_eq!(edge.max_concurrent_streams, Some(1000));
-    assert_eq!(edge.connection_window - 65_535, 15_663_105);
-
-    let safari18 = h2_fingerprint(TlsFingerprint::Safari18).expect("safari18 tunes h2");
-    assert_eq!(safari18.header_table_size, None);
-    assert_eq!(safari18.max_concurrent_streams, Some(100));
-    assert_eq!(safari18.initial_window_size, 2_097_152);
-    assert_eq!(safari18.enable_push, Some(false));
-    assert_eq!(safari18.settings_order, &[] as &[u16], "Safari 18 lists 2, 3 and 4 ascending");
-    assert_eq!(safari18.connection_window - 65_535, 10_420_225);
-}
-
-/// h2 sorts the settings it sends by id; Safari's preface does not, so the
-/// order is part of the shape. An empty order means the sorted default the
-/// other profiles and the baseline keep.
-#[test]
-fn h2_settings_go_out_in_the_order_the_wrapper_sends_them() {
-    for (fingerprint, expected) in [
-        (TlsFingerprint::Chrome, &[][..]),
-        (TlsFingerprint::Firefox, &[][..]),
-        (TlsFingerprint::Safari, &[4, 3][..]),
-    ] {
-        let h2 = h2_fingerprint(fingerprint).expect("browser profiles tune h2");
-        assert_eq!(h2.settings_order, expected, "{}", fingerprint.code());
+    /// The `SETTINGS` payload as the wire orders it: `settings_order` names the
+    /// ids that go first, in that order, and the rest follow ascending.
+    fn payload(h2: &H2Fingerprint) -> String {
+        let mut present: Vec<(u16, u32)> = Vec::new();
+        if let Some(value) = h2.header_table_size {
+            present.push((1, value));
+        }
+        if let Some(value) = h2.enable_push {
+            present.push((2, value as u32));
+        }
+        if let Some(value) = h2.max_concurrent_streams {
+            present.push((3, value));
+        }
+        present.push((4, h2.initial_window_size));
+        if let Some(value) = h2.max_frame_size {
+            present.push((5, value));
+        }
+        if let Some(value) = h2.max_header_list_size {
+            present.push((6, value));
+        }
+        let first: Vec<(u16, u32)> = h2
+            .settings_order
+            .iter()
+            .filter_map(|id| present.iter().find(|(kind, _)| kind == id).copied())
+            .collect();
+        let rest: Vec<(u16, u32)> = present
+            .iter()
+            .copied()
+            .filter(|(kind, _)| !first.iter().any(|(f, _)| f == kind))
+            .collect();
+        first
+            .into_iter()
+            .chain(rest)
+            .map(|(id, value)| format!("{id}:{value}"))
+            .collect::<Vec<_>>()
+            .join(";")
     }
+
+    /// One row: profile, settings payload, `WINDOW_UPDATE` increment, pseudo
+    /// header order, request priority.
+    type Row = (TlsFingerprint, &'static str, u32, PseudoOrder, Option<(u16, bool)>);
+
+    let expected: [Row; 18] = [
+        (TlsFingerprint::Firefox, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
+        (TlsFingerprint::Firefox135, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
+        (TlsFingerprint::Firefox144, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
+        (TlsFingerprint::Tor145, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
+        (TlsFingerprint::Chrome, "1:65536;2:0;3:1000;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Chrome99Android, "1:65536;3:1000;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Edge, "1:65536;3:1000;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Chrome120, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Chrome131, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Chrome131Android, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Chrome133, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Chrome136, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Safari, "4:4194304;3:100", 10_485_760, MethodSchemePathAuthority, Some((255, false))),
+        (TlsFingerprint::Safari153, "4:4194304;3:100", 10_485_760, MethodSchemePathAuthority, Some((255, false))),
+        (TlsFingerprint::Safari18, "2:0;3:100;4:2097152", 10_420_225, MethodSchemeAuthorityPath, Some((256, false))),
+        (TlsFingerprint::Safari184Ios, "2:0;3:100;4:2097152", 10_420_225, MethodSchemeAuthorityPath, Some((256, false))),
+        (TlsFingerprint::Safari260, "2:0;3:100;4:2097152", 10_420_225, MethodSchemeAuthorityPath, None),
+        (TlsFingerprint::Safari260Ios, "2:0;3:100;4:2097152", 10_420_225, MethodSchemeAuthorityPath, None),
+    ];
+
+    for (fingerprint, settings, increment, pseudo, priority) in expected {
+        let code = fingerprint.code();
+        let h2 = h2_fingerprint(fingerprint).expect("every profile but the baseline tunes h2");
+        assert_eq!(payload(&h2), settings, "{code} settings payload");
+        assert_eq!(h2.connection_window - 65_535, increment, "{code} window increment");
+        assert_eq!(h2.pseudo_order, pseudo, "{code} pseudo-header order");
+        assert_eq!(h2.priority, priority, "{code} request priority");
+    }
+    assert!(h2_fingerprint(TlsFingerprint::Rustls).is_none(), "the baseline keeps hyper's defaults");
 }
 
 /// The version-bearing label is display only: it must not collide with a

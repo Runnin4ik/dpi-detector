@@ -27,6 +27,12 @@
 //!
 //! ## Verifying a profile against the bundle it reproduces
 //!
+//! Steps 1–6 below are scripted in `tools/fingerprint/`: `python
+//! tools/fingerprint/fingerprint.py all` runs each of them for every profile and
+//! prints the differences. Read the steps anyway — they are the reasons the tool
+//! compares what it compares, and the two Safari bugs below are what happens when
+//! one of them is skipped.
+//!
 //! A fingerprint hash is a *summary*. JA3 never reads the signature-algorithms
 //! list; JA3, JA4 and peetprint all drop GREASE by design, because its values
 //! change every connection; and none of them covers the padding length or a
@@ -344,6 +350,12 @@ fn dechunk(body: &[u8]) -> Vec<u8> {
 
 /// What `tls.peet.ws` saw, in the order a comparison reads it: the TLS hashes
 /// first, then the HTTP/2 shape and every request header it received.
+///
+/// Every frame the service received is printed, not only the headers: the
+/// preface's `SETTINGS` payload and its order, the `WINDOW_UPDATE` increment and
+/// the priority a `HEADERS` frame carries are the rest of the h2 shape, and a
+/// comparison that reads only the akamai string cannot tell whether the request
+/// went out with the priority flag the wrapper names.
 fn print_peet_report(report: &serde_json::Value) {
     if let Some(tls) = report.get("tls") {
         for key in ["ja3", "ja3_hash", "ja4", "peetprint_hash"] {
@@ -360,13 +372,45 @@ fn print_peet_report(report: &serde_json::Value) {
             println!("   http2.{key} = {value}");
         }
     }
-    if let Some(frames) = http2.get("sent_frames").and_then(|frames| frames.as_array()) {
-        for frame in frames {
-            let kind = frame.get("frame_type").and_then(|k| k.as_str()).unwrap_or("?");
-            if let Some(headers) = frame.get("headers").and_then(|h| h.as_array()) {
-                for header in headers {
-                    println!("   {kind} {}", header.as_str().unwrap_or(""));
-                }
+    let Some(frames) = http2.get("sent_frames").and_then(|frames| frames.as_array()) else {
+        return;
+    };
+    for frame in frames {
+        let kind = frame.get("frame_type").and_then(|k| k.as_str()).unwrap_or("?");
+        let mut shape = String::new();
+        if let Some(settings) = frame.get("settings").and_then(|s| s.as_array()) {
+            shape.push_str(
+                &settings
+                    .iter()
+                    .filter_map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(";"),
+            );
+        }
+        if let Some(increment) = frame.get("increment") {
+            shape.push_str(&format!("increment {increment}"));
+        }
+        if let Some(flags) = frame.get("flags").and_then(|f| f.as_array()) {
+            shape.push_str(
+                &flags
+                    .iter()
+                    .filter_map(|f| f.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
+        if let Some(priority) = frame.get("priority") {
+            shape.push_str(&format!(
+                " weight {} depends_on {} exclusive {}",
+                priority.get("weight").and_then(|w| w.as_u64()).unwrap_or(0),
+                priority.get("depends_on").and_then(|d| d.as_u64()).unwrap_or(0),
+                priority.get("exclusive").and_then(|e| e.as_u64()).unwrap_or(0),
+            ));
+        }
+        println!("   {kind} {shape}");
+        if let Some(headers) = frame.get("headers").and_then(|h| h.as_array()) {
+            for header in headers {
+                println!("   HEADERS {}", header.as_str().unwrap_or(""));
             }
         }
     }

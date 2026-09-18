@@ -64,21 +64,28 @@
 //!   the browser's own, fallbacks included: Safari 15.5 lists TLS 1.1 and 1.0
 //!   behind 1.2 (`legacy_versions`), and a peer that actually selects one is
 //!   refused by the config and reported `NO TLS1.3`, not as a block.
-//! * HTTP/2 pseudo-headers are ordered `m,s,a,p` (hyper's order; the clients
-//!   send `m,a,s,p` for Chrome, `m,p,a,s` for Firefox, `m,s,p,a` for Safari) and
-//!   the request `HEADERS` frame carries no priority (h2 0.4 dropped priority
-//!   support; Chrome weight 256 / exclusive, Firefox 42 / 0, Safari 255 / 0).
+//! * Two HTTP/2 settings are out of reach: Safari 18 names
+//!   `SETTINGS_ENABLE_CONNECT_PROTOCOL` (`8:1`) and Safari 18 and 26
+//!   `SETTINGS_NO_RFC7540_PRIORITIES` (`9:1`), which neither h2 nor hyper
+//!   exposes, so a Safari preface is short of them
+//!   (`vendor/h2/README-PATCH.md`). Everything else about the preface — which
+//!   settings go out and in what order, the connection window, the request's
+//!   pseudo-header order and the priority its `HEADERS` frame carries — is in
+//!   [`h2_fingerprint`].
 //!
-//! Measured against `tls.peet.ws` the TLS hashes, the header list and order, the
-//! UA and the whole HTTP/2 `SETTINGS`/`WINDOW_UPDATE` pair match the bundle
-//! exactly; `peetprint` — which folds in the priority and the pseudo-header
-//! order — does not.
+//! Measured against `tls.peet.ws` with `tools/fingerprint/`, the TLS hashes, the
+//! header list and order, the UA, the whole HTTP/2 `SETTINGS`/`WINDOW_UPDATE`
+//! pair, the pseudo-header order and the priority match the bundle exactly on
+//! every profile that carries no ECH; `ja3`, `ja4` and `peetprint` differ only
+//! where the omitted `encrypted_client_hello` makes them differ, which is the
+//! extension the profile's own pin records.
 //!
 //! # Adding a profile
 //!
 //! Write the record, add the alias set and the `curl_*` names it reproduces,
 //! pin its JA3 **and** JA4 against the source the record claims, and run
-//! `examples/tls_fingerprint.rs` (`dump`, then `live`). The gate in
+//! `python tools/fingerprint/fingerprint.py all <code>` — it drives the bundle
+//! the record copies and diffs the two clients three ways. The gate in
 //! `tests::every_advertised_code_point_is_served_or_named` refuses a record
 //! whose cipher, group or signature scheme this build cannot serve unless the
 //! gap is named and has a reason — the provider is the second half of a

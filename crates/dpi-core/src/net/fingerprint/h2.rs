@@ -138,7 +138,7 @@ pub(crate) const SAFARI18_H2: H2Fingerprint = H2Fingerprint {
     enable_push: Some(false),
     settings_order: &[],
     connection_window: 10_420_225 + 65_535,
-    pseudo_order: PseudoOrder::MethodSchemePathAuthority,
+    pseudo_order: PseudoOrder::MethodSchemeAuthorityPath,
     priority: Some((256, false)),
 };
 
@@ -160,7 +160,7 @@ pub(crate) const SAFARI260_H2: H2Fingerprint = H2Fingerprint {
     enable_push: Some(false),
     settings_order: &[],
     connection_window: 10_420_225 + 65_535,
-    pseudo_order: PseudoOrder::MethodSchemePathAuthority,
+    pseudo_order: PseudoOrder::MethodSchemeAuthorityPath,
     priority: None,
 };
 
