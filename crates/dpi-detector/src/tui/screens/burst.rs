@@ -15,7 +15,6 @@ use futures_util::StreamExt;
 
 use crate::render::{
     asc, clean_output, frame_home, frame_repaint, output_str, panel_to_string, plain_mode,
-    strip_ansi_len, BOX_WIDTH,
 };
 use crate::tui::input::{nav_key, normalize_key_char};
 use crate::tui::screens::main::pad_width;
@@ -64,32 +63,6 @@ fn tail_of(text: &str, width: usize) -> String {
     } else {
         text.to_string()
     }
-}
-
-/// Columns left for a row's value: the box, its two borders and the space inside
-/// each, the mark, the gap and the label column.
-const BURST_VALUE_WIDTH: usize = BOX_WIDTH - 3 - (2 + 1 + BURST_LABEL_WIDTH + 1);
-
-/// The shapes as one value, cut to `width` columns with an ellipsis. A selection
-/// the cycler has no position for is a list whose names would otherwise run past
-/// the box's right edge — the row is one line, so what does not fit is dropped
-/// rather than pushed off the screen.
-fn names_value(names: &[&str], width: usize) -> String {
-    let mut out = String::new();
-    let mut used = 0usize;
-    for (index, name) in names.iter().enumerate() {
-        let separator = if index > 0 { 2 } else { 0 };
-        if used + separator + strip_ansi_len(name) + 1 > width {
-            out.push('…');
-            return out;
-        }
-        if index > 0 {
-            out.push_str(", ");
-        }
-        out.push_str(name);
-        used += separator + strip_ansi_len(name);
-    }
-    out
 }
 
 /// Test 6's own screen: how many handshakes at once, how long each may take,
@@ -141,14 +114,17 @@ async fn burst_settings_loop(
     let mut edited = current_domain.is_none();
     let mut editing = false;
     let mut profiles = initial.profiles.clone();
+    // The row and the plan are the same value: a selection the cycler cannot
+    // express is replaced by the value it opens on, never shown as a list.
     let mut profile_index = profile_index_of(&profiles);
+    profiles = profiles_for_index(profile_index);
     let mut prev_max = 0usize;
     let mut drawn = 0u16;
     let mut reader = EventStream::new();
 
     loop {
         draw_burst_settings(
-            msg, lang, cursor, attempts, timeout_secs, tls, alpn, &text, editing, &profiles,
+            msg, lang, cursor, attempts, timeout_secs, tls, alpn, &text, editing,
             profile_index, domain_count, &mut prev_max, &mut drawn,
         );
 
@@ -234,8 +210,8 @@ async fn burst_settings_loop(
                 BURST_ROW_TLS => tls = flip_tls(tls, false),
                 BURST_ROW_HTTP => alpn = flip_alpn(alpn),
                 BURST_ROW_PROFILES => {
-                    let next = profile_index.map(|i| (i + PROFILE_CHOICES - 1) % PROFILE_CHOICES).unwrap_or(0);
-                    profile_index = Some(next);
+                    let next = (profile_index + PROFILE_CHOICES - 1) % PROFILE_CHOICES;
+                    profile_index = next;
                     profiles = profiles_for_index(next);
                 }
                 _ => {}
@@ -255,8 +231,8 @@ async fn burst_settings_loop(
                 BURST_ROW_TLS => tls = flip_tls(tls, true),
                 BURST_ROW_HTTP => alpn = flip_alpn(alpn),
                 BURST_ROW_PROFILES => {
-                    let next = profile_index.map(|i| (i + 1) % PROFILE_CHOICES).unwrap_or(0);
-                    profile_index = Some(next);
+                    let next = (profile_index + 1) % PROFILE_CHOICES;
+                    profile_index = next;
                     profiles = profiles_for_index(next);
                 }
                 _ => {}
@@ -288,14 +264,13 @@ fn draw_burst_settings(
     alpn: BurstAlpn,
     text: &str,
     editing: bool,
-    profiles: &[TlsFingerprint],
-    profile_index: Option<usize>,
+    profile_index: usize,
     domain_count: usize,
     prev_max: &mut usize,
     drawn: &mut u16,
 ) {
     let rows = burst_settings_rows(
-        msg, lang, cursor, attempts, timeout_secs, tls, alpn, text, editing, profiles, profile_index,
+        msg, lang, cursor, attempts, timeout_secs, tls, alpn, text, editing, profile_index,
         domain_count,
     );
     frame_home(*drawn);
@@ -317,8 +292,7 @@ fn burst_settings_rows(
     alpn: BurstAlpn,
     text: &str,
     editing: bool,
-    profiles: &[TlsFingerprint],
-    profile_index: Option<usize>,
+    profile_index: usize,
     domain_count: usize,
 ) -> Vec<String> {
     let label = |s: &str| format_bidi(s, lang);
@@ -386,24 +360,15 @@ fn burst_settings_rows(
     // Profiles cycle like the main menu's fingerprint row: one value with its
     // position, moved by the same keys. The first value is every shape at once —
     // the run then puts one shape per row of the table.
-    let profile_value = match profile_index {
-        Some(index) => {
-            let name = if index == 0 {
-                label(msg.burst_profiles_all)
-            } else {
-                // Latin with the pinned version, like the table headers: the
-                // cycler names the exact shape the run will use (rule 4, never
-                // translated).
-                TlsFingerprint::ALL[index - 1].display_label().to_string()
-            };
-            format!("{} \x1b[2m[{}/{}]\x1b[0m", name, index + 1, PROFILE_CHOICES)
-        }
-        // A selection the cycler has no position for (`--burst-profiles`): its
-        // names are shown while they fit the column, so the box keeps its edge.
-        None => names_value(
-            &profiles.iter().map(|f| f.display_label()).collect::<Vec<_>>(),
-            BURST_VALUE_WIDTH,
-        ),
+    let profile_value = {
+        let name = if profile_index == 0 {
+            label(msg.burst_profiles_all)
+        } else {
+            // Latin with the pinned version, like the table headers: the cycler
+            // names the exact shape the run will use (rule 4, never translated).
+            TlsFingerprint::ALL[profile_index - 1].display_label().to_string()
+        };
+        format!("{} \x1b[2m[{}/{}]\x1b[0m", name, profile_index + 1, PROFILE_CHOICES)
     };
     lines.push(field(BURST_ROW_PROFILES, msg.burst_field_profiles, profile_value));
 
@@ -468,16 +433,20 @@ fn flip_alpn(alpn: BurstAlpn) -> BurstAlpn {
 const PROFILE_CHOICES: usize = TlsFingerprint::ALL.len() + 1;
 
 /// The cycler position a selection corresponds to: `Some(0)` = every shape,
-/// `Some(1+n)` = the n-th shape alone, `None` = a combination the cycler cannot
-/// show, which only `--burst-profiles` can ask for, so the row names the shapes
-/// until a press picks one.
-fn profile_index_of(profiles: &[TlsFingerprint]) -> Option<usize> {
+/// `Some(1+n)` = the n-th shape alone. A selection the cycler cannot express —
+/// the CLI's default set, or a comma list — opens on the first value, and the
+/// screen adopts it, so what the row says is what Enter starts.
+fn profile_index_of(profiles: &[TlsFingerprint]) -> usize {
     if profiles.len() == TlsFingerprint::ALL.len() {
-        Some(0)
+        0
     } else if profiles.len() == 1 {
-        TlsFingerprint::ALL.iter().position(|f| *f == profiles[0]).map(|i| i + 1)
+        TlsFingerprint::ALL
+            .iter()
+            .position(|f| *f == profiles[0])
+            .map(|i| i + 1)
+            .unwrap_or(0)
     } else {
-        None
+        0
     }
 }
 
@@ -520,9 +489,8 @@ mod tests {
     #[test]
     fn burst_settings_rows_align_and_prompt() {
         let msg = get_messages(Language::Ru);
-        let all = TlsFingerprint::ALL.to_vec();
 
-        let empty = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13And12, BurstAlpn::Http2, "", false, &all, Some(0), 35);
+        let empty = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13And12, BurstAlpn::Http2, "", false, 0, 35);
         // The last row is the footer, which lives outside the box.
         for row in empty.iter().take(empty.len() - 1) {
             assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{row:?}");
@@ -546,7 +514,7 @@ mod tests {
 
         // Typing replaces the prompt; the caret marks the active field, and the
         // row still fits the box.
-        let typed = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13And12, BurstAlpn::Http11, "www.google.com", true, &all, Some(0), 35);
+        let typed = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13And12, BurstAlpn::Http11, "www.google.com", true, 0, 35);
         for row in typed.iter().take(typed.len() - 1) {
             assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{row:?}");
         }
@@ -560,7 +528,7 @@ mod tests {
         // with the bare family.
         let chrome = [TlsFingerprint::Chrome107];
         let single = burst_settings_rows(
-            &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12Only, BurstAlpn::Http2, "", false, &chrome, profile_index_of(&chrome), 35,
+            &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12Only, BurstAlpn::Http2, "", false, profile_index_of(&chrome), 35,
         );
         let chrome_position = TlsFingerprint::ALL
             .iter()
@@ -575,42 +543,44 @@ mod tests {
         );
     }
 
-    /// A selection the cycler has no position for is the CLI's default set: the
-    /// row names the shapes while they fit the column and drops the rest, so the
-    /// box keeps its right edge — the names of seven shapes used to run past it.
+    /// The row holds a value the cycler can show, never a list of names: a
+    /// selection it cannot express — the CLI's default set, which is what
+    /// opening test 6 starts with — opens on the first value, every shape, and
+    /// the screen adopts it, so what Enter starts is what the row says.
     #[test]
-    fn a_selection_without_a_position_is_cut_to_the_column() {
+    fn a_selection_without_a_position_opens_on_every_shape() {
         let msg = get_messages(Language::Ru);
-        let chosen = TlsFingerprint::DEFAULT_SET.to_vec();
+        let incoming = TlsFingerprint::DEFAULT_SET.to_vec();
+        assert_eq!(profile_index_of(&incoming), 0, "an unexpressible set opens on all");
+        let chosen = profiles_for_index(profile_index_of(&incoming));
+        assert_eq!(chosen, TlsFingerprint::ALL.to_vec(), "and the screen adopts it");
         let rows = burst_settings_rows(
             &msg, Language::Ru, BURST_ROW_PROFILES, 4, 8, BurstTlsVersion::Tls13And12,
-            BurstAlpn::Http2, "", false, &chosen, profile_index_of(&chosen), 35,
+            BurstAlpn::Http2, "", false, profile_index_of(&chosen), 35,
         );
         for row in rows.iter().take(rows.len() - 1) {
             assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{row:?}");
         }
         let joined = strip_ansi(&rows.join("\n"));
-        assert!(joined.contains('…'), "what does not fit is cut: {joined}");
-        assert!(joined.contains(TlsFingerprint::DEFAULT_SET[0].display_label()), "{joined}");
+        assert!(joined.contains(&format!("все [1/{PROFILE_CHOICES}]")), "{joined}");
+        assert!(!joined.contains("RUSTLS,"), "no list of names: {joined}");
     }
 
     /// The row offers every shape the detector can present, one press away, and
     /// the first value is the whole list — the run that fills the table with a
-    /// row per shape. A selection the cycler did not produce (a
-    /// `--burst-profiles` list) has no position, so the row names the shapes
-    /// until a press picks one.
+    /// row per shape.
     #[test]
     fn the_profile_cycler_reaches_every_shape_and_the_whole_list() {
         assert_eq!(PROFILE_CHOICES, TlsFingerprint::ALL.len() + 1, "every shape, plus all");
         assert_eq!(profiles_for_index(0), TlsFingerprint::ALL.to_vec(), "the first value is all");
-        assert_eq!(profile_index_of(&TlsFingerprint::ALL), Some(0), "and it round-trips");
+        assert_eq!(profile_index_of(&TlsFingerprint::ALL), 0, "and it round-trips");
         for index in 1..PROFILE_CHOICES {
             let chosen = profiles_for_index(index);
             assert_eq!(chosen.len(), 1, "{index}: one shape at a time");
             assert_eq!(chosen[0], TlsFingerprint::ALL[index - 1]);
-            assert_eq!(profile_index_of(&chosen), Some(index), "the position round-trips");
+            assert_eq!(profile_index_of(&chosen), index, "the position round-trips");
         }
-        assert_eq!(profile_index_of(&TlsFingerprint::DEFAULT_SET), None, "a set has no position");
+        assert_eq!(profile_index_of(&TlsFingerprint::DEFAULT_SET), 0, "a set the cycler lacks opens on all");
     }
 
     /// A pasted URL must survive in the box and come out as its host, not as the
@@ -653,7 +623,6 @@ mod tests {
     #[test]
     fn burst_domain_box_paints_its_state() {
         let msg = get_messages(Language::Ru);
-        let all = vec![TlsFingerprint::Chrome107];
         let box_row = |editing: bool, text: &str| {
             burst_settings_rows(
                 &msg,
@@ -665,8 +634,7 @@ mod tests {
                 BurstAlpn::Http2,
                 text,
                 editing,
-                &all,
-                Some(0),
+                0,
                 35,
             )
             .into_iter()
