@@ -44,7 +44,7 @@ their patched rustls rejected valid server configurations.
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 0.23.43 — 1259 lines across 9
+`PATCH.diff` is the exact diff against pristine 0.23.43 — 1311 lines across 10
 files, one of them new (`src/client/hello_profile.rs`). It applies to a pristine
 copy with `patch -p1` (`patch -p1 --binary` was run against the crates.io source
 before this file was replaced, and the result compared against this tree with
@@ -62,6 +62,7 @@ below.
 | `src/crypto/hpke.rs` | re-exports `HpkeKem`, `HpkeKdf`, `HpkeAead` and `HpkeSymmetricCipherSuite` — an `Hpke` implementation outside the crate cannot name the suite it implements otherwise — and gives `HpkePrivateKey` the `from_bytes` constructor its private field implies |
 | `src/client/hs.rs` | applies the profile while building the ClientHello, with a per-connection GREASE seed and a 128-bit shuffle seed from the provider's CSPRNG; adds the GREASE key share and the GREASE `supported_versions` entry for a greasing profile; carries a *list* of key exchanges (`offered_key_shares`) instead of one, so a profile can send the shares a browser's `--tls-key-shares-limit` produces, and handles the HelloRetryRequest against that list; records the *encoded* extension set as `sent_extensions`; gates `compress_certificate` on the hello offering TLS 1.3 |
 | `src/client/tls13.rs` | `initial_key_shares` builds one exchange per group `key_share_groups` names; `KeyExchangeChoice::new` looks the server's group up among every share the client sent (whole or hybrid component) |
+| `src/client/ech.rs` | `EchGreaseConfig::grease_ext` sizes the GREASE payload the way BoringSSL does — one of 128, 160, 192 or 224 bytes, a rounded estimate of the inner hello, plus the AEAD tag (`setup_ech_grease()` in its `ssl/encrypted_client_hello.cc`) — instead of encoding the inner hello this client would really send, which is 441 bytes and a length no browser produces. The outer hello is no longer needed to size the body, so that argument is gone |
 | `src/msgs/handshake.rs` | `SupportedProtocolVersions` gains `grease: Option<u16>` (written ahead of the real versions) and `legacy: Vec<u16>` (the fallbacks a browser advertises behind 1.2, written after them); `ClientExtensions` gains `profile_order`, `raw_extensions`, `suppress_extensions`, `padding_to`; the encoder honours them, computes RFC 7685 padding to the profile's target size, and still keeps ECH/PSK last; a certificate entry carrying SCTs (type 18) is accepted and ignored |
 | `src/lib.rs` | exports the module and `ClientHelloProfile` |
 | `src/server/test.rs` | upstream's own test constructor uses `..Default::default()` now that the version carrier has a field it does not care about |
@@ -79,7 +80,7 @@ every existing measurement stays comparable.
 rm -rf vendor/rustls
 cp -r <path-to-upstream-rustls-<version>> vendor/rustls
 rm -f vendor/rustls/.cargo-ok vendor/rustls/.cargo_vcs_info.json vendor/rustls/Cargo.lock
-patch -p1 -d vendor/rustls < PATCH.diff      # expect hunks only in the 6 files above
+patch -p1 -d vendor/rustls < PATCH.diff      # expect hunks only in the files above
 ```
 
 2. Conflicts are expected in exactly one region: the ClientHello assembly in
@@ -221,8 +222,12 @@ failing handshake or a real mismatched fingerprint, not a theoretical concern:
   alert: DecodeError`, while the rustls path is accepted by all four hosts of the
   live sweep (`tls_fingerprint liveany firefox cloudflare.com www.google.com
   dns.google tls.peet.ws`). The extension's bytes are never comparable between
-  connections — ours is 446 bytes where the bundle's is 187 to 283, because
-  rustls sizes the payload from the encoded inner hello it would really send.
+  connections — `enc` is a fresh ephemeral key and the payload is random — but
+  its length is: rustls sizes the payload by encoding the inner hello it would
+  really send, which gave 441 bytes where Chrome sends 186 to 282, so the patch
+  draws the length from the four estimates BoringSSL draws from
+  (`setup_ech_grease()`) instead, leaving the body a length no censor can pin to
+  this build.
 
 * **Certificate compression is advertised only if it can be decoded.** The
   profile asks for `compress_certificate` (extension 27) because a browser sends

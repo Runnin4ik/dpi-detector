@@ -105,6 +105,12 @@ PROFILES = [
 
 CAPTURE_REPO = "https://github.com/lexiforest/curl-impersonate.git"
 
+# `encrypted_client_hello` (RFC 9849 / draft-ietf-tls-esni-18) as a GREASE extension, and the
+# payload lengths BoringSSL draws from — four 32-byte-rounded estimates of the inner hello plus
+# the AEAD tag (`setup_ech_grease()` in its `ssl/encrypted_client_hello.cc`).
+ECH_EXTENSION = 65037
+ECH_PAYLOAD_LENGTHS = (144, 176, 208, 240)
+
 EXT_NAMES = {
     0: "server_name", 5: "status_request", 10: "supported_groups", 11: "ec_point_formats",
     13: "signature_algorithms", 16: "alpn", 18: "sct", 21: "padding", 23: "ems",
@@ -190,10 +196,43 @@ def _key_shares(body):
     return out
 
 
+def _ech_payload_len(body):
+    """The payload length an ECH body declares, or `None` if the header does not decode.
+
+    The body is `type(1) kdf(2) aead(2) config_id(1) enc<2+len> payload<2+len>` and every
+    profile here sends an outer hello (type 0) with X25519.
+    """
+    for off in (1, 0):
+        if len(body) < off + 9 or body[off:off + 2] != b"\x00\x01":
+            continue
+        enc_len = int.from_bytes(body[off + 5:off + 7], "big")
+        start = off + 7 + enc_len
+        if len(body) >= start + 2:
+            return int.from_bytes(body[start:start + 2], "big")
+    return None
+
+
+def _ech_diff(mine, theirs):
+    """`None` when both GREASE ECH bodies declare a length a browser picks.
+
+    The payload is random data, so the bytes can never match — but the length can, and it is
+    what identifies the build: BoringSSL picks one of four 32-byte-rounded estimates of the
+    inner hello and appends the AEAD tag (`setup_ech_grease()` in its
+    `ssl/encrypted_client_hello.cc`). Encoding the inner hello this client would really send
+    made the payload 400 bytes, a body no browser produces.
+    """
+    mine_len, their_len = _ech_payload_len(mine), _ech_payload_len(theirs)
+    if {mine_len, their_len} <= set(ECH_PAYLOAD_LENGTHS):
+        return None  # two independent draws from the same four values
+    return f"payloads {mine_len} vs {their_len}, one of {ECH_PAYLOAD_LENGTHS} expected"
+
+
 def body_diff(kind, mine, theirs):
     """`None` when the two extension bodies match, else what differs."""
     if kind in (0, 5, 18, 23, 35, 65281):
         return None  # no body worth comparing: the name, an empty body, or a ticket
+    if kind == ECH_EXTENSION:
+        return _ech_diff(mine, theirs)
     if kind == 21 or kind == 41:
         return None if len(mine) == len(theirs) else f"length {len(mine)} vs {len(theirs)}"
     if kind == 51:

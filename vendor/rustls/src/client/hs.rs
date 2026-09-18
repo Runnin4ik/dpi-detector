@@ -460,7 +460,6 @@ fn emit_client_hello_for_retry(
             EchMode::Grease(cfg) => Some(cfg.grease_ext(
                 config.provider.secure_random,
                 input.server_name.clone(),
-                &chp_payload,
             )),
             _ => None,
         });

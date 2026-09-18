@@ -19,6 +19,13 @@ const CHROME_107_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-5
 const SAFARI_155_JA4: &str = "t13d2014h2_a09f3c656075_14788d8d241b";
 const FIREFOX_133_JA4: &str = "t13d1716h2_5b57614c22b0_eeeea6562960";
 
+/// The payload lengths a GREASE ECH body declares: BoringSSL's estimate of an
+/// encoded inner hello — 128, 160, 192 or 224 bytes, rounded to 32 — plus the
+/// AEAD tag. See `setup_ech_grease()` in its `ssl/encrypted_client_hello.cc`;
+/// the bodies measured from `curl-impersonate`'s own captures are 186, 218, 250
+/// and 282 bytes, which is this list plus the 42-byte header.
+const GREASE_PAYLOAD_LENGTHS: [usize; 4] = [144, 176, 208, 240];
+
 /// Every identity is spelled the way its own client writes it, and the two
 /// protocols differ in what that costs.
 ///
@@ -193,12 +200,13 @@ fn only_the_chromium_profiles_shuffle_their_extension_order() {
                 distinct += 1;
             }
             if !expected {
-                // The same order and the same length every time. The hello's own
-                // random differs per connection, so the order — the thing this
-                // test is about — is what gets compared.
+                // The same order every time. The length is not compared any
+                // more: the GREASE ECH body is one of four sizes the client
+                // draws per connection, so the hello's own size moves with it
+                // (`GREASE_PAYLOAD_LENGTHS`), while its order does not.
                 assert_eq!(
-                    (order(&next), next.len()),
-                    (order(&first), first.len()),
+                    order(&next),
+                    order(&first),
                     "{} must send one order every time",
                     fingerprint.code()
                 );
@@ -296,15 +304,38 @@ fn the_ech_shapes_carry_the_grease_extension_and_the_others_do_not() {
         assert_eq!(enc_len, 32, "{}: an X25519 encapsulated key", fingerprint.code());
         let payload_len = u16::from_be_bytes([body[8 + enc_len], body[9 + enc_len]]) as usize;
         assert!(
-            payload_len > 16,
-            "{}: an inner hello plus an AEAD tag",
+            GREASE_PAYLOAD_LENGTHS.contains(&payload_len),
+            "{}: a {payload_len}-byte payload, not one of the four a browser sends",
+            fingerprint.code()
+        );
+        assert_eq!(
+            body.len(),
+            10 + enc_len + payload_len,
+            "{}: the body is its header plus the payload",
             fingerprint.code()
         );
 
-        // Nothing about the body repeats: `enc` is a fresh ephemeral public key
-        // and the payload is random, per connection.
-        let other = body_of(&hello(fingerprint)).expect("the extension again");
-        assert_ne!(other, body, "{}: the same body twice", fingerprint.code());
+        // The length is picked per connection, from the same four values, and
+        // nothing else about the body repeats: `enc` is a fresh ephemeral
+        // public key and the payload is random.
+        let mut lengths = std::collections::BTreeSet::new();
+        for _ in 0..16 {
+            let other = body_of(&hello(fingerprint)).expect("the extension again");
+            assert_ne!(other, body, "{}: the same body twice", fingerprint.code());
+            let other_enc = u16::from_be_bytes([other[6], other[7]]) as usize;
+            let other_len = u16::from_be_bytes([other[8 + other_enc], other[9 + other_enc]]) as usize;
+            assert!(
+                GREASE_PAYLOAD_LENGTHS.contains(&other_len),
+                "{}: a {other_len}-byte payload on a later connection",
+                fingerprint.code()
+            );
+            lengths.insert(other_len);
+        }
+        assert!(
+            lengths.len() > 1,
+            "{}: every payload was {lengths:?}, so the length is not drawn per connection",
+            fingerprint.code()
+        );
     }
 
     carrying.sort_unstable();
@@ -568,12 +599,18 @@ fn fingerprint_parses_known_values_and_rejects_others() {
     for (name, fingerprint) in [
         ("chrome99android", TlsFingerprint::Chrome99Android),
         ("curl_chrome99_android", TlsFingerprint::Chrome99Android),
+        ("curl_chrome119", TlsFingerprint::Chrome120),
         ("curl_chrome120", TlsFingerprint::Chrome120),
+        ("curl_chrome123", TlsFingerprint::Chrome120),
         ("curl_chrome131", TlsFingerprint::Chrome131),
         ("curl_chrome131_android", TlsFingerprint::Chrome131Android),
         ("curl_chrome136", TlsFingerprint::Chrome136),
+        ("curl_chrome142", TlsFingerprint::Chrome136),
+        ("curl_chrome145", TlsFingerprint::Chrome136),
+        ("curl_chrome146", TlsFingerprint::Chrome136),
         ("curl_firefox135", TlsFingerprint::Firefox135),
         ("curl_firefox144", TlsFingerprint::Firefox144),
+        ("curl_firefox147", TlsFingerprint::Firefox144),
         ("curl_safari153", TlsFingerprint::Safari153),
         ("curl_safari184_ios", TlsFingerprint::Safari184Ios),
         ("curl_safari260", TlsFingerprint::Safari260),
@@ -593,11 +630,13 @@ fn fingerprint_parses_known_values_and_rejects_others() {
         TlsFingerprint::parse("curl_safari155"),
         Some(TlsFingerprint::Safari)
     );
-    // Shapes no profile sends: a permuted hello whose UA names another version
-    // (116, 119, 123, 147), an iOS release with no record (17.2), and the
-    // prefix that carries no version at all.
+    // Shapes no record sends, measured wrapper by wrapper: 110 and 116 permute
+    // Chrome 107's set, which this build sends in a fixed order, 124 carries a
+    // set no record has, and `curl_safari172_ios` carries an iOS identity no
+    // record has. The prefix alone carries no version at all.
+    assert_eq!(TlsFingerprint::parse("curl_chrome110"), None);
     assert_eq!(TlsFingerprint::parse("curl_chrome116"), None);
-    assert_eq!(TlsFingerprint::parse("curl_firefox147"), None);
+    assert_eq!(TlsFingerprint::parse("curl_chrome124"), None);
     assert_eq!(TlsFingerprint::parse("curl_safari172_ios"), None);
     assert_eq!(TlsFingerprint::parse("curl_chrome"), None);
     assert_eq!(TlsFingerprint::parse(""), None);
@@ -1065,14 +1104,18 @@ fn chrome_133_ja4_pins_the_parts_a_source_covers() {
 fn profiles_that_share_a_tls_shape_send_the_same_hello() {
     // `chrome136` is a shuffling shape, so the pair is compared with its
     // extension lists sorted — the set is the shape, the order is per
-    // connection. Every other pair is compared byte for byte.
+    // connection. A pair that carries ECH is compared the same way: the GREASE
+    // body is rebuilt from random bytes on every connection and its length is
+    // one of four values drawn with it, so neither the bytes nor the record
+    // length can be compared across two hellos; every other pair is compared
+    // byte for byte.
     let same = |left: TlsFingerprint, right: TlsFingerprint, version: TlsVersion| {
         let ours = client_hello_full(left, version);
         let theirs = client_hello_full(right, version);
-        if left.spec().permute_extensions || right.spec().permute_extensions {
+        if left.spec().permute_extensions || right.spec().permute_extensions || left.spec().ech {
             assert_eq!(
-                (order_independent_ja3(&ours.0), ours.1, ours.2.clone()),
-                (order_independent_ja3(&theirs.0), theirs.1, theirs.2.clone()),
+                (order_independent_ja3(&ours.0), ours.2.clone()),
+                (order_independent_ja3(&theirs.0), theirs.2.clone()),
                 "{}",
                 left.code()
             );
@@ -1110,11 +1153,15 @@ fn profiles_that_share_a_tls_shape_send_the_same_hello() {
 /// compute — the iOS row among them because the two 26.0 hellos differ by three
 /// extensions, not by one omission.
 ///
-/// The other six carry `encrypted_client_hello`, which this build omits (see the
-/// Firefox record), so their counts are one extension below the source's and the
-/// extension hash is ours; the counts, the cipher hash and the ALPN field are
-/// the source's, and the last one would move if the shape stopped being the
-/// client's. Chrome 133, 136, 142, 145 and 146 send one hello, so `chrome136`
+/// The other six carry `encrypted_client_hello` as GREASE, like the wrappers
+/// they name, so the pin is the source's own value: JA4 counts a GREASE
+/// extension out, and the extension hash is the source's too. Two of them —
+/// `chrome120` and `chrome131android` — are the only shapes whose hello can fall
+/// under the 512-byte floor a browser pads to with the shortest ECH body, and
+/// this build sends the unpadded value there, which is the one the client itself
+/// sends on three connections out of four (see their records).
+///
+/// Chrome 133, 136, 142, 145 and 146 send one hello, so `chrome136`
 /// repeats Chrome 133's pin rather than carrying a second constant.
 #[test]
 fn added_shapes_match_the_captures_they_were_read_from() {
@@ -1148,12 +1195,14 @@ fn added_shapes_match_the_captures_they_were_read_from() {
     }
 
     // Chrome 133's hello, which 136 shares: the pin is the one that test
-    // carries. Both shuffle, so their extension lists are compared sorted.
+    // carries. Both shuffle a GREASE ECH body whose length is drawn per
+    // connection, so the comparison is the sorted extension list and the two
+    // hashes — the length is not a property of the shape.
     let ours = client_hello_full(TlsFingerprint::Chrome136, TlsVersion::Any);
     let theirs = client_hello_full(TlsFingerprint::Chrome133, TlsVersion::Any);
     assert_eq!(
-        (order_independent_ja3(&ours.0), ours.1, ours.2),
-        (order_independent_ja3(&theirs.0), theirs.1, theirs.2),
+        (order_independent_ja3(&ours.0), ours.2),
+        (order_independent_ja3(&theirs.0), theirs.2),
         "chrome136 sends Chrome 133's hello"
     );
 }

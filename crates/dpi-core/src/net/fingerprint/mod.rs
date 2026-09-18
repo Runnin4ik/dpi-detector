@@ -58,9 +58,25 @@
 //!   behind it). A real config would have to come from the target's own HTTPS
 //!   record, which is per *host* where every other field of a record is per
 //!   *client* — and the reference client does not do it. The extension's body is
-//!   rebuilt per connection, so its bytes are never comparable: the bundle
-//!   measures 187 bytes for it (its inner hello is smaller), this build 446, and
-//!   both are the same shape.
+//!   rebuilt per connection, so its bytes are never comparable: `enc` is a fresh
+//!   ephemeral key and the payload is random. Its *length* is, and it is drawn
+//!   from the same four values BoringSSL draws from — 128, 160, 192 or 224 bytes
+//!   of estimated inner hello, each rounded to 32, plus the AEAD tag — so a body
+//!   of any other size would be a stable identifier of this build.
+//! * A Chrome 110 or later profile shuffles its extension order per connection,
+//!   as the browser does (`TlsShape::permute_extensions`), so its JA3 is one
+//!   sample of a distribution and JA4 — which hashes the sorted set — is the
+//!   stable key. The order is the only thing that moves: the set, the ciphers,
+//!   the groups, the signature schemes, the key shares a `--tls-key-shares-limit`
+//!   asks for, the h2 preface including the settings Safari names and the
+//!   request's priority are the client's own.
+//! * `chrome120` and `chrome131android` are the only shapes whose hello can fall
+//!   under the 512-byte floor a browser pads to — 497 bytes with the shortest
+//!   GREASE ECH body — and this build never pads there: the profile's
+//!   `padding_to` measures the hello before rustls appends the typed ECH body, so
+//!   a slot for it overshoots by the whole body (803 bytes against the bundle's
+//!   517). What goes out is the unpadded hello the same client sends on three
+//!   connections out of four, so the gap is a frequency, not a shape.
 //! * A hello whose version is pinned for isolation — test 2's two columns and
 //!   test 6's TLS 1.2 axis — advertises one version where the client it
 //!   imitates sends two or more (`[GREASE, 0x0304]` instead of
@@ -72,17 +88,6 @@
 //!   the browser's own, fallbacks included: Safari 15.5 lists TLS 1.1 and 1.0
 //!   behind 1.2 (`legacy_versions`), and a peer that actually selects one is
 //!   refused by the config and reported `NO TLS1.3`, not as a block.
-//! * A Chrome 110 or later profile shuffles its extension order per connection,
-//!   as the browser does (`TlsShape::permute_extensions`), so its JA3 is one
-//!   sample of a distribution and JA4 — which hashes the sorted set — is the
-//!   stable key. Because this build's GREASE ECH body is larger than the
-//!   bundle's, its 1.3-only Chrome hellos stay above BoringSSL's 512-byte
-//!   padding floor where the bundle's sometimes dip below it: the padding
-//!   extension the bundle adds on those connections is absent here, which moves
-//!   that shape's extension *count* by one. Every other list — ciphers, groups,
-//!   signature schemes, the key shares a `--tls-key-shares-limit` asks for, the
-//!   h2 preface including the settings Safari names and the request's priority —
-//!   is the client's own.
 //!
 //! Measured against `tls.peet.ws` with `tools/fingerprint/`, the TLS hashes, the
 //! header list and order, the UA, the whole HTTP/2 `SETTINGS`/`WINDOW_UPDATE`

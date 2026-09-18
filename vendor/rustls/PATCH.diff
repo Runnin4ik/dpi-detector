@@ -55,6 +55,50 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      /// Whether to check the selected ALPN was offered.
      ///
      /// The default is true.
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/ech.rs b/src/client/ech.rs
+--- a/src/client/ech.rs	2006-07-24 05:21:28.000000000 +0400
++++ b/src/client/ech.rs	2026-09-18 14:46:47.452465000 +0300
+@@ -218,7 +218,6 @@
+         &self,
+         secure_random: &'static dyn SecureRandom,
+         inner_name: ServerName<'static>,
+-        outer_hello: &ClientHelloPayload,
+     ) -> Result<EncryptedClientHello, Error> {
+         trace!("Preparing GREASE ECH extension");
+ 
+@@ -230,7 +229,7 @@
+ 
+         // Construct a dummy ECH state - we don't have a real ECH config from a server since
+         // this is for GREASE.
+-        let mut grease_state = EchState::new(
++        let grease_state = EchState::new(
+             &EchConfig {
+                 config: EchConfigPayload::V18(EchConfigContents {
+                     key_config: HpkeKeyConfig {
+@@ -251,12 +250,17 @@
+             false, // Does not matter if we enable/disable SNI here. Inner hello is not used.
+         )?;
+ 
+-        // Construct an inner hello using the outer hello - this allows us to know the size of
+-        // dummy payload we should use for the GREASE extension.
+-        let encoded_inner_hello = grease_state.encode_inner_hello(outer_hello, None, &None);
+-
+-        // Generate a payload of random data equivalent in length to a real inner hello.
+-        let payload_len = encoded_inner_hello.len()
++        // Size the payload the way BoringSSL sizes it, rather than by encoding the inner hello
++        // this client would really send: BoringSSL estimates an EncodedClientHelloInner at 128,
++        // 160, 192 or 224 bytes — the estimate is rounded to 32 bytes, the granularity the real
++        // encoding's final padding step lands on — picks one at random and appends the AEAD tag.
++        // See `setup_ech_grease()` in BoringSSL's `ssl/encrypted_client_hello.cc`, whose comment
++        // names the extensions an inner hello carries. The measured result is an ECH extension
++        // body of 185 to 281 bytes; the encoding of this client's own inner hello is 446, a
++        // length no browser produces, which is a stable identifier of this build.
++        let estimated_inner_hello_len =
++            32 * (4 + usize::from(crate::rand::random_u16(secure_random)? % 4));
++        let payload_len = estimated_inner_hello_len
+             + suite
+                 .sym
+                 .aead_id
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/hello_profile.rs b/src/client/hello_profile.rs
 --- a/src/client/hello_profile.rs	1970-01-01 03:00:00.000000000 +0300
 +++ b/src/client/hello_profile.rs	2026-09-18 13:51:12.033626700 +0300
@@ -506,7 +550,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +}
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/hs.rs b/src/client/hs.rs
 --- a/src/client/hs.rs	2006-07-24 05:21:28.000000000 +0400
-+++ b/src/client/hs.rs	2026-09-18 13:51:15.364636300 +0300
++++ b/src/client/hs.rs	2026-09-18 14:46:53.215044400 +0300
 @@ -56,7 +56,7 @@
      //
      // If this is `None` then we do not support early data.
@@ -714,7 +758,15 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      let mut chp_payload = ClientHelloPayload {
          client_version: ProtocolVersion::TLSv1_2,
          random: input.random,
-@@ -431,8 +493,10 @@
+@@ -398,7 +460,6 @@
+             EchMode::Grease(cfg) => Some(cfg.grease_ext(
+                 config.provider.secure_random,
+                 input.server_name.clone(),
+-                &chp_payload,
+             )),
+             _ => None,
+         });
+@@ -431,8 +492,10 @@
          _ => {}
      }
  
@@ -727,7 +779,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      input.hello.offered_cipher_suites = chp_payload.cipher_suites.clone();
  
      let mut chp = HandshakeMessagePayload(HandshakePayload::ClientHello(chp_payload));
-@@ -516,12 +580,12 @@
+@@ -516,12 +579,12 @@
          input,
          transcript_buffer,
          early_data_key_schedule,
@@ -742,7 +794,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
          Box::new(ExpectServerHelloOrHelloRetryRequest {
              next,
              extra_exts: extra_exts.into_owned(),
-@@ -828,7 +892,7 @@
+@@ -828,7 +891,7 @@
                      transcript,
                      self.early_data_key_schedule,
                      // We always send a key share when TLS 1.3 is enabled.
@@ -751,7 +803,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
                      &m,
                      self.ech_state,
                      self.input,
-@@ -869,21 +933,28 @@
+@@ -869,21 +932,28 @@
          cx.common.check_aligned_handshake()?;
  
          // We always send a key share when TLS 1.3 is enabled.
@@ -788,7 +840,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
                  return Err({
                      cx.common.send_fatal_alert(
                          AlertDescription::IllegalParameter,
-@@ -1011,8 +1082,19 @@
+@@ -1011,8 +1081,19 @@
              cx.data.early_data.rejected();
          }
  
@@ -810,7 +862,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
                  let Some(skxg) = config.find_kx_group(group, ProtocolVersion::TLSv1_3) else {
                      return Err(cx.common.send_fatal_alert(
                          AlertDescription::IllegalParameter,
-@@ -1021,15 +1103,15 @@
+@@ -1021,15 +1102,15 @@
                  };
  
                  cx.common.kx_state = KxState::Start(skxg);

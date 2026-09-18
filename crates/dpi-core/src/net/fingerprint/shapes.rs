@@ -98,10 +98,11 @@ pub(crate) struct TlsShape {
     /// their wrappers say `--ech true`, and curl can only fetch an ECHConfigList
     /// through DoH or `--ecl:`, neither of which the wrappers pass — so what
     /// reaches the wire is a grease extension. Measured on the bundle's own
-    /// hello: `curl_chrome136`, `curl_firefox133` and `curl_tor145` all send a
-    /// body of exactly 187 bytes — `outer`, suite `0001 0001`, a random
-    /// `config_id`, a 32-byte `enc` and a 144-byte payload — the same shape on
-    /// three different browsers, which a real config never is.
+    /// hello: `curl_chrome136`, `curl_firefox133` and `curl_tor145` all send the
+    /// same kind of body — `outer`, suite `0001 0001`, a random `config_id`, a
+    /// 32-byte `enc` and a random payload of 144, 176, 208 or 240 bytes, which is
+    /// an extension of 186, 218, 250 or 282 bytes — the same shape on three
+    /// different browsers, which a real config never is.
     ///
     /// This is what `net::tls` turns into `EchMode::Grease`; a real
     /// `EchMode::Enable` would need the host's own HTTPS record, which is a
@@ -159,14 +160,20 @@ pub(crate) struct TlsShape {
 ///
 /// The forum that reported the TSPU fingerprints names the profiles after the
 /// bundle, so those names are accepted — but only where this build reproduces
-/// the shape they describe: a bundle profile whose JA3 differs (`chrome110+`
-/// shuffles the extension order, `safari260` offers the post-quantum group,
-/// `firefox135+` adds SCT) is rejected rather than mapped to a neighbour.
+/// the hello they describe, and the same hello can be sent by more than one
+/// release: a name selects the *shape*, and the record's own identity is what a
+/// probe presents with it. `curl_chrome119`/`123` therefore answer as Chrome
+/// 120's record, `curl_chrome142`/`145`/`146` as 136's, and `curl_chrome100…107`
+/// as 107's, each measured by capturing the wrapper itself.
 ///
-/// The device wrappers are the same ClientHello behind a different identity
-/// (`curl_chrome131_android` is Chrome 131's hello with an Android UA and
-/// `sec-ch-ua-platform: "Android"`), so a record answers to them only when its
-/// own identity is that device's — hence the suffix every arm carries.
+/// A name is rejected rather than mapped to a neighbour where the hello differs:
+/// `curl_chrome110`/`116` permute an extension set this build sends in a fixed
+/// order (Chrome 107's, without ECH), `curl_chrome124` carries a set no record
+/// has, and a name whose device suffix does not match the record's identity is a
+/// different client — `curl_chrome131_android` is Chrome 131's hello with an
+/// Android UA and `sec-ch-ua-platform: "Android"`, and `curl_safari172_ios` is
+/// Safari 15.5's hello behind an iOS identity no record carries, so the suffix
+/// every device arm carries is part of the name.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum CurlNames {
     /// Every numbered profile of these prefixes up to and including the
@@ -393,13 +400,16 @@ const SAFARI_TLS_RAW_EXTS: &[(u16, &[u8])] = &[
 ];
 
 /// Chrome 110–131's extension order: Chrome 99–107's list without the padding
-/// slot, which those releases no longer send.
+/// slot, which those releases no longer send on their own — nothing pads a
+/// 300-byte hello.
 ///
-/// `curl_chrome110…131` carry no extension 21 (nothing pads their 300-odd-byte
-/// hello), and uTLS's `HelloChrome_120`/`HelloChrome_131` name the rest in
-/// exactly this order. Chromium permutes per connection, so this is one order
-/// out of the distribution the same way Chrome 133's is: the tests pin the
-/// extension *set* and the order-insensitive JA4.
+/// `curl_chrome110…131` carry no extension 21 on their longer hellos, and uTLS's
+/// `HelloChrome_120`/`HelloChrome_131` name the rest in exactly this order.
+/// Chromium permutes per connection, so this is one order out of the
+/// distribution the same way Chrome 133's is: the tests pin the extension *set*
+/// and the order-insensitive JA4. Chrome 120 and 131 Android would carry one
+/// under the 512-byte floor — the client pads there with the shortest GREASE ECH
+/// body — and they do not here, for the reason in the Chrome 120 record.
 const CHROME_NO_PADDING_EXT_ORDER: &[u16] = &[
     GREASE_EXTENSION_MARKER,
     EXT_SERVER_NAME,
@@ -845,15 +855,11 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // www.google.com dns.google tls.peet.ws`), which is the difference between a
     // body that parses on a server's ECH path and one that does not.
     //
-    // One deviation the byte comparison against the pinned bundle finds, in a
-    // body no fingerprint hash covers (JA4 reads extension *types* and the
-    // signature-algorithms list, never a key share):
-    //
-    // * our GREASE ECH body is 446 bytes where the bundle's is 187, because
-    //   rustls sizes the payload from the encoded inner hello it would really
-    //   send and curl's inner hello is smaller. It is the one field of the hello
-    //   whose length is random on both sides — the bundle's own varies between
-    //   187 and 283 bytes across connections.
+    // The GREASE ECH body used to be listed here as a deviation — ours was 441
+    // bytes where the bundle's is 186, 218, 250 or 282 — because rustls sized
+    // the payload from the inner hello this client would really send. It now
+    // draws the length from the same four values BoringSSL draws from, so only
+    // the random content of the body differs.
     //
     // The key shares, `compress_certificate` list and h2 preface that used to be
     // listed here as deviations are the bundle's own since the pass that closed
@@ -1203,17 +1209,28 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         h2: Some(&CHROME99_ANDROID_H2),
     },
     // Chrome 120, as `curl_chrome120` sends it: the first Chromium release in
-    // this bundle that pads nothing and adds ECH.
+    // this bundle that carries ECH.
     //
-    // What differs from Chrome 107: no padding extension, ALPS still at 17513,
-    // `encrypted_client_hello` (65037) — omitted here for the reason in the
-    // Firefox record, so this hello carries one extension fewer than
-    // `curl_chrome120` — and an HTTP layer that keeps `accept-encoding: gzip,
-    // deflate, br` and sends no `priority` header, which is why one header table
-    // per version is the honest description rather than one per family.
+    // What differs from Chrome 107: ALPS still at 17513, `encrypted_client_hello`
+    // (65037) as GREASE — the extension the wrapper sends, not one this build
+    // invents — and an HTTP layer that keeps `accept-encoding: gzip, deflate,
+    // br` and sends no `priority` header, which is why one header table per
+    // version is the honest description rather than one per family.
     //
-    // `curl_chrome119` and `curl_chrome123` send the same shape with another UA;
-    // they are not accepted, because the UA is part of what a probe presents.
+    // This and Chrome 131 Android are the two shapes whose hello can fall under
+    // the 512-byte floor: with the shortest GREASE ECH body it is 497 bytes, and
+    // the client pads there — 16 bytes of padding bring it to 517, measured on
+    // the wrapper. We do not: the profile's `padding_to` measures the hello
+    // before rustls appends the typed ECH body, so a slot here overshoots by the
+    // whole body (803 bytes against 517). The hello is then the *unpadded* value
+    // the client itself sends on three connections out of four, never a shape it
+    // never sends — the gap is a frequency, not a shape.
+    //
+    // `curl_chrome119` and `curl_chrome123` send this hello under their own UA and
+    // are accepted as it: a name selects the *shape*, the way `curl_chrome100…107`
+    // did on Chrome 107's record, and the identity stays the record's own.
+    // Measured — each wrapper captured through a local listener — all three send
+    // one cipher list, group list, signature-scheme list and extension set.
     TlsShape {
         variant: TlsFingerprint::Chrome120,
         code: "chrome120",
@@ -1221,7 +1238,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         label: "CHROME 120",
         source: "curl_chrome120 (curl-impersonate v2.2.2)",
         aliases: &["chrome120"],
-        curl: Some(CurlNames::Only(&["curl_chrome"], &[120], &[""])),
+        curl: Some(CurlNames::Only(&["curl_chrome"], &[119, 120, 123], &[""])),
         baseline: false,
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_GROUPS,
@@ -1298,7 +1315,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // Its wrapper's first comment line is the whole difference from the desktop
     // row: "The only difference from desktop is the absense of MLKEM", so the
     // group list is X25519/P-256/P-384 and nothing is post-quantum. Everything
-    // else — the ECH extension we omit, the ALPS code point, the header set —
+    // else — the ECH extension, the ALPS code point, the 512-byte floor the
+    // shortest ECH body drops it under (see the desktop record), the header set —
     // tracks the desktop 131 with the phone's UA and platform.
     TlsShape {
         variant: TlsFingerprint::Chrome131Android,
@@ -1352,7 +1370,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         label: "CHROME 136",
         source: "curl_chrome136 (curl-impersonate v2.2.2)",
         aliases: &["chrome136"],
-        curl: Some(CurlNames::Only(&["curl_chrome"], &[136], &[""])),
+        curl: Some(CurlNames::Only(&["curl_chrome"], &[136, 142, 145, 146], &[""])),
         baseline: false,
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_PQ_GROUPS,
@@ -1434,7 +1452,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         label: "FIREFOX 144",
         source: "curl_firefox144 (curl-impersonate v2.2.2)",
         aliases: &["firefox144"],
-        curl: Some(CurlNames::Only(&["curl_firefox"], &[144], &[""])),
+        curl: Some(CurlNames::Only(&["curl_firefox"], &[144, 147], &[""])),
         baseline: false,
         ciphers: FIREFOX_TLS_CIPHERS,
         groups: FIREFOX_TLS_GROUPS,
