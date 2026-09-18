@@ -41,6 +41,7 @@ pub(crate) fn messages() -> Messages {
         burst_field_tls: "Version-e TLS",
         burst_field_http: "Protocol-e HTTP",
         burst_field_profiles: "Fingerprint",
+        burst_profiles_all: "hame",
         burst_testing: "Dar hal-e test",
         fingerprint_label: "Fingerprint",
         fingerprint_note: "Har profile yek shape-e pin-shode-ye curl-impersonate ra bazsazi mikonad: ClientHello, User-Agent va header ha, va moqaddame-e HTTP/2 yek version-e client. --legend list-e profile ha ra ba version-e har yek chap mikonad. Hich yek copy-e byte-be-byte-e yek browser-e vaghe-i nist - fingerprinting-e amigh-tar (HTTP/2 settings, record timing) hanuz mitavanad anha ra tafzil konad.",

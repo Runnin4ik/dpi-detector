@@ -300,7 +300,7 @@ impl BurstProfileReport {
 /// detail row reads them: most frequent first. The sort is stable, so two
 /// statuses with the same count keep the order they were first seen in and the
 /// same input always renders the same row.
-fn group_failures(statuses: impl Iterator<Item = DpiStatus>) -> Vec<(DpiStatus, usize)> {
+pub fn group_failures(statuses: impl Iterator<Item = DpiStatus>) -> Vec<(DpiStatus, usize)> {
     let mut counts: Vec<(DpiStatus, usize)> = Vec::new();
     for status in statuses.filter(|s| !s.is_ok_status()) {
         match counts.iter_mut().find(|(seen, _)| *seen == status) {

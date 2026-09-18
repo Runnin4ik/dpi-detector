@@ -41,6 +41,7 @@ pub(crate) fn messages() -> Messages {
         burst_field_tls: "TLS 版本",
         burst_field_http: "HTTP 协议",
         burst_field_profiles: "Fingerprint",
+        burst_profiles_all: "全部",
         burst_testing: "正在测试",
         fingerprint_label: "Fingerprint",
         fingerprint_note: "每个配置复现一个固定的 curl-impersonate 形态：某个客户端版本的 ClientHello、User-Agent 及其请求头，以及 HTTP/2 前导帧。--legend 会列出全部配置及各自复现的版本。它们均非真实浏览器的逐字节复制，更深层的指纹识别（HTTP/2 设置、记录时序）仍可能将它们区分开。",
