@@ -496,7 +496,9 @@ mod tests {
         let joined = strip_ansi(&empty.join("\n"));
         assert!(joined.contains("Переключитесь для ввода"), "{joined}");
         assert!(joined.contains("По умолчанию — все домены (35)"), "{joined}");
-        assert!(joined.contains("все [1/5]"), "{joined}");
+        // The cycler's position and size come from the profile table, so this
+        // is the count the tool actually offers rather than a number here.
+        assert!(joined.contains(&format!("все [1/{PROFILE_CHOICES}]")), "{joined}");
 
         // Measured without styling: an escape contains '[' and would be mistaken
         // for the input box.
@@ -524,7 +526,17 @@ mod tests {
         let single = burst_settings_rows(
             &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12Only, BurstAlpn::Http2, "", false, &chrome, profile_index_of(&chrome), 35,
         );
-        assert!(strip_ansi(&single.join("\n")).contains("CHROME 107 [4/5]"));
+        let chrome_position = TlsFingerprint::ALL
+            .iter()
+            .position(|f| *f == TlsFingerprint::Chrome)
+            .expect("the cycler lists chrome")
+            + 2;
+        assert!(
+            strip_ansi(&single.join("\n"))
+                .contains(&format!("CHROME 107 [{chrome_position}/{PROFILE_CHOICES}]")),
+            "{}",
+            strip_ansi(&single.join("\n"))
+        );
     }
 
     /// A pasted URL must survive in the box and come out as its host, not as the

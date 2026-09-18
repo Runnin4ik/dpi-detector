@@ -28,6 +28,9 @@ fn http_identity_names_the_version_the_hello_imitates() {
         (TlsFingerprint::Chrome, "Chrome/107.0.0.0"),
         (TlsFingerprint::Firefox, "Firefox/133.0"),
         (TlsFingerprint::Safari, "Version/15.5"),
+        (TlsFingerprint::Chrome133, "Chrome/133.0.0.0"),
+        (TlsFingerprint::Safari18, "Version/18.0"),
+        (TlsFingerprint::Edge, "Edg/101.0.1210.47"),
     ] {
         let identity = http_identity(fingerprint);
         let ua = identity.user_agent.expect("a browser profile carries a UA");
@@ -50,8 +53,11 @@ fn http_identity_names_the_version_the_hello_imitates() {
             .find(|(name, _)| *name == "accept-encoding")
             .expect("every identity states its encoding");
         let expected = match fingerprint {
-            TlsFingerprint::Firefox => "gzip, deflate, br, zstd",
-            TlsFingerprint::Chrome | TlsFingerprint::Safari => "gzip, deflate, br",
+            TlsFingerprint::Firefox | TlsFingerprint::Chrome133 => "gzip, deflate, br, zstd",
+            TlsFingerprint::Chrome
+            | TlsFingerprint::Safari
+            | TlsFingerprint::Safari18
+            | TlsFingerprint::Edge => "gzip, deflate, br",
             TlsFingerprint::Rustls => "identity",
         };
         assert_eq!(*encoding, expected, "{}: {}", fingerprint.code(), *encoding);
@@ -127,6 +133,26 @@ fn h2_preface_settings_match_the_wrapper_they_are_pinned_to() {
     assert_eq!(safari.max_header_list_size, None, "Safari sends no header-list size");
     assert_eq!(safari.enable_push, None, "Safari sends no push setting");
     assert_eq!(safari.settings_order, [4, 3], "Safari lists the window before the stream cap");
+
+    // Chrome 133 dropped MAX_CONCURRENT_STREAMS; Edge leaves out ENABLE_PUSH;
+    // Safari 18 sends neither a header-table size nor a header-list size, and
+    // lists its settings in ascending order.
+    let chrome133 = h2_fingerprint(TlsFingerprint::Chrome133).expect("chrome133 tunes h2");
+    assert_eq!(chrome133.max_concurrent_streams, None, "Chrome 133 sends no stream cap");
+    assert_eq!(chrome133.connection_window - 65_535, 15_663_105);
+
+    let edge = h2_fingerprint(TlsFingerprint::Edge).expect("edge tunes h2");
+    assert_eq!(edge.enable_push, None, "Edge sends no push setting");
+    assert_eq!(edge.max_concurrent_streams, Some(1000));
+    assert_eq!(edge.connection_window - 65_535, 15_663_105);
+
+    let safari18 = h2_fingerprint(TlsFingerprint::Safari18).expect("safari18 tunes h2");
+    assert_eq!(safari18.header_table_size, None);
+    assert_eq!(safari18.max_concurrent_streams, Some(100));
+    assert_eq!(safari18.initial_window_size, 2_097_152);
+    assert_eq!(safari18.enable_push, Some(false));
+    assert_eq!(safari18.settings_order, &[] as &[u16], "Safari 18 lists 2, 3 and 4 ascending");
+    assert_eq!(safari18.connection_window - 65_535, 10_420_225);
 }
 
 /// h2 sorts the settings it sends by id; Safari's preface does not, so the
@@ -153,6 +179,9 @@ fn display_labels_name_the_pinned_version() {
     assert_eq!(TlsFingerprint::Chrome.display_label(), "CHROME 107");
     assert_eq!(TlsFingerprint::Safari.display_label(), "SAFARI 155");
     assert_eq!(TlsFingerprint::Rustls.display_label(), "RUSTLS");
+    assert_eq!(TlsFingerprint::Chrome133.display_label(), "CHROME 133");
+    assert_eq!(TlsFingerprint::Safari18.display_label(), "SAFARI 18");
+    assert_eq!(TlsFingerprint::Edge.display_label(), "EDGE 101");
     for fp in TlsFingerprint::ALL {
         assert!(fp.display_label().starts_with(fp.token()), "{fp:?}");
         assert!(fp.display_label().is_ascii(), "{fp:?}");
@@ -185,10 +214,21 @@ fn fingerprint_parses_known_values_and_rejects_others() {
         TlsFingerprint::parse("curl_chrome107"),
         Some(TlsFingerprint::Chrome)
     );
+    // Edge is Chromium but not Chrome: the bundle's own Edge names map to the
+    // Edge record, whose header set is what tells the two clients apart.
     assert_eq!(
         TlsFingerprint::parse("curl_edge101"),
-        Some(TlsFingerprint::Chrome)
+        Some(TlsFingerprint::Edge)
     );
+    assert_eq!(TlsFingerprint::parse("edge"), Some(TlsFingerprint::Edge));
+    assert_eq!(TlsFingerprint::parse("chrome133"), Some(TlsFingerprint::Chrome133));
+    assert_eq!(TlsFingerprint::parse("curl_chrome133a"), Some(TlsFingerprint::Chrome133));
+    assert_eq!(TlsFingerprint::parse("safari18"), Some(TlsFingerprint::Safari18));
+    assert_eq!(TlsFingerprint::parse("curl_safari180"), Some(TlsFingerprint::Safari18));
+    // Chrome 131 is the same hello with ALPS at the *old* code point, and
+    // Safari 18.4 an extra h2 setting: neither is a shape these records send.
+    assert_eq!(TlsFingerprint::parse("curl_chrome131"), None);
+    assert_eq!(TlsFingerprint::parse("safari184"), Some(TlsFingerprint::Safari));
     assert_eq!(
         TlsFingerprint::parse("curl_safari155"),
         Some(TlsFingerprint::Safari)
@@ -538,6 +578,100 @@ fn bundle_versions_match_their_ja4() {
     }
 }
 
+/// Chrome 133, as uTLS `HelloChrome_133` (v1.8.2, unchanged on master) defines
+/// it and `curl_chrome133a` sends it. Both sources agree on every list; only
+/// uTLS supplies an extension *order*, because Chromium permutes it per
+/// connection.
+///
+/// The expected strings are the uTLS lists with two edits and nothing else:
+///
+/// * `encrypted_client_hello` (65037) is removed — this build cannot synthesize
+///   a GREASE ECH body the ECH-aware servers accept (see the Firefox record);
+/// * the order is the pre-shuffle list, because a permuted hello cannot be
+///   pinned at all. JA3 is order-sensitive, so this pin holds for one shape out
+///   of the distribution a real Chrome 133 sends; JA4's sorted view is the
+///   stable key.
+///
+/// With those two edits the strings below are the uTLS lists in the uTLS order,
+/// which is why a reader can redo them against the source rather than against
+/// this test. The pinned versions are derived the same way: the 1.3 hello drops
+/// what belongs to the 1.2 era, the 1.2 hello drops `supported_versions` and
+/// ALPS.
+#[test]
+fn chrome_133_matches_the_utls_list_it_is_derived_from() {
+    const CHROME_133_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-\
+         49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17613,4588-29-23-24,0";
+    const CHROME_133_TLS13: &str =
+        "771,4865-4866-4867,0-10-16-5-13-18-51-45-43-27-17613,4588-29-23-24,";
+    const CHROME_133_TLS12: &str = "771,49195-49199-49196-49200-52393-52392-49171-49172-\
+         156-157-47-53,0-23-65281-10-11-35-16-5-13-18,4588-29-23-24,0";
+
+    for (version, expected) in [
+        (TlsVersion::Any, CHROME_133_JA3),
+        (TlsVersion::Tls13, CHROME_133_TLS13),
+        (TlsVersion::Tls12, CHROME_133_TLS12),
+    ] {
+        assert_eq!(
+            client_hello_of(TlsFingerprint::Chrome133, version).0,
+            expected,
+            "chrome133 ({version:?})"
+        );
+    }
+}
+
+/// The JA4 of Chrome 133's unpinned hello, in the three parts a source can
+/// speak to, and one it cannot.
+///
+/// JA4 DBs publish `t13d1516h2_8daaf6152771_...` for the whole Chrome 133–146
+/// line, so two parts of ours have to line up with it and one cannot:
+///
+/// * `t13d1515h2` — the counts, derived: 15 ciphers, 16 extensions less the
+///   omitted ECH, h2 as the ALPN;
+/// * `8daaf6152771` — the cipher hash, the published one. It moving means the
+///   cipher list stopped being Chrome's, which no other test would notice;
+/// * the extension hash is ours alone: nobody publishes a hash for an ECH-less
+///   Chrome 133, so the full string carries the `_LESS_ECH` suffix the Firefox
+///   pin uses — a regression guard, not evidence.
+#[test]
+fn chrome_133_ja4_pins_the_parts_a_source_covers() {
+    const CHROME_133_JA4_LESS_ECH: &str = "t13d1515h2_8daaf6152771_22334254f9f7";
+
+    let (_, _, ja4) = client_hello_full(TlsFingerprint::Chrome133, TlsVersion::Any);
+    assert!(ja4.starts_with("t13d1515h2_"), "{ja4}");
+    assert_eq!(
+        ja4.split('_').nth(1),
+        Some("8daaf6152771"),
+        "the cipher hash the JA4 databases publish for Chrome 133+"
+    );
+    assert_eq!(ja4, CHROME_133_JA4_LESS_ECH);
+}
+
+/// Records that name the same TLS lists must put the same hello on the wire.
+/// Edge is Chromium and Safari 18.0 is Safari 15.5's hello, so the JA3/JA4 pins
+/// above are theirs too — the alternative, a second set of constants per
+/// record, is how two records of one shape drift apart.
+///
+/// The sharing is a fact about the sources, not a convenience: the bundle's own
+/// `safari_18.0_macOS` capture publishes the identical `ja3_text` (and a
+/// `ja3_hash` of `773906b0efdefa24a7f2b8eb6985bf37`, which `tls.peet.ws`
+/// reported for this profile's hello), and `curl_edge99/101` is documented to
+/// emit the same JA3 as `curl_chrome99..107`.
+#[test]
+fn profiles_that_share_a_tls_shape_send_the_same_hello() {
+    for version in [TlsVersion::Any, TlsVersion::Tls13, TlsVersion::Tls12] {
+        assert_eq!(
+            client_hello_full(TlsFingerprint::Edge, version),
+            client_hello_full(TlsFingerprint::Chrome, version),
+            "edge101 sends Chrome's hello ({version:?})"
+        );
+        assert_eq!(
+            client_hello_full(TlsFingerprint::Safari18, version),
+            client_hello_full(TlsFingerprint::Safari, version),
+            "safari18 sends Safari 15.5's hello ({version:?})"
+        );
+    }
+}
+
 /// Test 6 pins the TLS version and the ALPN it offers, and both have to
 /// reach the wire: the pinned JA4 shows the version field (`t12`/`t13`) and
 /// the ALPN field (`h2`/`h1`), while JA3 turns on the version — a 1.3-only
@@ -690,6 +824,11 @@ fn curl_family_profiles_do_not_use_the_pq_provider() {
     assert!(!needs_pq(TlsFingerprint::Chrome));
     assert!(!needs_pq(TlsFingerprint::Safari));
     assert!(needs_pq(TlsFingerprint::Firefox));
+    // Chrome 133 offers X25519MLKEM768 first, so it needs the provider that can
+    // share a key over it; Edge and Safari 18 predate the hybrid group.
+    assert!(needs_pq(TlsFingerprint::Chrome133));
+    assert!(!needs_pq(TlsFingerprint::Safari18));
+    assert!(!needs_pq(TlsFingerprint::Edge));
     assert!(advertises_cert_compression(TlsFingerprint::Chrome));
     assert!(advertises_cert_compression(TlsFingerprint::Safari));
     assert!(!advertises_cert_compression(TlsFingerprint::Rustls));
@@ -707,6 +846,9 @@ fn the_decompressor_list_follows_the_profile() {
         ("Firefox", TlsFingerprint::Firefox, 2),
         ("Chrome", TlsFingerprint::Chrome, 2),
         ("Safari", TlsFingerprint::Safari, 2),
+        ("Chrome133", TlsFingerprint::Chrome133, 2),
+        ("Safari18", TlsFingerprint::Safari18, 2),
+        ("Edge", TlsFingerprint::Edge, 2),
     ] {
         let config = create_tls_config(&TlsProfile::insecure(fingerprint).tls13());
         assert_eq!(

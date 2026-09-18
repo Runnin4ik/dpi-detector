@@ -142,20 +142,13 @@ pub fn render_banner(msg: &Messages, _profile: RegionProfile, badge: &str) -> St
 }
 
 /// Active TLS fingerprint line(s) for the human report header (text mode only).
-/// Always one line with the profile (`Fingerprint: FIREFOX (firefox 133)`) using the
-/// canonical token and label; the translated caveat follows on a second line for every
-/// non-default profile (with RUSTLS it is irrelevant noise). The `[!]` prefix
-/// and colors are added here, never stored in i18n (rule 4 keeps
-/// JA3/JA4/ClientHello/TLS/RUSTLS/FIREFOX/CHROME/SAFARI untranslated there too).
+/// One line with the profile — its canonical token and the version the shape
+/// reproduces (`Fingerprint: CHROME 133`, `Fingerprint: RUSTLS (default)`) —
+/// and, for every non-default profile, the translated caveat on a second line.
+/// The `[!]` prefix and colors are added here, never stored in i18n; the
+/// profile list itself is generated into `--legend` from the profile table.
 pub fn render_fingerprint_header(fp: TlsFingerprint, msg: &Messages) -> String {
-    let label = fingerprint_label(fp, msg.lang);
-    // The default profile's label repeats its code ("rustls (default)" against
-    // the RUSTLS token), which read as "RUSTLS (rustls (default))": a label
-    // that starts with the code keeps only the qualifier.
-    let head = match label.strip_prefix(fp.code()) {
-        Some(qualifier) => format!("{}: {}{}", msg.fingerprint_label, fp.token(), qualifier),
-        None => format!("{}: {} ({})", msg.fingerprint_label, fp.token(), label),
-    };
+    let head = format!("{}: {}", msg.fingerprint_label, fingerprint_label(fp, msg.lang));
     if fp != TlsFingerprint::Rustls {
         let note = format!("\x1b[33m[!]\x1b[0m \x1b[2m{}\x1b[0m", msg.fingerprint_note);
         format!("{}\n{}", head, note)
@@ -397,19 +390,26 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_header_never_repeats_the_profile_code() {
+    fn fingerprint_header_names_the_shape_and_keeps_the_caveat() {
         use crate::i18n::{get_messages, Language};
         let en = get_messages(Language::En);
-        // The default label ("rustls (default)") carried the token as well, so
-        // the header read "RUSTLS (rustls (default))".
-        assert_eq!(render_fingerprint_header(TlsFingerprint::Rustls, &en), "Fingerprint: RUSTLS (default)");
+        assert_eq!(
+            render_fingerprint_header(TlsFingerprint::Rustls, &en),
+            "Fingerprint: RUSTLS (default)"
+        );
         let fa = get_messages(Language::Fa);
-        assert_eq!(render_fingerprint_header(TlsFingerprint::Rustls, &fa), "Fingerprint: RUSTLS (pishfarz)");
-        // A label that does not repeat the code keeps the full parenthetical.
-        // The label already carries the code (`firefox 133` holds `firefox`), so
-        // the parenthetical is dropped and the line stays one token shorter.
+        assert_eq!(
+            render_fingerprint_header(TlsFingerprint::Rustls, &fa),
+            "Fingerprint: RUSTLS (pishfarz)"
+        );
+        // A browser profile is named by its token and the version it
+        // reproduces (rule 4: Latin, never translated), and the caveat follows
+        // verbatim from i18n rather than being pinned here a second time.
         let firefox = render_fingerprint_header(TlsFingerprint::Firefox, &en);
         assert!(firefox.starts_with("Fingerprint: FIREFOX 133"), "{firefox}");
-        assert!(firefox.contains("FIREFOX = firefox133"), "the caveat still follows");
+        assert!(firefox.contains(en.fingerprint_note), "{firefox}");
+        // The baseline has no caveat: nobody is impersonated, nothing to warn
+        // about.
+        assert!(!render_fingerprint_header(TlsFingerprint::Rustls, &en).contains(en.fingerprint_note));
     }
 }

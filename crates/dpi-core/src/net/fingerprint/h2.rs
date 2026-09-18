@@ -63,6 +63,62 @@ pub fn h2_fingerprint(fingerprint: super::TlsFingerprint) -> Option<H2Fingerprin
     fingerprint.spec().preface()
 }
 
+/// `1:65536;2:0;4:6291456;6:262144`, window 15663105,
+/// `--http2-stream-weight 256 --http2-stream-exclusive 1`, pseudo-headers `masp`
+/// (the curl default, no flag). Chrome 133 stops sending
+/// `SETTINGS_MAX_CONCURRENT_STREAMS` where 107 sent `3:1000`.
+pub(crate) const CHROME133_H2: H2Fingerprint = H2Fingerprint {
+    header_table_size: Some(65_536),
+    max_concurrent_streams: None,
+    initial_window_size: 6_291_456,
+    max_frame_size: None,
+    max_header_list_size: Some(262_144),
+    enable_push: Some(false),
+    settings_order: &[],
+    connection_window: 15_663_105 + 65_535,
+    pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
+    priority: Some((256, true)),
+};
+
+/// `1:65536;3:1000;4:6291456;6:262144`, window 15663105,
+/// `--http2-stream-weight 256 --http2-stream-exclusive 1`, pseudo-headers `masp`.
+/// Edge leaves out `SETTINGS_ENABLE_PUSH`, which Chrome sends.
+pub(crate) const EDGE101_H2: H2Fingerprint = H2Fingerprint {
+    header_table_size: Some(65_536),
+    max_concurrent_streams: Some(1000),
+    initial_window_size: 6_291_456,
+    max_frame_size: None,
+    max_header_list_size: Some(262_144),
+    enable_push: None,
+    settings_order: &[],
+    connection_window: 15_663_105 + 65_535,
+    pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
+    priority: Some((256, true)),
+};
+
+/// `2:0;3:100;4:2097152;8:1;9:1`, window 10420225,
+/// `--http2-pseudo-headers-order "msap" --http2-stream-weight 256
+/// --http2-stream-exclusive 0`.
+///
+/// The wrapper also sets `8:1` (`SETTINGS_ENABLE_CONNECT_PROTOCOL`) and `9:1`
+/// (`SETTINGS_NO_RFC7540_PRIORITIES`), which this preface cannot carry: both
+/// are beyond what the patched `h2` writes (see `vendor/h2/README-PATCH.md`),
+/// so the settings payload is two entries short of Safari 18's. The values it
+/// can send — the connection window, the stream cap and the window — are
+/// Safari's own.
+pub(crate) const SAFARI18_H2: H2Fingerprint = H2Fingerprint {
+    header_table_size: None,
+    max_concurrent_streams: Some(100),
+    initial_window_size: 2_097_152,
+    max_frame_size: None,
+    max_header_list_size: None,
+    enable_push: Some(false),
+    settings_order: &[],
+    connection_window: 10_420_225 + 65_535,
+    pseudo_order: PseudoOrder::MethodSchemePathAuthority,
+    priority: Some((256, false)),
+};
+
 /// `1:65536;2:0;3:1000;4:6291456;6:262144`, window 15663105,
 /// `--http2-stream-weight 256 --http2-stream-exclusive 1`, pseudo-headers `masp`.
 pub(crate) const CHROME_H2: H2Fingerprint = H2Fingerprint {

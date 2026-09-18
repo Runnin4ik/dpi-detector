@@ -26,6 +26,11 @@
 //!   JA3s of the `curl-impersonate` bundles the forum report names. They exist
 //!   to answer "is this site blocked for me, or only for clients that look like
 //!   `curl_chrome107`?".
+//! * [`TlsFingerprint::Chrome133`], [`TlsFingerprint::Safari18`],
+//!   [`TlsFingerprint::Edge`] — current releases of the same clients: Chrome
+//!   133's hello is a different shape (hybrid post-quantum group, ALPS at its
+//!   new code point), while Safari 18 and Edge send the TLS shape their older
+//!   rows already reproduce behind a current identity.
 //!
 //! # What "shape" means here
 //!
@@ -110,6 +115,13 @@ pub enum TlsFingerprint {
     Chrome,
     /// `curl_safari15.5..18.4`-shaped (reported TSPU trigger).
     Safari,
+    /// `curl_chrome133a`-shaped: the newest Chrome the bundle reproduces.
+    Chrome133,
+    /// `curl_safari180`-shaped: Safari 18.0 — the same hello as [`Self::Safari`],
+    /// the identity and preface of the current release.
+    Safari18,
+    /// `curl_edge99,101`-shaped: Chromium's hello behind Edge's identity.
+    Edge,
 }
 
 impl TlsFingerprint {
@@ -165,11 +177,14 @@ impl TlsFingerprint {
     /// The single hand-written list on this side of the table: `spec()` panics
     /// on a variant missing from `SHAPES`, and the totality test compares this
     /// list with the table, so the two cannot drift apart unnoticed.
-    pub const ALL: [TlsFingerprint; 4] = [
+    pub const ALL: [TlsFingerprint; 7] = [
         Self::Rustls,
         Self::Firefox,
         Self::Chrome,
         Self::Safari,
+        Self::Chrome133,
+        Self::Safari18,
+        Self::Edge,
     ];
 
     /// The profiles a run presents when nothing asked for a specific set: test
@@ -179,11 +194,14 @@ impl TlsFingerprint {
     /// `profiles × hosts × 2 version axes`: every shape added here is paid for
     /// on every run, so a profile joins the default set deliberately and `all`
     /// stays the explicit way to ask for everything, however many that is.
-    pub const DEFAULT_SET: [TlsFingerprint; 4] = [
+    pub const DEFAULT_SET: [TlsFingerprint; 7] = [
         Self::Rustls,
         Self::Firefox,
         Self::Chrome,
         Self::Safari,
+        Self::Chrome133,
+        Self::Safari18,
+        Self::Edge,
     ];
 
     /// Parses a profile list for test 6: `all`, or comma/space separated names

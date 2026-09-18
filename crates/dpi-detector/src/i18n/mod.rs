@@ -137,18 +137,26 @@ pub fn legend_text(lang: Language, msg: &Messages) -> String {
     out
 }
 
-/// Display label for a TLS ClientHello profile. The canonical token and the
-/// profile names stay Latin (rule 4); only the default profile is spelled out
-/// per language ("pishfarz" is the Finglish for "default").
-pub fn fingerprint_label(fp: dpi_core::net::fingerprint::TlsFingerprint, lang: Language) -> &'static str {
+/// Display label for a TLS ClientHello profile: the canonical token plus the
+/// version the shape reproduces ("CHROME 133"), Latin in every language
+/// (rule 4). Only the baseline needs prose rather than a token, and only there
+/// is a language involved ("pishfarz" is the Finglish for "default").
+///
+/// The list of profiles is not spelled out here: `--legend` builds its table
+/// from the profile table ([`profile_section`]), so a profile added to the
+/// probe needs no new text in any language.
+pub fn fingerprint_label(fp: dpi_core::net::fingerprint::TlsFingerprint, lang: Language) -> String {
     use dpi_core::net::fingerprint::TlsFingerprint as F;
-    match (fp, lang) {
-        (F::Rustls, Language::Fa) => "rustls (pishfarz)",
-        (F::Rustls, _) => "rustls (default)",
-        (F::Firefox, _) => "firefox 133",
-        (F::Chrome, _) => "curl chrome 107",
-        (F::Safari, _) => "curl safari 155",
+    if fp != F::Rustls {
+        return fp.display_label().to_string();
     }
+    // The baseline's name is its token plus a translated qualifier: there is no
+    // client version to name, so the prose says what the profile does instead.
+    let qualifier = match lang {
+        Language::Fa => "pishfarz",
+        _ => "default",
+    };
+    format!("{} ({})", fp.token(), qualifier)
 }
 
 /// Transfer rate in the interface's speed units (Ru uses Cyrillic units).

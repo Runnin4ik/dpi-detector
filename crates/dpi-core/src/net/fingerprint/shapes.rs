@@ -16,8 +16,13 @@
 use rustls::client::hello_profile::GREASE_EXTENSION_MARKER;
 use rustls::client::ClientHelloProfile;
 
-use super::h2::{H2Fingerprint, CHROME_H2, FIREFOX_H2, SAFARI_H2};
-use super::identity::{CHROME_HEADERS, FIREFOX_HEADERS, SAFARI_HEADERS};
+use super::h2::{
+    H2Fingerprint, CHROME133_H2, CHROME_H2, EDGE101_H2, FIREFOX_H2, SAFARI18_H2, SAFARI_H2,
+};
+use super::identity::{
+    CHROME133_HEADERS, CHROME_HEADERS, EDGE101_HEADERS, FIREFOX_HEADERS, SAFARI18_HEADERS,
+    SAFARI_HEADERS,
+};
 use super::TlsFingerprint;
 
 /// One selectable shape.
@@ -480,7 +485,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         label: "CHROME 107",
         source: "curl_chrome107 (curl-impersonate v2.2.2)",
         aliases: &["chrome", "chrome99", "chrome107"],
-        curl: Some(CurlNames::UpTo(&["curl_chrome", "curl_edge"], 107)),
+        curl: Some(CurlNames::UpTo(&["curl_chrome"], 107)),
         baseline: false,
         ciphers: CHROME_TLS_CIPHERS,
         groups: CHROME_TLS_GROUPS,
@@ -518,6 +523,10 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // groups, a duplicated `RSA-PSS SHA-384` signature scheme, no
     // `session_ticket`, no ALPS, and zlib rather than brotli for certificate
     // compression. See `tests::bundle_versions_match_their_ja3`.
+    //
+    // The newer Safari versions keep this TLS shape and change the HTTP layer,
+    // which is what [`TlsFingerprint::Safari18`] records; this row is the shape
+    // and the identity the report's older bundle versions send.
     TlsShape {
         variant: TlsFingerprint::Safari,
         code: "safari",
@@ -525,7 +534,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         label: "SAFARI 155",
         source: "curl_safari155 (curl-impersonate v2.2.2)",
         aliases: &["safari", "safari155", "safari184"],
-        curl: Some(CurlNames::Only(&["curl_safari"], &[155, 170, 172, 180, 184])),
+        curl: Some(CurlNames::Only(&["curl_safari"], &[155, 170, 172, 184])),
         baseline: false,
         ciphers: SAFARI_TLS_CIPHERS,
         groups: SAFARI_TLS_GROUPS,
@@ -550,6 +559,173 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         legacy_versions: &[0x0302, 0x0301],
         headers: Some(SAFARI_HEADERS),
         h2: Some(&SAFARI_H2),
+    },
+    // Chrome 133, as `curl_chrome133a` of curl-impersonate v2.2.3 sends it and
+    // as uTLS `HelloChrome_133` (v1.8.2, unchanged on master) defines it. Both
+    // sources agree on every list; uTLS supplies the extension *order* the
+    // bundle cannot, because Chromium permutes it per connection.
+    //
+    // What differs from Chrome 107: the hybrid `X25519MLKEM768` group leads the
+    // list (and is shared, so the hello carries an ML-KEM and an X25519 share),
+    // ALPS moves to its new code point 17613 (`HelloChrome_131` is the same
+    // shape with the old 17513 — that is why 131 is not an alias), padding is
+    // gone, and `accept-encoding` gained `zstd`.
+    //
+    // Two things a permuted, ECH-carrying client cannot give this build:
+    //
+    // * `encrypted_client_hello` (65037) is omitted for the reason in the
+    //   Firefox record — a body we synthesize is rejected by every ECH-aware
+    //   server. JA3 and JA4 therefore carry one extension fewer than the
+    //   source's, which is why the tests pin the extension *set* and the
+    //   JA4 cipher hash rather than a whole JA4 string: no source publishes a
+    //   hash for an ECH-less Chrome 133, and pinning our own dump would lock in
+    //   whatever this build happens to send.
+    // * the order below is uTLS's pre-shuffle list. Chromium randomizes the
+    //   order of every hello (`ShuffleChromeTLSExtensions`), so a real Chrome
+    //   133 sends one of many orders and its JA3 differs per connection; JA4,
+    //   which sorts what it hashes, is the stable key. This profile sends one
+    //   order from that distribution, deterministically, which is what makes a
+    //   column of the burst reproducible at all.
+    TlsShape {
+        variant: TlsFingerprint::Chrome133,
+        code: "chrome133",
+        token: "CHROME",
+        label: "CHROME 133",
+        source: "curl_chrome133a (curl-impersonate v2.2.3) / uTLS HelloChrome_133 (v1.8.2)",
+        aliases: &["chrome133", "chrome133a"],
+        curl: Some(CurlNames::Only(&["curl_chrome"], &[133])),
+        baseline: false,
+        ciphers: CHROME_TLS_CIPHERS,
+        groups: &[
+            4588, // X25519MLKEM768
+            29,   // X25519
+            23,   // secp256r1
+            24,   // secp384r1
+        ],
+        sig_algs: CHROME_TLS_SIG_ALGS,
+        ext_order: &[
+            GREASE_EXTENSION_MARKER,
+            EXT_SERVER_NAME,
+            EXT_EXTENDED_MASTER_SECRET,
+            EXT_RENEGOTIATION_INFO,
+            EXT_SUPPORTED_GROUPS,
+            EXT_EC_POINT_FORMATS,
+            EXT_SESSION_TICKET,
+            EXT_ALPN,
+            EXT_STATUS_REQUEST,
+            EXT_SIGNATURE_ALGORITHMS,
+            EXT_SCT,
+            EXT_KEY_SHARE,
+            EXT_PSK_KEY_EXCHANGE_MODES,
+            EXT_SUPPORTED_VERSIONS,
+            EXT_COMPRESS_CERTIFICATE,
+            EXT_APPLICATION_SETTINGS_NEW,
+            GREASE_EXTENSION_MARKER,
+        ],
+        raw_exts: &[
+            (EXT_RENEGOTIATION_INFO, &[0x00]),
+            (EXT_EC_POINT_FORMATS, &[0x01, 0x00]),
+            (EXT_SCT, &[]),
+            (EXT_SESSION_TICKET, &[]),
+            // ALPS at the new code point, same body: one protocol, h2.
+            (EXT_APPLICATION_SETTINGS_NEW, &[0x00, 0x03, 0x02, b'h', b'2']),
+        ],
+        suppress: &[],
+        drop13: &[
+            EXT_EXTENDED_MASTER_SECRET,
+            EXT_RENEGOTIATION_INFO,
+            EXT_EC_POINT_FORMATS,
+            EXT_SESSION_TICKET,
+        ],
+        // No padding in this shape, so only the version list and ALPS go.
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS_NEW],
+        alpn: H2_AND_HTTP11,
+        // Chrome 110+ stopped padding: the captured 133 hello is far past the
+        // 256-byte floor anyway, with an ML-KEM share in it.
+        padding_to: None,
+        grease: true,
+        cert_compression: BROTLI,
+        pq: true,
+        legacy_versions: &[],
+        headers: Some(CHROME133_HEADERS),
+        h2: Some(&CHROME133_H2),
+    },
+    // Safari 18.0, as `curl_safari180` of curl-impersonate v2.2.3 sends it.
+    //
+    // The TLS shape is Safari 15.5's — the bundle's own `safari_18.0_macOS`
+    // capture carries the identical JA3 and signature-scheme list — so this
+    // record differs in the HTTP identity (`Version/18.0`, a `priority` header,
+    // `en-US,en;q=0.9`) and in the HTTP/2 preface. It answers the question the
+    // older Safari row cannot: whether a *current* Safari is treated like the
+    // version the forum report named.
+    //
+    // `safari184` stays an alias of the 15.5 record: newer than 18.0, its TLS
+    // shape is still the same one, while its preface (an extra `9:1`) is not
+    // what either record sends.
+    TlsShape {
+        variant: TlsFingerprint::Safari18,
+        code: "safari18",
+        token: "SAFARI",
+        label: "SAFARI 18",
+        source: "curl_safari180 (curl-impersonate v2.2.3)",
+        aliases: &["safari18", "safari180"],
+        curl: Some(CurlNames::Only(&["curl_safari"], &[180])),
+        baseline: false,
+        ciphers: SAFARI_TLS_CIPHERS,
+        groups: SAFARI_TLS_GROUPS,
+        sig_algs: SAFARI_TLS_SIG_ALGS,
+        ext_order: SAFARI_TLS_EXT_ORDER,
+        raw_exts: SAFARI_TLS_RAW_EXTS,
+        suppress: &[EXT_SESSION_TICKET],
+        drop13: &[EXT_EXTENDED_MASTER_SECRET, EXT_RENEGOTIATION_INFO, EXT_EC_POINT_FORMATS],
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+        alpn: H2_AND_HTTP11,
+        padding_to: Some(512),
+        grease: true,
+        cert_compression: &[1],
+        pq: false,
+        legacy_versions: &[0x0302, 0x0301],
+        headers: Some(SAFARI18_HEADERS),
+        h2: Some(&SAFARI18_H2),
+    },
+    // Edge 101, as `curl_edge101` of curl-impersonate v2.2.3 sends it, with
+    // uTLS `HelloEdge_106` as the second reading of the same shape.
+    //
+    // Edge is Chromium: the TLS lists above are Chrome 99–107's, and the bundle
+    // documents that Chromium browsers differ only in `User-Agent` and
+    // `sec-ch-ua-platform`. The identity is therefore the whole point of this
+    // record, and so is the one h2 difference — Edge sends no
+    // `SETTINGS_ENABLE_PUSH`.
+    TlsShape {
+        variant: TlsFingerprint::Edge,
+        code: "edge101",
+        token: "EDGE",
+        label: "EDGE 101",
+        source: "curl_edge101 (curl-impersonate v2.2.3) / uTLS HelloEdge_106 (v1.8.2)",
+        aliases: &["edge", "edge99", "edge101"],
+        curl: Some(CurlNames::Only(&["curl_edge"], &[99, 101])),
+        baseline: false,
+        ciphers: CHROME_TLS_CIPHERS,
+        groups: CHROME_TLS_GROUPS,
+        sig_algs: CHROME_TLS_SIG_ALGS,
+        ext_order: CHROME_TLS_EXT_ORDER,
+        raw_exts: CHROME_TLS_RAW_EXTS,
+        suppress: &[],
+        drop13: &[
+            EXT_EXTENDED_MASTER_SECRET,
+            EXT_RENEGOTIATION_INFO,
+            EXT_EC_POINT_FORMATS,
+            EXT_SESSION_TICKET,
+        ],
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING],
+        alpn: H2_AND_HTTP11,
+        padding_to: Some(512),
+        grease: true,
+        cert_compression: BROTLI,
+        pq: false,
+        legacy_versions: &[],
+        headers: Some(EDGE101_HEADERS),
+        h2: Some(&EDGE101_H2),
     },
 ];
 
@@ -627,3 +803,6 @@ pub(crate) const EXT_KEY_SHARE: u16 = 51;
 pub(crate) const EXT_RENEGOTIATION_INFO: u16 = 65281;
 /// Chrome's ALPS (draft-vvv-tls-alps), as Chrome 107 and Safari send it.
 pub(crate) const EXT_APPLICATION_SETTINGS: u16 = 17513;
+/// The same extension at the code point Chrome 133 moved it to
+/// (`--tls-use-new-alps-codepoint`, and `utlsExtensionApplicationSettingsNew`).
+pub(crate) const EXT_APPLICATION_SETTINGS_NEW: u16 = 17613;
