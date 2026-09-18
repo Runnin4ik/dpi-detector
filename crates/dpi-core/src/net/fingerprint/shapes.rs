@@ -92,6 +92,34 @@ pub(crate) struct TlsShape {
     pub(crate) padding_to: Option<u16>,
     /// Emit GREASE values. Chrome and Safari grease, Firefox does not.
     pub(crate) grease: bool,
+    /// Whether the impersonated client carries `encrypted_client_hello` (65037).
+    ///
+    /// Nine of the nineteen shapes do, and every one of them does it as GREASE:
+    /// their wrappers say `--ech true`, and curl can only fetch an ECHConfigList
+    /// through DoH or `--ecl:`, neither of which the wrappers pass — so what
+    /// reaches the wire is a grease extension. Measured on the bundle's own
+    /// hello: `curl_chrome136`, `curl_firefox133` and `curl_tor145` all send a
+    /// body of exactly 187 bytes — `outer`, suite `0001 0001`, a random
+    /// `config_id`, a 32-byte `enc` and a 144-byte payload — the same shape on
+    /// three different browsers, which a real config never is.
+    ///
+    /// This is what `net::tls` turns into `EchMode::Grease`; a real
+    /// `EchMode::Enable` would need the host's own HTTPS record, which is a
+    /// different kind of fidelity than these records promise (see the plan).
+    pub(crate) ech: bool,
+    /// Shuffle the extension order once per connection.
+    ///
+    /// Measured twice, because it decides whether a shape can be pinned at all:
+    /// the bundle's own wrappers name `--tls-permute-extensions` for
+    /// `curl_chrome120` through `curl_chrome146` and for nothing older, and the
+    /// fork's captures carry `tls_permute_extensions: true` for every Chromium
+    /// from 110 up (Edge from 118). Chromium enables it unconditionally
+    /// (`SSL_set_permute_extensions` in `ssl_client_socket_impl.cc`), and
+    /// BoringSSL's `ssl_setup_extension_permutation` draws a fresh Fisher–Yates
+    /// pass per connection — so two hellos from one Chrome are never ordered
+    /// alike, and a profile that pins one order is the one thing Chrome 110+
+    /// never sends.
+    pub(crate) permute_extensions: bool,
     /// Whether the impersonated client sends its `priority` header over
     /// HTTP/1.1 as well as HTTP/2.
     ///
@@ -238,6 +266,17 @@ const H2_AND_HTTP11: &[&[u8]] = &[b"h2", b"http/1.1"];
 /// brotli, exactly what Chrome 107, Chrome 133 and Edge 101 advertise.
 const BROTLI: &[u16] = &[2];
 
+/// `zlib, brotli, zstd`, the list the whole Firefox family advertises.
+///
+/// Measured on the bundle's own hello: `curl_firefox133`, `curl_firefox135` and
+/// `curl_firefox144` carry `compress_certificate` with the body
+/// `06000100020003` — three algorithms in that order. `curl_tor145` names the
+/// same `--cert-compression` and sends no such extension at all, so its record
+/// keeps an empty list.
+///
+/// The code points are RFC 8879's: 1 zlib, 2 brotli, 3 zstd.
+const FIREFOX_COMPRESSION: &[u16] = &[1, 2, 3];
+
 /// The `curl_safari15.5..18.4` cipher list: 20 suites, CBC-heavy, 3DES at the
 /// end. Safari 18.0's bundle wrapper lists the same 20 in the same order.
 const SAFARI_TLS_CIPHERS: &[u16] = &[
@@ -379,6 +418,7 @@ const CHROME_NO_PADDING_EXT_ORDER: &[u16] = &[
     EXT_COMPRESS_CERTIFICATE,
     EXT_APPLICATION_SETTINGS,
     GREASE_EXTENSION_MARKER,
+    EXT_ENCRYPTED_CLIENT_HELLO,
 ];
 
 /// Chrome 133–146's extension order, uTLS `HelloChrome_133`'s pre-shuffle list:
@@ -401,6 +441,7 @@ const CHROME_ALPS_NEW_EXT_ORDER: &[u16] = &[
     EXT_COMPRESS_CERTIFICATE,
     EXT_APPLICATION_SETTINGS_NEW,
     GREASE_EXTENSION_MARKER,
+    EXT_ENCRYPTED_CLIENT_HELLO,
 ];
 
 /// The bodies Chrome 133–146 emit verbatim: the shared set with ALPS at its new
@@ -666,6 +707,7 @@ const FIREFOX_TLS_EXT_ORDER: &[u16] = &[
     EXT_PSK_KEY_EXCHANGE_MODES,
     EXT_RECORD_SIZE_LIMIT,
     EXT_COMPRESS_CERTIFICATE,
+    EXT_ENCRYPTED_CLIENT_HELLO,
 ];
 
 /// Firefox 135–144's extension order: 133's with
@@ -688,6 +730,7 @@ const FIREFOX135_TLS_EXT_ORDER: &[u16] = &[
     EXT_PSK_KEY_EXCHANGE_MODES,
     EXT_RECORD_SIZE_LIMIT,
     EXT_COMPRESS_CERTIFICATE,
+    EXT_ENCRYPTED_CLIENT_HELLO,
 ];
 
 /// Tor Browser 14.5's extension order, exactly the wrapper's
@@ -707,6 +750,7 @@ const TOR_TLS_EXT_ORDER: &[u16] = &[
     EXT_SUPPORTED_VERSIONS,
     EXT_SIGNATURE_ALGORITHMS,
     EXT_RECORD_SIZE_LIMIT,
+    EXT_ENCRYPTED_CLIENT_HELLO,
 ];
 
 /// The bodies Firefox 133–144 emit verbatim. The SCT entry is inert in 133's
@@ -765,6 +809,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: &[],
         padding_to: None,
         grease: false,
+        permute_extensions: false,
+        ech: false,
         priority_on_h1: false,
         cert_compression: &[],
         key_share_groups: None,
@@ -783,30 +829,35 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // no `signed_certificate_timestamp` (18). See
     // `tests::bundle_versions_match_their_ja3`.
     //
-    // One deliberate deviation remains: `encrypted_client_hello` (65037) is left
-    // out. uTLS's own GREASE ECH encrypts a fake inner hello with a fresh HPKE
-    // key, and this build has no HPKE provider; every hand-built body tried so
-    // far — the current one included, placed last exactly where Firefox puts it
-    // — makes `cloudflare.com`, `www.google.com` and `dns.google` answer
-    // `fatal alert: DecodeError` (`tls_fingerprint live custom`). Since Google
-    // and Cloudflare front much of what this tool probes, sending a hello they
-    // abort would report our own artifact as censorship. JA4 therefore shows 15
-    // extensions where `curl_firefox133` sends 16.
+    // `encrypted_client_hello` (65037) closes the list, as GREASE: the wrapper
+    // names `--ech true` and curl can only fetch a real ECHConfigList through
+    // DoH or `--ecl:`, neither of which it passes. `net::tls` installs
+    // `EchMode::Grease`, `net::hpke` is the HPKE suite it encapsulates with, and
+    // the extension is rebuilt per connection — `enc` is a fresh X25519 public
+    // key and the payload is random — so its *bytes* are never comparable, the
+    // same as a real browser's. JA4 counts it: 16 extensions, which is what
+    // `curl_firefox133` sends.
     //
-    // Two more deviations the byte comparison against the pinned bundle found,
-    // both in bodies no fingerprint hash covers (JA4 reads extension *types* and
-    // the signature-algorithms list, never a compression list or a key share):
+    // An earlier attempt at this record *hand-built* the body and had
+    // `cloudflare.com`, `www.google.com` and `dns.google` answer `fatal alert:
+    // DecodeError`; rustls's GREASE path is accepted by all four of those hosts
+    // (measured again with `tls_fingerprint liveany firefox cloudflare.com
+    // www.google.com dns.google tls.peet.ws`), which is the difference between a
+    // body that parses on a server's ECH path and one that does not.
     //
-    // * `compress_certificate` lists zlib and brotli, the bundle's three also
-    //   list zstd — advertising it would mean decoding it, and this build has no
-    //   decompressor for it;
-    // * the hello carries two key shares (X25519MLKEM768, X25519) where the
-    //   bundle's `--tls-key-shares-limit 3` sends three, the third a P-256
-    //   share.
+    // One deviation the byte comparison against the pinned bundle finds, in a
+    // body no fingerprint hash covers (JA4 reads extension *types* and the
+    // signature-algorithms list, never a key share):
     //
-    // Both are invisible to `tls.peet.ws` (`ja3`, `ja4` and `peetprint` are
-    // equal outside the ECH above), which is why only a captured-byte comparison
-    // sees them.
+    // * our GREASE ECH body is 446 bytes where the bundle's is 187, because
+    //   rustls sizes the payload from the encoded inner hello it would really
+    //   send and curl's inner hello is smaller. It is the one field of the hello
+    //   whose length is random on both sides — the bundle's own varies between
+    //   187 and 283 bytes across connections.
+    //
+    // The key shares, `compress_certificate` list and h2 preface that used to be
+    // listed here as deviations are the bundle's own since the pass that closed
+    // them (`--tls-key-shares-limit 3`, `zlib, brotli, zstd`, `8:1`/`9:1`).
     TlsShape {
         variant: TlsFingerprint::Firefox,
         code: "firefox",
@@ -831,12 +882,14 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         // Firefox sends no padding; the JA3 this profile is pinned to has none.
         padding_to: None,
         grease: false,
+        permute_extensions: false,
+        ech: true,
         priority_on_h1: true,
         // zlib, brotli — the two this build can actually decompress (`zstd` is
         // not a rustls feature; advertising it would invite a
         // CompressedCertificate we cannot read). The algorithm *list* is not
         // part of JA3/JA4, only the presence of extension 27 is.
-        cert_compression: &[1, 2],
+        cert_compression: FIREFOX_COMPRESSION,
         key_share_groups: Some(FIREFOX_KEY_SHARE_GROUPS),
         pq: true,
         // Firefox 133 offers 1.3 and 1.2 only.
@@ -886,6 +939,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        permute_extensions: false,
+        ech: false,
         priority_on_h1: false,
         cert_compression: BROTLI,
         key_share_groups: None,
@@ -932,6 +987,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        permute_extensions: false,
+        ech: false,
         priority_on_h1: false,
         // zlib, exactly what Safari advertises.
         cert_compression: &[1],
@@ -957,21 +1014,18 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // shape with the old 17513 — that is why 131 is not an alias), padding is
     // gone, and `accept-encoding` gained `zstd`.
     //
-    // Two things a permuted, ECH-carrying client cannot give this build:
+    // The two things a shuffling, ECH-carrying client means for this build:
     //
-    // * `encrypted_client_hello` (65037) is omitted for the reason in the
-    //   Firefox record — a body we synthesize is rejected by every ECH-aware
-    //   server. JA3 and JA4 therefore carry one extension fewer than the
-    //   source's, which is why the tests pin the extension *set* and the
-    //   JA4 cipher hash rather than a whole JA4 string: no source publishes a
-    //   hash for an ECH-less Chrome 133, and pinning our own dump would lock in
-    //   whatever this build happens to send.
-    // * the order below is uTLS's pre-shuffle list. Chromium randomizes the
-    //   order of every hello (`ShuffleChromeTLSExtensions`), so a real Chrome
-    //   133 sends one of many orders and its JA3 differs per connection; JA4,
-    //   which sorts what it hashes, is the stable key. This profile sends one
-    //   order from that distribution, deterministically, which is what makes a
-    //   column of the burst reproducible at all.
+    // * `encrypted_client_hello` (65037) is sent as GREASE, like the wrapper's
+    //   own `--ech true` (see the Firefox record);
+    // * the extension order is shuffled per connection, so the tests pin the
+    //   extension *set* and the JA4 rather than a whole JA3 string: JA3 of this
+    //   shape differs between two connections of the real browser too.
+    // * the order below is uTLS's pre-shuffle list, and the profile now shuffles
+    //   it per connection the way Chromium does (`TlsShape::permute_extensions`,
+    //   BoringSSL's `ssl_setup_extension_permutation`): a real Chrome 133 sends
+    //   one of many orders and its JA3 differs per connection, which this build
+    //   now reproduces. JA4, which sorts what it hashes, stays the stable key.
     TlsShape {
         variant: TlsFingerprint::Chrome133,
         code: "chrome133",
@@ -1000,6 +1054,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         // 256-byte floor anyway, with an ML-KEM share in it.
         padding_to: None,
         grease: true,
+        permute_extensions: true,
+        ech: true,
         priority_on_h1: false,
         cert_compression: BROTLI,
         key_share_groups: None,
@@ -1043,6 +1099,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        permute_extensions: false,
+        ech: false,
         priority_on_h1: false,
         cert_compression: &[1],
         key_share_groups: None,
@@ -1084,6 +1142,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        permute_extensions: false,
+        ech: false,
         priority_on_h1: false,
         cert_compression: BROTLI,
         key_share_groups: None,
@@ -1132,6 +1192,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        permute_extensions: false,
+        ech: false,
         priority_on_h1: false,
         cert_compression: BROTLI,
         key_share_groups: None,
@@ -1178,6 +1240,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: true,
+        permute_extensions: true,
+        ech: true,
         priority_on_h1: false,
         cert_compression: BROTLI,
         key_share_groups: None,
@@ -1219,6 +1283,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: true,
+        permute_extensions: true,
+        ech: true,
         priority_on_h1: false,
         cert_compression: BROTLI,
         key_share_groups: None,
@@ -1259,6 +1325,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: true,
+        permute_extensions: true,
+        ech: true,
         priority_on_h1: false,
         cert_compression: BROTLI,
         key_share_groups: None,
@@ -1302,6 +1370,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: true,
+        permute_extensions: true,
+        ech: true,
         priority_on_h1: false,
         cert_compression: BROTLI,
         key_share_groups: None,
@@ -1316,10 +1386,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     //
     // One extension is the whole difference, and it is the one the plan called
     // out as a shape this build could not reproduce: 18 is a body this profile
-    // already writes for Chrome, so it costs a record rather than a patch. The
-    // deviations are Firefox 133's (no ECH, `zlib, brotli` where the bundle
-    // advertises zstd too, two key shares where the wrapper's
-    // `--tls-key-shares-limit 3` sends three).
+    // already writes for Chrome, so it costs a record rather than a patch. What
+    // used to be listed here as deviations — ECH, the zstd code point, the third
+    // key share — is the bundle's own since the passes that closed them.
     TlsShape {
         variant: TlsFingerprint::Firefox135,
         code: "firefox135",
@@ -1340,8 +1409,10 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: false,
+        permute_extensions: false,
+        ech: true,
         priority_on_h1: true,
-        cert_compression: &[1, 2],
+        cert_compression: FIREFOX_COMPRESSION,
         key_share_groups: Some(FIREFOX_KEY_SHARE_GROUPS),
         pq: true,
         legacy_versions: &[],
@@ -1376,8 +1447,10 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: false,
+        permute_extensions: false,
+        ech: true,
         priority_on_h1: true,
-        cert_compression: &[1, 2],
+        cert_compression: FIREFOX_COMPRESSION,
         key_share_groups: Some(FIREFOX_KEY_SHARE_GROUPS),
         pq: true,
         legacy_versions: &[],
@@ -1412,6 +1485,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        permute_extensions: false,
+        ech: false,
         priority_on_h1: false,
         // No `compress_certificate`: the wrapper advertises none.
         cert_compression: &[],
@@ -1449,6 +1524,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        permute_extensions: false,
+        ech: false,
         priority_on_h1: false,
         cert_compression: &[1],
         key_share_groups: None,
@@ -1488,6 +1565,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         // No padding either, and the hello says so.
         padding_to: None,
         grease: true,
+        permute_extensions: false,
+        ech: false,
         priority_on_h1: false,
         cert_compression: &[1],
         key_share_groups: None,
@@ -1525,6 +1604,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        permute_extensions: false,
+        ech: false,
         priority_on_h1: false,
         cert_compression: &[1],
         key_share_groups: None,
@@ -1571,6 +1652,8 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: false,
+        permute_extensions: false,
+        ech: true,
         priority_on_h1: true,
         cert_compression: &[],
         key_share_groups: Some(TOR_KEY_SHARE_GROUPS),
@@ -1636,6 +1719,7 @@ impl TlsShape {
             raw_extensions: self.raw_exts.iter().map(|(ext, body)| (*ext, body.to_vec())).collect(),
             suppress_extensions: self.suppress.to_vec(),
             grease: self.grease,
+            permute_extensions: self.permute_extensions,
             cert_compression: Some(self.cert_compression.to_vec()),
             padding_to: self.padding_to,
             legacy_versions: self.legacy_versions.to_vec(),
@@ -1661,6 +1745,9 @@ pub(crate) const EXT_SUPPORTED_VERSIONS: u16 = 43;
 pub(crate) const EXT_PSK_KEY_EXCHANGE_MODES: u16 = 45;
 pub(crate) const EXT_KEY_SHARE: u16 = 51;
 pub(crate) const EXT_RENEGOTIATION_INFO: u16 = 65281;
+/// `encrypted_client_hello` (draft-ietf-tls-esni), the extension nine shapes
+/// carry as GREASE.
+pub(crate) const EXT_ENCRYPTED_CLIENT_HELLO: u16 = 65037;
 /// Chrome's ALPS (draft-vvv-tls-alps), as Chrome 107 and Safari send it.
 pub(crate) const EXT_APPLICATION_SETTINGS: u16 = 17513;
 /// The same extension at the code point Chrome 133 moved it to

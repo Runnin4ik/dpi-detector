@@ -51,8 +51,16 @@
 //!
 //! It is **not** a byte-for-byte browser. What is left, and why:
 //!
-//! * ECH is omitted entirely (see [`shapes`] — synthesizing it makes Google and
-//!   Cloudflare abort the handshake), and record-layer splitting is rustls'.
+//! * The nine shapes whose client sends `encrypted_client_hello` send it as
+//!   GREASE, because that is what their own wrappers send: curl needs DoH or an
+//!   explicit `--ecl:` for a real ECHConfigList and no wrapper passes either
+//!   (`net::tls` installs `EchMode::Grease`, `net::hpke` is the HPKE suite
+//!   behind it). A real config would have to come from the target's own HTTPS
+//!   record, which is per *host* where every other field of a record is per
+//!   *client* — and the reference client does not do it. The extension's body is
+//!   rebuilt per connection, so its bytes are never comparable: the bundle
+//!   measures 187 bytes for it (its inner hello is smaller), this build 446, and
+//!   both are the same shape.
 //! * A hello whose version is pinned for isolation — test 2's two columns and
 //!   test 6's TLS 1.2 axis — advertises one version where the client it
 //!   imitates sends two or more (`[GREASE, 0x0304]` instead of
@@ -64,20 +72,24 @@
 //!   the browser's own, fallbacks included: Safari 15.5 lists TLS 1.1 and 1.0
 //!   behind 1.2 (`legacy_versions`), and a peer that actually selects one is
 //!   refused by the config and reported `NO TLS1.3`, not as a block.
-//! * A Chrome 110 or later profile carries one fixed extension order where the
-//!   browser shuffles its extensions per connection, so its JA3 is one sample of
-//!   a distribution (JA4 hashes the sorted set and is stable). Every other list —
-//!   ciphers, groups, signature schemes, the key shares a
-//!   `--tls-key-shares-limit` asks for, the h2 preface including the settings
-//!   Safari names and the request's priority — is the client's own.
+//! * A Chrome 110 or later profile shuffles its extension order per connection,
+//!   as the browser does (`TlsShape::permute_extensions`), so its JA3 is one
+//!   sample of a distribution and JA4 — which hashes the sorted set — is the
+//!   stable key. Because this build's GREASE ECH body is larger than the
+//!   bundle's, its 1.3-only Chrome hellos stay above BoringSSL's 512-byte
+//!   padding floor where the bundle's sometimes dip below it: the padding
+//!   extension the bundle adds on those connections is absent here, which moves
+//!   that shape's extension *count* by one. Every other list — ciphers, groups,
+//!   signature schemes, the key shares a `--tls-key-shares-limit` asks for, the
+//!   h2 preface including the settings Safari names and the request's priority —
+//!   is the client's own.
 //!
 //! Measured against `tls.peet.ws` with `tools/fingerprint/`, the TLS hashes, the
 //! header list and order, the UA, the whole HTTP/2 `SETTINGS`/`WINDOW_UPDATE`
 //! pair, the pseudo-header order, the priority, and the HTTP/1.1 request block
-//! with its header spellings match the bundle exactly on every profile that
-//! carries no ECH; `ja3`, `ja4` and `peetprint` differ only where the omitted
-//! `encrypted_client_hello` makes them differ, which is the extension the
-//! profile's own pin records.
+//! with its header spellings match the bundle exactly on every profile whose
+//! extension order is fixed. On the five that shuffle, JA4 matches and JA3 does
+//! not — the bundle's own JA3 moves per connection for the same reason.
 //!
 //! # Adding a profile
 //!
@@ -329,6 +341,19 @@ pub fn hello_profile(fingerprint: TlsFingerprint) -> Option<Arc<ClientHelloProfi
 /// does not send would change the fingerprint being reproduced.
 pub fn needs_pq(fingerprint: TlsFingerprint) -> bool {
     fingerprint.spec().pq
+}
+
+/// True when this shape carries `encrypted_client_hello` (65037) as GREASE.
+///
+/// Nine shapes do: every wrapper that names `--ech true` — `curl_chrome120`,
+/// `curl_chrome131`, `curl_chrome131_android`, `curl_chrome133`,
+/// `curl_chrome136`, `curl_firefox133`, `curl_firefox135`, `curl_firefox144` and
+/// `curl_tor145` — and each sends it as grease, because curl needs DoH or an
+/// explicit `--ecl:` to have a real config at all. The wrapper's own flags are
+/// the source; the captures agree (`encrypted_client_hello` in
+/// `firefox_133.0.3_linux.yaml`, `chrome_136.0.7103.93.yaml` and the rest).
+pub fn sends_ech(fingerprint: TlsFingerprint) -> bool {
+    fingerprint.spec().ech
 }
 
 /// True when this selection advertises `compress_certificate` (extension 27).

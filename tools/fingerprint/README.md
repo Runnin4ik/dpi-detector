@@ -61,17 +61,25 @@ the sampled tests that pinned everything else.
 
 These are deliberate. Anything *else* it reports is a bug.
 
-* **ECH.** `chrome120`, `chrome131`, `chrome131android`, `chrome133`,
-  `chrome136`, `firefox`, `firefox135`, `firefox144` and `tor145` carry no
-  `encrypted_client_hello` (65037): a synthesized body makes real servers reject
-  the handshake. Their JA3/JA4/peetprint therefore differ from the bundle's, and
-  their JA4 extension count is one lower.
+* **ECH body length.** The nine shapes whose wrapper names `--ech true` send
+  `encrypted_client_hello` (65037) as GREASE, like the wrapper does. `enc` and the
+  payload are rebuilt per connection, so the extension's *bytes* always differ —
+  for a real browser too. Ours is 446 bytes where the bundle's is 187 to 283,
+  because rustls sizes the payload from the encoded inner hello it would really
+  send and curl's inner hello is smaller. `hello-diff` therefore reports the
+  extension's body, and `echo-diff` reports `peetprint` (which hashes the hello's
+  content); `ja3`/`ja4` see only the type.
+* **Padding on the 1.3-only Chrome shapes.** Because our GREASE ECH body is
+  bigger, a `chrome120`/`chrome131`/`chrome131android` hello stays above
+  BoringSSL's 512-byte padding floor where the bundle's sometimes dips below it —
+  and the bundle's own extension count moves between connections for exactly that
+  reason. When it does not pad, `hello-diff` and `captures` report the same
+  extension *set*; when it does, the bundle has one extension more than we do.
 * **Permuted extension order.** Chrome 110 and later shuffle their extensions per
-  connection; a profile has one order, so its JA3 is one sample of the
-  distribution (JA4 hashes the sorted set and is stable).
-* **Compression list (Firefox family, Tor).** The build has no zstd decompressor,
-  so `compress_certificate` stops at `zlib, brotli` where the bundle sends
-  `zlib, brotli, zstd`.
+  connection, and so do the five profiles that copy them, because the wrapper
+  names `--tls-permute-extensions`. JA3 is therefore a fresh sample on both sides
+  — `echo-diff` reports it as a difference, and the bundle's own JA3 moves the
+  same way — while JA4, which hashes the sorted set, is stable and matches.
 * **Tor's third key share, against the capture only.** `curl_tor145` passes
   `--tls-key-shares-limit 3`, so the bundle and our record send X25519, P-256 and
   P-521; the fork's capture of Tor 14.5 itself stops after P-256. The `captures`

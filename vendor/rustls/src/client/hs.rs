@@ -407,10 +407,20 @@ fn emit_client_hello_for_retry(
     // GREASE values change per connection exactly like a browser's do.
     if let Some(profile) = &config.hello_profile {
         let grease_seed = crate::rand::random_u16(config.provider.secure_random)?;
+        // dpi-detector patch: a profile that permutes its extension order draws
+        // the seed here, from the same CSPRNG, so the order of one connection
+        // says nothing about the next.
+        let mut permute_seed = [0u8; 16];
+        config
+            .provider
+            .secure_random
+            .fill(&mut permute_seed)
+            .map_err(|_| Error::General("failed to get random bytes".into()))?;
         profile.apply(
             &mut exts,
             &mut cipher_suites,
             grease_seed,
+            permute_seed,
             offers_tls13,
         );
         // dpi-detector patch: a browser that greases also offers a key share for

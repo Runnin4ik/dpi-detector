@@ -35,6 +35,18 @@ impl ConfigBuilder<ClientConfig, WantsVersions> {
 }
 
 impl ConfigBuilder<ClientConfig, WantsVerifier> {
+    /// Enable ECH on a builder that has already chosen its protocol versions.
+    ///
+    /// dpi-detector patch. Upstream's [`ConfigBuilder::with_ech`] selects TLS 1.3
+    /// as the only version, because only a TLS 1.3 hello can be encrypted. A
+    /// profile that reproduces a browser keeps its TLS 1.2 fallback in the offer
+    /// — Chrome 120's hello carries both — and still has to carry the extension,
+    /// so the mode is set here without touching the version list.
+    pub fn with_ech_mode(mut self, mode: EchMode) -> Self {
+        self.state.client_ech_mode = Some(mode);
+        self
+    }
+
     /// Choose how to verify server certificates.
     ///
     /// Using this function does not configure revocation.  If you wish to

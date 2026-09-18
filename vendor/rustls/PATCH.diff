@@ -1,7 +1,26 @@
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/builder.rs b/src/client/builder.rs
---- a/src/client/builder.rs	2006-07-24 04:21:28.000000000 +0300
-+++ b/src/client/builder.rs	2026-09-11 00:15:28.069746700 +0300
-@@ -168,6 +168,7 @@
+--- a/src/client/builder.rs	2006-07-24 05:21:28.000000000 +0400
++++ b/src/client/builder.rs	2026-09-18 14:03:10.492494400 +0300
+@@ -35,6 +35,18 @@
+ }
+ 
+ impl ConfigBuilder<ClientConfig, WantsVerifier> {
++    /// Enable ECH on a builder that has already chosen its protocol versions.
++    ///
++    /// dpi-detector patch. Upstream's [`ConfigBuilder::with_ech`] selects TLS 1.3
++    /// as the only version, because only a TLS 1.3 hello can be encrypted. A
++    /// profile that reproduces a browser keeps its TLS 1.2 fallback in the offer
++    /// — Chrome 120's hello carries both — and still has to carry the extension,
++    /// so the mode is set here without touching the version list.
++    pub fn with_ech_mode(mut self, mode: EchMode) -> Self {
++        self.state.client_ech_mode = Some(mode);
++        self
++    }
++
+     /// Choose how to verify server certificates.
+     ///
+     /// Using this function does not configure revocation.  If you wish to
+@@ -168,6 +180,7 @@
          ClientConfig {
              provider: self.provider,
              alpn_protocols: Vec::new(),
@@ -10,7 +29,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
              resumption: Resumption::default(),
              max_fragment_size: None,
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/client_conn.rs b/src/client/client_conn.rs
---- a/src/client/client_conn.rs	2006-07-24 04:21:28.000000000 +0300
+--- a/src/client/client_conn.rs	2006-07-24 05:21:28.000000000 +0400
 +++ b/src/client/client_conn.rs	2026-09-11 00:15:36.623504600 +0300
 @@ -6,6 +6,7 @@
  use pki_types::{ServerName, UnixTime};
@@ -38,8 +57,8 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      /// The default is true.
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/hello_profile.rs b/src/client/hello_profile.rs
 --- a/src/client/hello_profile.rs	1970-01-01 03:00:00.000000000 +0300
-+++ b/src/client/hello_profile.rs	2026-09-18 13:12:32.271016300 +0300
-@@ -0,0 +1,351 @@
++++ b/src/client/hello_profile.rs	2026-09-18 13:51:12.033626700 +0300
+@@ -0,0 +1,445 @@
 +//! ClientHello profile override (dpi-detector patch).
 +//!
 +//! Upstream rustls fixes the ClientHello shape: the cipher-suite list and its
@@ -150,6 +169,18 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +    /// every connection, which makes JA3 unstable by design (JA4 ignores them).
 +    pub grease: bool,
 +
++    /// Shuffle [`Self::extension_order`] once per connection, as Chromium 110+
++    /// does: BoringSSL's `ssl_setup_extension_permutation` runs one Fisher–Yates
++    /// pass over its extension table, seeded from `RAND_bytes`, so two
++    /// ClientHellos from one browser never share an order. Chrome's JA3 is
++    /// therefore different on every connection, and a build that pins one order
++    /// is the one shape a modern Chromium never sends.
++    ///
++    /// The GREASE slots, the trailing padding and the extensions TLS 1.3
++    /// requires last (ECH, PSK) keep their positions — BoringSSL adds those
++    /// outside the loop it shuffles.
++    pub permute_extensions: bool,
++
 +    /// Certificate compression algorithms to advertise (`compress_certificate`).
 +    pub cert_compression: Option<Vec<u16>>,
 +
@@ -213,12 +244,14 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +    /// Applies the profile to a freshly built ClientHello.
 +    ///
 +    /// `grease_seed` selects the GREASE values (mirrors the per-connection
-+    /// randomization rustls already uses for extension order).
++    /// randomization rustls already uses for extension order), and
++    /// `permute_seed` drives [`Self::permute_extensions`].
 +    pub(crate) fn apply(
 +        &self,
 +        exts: &mut ClientExtensions<'_>,
 +        cipher_suites: &mut Vec<CipherSuite>,
 +        grease_seed: u16,
++        permute_seed: [u8; 16],
 +        tls13: bool,
 +    ) {
 +        if let Some(ciphers) = &self.cipher_suites {
@@ -302,6 +335,15 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +        // `curl-impersonate v2.2.2` bundles, whose closing GREASE is the only
 +        // thing that differs in size from ours in an otherwise identical hello.
 +        let order = self.extension_order.as_ref().map(|order| {
++            // The shuffle runs on the order as written, before the GREASE slots
++            // take their per-connection values: BoringSSL permutes its table of
++            // extensions and then emits the GREASE pair around the result, so a
++            // GREASE marker keeps the position the profile gave it.
++            let order = if self.permute_extensions {
++                permuted_order(order, permute_seed)
++            } else {
++                order.clone()
++            };
 +            let markers = order.iter().filter(|t| **t == GREASE_EXTENSION_MARKER).count();
 +            let mut nth = 0u8;
 +            order
@@ -340,6 +382,77 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +        });
 +
 +        exts.padding_to = self.padding_to;
++    }
++}
++
++/// The profile's order with its movable entries shuffled, per connection.
++///
++/// This is BoringSSL's `ssl_setup_extension_permutation` in miniature: one
++/// Fisher–Yates pass from the end of the list, each step swapping entry `i` with
++/// a uniformly drawn earlier one. Three classes stay where the profile put them,
++/// because BoringSSL adds them outside the loop it shuffles:
++///
++/// * GREASE slots — its pair is written around the permuted table;
++/// * padding (21) — appended last, which is also where RFC 7685 padding belongs;
++/// * `encrypted_client_hello` (65037) and `pre_shared_key` (41) — TLS 1.3
++///   requires them last, and rustls places them there regardless.
++///
++/// The seed is 128 bits drawn from the CSPRNG per connection and expanded by a
++/// splitmix64 stream. BoringSSL draws one random byte per position, so its space
++/// is `2^(8·(n-1))`; this one is bounded by the seed, `2^128`, which for the
++/// fifteen-odd entries a browser sends is the same statement: no two connections
++/// repeat an order. An observer sees the resulting permutation, not the stream
++/// that produced it, so the next connection's order is not predictable from
++/// this one's.
++fn permuted_order(order: &[u16], seed: [u8; 16]) -> Vec<u16> {
++    let mut out = order.to_vec();
++    let mut rng = SplitMix64::new(seed);
++    let movable: Vec<usize> = (0..out.len())
++        .filter(|i| is_movable(out[*i]))
++        .collect();
++
++    for i in (1..movable.len()).rev() {
++        let j = (rng.next_u64() % (i as u64 + 1)) as usize;
++        out.swap(movable[i], movable[j]);
++    }
++    out
++}
++
++/// Whether BoringSSL's shuffle is free to move this entry.
++fn is_movable(ext_type: u16) -> bool {
++    const PADDING: u16 = 21;
++    const PRE_SHARED_KEY: u16 = 41;
++    const ENCRYPTED_CLIENT_HELLO: u16 = 65037;
++
++    ext_type != GREASE_EXTENSION_MARKER
++        && ext_type != PADDING
++        && ext_type != PRE_SHARED_KEY
++        && ext_type != ENCRYPTED_CLIENT_HELLO
++}
++
++/// A splitmix64 stream over a 128-bit seed: the permutation's only randomness,
++/// and the reason it needs no dependency of its own.
++struct SplitMix64 {
++    state: u64,
++    key: u64,
++}
++
++impl SplitMix64 {
++    fn new(seed: [u8; 16]) -> Self {
++        let hi = u64::from_be_bytes(seed[..8].try_into().unwrap_or([0; 8]));
++        let lo = u64::from_be_bytes(seed[8..].try_into().unwrap_or([0; 8]));
++        Self {
++            state: hi ^ 0x9e37_79b9_7f4a_7c15,
++            key: lo,
++        }
++    }
++
++    fn next_u64(&mut self) -> u64 {
++        self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
++        let mut z = self.state;
++        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
++        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
++        (z ^ (z >> 31)) ^ self.key
 +    }
 +}
 +
@@ -392,8 +505,8 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +    pub const RENEGOTIATION_INFO: u16 = 65281;
 +}
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/hs.rs b/src/client/hs.rs
---- a/src/client/hs.rs	2006-07-24 04:21:28.000000000 +0300
-+++ b/src/client/hs.rs	2026-09-18 13:13:27.984693900 +0300
+--- a/src/client/hs.rs	2006-07-24 05:21:28.000000000 +0400
++++ b/src/client/hs.rs	2026-09-18 13:51:15.364636300 +0300
 @@ -56,7 +56,7 @@
      //
      // If this is `None` then we do not support early data.
@@ -484,11 +597,6 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 -    if let Some(key_share) = &key_share {
 -        debug_assert!(supported_versions.tls13);
 -        let mut shares = vec![KeyShareEntry::new(key_share.group(), key_share.pub_key())];
--
--        if !retryreq
--            .map(|rr| rr.key_share.is_some())
--            .unwrap_or_default()
--        {
 +    if !key_shares.is_empty() {
 +        debug_assert!(offers_tls13);
 +        let mut shares = Vec::new();
@@ -505,7 +613,11 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +                // A HRR that names a group asks for that one alone.
 +                continue;
 +            }
-+
+ 
+-        if !retryreq
+-            .map(|rr| rr.key_share.is_some())
+-            .unwrap_or_default()
+-        {
              // Only for the initial client hello, or a HRR that does not specify a kx group,
              // see if we can send a second KeyShare for "free".  We only do this if the same
              // algorithm is also supported separately by our provider for this version
@@ -547,7 +659,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
              exts.certificate_compression_algorithms = Some(
                  config
                      .cert_decompressors
-@@ -377,11 +397,43 @@
+@@ -377,11 +397,53 @@
          })
          .collect();
  
@@ -562,10 +674,20 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +    // GREASE values change per connection exactly like a browser's do.
 +    if let Some(profile) = &config.hello_profile {
 +        let grease_seed = crate::rand::random_u16(config.provider.secure_random)?;
++        // dpi-detector patch: a profile that permutes its extension order draws
++        // the seed here, from the same CSPRNG, so the order of one connection
++        // says nothing about the next.
++        let mut permute_seed = [0u8; 16];
++        config
++            .provider
++            .secure_random
++            .fill(&mut permute_seed)
++            .map_err(|_| Error::General("failed to get random bytes".into()))?;
 +        profile.apply(
 +            &mut exts,
 +            &mut cipher_suites,
 +            grease_seed,
++            permute_seed,
 +            offers_tls13,
 +        );
 +        // dpi-detector patch: a browser that greases also offers a key share for
@@ -592,7 +714,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      let mut chp_payload = ClientHelloPayload {
          client_version: ProtocolVersion::TLSv1_2,
          random: input.random,
-@@ -431,8 +483,10 @@
+@@ -431,8 +493,10 @@
          _ => {}
      }
  
@@ -605,7 +727,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      input.hello.offered_cipher_suites = chp_payload.cipher_suites.clone();
  
      let mut chp = HandshakeMessagePayload(HandshakePayload::ClientHello(chp_payload));
-@@ -516,12 +570,12 @@
+@@ -516,12 +580,12 @@
          input,
          transcript_buffer,
          early_data_key_schedule,
@@ -620,7 +742,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
          Box::new(ExpectServerHelloOrHelloRetryRequest {
              next,
              extra_exts: extra_exts.into_owned(),
-@@ -828,7 +882,7 @@
+@@ -828,7 +892,7 @@
                      transcript,
                      self.early_data_key_schedule,
                      // We always send a key share when TLS 1.3 is enabled.
@@ -629,7 +751,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
                      &m,
                      self.ech_state,
                      self.input,
-@@ -869,21 +923,28 @@
+@@ -869,21 +933,28 @@
          cx.common.check_aligned_handshake()?;
  
          // We always send a key share when TLS 1.3 is enabled.
@@ -651,8 +773,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +                if share.group() == req_group {
 +                    return true;
 +                }
- 
--            if req_group == offered_key_share.group() || Some(req_group) == offered_hybrid {
++
 +                share
 +                    .hybrid_component()
 +                    .and_then(|(group_name, _)| {
@@ -661,12 +782,13 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +                    .map(|skxg| skxg.name() == req_group)
 +                    .unwrap_or_default()
 +            });
-+
+ 
+-            if req_group == offered_key_share.group() || Some(req_group) == offered_hybrid {
 +            if offered {
                  return Err({
                      cx.common.send_fatal_alert(
                          AlertDescription::IllegalParameter,
-@@ -1011,8 +1072,19 @@
+@@ -1011,8 +1082,19 @@
              cx.data.early_data.rejected();
          }
  
@@ -688,7 +810,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
                  let Some(skxg) = config.find_kx_group(group, ProtocolVersion::TLSv1_3) else {
                      return Err(cx.common.send_fatal_alert(
                          AlertDescription::IllegalParameter,
-@@ -1021,15 +1093,15 @@
+@@ -1021,15 +1103,15 @@
                  };
  
                  cx.common.kx_state = KxState::Start(skxg);
@@ -708,7 +830,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
              Some(cs),
              self.next.input,
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/tls13.rs b/src/client/tls13.rs
---- a/src/client/tls13.rs	2006-07-24 04:21:28.000000000 +0300
+--- a/src/client/tls13.rs	2006-07-24 05:21:28.000000000 +0400
 +++ b/src/client/tls13.rs	2026-09-18 13:15:24.838964700 +0300
 @@ -21,6 +21,7 @@
  use crate::enums::{
@@ -845,8 +967,42 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
  pub(super) fn initial_key_share(
      config: &ClientConfig,
      server_name: &ServerName<'_>,
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/crypto/hpke.rs b/src/crypto/hpke.rs
+--- a/src/crypto/hpke.rs	2006-07-24 05:21:28.000000000 +0400
++++ b/src/crypto/hpke.rs	2026-09-18 14:03:58.263858300 +0300
+@@ -5,9 +5,14 @@
+ use zeroize::Zeroize;
+ 
+ use crate::Error;
+-use crate::msgs::enums::HpkeKem;
+-use crate::msgs::handshake::HpkeSymmetricCipherSuite;
+ 
++// dpi-detector patch: an implementation of `Hpke` that lives outside this crate
++// has to be able to *name* the suite it implements — `aws_lc_rs` can, because it
++// is inside. `rustls-rustcrypto`, which this build uses as its provider, cannot
++// until these are re-exported from here.
++pub use crate::msgs::enums::{HpkeAead, HpkeKdf, HpkeKem};
++pub use crate::msgs::handshake::HpkeSymmetricCipherSuite;
++
+ /// An HPKE suite, specifying a key encapsulation mechanism and a symmetric cipher suite.
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ pub struct HpkeSuite {
+@@ -118,6 +123,13 @@
+     pub fn secret_bytes(&self) -> &[u8] {
+         self.0.as_slice()
+     }
++
++    /// dpi-detector patch: an `Hpke` implementation outside this crate — the one
++    /// this build's provider needs — has to hand a key pair back from
++    /// [`Hpke::generate_key_pair`], and the field is private.
++    pub fn from_bytes(bytes: Vec<u8>) -> Self {
++        Self(bytes)
++    }
+ }
+ 
+ impl From<Vec<u8>> for HpkePrivateKey {
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs	2006-07-24 04:21:28.000000000 +0300
+--- a/src/lib.rs	2006-07-24 05:21:28.000000000 +0400
 +++ b/src/lib.rs	2026-09-11 00:15:28.043209400 +0300
 @@ -586,6 +586,7 @@
      mod ech;
@@ -865,7 +1021,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      #[cfg(any(feature = "std", feature = "hashbrown"))]
      pub use handy::ClientSessionMemoryCache;
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/msgs/handshake.rs b/src/msgs/handshake.rs
---- a/src/msgs/handshake.rs	2006-07-24 04:21:28.000000000 +0300
+--- a/src/msgs/handshake.rs	2006-07-24 05:21:28.000000000 +0400
 +++ b/src/msgs/handshake.rs	2026-09-14 12:53:42.347222700 +0300
 @@ -694,10 +694,23 @@
  /// ignore the preference of the client.
@@ -1091,7 +1247,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
              })?;
          }
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/server/test.rs b/src/server/test.rs
---- a/src/server/test.rs	2006-07-24 04:21:28.000000000 +0300
+--- a/src/server/test.rs	2006-07-24 05:21:28.000000000 +0400
 +++ b/src/server/test.rs	2026-09-14 12:49:31.190293900 +0300
 @@ -359,6 +359,7 @@
              supported_versions: Some(SupportedProtocolVersions {

@@ -518,11 +518,14 @@ dependencies = [
 name = "dpi-core"
 version = "5.0.0-alpha.16"
 dependencies = [
+ "aes-gcm",
  "base64",
  "brotli",
  "brotli-decompressor",
  "bytes",
+ "chacha20poly1305",
  "h2",
+ "hkdf",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -532,6 +535,7 @@ dependencies = [
  "rand",
  "rustls",
  "rustls-rustcrypto",
+ "ruzstd",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1604,6 +1608,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruzstd"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7c1c839d570d835527c9a5e4db7cb2198683a988cb9d7293fc8674e6bd58fc8"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2067,6 +2080,12 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "twox-hash"
+version = "2.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 
 [[package]]
 name = "typenum"

@@ -108,6 +108,18 @@ pub struct ClientHelloProfile {
     /// every connection, which makes JA3 unstable by design (JA4 ignores them).
     pub grease: bool,
 
+    /// Shuffle [`Self::extension_order`] once per connection, as Chromium 110+
+    /// does: BoringSSL's `ssl_setup_extension_permutation` runs one Fisher–Yates
+    /// pass over its extension table, seeded from `RAND_bytes`, so two
+    /// ClientHellos from one browser never share an order. Chrome's JA3 is
+    /// therefore different on every connection, and a build that pins one order
+    /// is the one shape a modern Chromium never sends.
+    ///
+    /// The GREASE slots, the trailing padding and the extensions TLS 1.3
+    /// requires last (ECH, PSK) keep their positions — BoringSSL adds those
+    /// outside the loop it shuffles.
+    pub permute_extensions: bool,
+
     /// Certificate compression algorithms to advertise (`compress_certificate`).
     pub cert_compression: Option<Vec<u16>>,
 
@@ -171,12 +183,14 @@ impl ClientHelloProfile {
     /// Applies the profile to a freshly built ClientHello.
     ///
     /// `grease_seed` selects the GREASE values (mirrors the per-connection
-    /// randomization rustls already uses for extension order).
+    /// randomization rustls already uses for extension order), and
+    /// `permute_seed` drives [`Self::permute_extensions`].
     pub(crate) fn apply(
         &self,
         exts: &mut ClientExtensions<'_>,
         cipher_suites: &mut Vec<CipherSuite>,
         grease_seed: u16,
+        permute_seed: [u8; 16],
         tls13: bool,
     ) {
         if let Some(ciphers) = &self.cipher_suites {
@@ -260,6 +274,15 @@ impl ClientHelloProfile {
         // `curl-impersonate v2.2.2` bundles, whose closing GREASE is the only
         // thing that differs in size from ours in an otherwise identical hello.
         let order = self.extension_order.as_ref().map(|order| {
+            // The shuffle runs on the order as written, before the GREASE slots
+            // take their per-connection values: BoringSSL permutes its table of
+            // extensions and then emits the GREASE pair around the result, so a
+            // GREASE marker keeps the position the profile gave it.
+            let order = if self.permute_extensions {
+                permuted_order(order, permute_seed)
+            } else {
+                order.clone()
+            };
             let markers = order.iter().filter(|t| **t == GREASE_EXTENSION_MARKER).count();
             let mut nth = 0u8;
             order
@@ -298,6 +321,77 @@ impl ClientHelloProfile {
         });
 
         exts.padding_to = self.padding_to;
+    }
+}
+
+/// The profile's order with its movable entries shuffled, per connection.
+///
+/// This is BoringSSL's `ssl_setup_extension_permutation` in miniature: one
+/// Fisher–Yates pass from the end of the list, each step swapping entry `i` with
+/// a uniformly drawn earlier one. Three classes stay where the profile put them,
+/// because BoringSSL adds them outside the loop it shuffles:
+///
+/// * GREASE slots — its pair is written around the permuted table;
+/// * padding (21) — appended last, which is also where RFC 7685 padding belongs;
+/// * `encrypted_client_hello` (65037) and `pre_shared_key` (41) — TLS 1.3
+///   requires them last, and rustls places them there regardless.
+///
+/// The seed is 128 bits drawn from the CSPRNG per connection and expanded by a
+/// splitmix64 stream. BoringSSL draws one random byte per position, so its space
+/// is `2^(8·(n-1))`; this one is bounded by the seed, `2^128`, which for the
+/// fifteen-odd entries a browser sends is the same statement: no two connections
+/// repeat an order. An observer sees the resulting permutation, not the stream
+/// that produced it, so the next connection's order is not predictable from
+/// this one's.
+fn permuted_order(order: &[u16], seed: [u8; 16]) -> Vec<u16> {
+    let mut out = order.to_vec();
+    let mut rng = SplitMix64::new(seed);
+    let movable: Vec<usize> = (0..out.len())
+        .filter(|i| is_movable(out[*i]))
+        .collect();
+
+    for i in (1..movable.len()).rev() {
+        let j = (rng.next_u64() % (i as u64 + 1)) as usize;
+        out.swap(movable[i], movable[j]);
+    }
+    out
+}
+
+/// Whether BoringSSL's shuffle is free to move this entry.
+fn is_movable(ext_type: u16) -> bool {
+    const PADDING: u16 = 21;
+    const PRE_SHARED_KEY: u16 = 41;
+    const ENCRYPTED_CLIENT_HELLO: u16 = 65037;
+
+    ext_type != GREASE_EXTENSION_MARKER
+        && ext_type != PADDING
+        && ext_type != PRE_SHARED_KEY
+        && ext_type != ENCRYPTED_CLIENT_HELLO
+}
+
+/// A splitmix64 stream over a 128-bit seed: the permutation's only randomness,
+/// and the reason it needs no dependency of its own.
+struct SplitMix64 {
+    state: u64,
+    key: u64,
+}
+
+impl SplitMix64 {
+    fn new(seed: [u8; 16]) -> Self {
+        let hi = u64::from_be_bytes(seed[..8].try_into().unwrap_or([0; 8]));
+        let lo = u64::from_be_bytes(seed[8..].try_into().unwrap_or([0; 8]));
+        Self {
+            state: hi ^ 0x9e37_79b9_7f4a_7c15,
+            key: lo,
+        }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        (z ^ (z >> 31)) ^ self.key
     }
 }
 

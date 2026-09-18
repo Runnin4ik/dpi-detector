@@ -5,8 +5,13 @@ use core::fmt::Debug;
 use zeroize::Zeroize;
 
 use crate::Error;
-use crate::msgs::enums::HpkeKem;
-use crate::msgs::handshake::HpkeSymmetricCipherSuite;
+
+// dpi-detector patch: an implementation of `Hpke` that lives outside this crate
+// has to be able to *name* the suite it implements — `aws_lc_rs` can, because it
+// is inside. `rustls-rustcrypto`, which this build uses as its provider, cannot
+// until these are re-exported from here.
+pub use crate::msgs::enums::{HpkeAead, HpkeKdf, HpkeKem};
+pub use crate::msgs::handshake::HpkeSymmetricCipherSuite;
 
 /// An HPKE suite, specifying a key encapsulation mechanism and a symmetric cipher suite.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,6 +122,13 @@ impl HpkePrivateKey {
     /// Return the private key bytes.
     pub fn secret_bytes(&self) -> &[u8] {
         self.0.as_slice()
+    }
+
+    /// dpi-detector patch: an `Hpke` implementation outside this crate — the one
+    /// this build's provider needs — has to hand a key pair back from
+    /// [`Hpke::generate_key_pair`], and the field is private.
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self(bytes)
     }
 }
 

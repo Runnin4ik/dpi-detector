@@ -44,7 +44,7 @@ their patched rustls rejected valid server configurations.
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 0.23.43 — 1103 lines across 8
+`PATCH.diff` is the exact diff against pristine 0.23.43 — 1259 lines across 9
 files, one of them new (`src/client/hello_profile.rs`). It applies to a pristine
 copy with `patch -p1` (`patch -p1 --binary` was run against the crates.io source
 before this file was replaced, and the result compared against this tree with
@@ -56,10 +56,11 @@ below.
 
 | File | Change |
 | --- | --- |
-| `src/client/hello_profile.rs` | **new**: public `ClientHelloProfile` (cipher list, groups, the key-share group list, signature schemes, ALPN, extension order with `GREASE_EXTENSION_MARKER` placeholders, verbatim extra extensions, suppressed extensions, GREASE, certificate compression, `padding_to`, `legacy_versions`) and its `apply`. An empty certificate-compression list clears the typed value instead of setting an empty one: the profiles whose client advertises no algorithm (Safari 15.3, Tor 14.5) must send no extension 27 at all, not one with zero entries |
+| `src/client/hello_profile.rs` | **new**: public `ClientHelloProfile` (cipher list, groups, the key-share group list, signature schemes, ALPN, extension order with `GREASE_EXTENSION_MARKER` placeholders, verbatim extra extensions, suppressed extensions, GREASE, the per-connection shuffle, certificate compression, `padding_to`, `legacy_versions`) and its `apply`. An empty certificate-compression list clears the typed value instead of setting an empty one: the profiles whose client advertises no algorithm (Safari 15.3, Tor 14.5) must send no extension 27 at all, not one with zero entries. `permute_extensions` shuffles the order the way BoringSSL's `ssl_setup_extension_permutation` does — one Fisher–Yates pass from the end, seeded by `hs.rs`, with the GREASE slots, the padding and the extensions TLS 1.3 requires last left in place |
 | `src/client/client_conn.rs` | `ClientConfig::hello_profile: Option<Arc<ClientHelloProfile>>` |
-| `src/client/builder.rs` | initializes it to `None` |
-| `src/client/hs.rs` | applies the profile while building the ClientHello, with a per-connection GREASE seed from the provider's CSPRNG; adds the GREASE key share and the GREASE `supported_versions` entry for a greasing profile; carries a *list* of key exchanges (`offered_key_shares`) instead of one, so a profile can send the shares a browser's `--tls-key-shares-limit` produces, and handles the HelloRetryRequest against that list; records the *encoded* extension set as `sent_extensions`; gates `compress_certificate` on the hello offering TLS 1.3 |
+| `src/client/builder.rs` | initializes it to `None`; `with_ech_mode` sets the ECH mode on a builder that has already chosen its versions — upstream's `with_ech` forces TLS 1.3 alone, and a profile that keeps its 1.2 fallback (Chrome 120) still carries the extension |
+| `src/crypto/hpke.rs` | re-exports `HpkeKem`, `HpkeKdf`, `HpkeAead` and `HpkeSymmetricCipherSuite` — an `Hpke` implementation outside the crate cannot name the suite it implements otherwise — and gives `HpkePrivateKey` the `from_bytes` constructor its private field implies |
+| `src/client/hs.rs` | applies the profile while building the ClientHello, with a per-connection GREASE seed and a 128-bit shuffle seed from the provider's CSPRNG; adds the GREASE key share and the GREASE `supported_versions` entry for a greasing profile; carries a *list* of key exchanges (`offered_key_shares`) instead of one, so a profile can send the shares a browser's `--tls-key-shares-limit` produces, and handles the HelloRetryRequest against that list; records the *encoded* extension set as `sent_extensions`; gates `compress_certificate` on the hello offering TLS 1.3 |
 | `src/client/tls13.rs` | `initial_key_shares` builds one exchange per group `key_share_groups` names; `KeyExchangeChoice::new` looks the server's group up among every share the client sent (whole or hybrid component) |
 | `src/msgs/handshake.rs` | `SupportedProtocolVersions` gains `grease: Option<u16>` (written ahead of the real versions) and `legacy: Vec<u16>` (the fallbacks a browser advertises behind 1.2, written after them); `ClientExtensions` gains `profile_order`, `raw_extensions`, `suppress_extensions`, `padding_to`; the encoder honours them, computes RFC 7685 padding to the profile's target size, and still keeps ECH/PSK last; a certificate entry carrying SCTs (type 18) is accepted and ignored |
 | `src/lib.rs` | exports the module and `ClientHelloProfile` |
@@ -206,18 +207,22 @@ failing handshake or a real mismatched fingerprint, not a theoretical concern:
   mirror it into the config (see `apply_fingerprint` in
   `crates/dpi-core/src/net/tls.rs`).
 
-* **GREASE ECH (extension 65037) is left out, and the patch cannot fix that.**
-  uTLS — and therefore `curl_firefox133` — builds its GREASE ECH payload by
-  encrypting a fake inner hello with a freshly generated HPKE key, so the bytes
-  are a well-formed HPKE ciphertext that no server can decrypt. rustls can only
-  produce that with an HPKE provider, and this build's provider
-  (`rustls-rustcrypto`) has none. Every hand-built substitute tried (three
-  bodies, `config_id` 0, 1, 255, 0xa7) made Cloudflare, Google and `dns.google`
-  answer `fatal alert: DecodeError` — those servers parse the extension strictly
-  and abort. Since Google and Cloudflare front much of what this tool probes,
-  the Firefox profile omits the extension rather than shipping a hello that
-  fails on most of the internet; the cost is one extension of fidelity (16 vs 17
-  in a JA4 count, the JA3 string loses its trailing `-65037`).
+* **GREASE ECH needs a real HPKE provider, and now has one.** `curl_firefox133`
+  — and the eight other wrappers naming `--ech true` — carries
+  `encrypted_client_hello` (65037) as GREASE: the body is a freshly generated
+  HPKE encapsulation plus a random payload, which is why no two connections share
+  one. rustls builds that shape in `ClientHelloProfile`'s ECH path only when it
+  can reach an `Hpke` implementation, and this build's provider
+  (`rustls-rustcrypto`) has none — so `crates/dpi-core/src/net/hpke.rs`
+  implements RFC 9180 base mode over the primitives already in the graph
+  (`x25519-dalek`, `hkdf`, `aes-gcm`, `chacha20poly1305`), verified against the
+  RFC's appendix A.1 vectors. A *hand-built* substitute does not work: three
+  bodies tried here made Cloudflare, Google and `dns.google` answer `fatal
+  alert: DecodeError`, while the rustls path is accepted by all four hosts of the
+  live sweep (`tls_fingerprint liveany firefox cloudflare.com www.google.com
+  dns.google tls.peet.ws`). The extension's bytes are never comparable between
+  connections — ours is 446 bytes where the bundle's is 187 to 283, because
+  rustls sizes the payload from the encoded inner hello it would really send.
 
 * **Certificate compression is advertised only if it can be decoded.** The
   profile asks for `compress_certificate` (extension 27) because a browser sends

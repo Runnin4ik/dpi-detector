@@ -1,10 +1,13 @@
 use std::sync::{Arc, LazyLock, Mutex};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::client::{EchGreaseConfig, EchMode};
+use rustls::crypto::hpke::Hpke;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme};
 
 use crate::net::fingerprint::TlsFingerprint;
+use crate::net::hpke;
 
 /// Returns the shared pure-Rust RustCrypto provider.
 pub fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
@@ -244,6 +247,25 @@ fn build_config(profile: &TlsProfile) -> ClientConfig {
     let builder = ClientConfig::builder_with_provider(provider_for(profile.fingerprint))
         .with_protocol_versions(profile.versions())
         .expect("the built-in provider serves TLS 1.3 and 1.2");
+    // The nine shapes whose client sends `encrypted_client_hello` carry it as
+    // GREASE (see `fingerprint::sends_ech`). `with_ech_mode`, not upstream's
+    // `with_ech`: the latter would drop the profile's TLS 1.2 fallback out of the
+    // offer, and Chrome 120's own hello keeps it.
+    //
+    // The placeholder key is never on the wire — each connection encapsulates to
+    // it afresh, which is why two greased hellos never share a body — but it has
+    // to be a real X25519 public key for that encapsulation to run.
+    let builder = if crate::net::fingerprint::sends_ech(profile.fingerprint) {
+        let (placeholder, _) = hpke::AES_128_GCM
+            .generate_key_pair()
+            .expect("the provider serves X25519");
+        builder.with_ech_mode(EchMode::Grease(EchGreaseConfig::new(
+            &hpke::AES_128_GCM,
+            placeholder,
+        )))
+    } else {
+        builder
+    };
 
     let mut config = if profile.verify {
         let mut root_store = RootCertStore::empty();

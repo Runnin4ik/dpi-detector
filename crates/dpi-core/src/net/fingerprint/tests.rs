@@ -17,7 +17,7 @@ const CHROME_107_JA4: &str = "t13d1516h2_8daaf6152771_e5627efa2ab1";
 const CHROME_107_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-\
              49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513-21,29-23-24,0";
 const SAFARI_155_JA4: &str = "t13d2014h2_a09f3c656075_14788d8d241b";
-const FIREFOX_133_JA4_LESS_ECH: &str = "t13d1715h2_5b57614c22b0_8fb63dbc839a";
+const FIREFOX_133_JA4: &str = "t13d1716h2_5b57614c22b0_eeeea6562960";
 
 /// Every identity is spelled the way its own client writes it, and the two
 /// protocols differ in what that costs.
@@ -112,6 +112,216 @@ fn every_profile_sends_the_key_shares_its_wrapper_asks_for() {
     for (fingerprint, groups) in expected {
         assert_eq!(shares(fingerprint), groups, "{}", fingerprint.code());
     }
+}
+
+/// JA3 with its extension list sorted — the key that survives Chromium's
+/// per-connection shuffle.
+///
+/// JA3 reads extensions in the order they arrive, so a shape that shuffles them
+/// (Chrome 110+) has no single JA3 by construction; the extension *set*, which
+/// the shuffle preserves, is what a pin can still hold. JA4 needs no such
+/// treatment: it sorts before hashing, which is why the JA4 of a shuffling shape
+/// is stable and its JA3 is not.
+#[cfg(test)]
+fn order_independent_ja3(ja3: &str) -> String {
+    let mut fields: Vec<String> = ja3.split(',').map(str::to_string).collect();
+    if let Some(extensions) = fields.get_mut(2) {
+        let mut parts: Vec<String> = extensions.split('-').map(str::to_string).collect();
+        parts.sort_unstable();
+        *extensions = parts.join("-");
+    }
+    fields.join(",")
+}
+
+/// The profiles that permute their extension order shuffle it per connection.
+///
+/// Chromium 110+ sends a fresh order every time (`tls_permute_extensions` in the
+/// fork's captures, `--tls-permute-extensions` in the bundle's own wrappers from
+/// `curl_chrome120` on), so the set of extensions is the shape and the order is
+/// not: JA3 of a real Chrome differs from connection to connection and JA4 does
+/// not. One hello is emitted many times, and every shape that does *not* permute
+/// has to come back byte-identical — the control that says the shuffle is the
+/// only thing that moved.
+#[test]
+fn only_the_chromium_profiles_shuffle_their_extension_order() {
+    let hello = |fingerprint: TlsFingerprint| {
+        let config = create_tls_config(&TlsProfile::insecure(fingerprint));
+        let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
+        let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
+        let mut buf = Vec::new();
+        conn.write_tls(&mut buf).expect("write ClientHello");
+        buf
+    };
+    // GREASE values are drawn per connection and masked out, so the orders below
+    // compare the extensions a profile named, not the values it greases them with.
+    let order = |record: &[u8]| {
+        crate::net::ja3::extension_types(record)
+            .into_iter()
+            .filter(|ext| !crate::net::ja3::is_grease(*ext))
+            .collect::<Vec<_>>()
+    };
+
+    for fingerprint in TlsFingerprint::ALL {
+        let first = hello(fingerprint);
+        let shapes = fingerprint.spec();
+        if shapes.baseline {
+            // The one row that installs no profile: rustls's own hello, whose
+            // extension set is the provider's, not a record's.
+            continue;
+        }
+        let expected = shapes.permute_extensions;
+        // The set never changes — only its order may.
+        let mut set = order(&first);
+        set.sort_unstable();
+        let mut pinned = shapes.ext_order.to_vec();
+        pinned.retain(|ext| {
+            *ext != rustls::client::hello_profile::GREASE_EXTENSION_MARKER
+        });
+        pinned.sort_unstable();
+        // The hello carries exactly what the record names, minus what rustls
+        // does not emit for this version set.
+        assert!(
+            set.iter().all(|ext| pinned.contains(ext)),
+            "{} sends an extension its record does not name",
+            fingerprint.code()
+        );
+
+        let mut distinct = 1;
+        for _ in 0..16 {
+            let next = hello(fingerprint);
+            if order(&next) != order(&first) {
+                distinct += 1;
+            }
+            if !expected {
+                // The same order and the same length every time. The hello's own
+                // random differs per connection, so the order — the thing this
+                // test is about — is what gets compared.
+                assert_eq!(
+                    (order(&next), next.len()),
+                    (order(&first), first.len()),
+                    "{} must send one order every time",
+                    fingerprint.code()
+                );
+            }
+        }
+        if expected {
+            assert!(
+                distinct > 1,
+                "{} is marked as permuting but sent one order in 16 connections",
+                fingerprint.code()
+            );
+        }
+    }
+}
+
+/// Every shape that permutes is one of the Chromium records the browser's own
+/// captures mark, and no other shape permutes.
+#[test]
+fn the_shuffling_shapes_are_the_chromium_ones_from_110_on() {
+    let mut permuting: Vec<&str> = TlsFingerprint::ALL
+        .iter()
+        .filter(|fingerprint| fingerprint.spec().permute_extensions)
+        .map(|fingerprint| fingerprint.code())
+        .collect();
+    permuting.sort_unstable();
+    assert_eq!(
+        permuting,
+        ["chrome120", "chrome131", "chrome131android", "chrome133", "chrome136"]
+    );
+}
+
+/// The nine shapes whose client carries `encrypted_client_hello`, and the body
+/// they carry.
+///
+/// The list is the wrappers that name `--ech true` — `curl_chrome120`,
+/// `curl_chrome131`, `curl_chrome131_android`, `curl_chrome133`,
+/// `curl_chrome136`, `curl_firefox133`, `curl_firefox135`, `curl_tor145` — and
+/// `firefox144`, whose wrapper is the one-line `--impersonate firefox144` and
+/// whose hello carries the extension all the same. Every one of them is GREASE:
+/// curl needs DoH or an explicit `--ecl:` to have a real config, and no wrapper
+/// passes either.
+///
+/// The body is the GREASE form of draft-ietf-tls-esni §6.2 — outer, a cipher
+/// suite, a random `config_id`, an `enc` of the KEM's public-key length, and a
+/// payload the size of an encoded inner hello plus the AEAD tag — and a fresh
+/// one per connection, which is why the extension's bytes can never be compared
+/// between two handshakes, not even two of a real browser's.
+#[test]
+fn the_ech_shapes_carry_the_grease_extension_and_the_others_do_not() {
+    let hello = |fingerprint: TlsFingerprint| {
+        let config = create_tls_config(&TlsProfile::insecure(fingerprint));
+        let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
+        let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
+        let mut buf = Vec::new();
+        conn.write_tls(&mut buf).expect("write ClientHello");
+        buf
+    };
+    let body_of = |record: &[u8]| {
+        // `write_tls` hands back the record; `extensions` walks a handshake
+        // message.
+        let message = record.get(5..).unwrap_or(record);
+        crate::net::ja3::extensions(message)
+            .into_iter()
+            .find(|(kind, _)| *kind == EXT_ENCRYPTED_CLIENT_HELLO)
+            .map(|(_, body)| body.to_vec())
+    };
+
+    let mut carrying = Vec::new();
+    for fingerprint in TlsFingerprint::ALL {
+        if fingerprint.spec().baseline {
+            continue;
+        }
+        let body = body_of(&hello(fingerprint));
+        if !fingerprint.spec().ech {
+            assert!(
+                body.is_none(),
+                "{} sends ECH without advertising it",
+                fingerprint.code()
+            );
+            continue;
+        }
+        carrying.push(fingerprint.code());
+        let body = body.unwrap_or_else(|| {
+            panic!("{} advertises ECH and sends none", fingerprint.code())
+        });
+
+        assert_eq!(body[0], 0, "{}: type outer", fingerprint.code());
+        assert_eq!(
+            &body[1..5],
+            &[0x00, 0x01, 0x00, 0x01],
+            "{}: HKDF-SHA256 with AES-128-GCM",
+            fingerprint.code()
+        );
+        let enc_len = u16::from_be_bytes([body[6], body[7]]) as usize;
+        assert_eq!(enc_len, 32, "{}: an X25519 encapsulated key", fingerprint.code());
+        let payload_len = u16::from_be_bytes([body[8 + enc_len], body[9 + enc_len]]) as usize;
+        assert!(
+            payload_len > 16,
+            "{}: an inner hello plus an AEAD tag",
+            fingerprint.code()
+        );
+
+        // Nothing about the body repeats: `enc` is a fresh ephemeral public key
+        // and the payload is random, per connection.
+        let other = body_of(&hello(fingerprint)).expect("the extension again");
+        assert_ne!(other, body, "{}: the same body twice", fingerprint.code());
+    }
+
+    carrying.sort_unstable();
+    assert_eq!(
+        carrying,
+        [
+            "chrome120",
+            "chrome131",
+            "chrome131android",
+            "chrome133",
+            "chrome136",
+            "firefox",
+            "firefox135",
+            "firefox144",
+            "tor145",
+        ]
+    );
 }
 
 /// The HTTP identity and the ClientHello of a profile have to describe the
@@ -525,19 +735,19 @@ fn firefox_profile_matches_the_shape_it_is_pinned_to() {
     assert_eq!(profile.groups.as_ref().and_then(|g| g.first()), Some(&4588));
 
     let order = profile.extension_order.as_ref().expect("extension order");
-    assert_eq!(order.len(), 15);
+    assert_eq!(order.len(), 16);
     assert_eq!(order.first(), Some(&EXT_SERVER_NAME));
-    assert_eq!(order.last(), Some(&EXT_COMPRESS_CERTIFICATE));
+    assert_eq!(order.last(), Some(&EXT_ENCRYPTED_CLIENT_HELLO));
     assert!(order.contains(&EXT_RENEGOTIATION_INFO));
     assert!(order.contains(&EXT_DELEGATED_CREDENTIALS));
     assert!(order.contains(&EXT_RECORD_SIZE_LIMIT));
     assert!(order.contains(&EXT_SESSION_TICKET));
     assert!(order.contains(&EXT_PSK_KEY_EXCHANGE_MODES));
     assert!(!order.contains(&EXT_SCT), "Firefox 133 sends no SCT");
-    // 65037 is the one extension curl_firefox133 has and this profile does
-    // not: every hand-built GREASE ECH body was rejected by the ECH-aware
-    // servers (see the record in `shapes`).
-    assert_eq!(order.iter().filter(|ext| **ext == 65037).count(), 0);
+    // 65037 is the extension whose absence used to be this profile's one
+    // deviation from `curl_firefox133`; it is GREASE ECH, and the wrapper's
+    // `--ech true` is what puts it there.
+    assert_eq!(order.iter().filter(|ext| **ext == EXT_ENCRYPTED_CLIENT_HELLO).count(), 1);
 
     assert!(profile.suppress_extensions.is_empty());
     assert!(!profile.grease);
@@ -608,19 +818,19 @@ fn bundle_versions_match_their_ja3() {
     const SAFARI_155: &str = "771,4865-4866-4867-49196-49195-52393-49200-49199-52392-49162-\
          49161-49172-49171-157-156-53-47-49160-49170-10,\
          0-23-65281-10-11-16-5-13-18-51-45-43-27-21,29-23-24-25,0";
-    // `curl_firefox133` sends `...,28-27-65037` — the profile stops at 27,
-    // because a GREASE ECH body this build writes is rejected by every
-    // ECH-aware server (see the Firefox record in `shapes`).
+    // `curl_firefox133` sends `...,28-27-65037`, and so does this build: the
+    // GREASE ECH extension closes the list of the four Firefox-family and Tor
+    // shapes whose wrapper names `--ech true` (see the record in `shapes`).
     const FIREFOX_133: &str = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49162-\
          49161-49171-49172-156-157-47-53,\
-         0-23-65281-10-11-35-16-5-34-51-43-13-45-28-27,4588-29-23-24-25-256-257,0";
+         0-23-65281-10-11-35-16-5-34-51-43-13-45-28-27-65037,4588-29-23-24-25-256-257,0";
 
     const CHROME_107_TLS13: &str =
         "771,4865-4866-4867,0-10-16-5-13-18-51-45-43-27-17513-21,29-23-24,";
     const SAFARI_155_TLS13: &str =
         "771,4865-4866-4867,0-10-16-5-13-18-51-45-43-27-21,29-23-24-25,";
     const FIREFOX_133_TLS13: &str =
-        "771,4865-4867-4866,0-23-65281-10-16-5-34-51-43-13-45-28-27,4588-29-23-24-25-256-257,";
+        "771,4865-4867-4866,0-23-65281-10-16-5-34-51-43-13-45-28-27-65037,4588-29-23-24-25-256-257,";
 
     const CHROME_107_TLS12: &str = "771,49195-49199-49196-49200-52393-52392-49171-49172-\
          156-157-47-53,0-23-65281-10-11-35-16-5-13-18,29-23-24,0";
@@ -628,20 +838,21 @@ fn bundle_versions_match_their_ja3() {
          49172-49171-157-156-53-47-49160-49170-10,\
          0-23-65281-10-11-16-5-13-18,29-23-24-25,0";
     const FIREFOX_133_TLS12: &str = "771,49195-49199-52393-52392-49196-49200-49162-49161-\
-         49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-34-13-28,\
+         49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-34-13-28-65037,\
          4588-29-23-24-25-256-257,0";
 
     // The M4 shapes, all of them clients that do not permute, so their JA3 is
     // one string. `chrome99android` is Chrome 107's hello behind a phone's
     // identity and carries exactly that JA3; the two Firefox rows are 133's with
-    // the certificate-timestamp extension and no ECH; Tor stops where its ECH
-    // would start. `chrome120`, `chrome131`, `chrome131android` and `chrome136`
-    // are absent on purpose: Chromium permutes the extension order, so their JA3
-    // differs per connection and only JA4 can be pinned (see
+    // the certificate-timestamp extension, ECH included; Tor is 145's with the
+    // ECH extension and without `compress_certificate`. `chrome120`,
+    // `chrome131`, `chrome131android` and `chrome136` are absent on purpose:
+    // Chromium shuffles the extension order, so their JA3 differs per connection
+    // and only JA4 can be pinned (see
     // `added_shapes_match_the_captures_they_were_read_from`).
     const FIREFOX_135: &str = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49162-\
          49161-49171-49172-156-157-47-53,\
-         0-23-65281-10-11-35-16-5-34-18-51-43-13-45-28-27,4588-29-23-24-25-256-257,0";
+         0-23-65281-10-11-35-16-5-34-18-51-43-13-45-28-27-65037,4588-29-23-24-25-256-257,0";
     const SAFARI_153: &str = "771,4865-4866-4867-49196-49195-52393-49200-49199-52392-49188-\
          49187-49162-49161-49192-49191-49172-49171-157-156-61-60-53-47-49160-49170-10,\
          0-23-65281-10-11-16-5-13-18-51-45-43-21,29-23-24-25,0";
@@ -655,7 +866,7 @@ fn bundle_versions_match_their_ja3() {
          49162-49161-49172-49171-157-156-53-47-49160-49170-10,\
          0-23-65281-10-11-35-16-5-13-18-51-45-43-27-21,29-23-24-25,0";
     const TOR_145: &str = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49171-\
-         49172-156-157-47-53,0-23-65281-10-11-16-5-34-51-43-13-28,29-23-24-25-256-257,0";
+         49172-156-157-47-53,0-23-65281-10-11-16-5-34-51-43-13-28-65037,29-23-24-25-256-257,0";
 
     // The pinned-version rows cover the three profiles the report names, which
     // is where the version pinning was measured; the rest of the table is the
@@ -746,17 +957,17 @@ fn bundle_versions_match_their_ja4() {
     // the strings below are the ones this build sends for that configuration.
     const CHROME_107_TLS13: &str = "t13d0312h2_55b375c5d22e_89e42599e699";
     const SAFARI_155_TLS13: &str = "t13d0311h2_55b375c5d22e_14aed462abe7";
-    const FIREFOX_133_TLS13: &str = "t13d0313h2_55b375c5d22e_1dac57d28bce";
+    const FIREFOX_133_TLS13: &str = "t13d0314h2_55b375c5d22e_be02affae600";
     const CHROME_107_TLS12: &str = "t12d1210h2_d34a8e72043a_fae48490d0f6";
     const SAFARI_155_TLS12: &str = "t12d1709h2_ba5946811be1_e0e2b8a7da62";
-    const FIREFOX_133_TLS12: &str = "t12d1411h2_c866b44c5a26_242292a3764d";
+    const FIREFOX_133_TLS12: &str = "t12d1412h2_c866b44c5a26_94a9864545c3";
 
     for (version, chrome, safari, firefox) in [
         (
             TlsVersion::Any,
             CHROME_107_JA4,
             SAFARI_155_JA4,
-            FIREFOX_133_JA4_LESS_ECH,
+            FIREFOX_133_JA4,
         ),
         (TlsVersion::Tls13, CHROME_107_TLS13, SAFARI_155_TLS13, FIREFOX_133_TLS13),
         (TlsVersion::Tls12, CHROME_107_TLS12, SAFARI_155_TLS12, FIREFOX_133_TLS12),
@@ -775,28 +986,26 @@ fn bundle_versions_match_their_ja4() {
 /// uTLS supplies an extension *order*, because Chromium permutes it per
 /// connection.
 ///
-/// The expected strings are the uTLS lists with two edits and nothing else:
+/// The expected strings are the uTLS lists with one edit and nothing else:
+/// the extension list is compared *sorted*, because Chromium shuffles the order
+/// per connection and a shuffled hello has no single JA3. The set is the uTLS
+/// set — `encrypted_client_hello` (65037) included, since `curl_chrome133a`
+/// names `--ech true` and sends the extension as GREASE — and JA4's sorted view
+/// is the stable key.
 ///
-/// * `encrypted_client_hello` (65037) is removed — this build cannot synthesize
-///   a GREASE ECH body the ECH-aware servers accept (see the Firefox record);
-/// * the order is the pre-shuffle list, because a permuted hello cannot be
-///   pinned at all. JA3 is order-sensitive, so this pin holds for one shape out
-///   of the distribution a real Chrome 133 sends; JA4's sorted view is the
-///   stable key.
-///
-/// With those two edits the strings below are the uTLS lists in the uTLS order,
-/// which is why a reader can redo them against the source rather than against
-/// this test. The pinned versions are derived the same way: the 1.3 hello drops
-/// what belongs to the 1.2 era, the 1.2 hello drops `supported_versions` and
-/// ALPS.
+/// With that edit the strings below are the uTLS lists, which is why a reader
+/// can redo them against the source rather than against this test. The pinned
+/// versions are derived the same way: the 1.3 hello drops what belongs to the
+/// 1.2 era, the 1.2 hello drops `supported_versions` and ALPS.
 #[test]
 fn chrome_133_matches_the_utls_list_it_is_derived_from() {
     const CHROME_133_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-\
-         49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17613,4588-29-23-24,0";
+         49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17613-65037,\
+         4588-29-23-24,0";
     const CHROME_133_TLS13: &str =
-        "771,4865-4866-4867,0-10-16-5-13-18-51-45-43-27-17613,4588-29-23-24,";
+        "771,4865-4866-4867,0-10-16-5-13-18-51-45-43-27-17613-65037,4588-29-23-24,";
     const CHROME_133_TLS12: &str = "771,49195-49199-49196-49200-52393-52392-49171-49172-\
-         156-157-47-53,0-23-65281-10-11-35-16-5-13-18,4588-29-23-24,0";
+         156-157-47-53,0-23-65281-10-11-35-16-5-13-18-65037,4588-29-23-24,0";
 
     for (version, expected) in [
         (TlsVersion::Any, CHROME_133_JA3),
@@ -804,38 +1013,37 @@ fn chrome_133_matches_the_utls_list_it_is_derived_from() {
         (TlsVersion::Tls12, CHROME_133_TLS12),
     ] {
         assert_eq!(
-            client_hello_of(TlsFingerprint::Chrome133, version).0,
-            expected,
+            order_independent_ja3(&client_hello_of(TlsFingerprint::Chrome133, version).0),
+            order_independent_ja3(expected),
             "chrome133 ({version:?})"
         );
     }
 }
 
-/// The JA4 of Chrome 133's unpinned hello, in the three parts a source can
-/// speak to, and one it cannot.
+/// The JA4 of Chrome 133's hello, in the parts a source can speak to.
 ///
 /// JA4 DBs publish `t13d1516h2_8daaf6152771_...` for the whole Chrome 133–146
-/// line, so two parts of ours have to line up with it and one cannot:
+/// line, and both parts of ours now line up with it:
 ///
-/// * `t13d1515h2` — the counts, derived: 15 ciphers, 16 extensions less the
-///   omitted ECH, h2 as the ALPN;
+/// * `t13d1516h2` — the counts, 16 extensions and 15 ciphers, which is what the
+///   source sends (`encrypted_client_hello` included);
 /// * `8daaf6152771` — the cipher hash, the published one. It moving means the
 ///   cipher list stopped being Chrome's, which no other test would notice;
-/// * the extension hash is ours alone: nobody publishes a hash for an ECH-less
-///   Chrome 133, so the full string carries the `_LESS_ECH` suffix the Firefox
-///   pin uses — a regression guard, not evidence.
+/// * the extension hash is ours alone: it is computed over the extension *set*
+///   in a fixed sorted order, and no public database says which set a Chrome
+///   133 behind an ECH-less resolver sent.
 #[test]
 fn chrome_133_ja4_pins_the_parts_a_source_covers() {
-    const CHROME_133_JA4_LESS_ECH: &str = "t13d1515h2_8daaf6152771_22334254f9f7";
+    const CHROME_133_JA4: &str = "t13d1516h2_8daaf6152771_d8a2da3f94cd";
 
     let (_, _, ja4) = client_hello_full(TlsFingerprint::Chrome133, TlsVersion::Any);
-    assert!(ja4.starts_with("t13d1515h2_"), "{ja4}");
+    assert!(ja4.starts_with("t13d1516h2_"), "{ja4}");
     assert_eq!(
         ja4.split('_').nth(1),
         Some("8daaf6152771"),
         "the cipher hash the JA4 databases publish for Chrome 133+"
     );
-    assert_eq!(ja4, CHROME_133_JA4_LESS_ECH);
+    assert_eq!(ja4, CHROME_133_JA4);
 }
 
 /// Records that name the same TLS lists must put the same hello on the wire.
@@ -855,42 +1063,36 @@ fn chrome_133_ja4_pins_the_parts_a_source_covers() {
 /// emit the same JA3 as `curl_chrome99..107`.
 #[test]
 fn profiles_that_share_a_tls_shape_send_the_same_hello() {
+    // `chrome136` is a shuffling shape, so the pair is compared with its
+    // extension lists sorted — the set is the shape, the order is per
+    // connection. Every other pair is compared byte for byte.
+    let same = |left: TlsFingerprint, right: TlsFingerprint, version: TlsVersion| {
+        let ours = client_hello_full(left, version);
+        let theirs = client_hello_full(right, version);
+        if left.spec().permute_extensions || right.spec().permute_extensions {
+            assert_eq!(
+                (order_independent_ja3(&ours.0), ours.1, ours.2.clone()),
+                (order_independent_ja3(&theirs.0), theirs.1, theirs.2.clone()),
+                "{}",
+                left.code()
+            );
+        } else {
+            assert_eq!(ours, theirs, "{}", left.code());
+        }
+    };
+
     for version in [TlsVersion::Any, TlsVersion::Tls13, TlsVersion::Tls12] {
-        assert_eq!(
-            client_hello_full(TlsFingerprint::Edge, version),
-            client_hello_full(TlsFingerprint::Chrome, version),
-            "edge101 sends Chrome's hello ({version:?})"
-        );
+        same(TlsFingerprint::Edge, TlsFingerprint::Chrome, version);
         // The M4 rows that are an identity rather than a hello: Chrome 99's
         // Android build, Chrome 136 (which is Chrome 133's shape), Safari 18.4
         // on iOS and Firefox 144.
-        for (left, right, why) in [
-            (
-                TlsFingerprint::Chrome99Android,
-                TlsFingerprint::Chrome,
-                "chrome99android is Chrome 107's hello behind a phone's identity",
-            ),
-            (
-                TlsFingerprint::Chrome136,
-                TlsFingerprint::Chrome133,
-                "chrome136 is Chrome 133's hello behind the current identity",
-            ),
-            (
-                TlsFingerprint::Safari184Ios,
-                TlsFingerprint::Safari18,
-                "safari184ios is Safari 18.4's hello behind an iPhone's identity",
-            ),
-            (
-                TlsFingerprint::Firefox144,
-                TlsFingerprint::Firefox135,
-                "firefox144 is Firefox 135's hello behind the current identity",
-            ),
+        for (left, right) in [
+            (TlsFingerprint::Chrome99Android, TlsFingerprint::Chrome),
+            (TlsFingerprint::Chrome136, TlsFingerprint::Chrome133),
+            (TlsFingerprint::Safari184Ios, TlsFingerprint::Safari18),
+            (TlsFingerprint::Firefox144, TlsFingerprint::Firefox135),
         ] {
-            assert_eq!(
-                client_hello_full(left, version),
-                client_hello_full(right, version),
-                "{why} ({version:?})"
-            );
+            same(left, right, version);
         }
     }
 }
@@ -932,23 +1134,26 @@ fn added_shapes_match_the_captures_they_were_read_from() {
     // source's minus one extension, and the cipher hash is the source's own,
     // which is the one part a wrong cipher list moves silently.
     for (fingerprint, ours, cipher_hash) in [
-        (TlsFingerprint::Chrome120, "t13d1515h2_8daaf6152771_f37e75b10bcc", "8daaf6152771"),
-        (TlsFingerprint::Chrome131, "t13d1515h2_8daaf6152771_f37e75b10bcc", "8daaf6152771"),
-        (TlsFingerprint::Chrome131Android, "t13d1515h2_8daaf6152771_f37e75b10bcc", "8daaf6152771"),
-        (TlsFingerprint::Chrome136, "t13d1515h2_8daaf6152771_22334254f9f7", "8daaf6152771"),
-        (TlsFingerprint::Firefox135, "t13d1716h2_5b57614c22b0_ddc8930e364f", "5b57614c22b0"),
-        (TlsFingerprint::Firefox144, "t13d1716h2_5b57614c22b0_ddc8930e364f", "5b57614c22b0"),
-        (TlsFingerprint::Tor145, "t13d1512h2_8daaf6152771_40c704383e9d", "8daaf6152771"),
+        (TlsFingerprint::Chrome120, "t13d1516h2_8daaf6152771_02713d6af862", "8daaf6152771"),
+        (TlsFingerprint::Chrome131, "t13d1516h2_8daaf6152771_02713d6af862", "8daaf6152771"),
+        (TlsFingerprint::Chrome131Android, "t13d1516h2_8daaf6152771_02713d6af862", "8daaf6152771"),
+        (TlsFingerprint::Chrome136, "t13d1516h2_8daaf6152771_d8a2da3f94cd", "8daaf6152771"),
+        (TlsFingerprint::Firefox135, "t13d1717h2_5b57614c22b0_3cbfd9057e0d", "5b57614c22b0"),
+        (TlsFingerprint::Firefox144, "t13d1717h2_5b57614c22b0_3cbfd9057e0d", "5b57614c22b0"),
+        (TlsFingerprint::Tor145, "t13d1513h2_8daaf6152771_748f4c70de1c", "8daaf6152771"),
     ] {
         let (_, _, got) = client_hello_full(fingerprint, TlsVersion::Any);
         assert_eq!(got.split('_').nth(1), Some(cipher_hash), "{fingerprint}: the source's cipher hash");
         assert_eq!(got, ours, "{fingerprint}: our extension hash");
     }
 
-    // Chrome 133's hello, which 136 shares: the pin is the one that test carries.
+    // Chrome 133's hello, which 136 shares: the pin is the one that test
+    // carries. Both shuffle, so their extension lists are compared sorted.
+    let ours = client_hello_full(TlsFingerprint::Chrome136, TlsVersion::Any);
+    let theirs = client_hello_full(TlsFingerprint::Chrome133, TlsVersion::Any);
     assert_eq!(
-        client_hello_full(TlsFingerprint::Chrome136, TlsVersion::Any),
-        client_hello_full(TlsFingerprint::Chrome133, TlsVersion::Any),
+        (order_independent_ja3(&ours.0), ours.1, ours.2),
+        (order_independent_ja3(&theirs.0), theirs.1, theirs.2),
         "chrome136 sends Chrome 133's hello"
     );
 }
@@ -1118,24 +1323,26 @@ fn curl_family_profiles_do_not_use_the_pq_provider() {
 /// The decompressor list is what rustls reads to decide whether to offer
 /// extension 27 and to pick a decoder for the algorithm the server answered
 /// with; an empty list against an advertised extension is a fatal
-/// `SelectedUnofferedCertCompression`. The default profile must keep the
-/// empty list so its hello stays the baseline shape.
+/// `SelectedUnofferedCertCompression`. A shape that advertises compression
+/// therefore has to come with a non-empty list, and the baseline — which
+/// advertises nothing — with an empty one. Which *algorithms* sit in the list is
+/// `every_advertised_compression_algorithm_is_readable`'s business.
 #[test]
 fn the_decompressor_list_follows_the_profile() {
-    for (name, fingerprint, decompressors) in [
-        ("Rustls", TlsFingerprint::Rustls, 0),
-        ("Firefox", TlsFingerprint::Firefox, 2),
-        ("Chrome", TlsFingerprint::Chrome, 2),
-        ("Safari", TlsFingerprint::Safari, 2),
-        ("Chrome133", TlsFingerprint::Chrome133, 2),
-        ("Safari18", TlsFingerprint::Safari18, 2),
-        ("Edge", TlsFingerprint::Edge, 2),
+    for (name, fingerprint, advertises) in [
+        ("Rustls", TlsFingerprint::Rustls, false),
+        ("Firefox", TlsFingerprint::Firefox, true),
+        ("Chrome", TlsFingerprint::Chrome, true),
+        ("Safari", TlsFingerprint::Safari, true),
+        ("Chrome133", TlsFingerprint::Chrome133, true),
+        ("Safari18", TlsFingerprint::Safari18, true),
+        ("Edge", TlsFingerprint::Edge, true),
     ] {
         let config = create_tls_config(&TlsProfile::insecure(fingerprint).tls13());
         assert_eq!(
-            config.cert_decompressors.len(),
-            decompressors,
-            "{name} decompressor count"
+            !config.cert_decompressors.is_empty(),
+            advertises,
+            "{name} decompressor list"
         );
     }
 }
