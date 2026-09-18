@@ -251,12 +251,22 @@ pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &M
                     if dpi_core::probe::domains::fake_ip_type(&ip) == dpi_core::probe::domains::FakeIpType::FakeIp {
                         egress_lines.push((format!("{}→FakeIP", a), Some(Color::Magenta)));
                     } else {
-                        let org = report.org_names.get(&ip.to_string()).cloned().unwrap_or_else(|| ip.to_string());
-                        let label = org_label(&org);
-                        if known_resolver(&label, &cfg.dns_known_resolver_names) {
-                            egress_lines.push((format!("{}→{}", a, label), Some(Color::Green)));
-                        } else {
-                            egress_lines.push((format!("{}→{}", a, label), Some(Color::Red)));
+                        match report.org_names.get(&ip.to_string()) {
+                            // The colour is about the network the query left
+                            // through: a known one is green, an unknown one red.
+                            Some(org) => {
+                                let label = org_label(org);
+                                let color = if known_resolver(&label, &cfg.dns_known_resolver_names) {
+                                    Color::Green
+                                } else {
+                                    Color::Red
+                                };
+                                egress_lines.push((format!("{}→{}", a, label), Some(color)));
+                            }
+                            // The lookup did not answer, so the label is the
+                            // address itself: that is not evidence of anything,
+                            // and red would read as a finding. White.
+                            None => egress_lines.push((format!("{}→{}", a, ip), Some(Color::White))),
                         }
                     }
                 }
@@ -450,5 +460,63 @@ mod tests {
         assert!(!out.contains("1/2"), "no addr/domain count mix-up");
         assert!(out.contains("8.8.4.4"), "per-addr egress lines");
         assert!(out.contains("8.8.8.8"), "per-addr egress lines");
+    }
+
+    /// The egress colour is about the network the query left through, not the
+    /// brand it asked for: two addresses of one brand are coloured apart when
+    /// they leave by different networks, and an org the lookup never answered for
+    /// leaves the label as the address itself — that is not evidence of
+    /// anything, so it is white, not red.
+    #[test]
+    fn egress_colour_follows_the_network_not_the_brand() {
+        use dpi_core::probe::dns_avail::{DnsAvailReport, ProbeKey, ProbeKind};
+        use std::collections::HashMap;
+
+        let mut report = DnsAvailReport {
+            allowed: vec!["vk.ru".to_string()],
+            udp_servers: vec![
+                ("198.51.100.1".to_string(), "Example".to_string(), 53),
+                ("198.51.100.2".to_string(), "Example".to_string(), 53),
+                ("198.51.100.3".to_string(), "Example".to_string(), 53),
+            ],
+            all_names: vec!["Example".to_string()],
+            ..Default::default()
+        };
+        for (addr, egress, org) in [
+            ("198.51.100.1", "203.0.113.1", Some("GOOGLE - Google LLC")),
+            ("198.51.100.2", "203.0.113.2", Some("SOMEBODY-ELSE - Other LLC")),
+            ("198.51.100.3", "203.0.113.3", None),
+        ] {
+            let key = ProbeKey {
+                kind: ProbeKind::Udp,
+                addr: addr.to_string(),
+                name: "Example".to_string(),
+            };
+            let mut dm = HashMap::new();
+            dm.insert("vk.ru".to_string(), Some(10.0));
+            report.raw.insert(key, dm);
+            report.egress.insert(
+                (addr.to_string(), "Example".to_string()),
+                Some(egress.parse().unwrap()),
+            );
+            if let Some(org) = org {
+                report.org_names.insert(egress.to_string(), org.to_string());
+            }
+        }
+        let cfg = AppConfig::default();
+        let out =
+            render_dns_availability(&report, &cfg, &crate::i18n::get_messages(crate::i18n::Language::Ru));
+        assert!(
+            out.contains("\x1b[32m198.51.100.1→GOOGLE"),
+            "a whitelisted network is green: {out}"
+        );
+        assert!(
+            out.contains("\x1b[31m198.51.100.2→SOMEBODY-ELSE"),
+            "an unknown one is red: {out}"
+        );
+        assert!(
+            out.contains("\x1b[37m198.51.100.3→203.0.113.3"),
+            "no org answer is white, not red: {out}"
+        );
     }
 }

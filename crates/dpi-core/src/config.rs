@@ -177,6 +177,13 @@ fn d_dns_known_resolver_names() -> Vec<String> {
     .collect()
 }
 
+fn d_dns_hijack_exempt_resolvers() -> Vec<String> {
+    // The two domestic resolvers that *are* the stand-in: a run that meets them
+    // is being intercepted, and the summary names them there as the host that
+    // answered, not as a brand whose answers were replaced.
+    ["MSK-IX", "НСДИ"].into_iter().map(|s| s.to_string()).collect()
+}
+
 fn d_telegram_dcs() -> Vec<Vec<String>> {
     vec![
         vec!["149.154.175.53".to_string(), "DC1".to_string()],
@@ -314,6 +321,10 @@ pub struct AppConfig {
     pub bypass_tools_raw: Vec<Vec<serde_yaml::Value>>,
     #[serde(default = "d_dns_known_resolver_names")]
     pub dns_known_resolver_names: Vec<String>,
+    /// Resolvers that are themselves the host other brands' answers come back
+    /// from, so a run must not name them as victims of the substitution.
+    #[serde(default = "d_dns_hijack_exempt_resolvers")]
+    pub dns_hijack_exempt_resolvers: Vec<String>,
     #[serde(default = "d_cymru_doh_servers")]
     pub cymru_doh_servers: Vec<String>,
     #[serde(default = "d_ip4_lookup_urls")]
@@ -397,6 +408,7 @@ impl Default for AppConfig {
             concurrency_presets: d_concurrency_presets(),
             bypass_tools_raw: d_bypass_tools(),
             dns_known_resolver_names: d_dns_known_resolver_names(),
+            dns_hijack_exempt_resolvers: d_dns_hijack_exempt_resolvers(),
             cymru_doh_servers: d_cymru_doh_servers(),
             ip4_lookup_urls: d_ip4_lookup_urls(),
             ip6_lookup_urls: d_ip6_lookup_urls(),
@@ -425,6 +437,7 @@ const KNOWN_KEYS: &[&str] = &[
     "TELEGRAM_UPLOAD_SIZE_MB", "TELEGRAM_STALL_TIMEOUT", "TELEGRAM_TOTAL_TIMEOUT",
     "TELEGRAM_DC_PING_TIMEOUT", "TELEGRAM_DC_PORT", "TELEGRAM_DCS", "PIN_CACHE_MAX",
     "PIN_CACHE_TTL", "CONCURRENCY_PRESETS", "BYPASS_TOOLS", "DNS_KNOWN_RESOLVER_NAMES",
+    "DNS_HIJACK_EXEMPT_RESOLVERS",
     "DNS_STUB_THRESHOLD", "DEBUG", "CYMRU_DOH_SERVERS", "IP4_LOOKUP_URLS",
     "IP6_LOOKUP_URLS", "IP_LOOKUP_URLS",
 ];
@@ -499,6 +512,7 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<Config
             // String lists: keep string elements only; a non-string element is
             // dropped from the sequence, not treated as a fatal error.
             "DNS_CHECK_DOMAINS" | "DNS_AVAILABILITY_DOMAINS" | "DNS_KNOWN_RESOLVER_NAMES"
+            | "DNS_HIJACK_EXEMPT_RESOLVERS"
             | "CYMRU_DOH_SERVERS" | "IP4_LOOKUP_URLS" | "IP6_LOOKUP_URLS" | "IP_LOOKUP_URLS" => {
                 match v {
                     serde_yaml::Value::Sequence(seq) => {
@@ -1108,6 +1122,7 @@ mod tests {
         assert_eq!(cfg.dns_known_resolver_names.len(), 29);
         assert!(cfg.dns_known_resolver_names.contains(&"google".to_string()));
         assert!(cfg.dns_known_resolver_names.contains(&"yandex".to_string()));
+        assert_eq!(cfg.dns_hijack_exempt_resolvers, vec!["MSK-IX", "НСДИ"]);
     }
 
     /// No-file fallbacks carry the same lists (embedded use without config.yml).
@@ -1124,6 +1139,7 @@ mod tests {
         assert_eq!(def.ip4_lookup_urls, from_yml.ip4_lookup_urls);
         assert_eq!(def.ip6_lookup_urls, from_yml.ip6_lookup_urls);
         assert_eq!(def.dns_known_resolver_names, from_yml.dns_known_resolver_names);
+        assert_eq!(def.dns_hijack_exempt_resolvers, from_yml.dns_hijack_exempt_resolvers);
         assert_eq!(def.concurrency_presets, from_yml.concurrency_presets);
     }
 

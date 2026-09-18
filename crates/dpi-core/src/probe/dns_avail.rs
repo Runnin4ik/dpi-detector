@@ -917,12 +917,18 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
 
     let mut hi = HashSet::new();
     for (name, addrs) in udp_by_name(report) {
+        // MSK-IX and НСДИ are the stand-in itself: the /24 a run meets them on
+        // is the host other brands' answers come back from, which is what the
+        // check below notices — but they are the ones doing the answering, not
+        // brands whose answers were replaced. The list is config data
+        // (`DNS_HIJACK_EXEMPT_RESOLVERS`), so it changes without a rebuild.
+        if known_resolver(&brand(&name), &cfg.dns_hijack_exempt_resolvers) {
+            continue;
+        }
         for a in addrs {
             let eip = report.egress.get(&(a.clone(), name.clone())).copied().flatten();
             if let Some(eip) = eip {
                 let org = report.org_names.get(&eip.to_string()).cloned().unwrap_or_default();
-                // NOTE: no domestic exemption: a hijacked MSK-IX/NSDI
-                // answer must be visible, not silently shielded.
                 if is_hijacked(&eip)
                     && !known_resolver(&org_label(&org), &cfg.dns_known_resolver_names)
                 {
@@ -1149,6 +1155,38 @@ mod tests {
         assert_eq!(
             connect_fail_label(&fault("tls_handshake", "certificate verify failed: unable to get local issuer certificate")),
             "NO CA BUNDLE"
+        );
+    }
+
+    /// The summary names brands whose answers were replaced, not the host that
+    /// replaced them: a resolver on `DNS_HIJACK_EXEMPT_RESOLVERS` stays out of
+    /// the list even when the /24 it exits through is shared with another brand,
+    /// which is exactly the shape the check reads as a stand-in.
+    #[test]
+    fn an_exempt_resolver_is_not_reported_as_hijacked() {
+        let cfg = AppConfig::default();
+        let mut report = DnsAvailReport {
+            udp_servers: vec![
+                ("192.0.2.10".to_string(), "MSK-IX".to_string(), 53),
+                ("192.0.2.11".to_string(), "Watchdog".to_string(), 53),
+                ("192.0.2.12".to_string(), "НСДИ".to_string(), 53),
+            ],
+            ..DnsAvailReport::default()
+        };
+        // Two brands exiting through one /24: the hijack check fires for both.
+        for (addr, name, egress) in [
+            ("192.0.2.10", "MSK-IX", "198.51.100.7"),
+            ("192.0.2.11", "Watchdog", "198.51.100.8"),
+        ] {
+            report.egress.insert(
+                (addr.to_string(), name.to_string()),
+                Some(egress.parse().unwrap()),
+            );
+        }
+        assert_eq!(
+            compute_stats(&report, &cfg).hijacked_brands,
+            vec!["Watchdog".to_string()],
+            "only the brand that is not the stand-in"
         );
     }
 }
