@@ -5,12 +5,18 @@
 //! always took, so nothing here can change a run that did not ask for it.
 //!
 //! A chosen interface binds every socket to one of its addresses before the
-//! connect. The source address is what forces the packet out of that interface, it
-//! needs no privilege, and it is the part that behaves the same on Windows and on
-//! the Entware/MIPS builds. On Linux the socket is additionally bound to the
-//! device (`SO_BINDTODEVICE`, best effort — it wants `CAP_NET_RAW`), which covers
-//! a family the interface has no address in and keeps the answer honest when the
-//! routing table would have sent the packet somewhere else.
+//! connect, and that address is the whole mechanism: the source of a packet is
+//! what the OS routes by — the routing table on a plain box, the policy rules on a
+//! router that splits traffic by source — so binding it is what makes the probes
+//! leave through that interface. It needs no privilege and behaves the same on
+//! Windows and on the Entware/MIPS builds.
+//!
+//! `SO_BINDTODEVICE` was tried as well and removed: it restricts the route lookup
+//! to that device, which *overrides* the policy rules a Keenetic uses to send a
+//! tunnel's traffic — a tunnel with no route of its own in the main table then
+//! fails with `Network is unreachable` (measured on the router, 2026-09-18) where
+//! the address bind alone lets the policy pick the tunnel. It also wants
+//! `CAP_NET_RAW`, which the address bind does not.
 //!
 //! The choice is process-wide and set once at startup, the way the VT/ASCII mode
 //! is: a run probes one network, and the probes that dial through
@@ -80,11 +86,6 @@ impl BindTarget {
 /// choice has no address of the destination's family.
 pub fn local_for(dest: &SocketAddr) -> Option<SocketAddr> {
     target().and_then(|t| t.local(dest))
-}
-
-/// The name of the chosen interface, for `SO_BINDTODEVICE`.
-pub fn device_name() -> Option<String> {
-    target().map(|t| t.name)
 }
 
 /// The interface every socket should leave through, or `None` for the routing
@@ -356,7 +357,7 @@ pub async fn tcp_connect(addr: &SocketAddr) -> std::io::Result<TcpStream> {
         SocketAddr::V4(_) => TcpSocket::new_v4()?,
         SocketAddr::V6(_) => TcpSocket::new_v6()?,
     };
-    configure(&socket, &local)?;
+    socket.bind(local)?;
     socket.connect(*addr).await
 }
 
@@ -389,39 +390,8 @@ pub async fn udp_socket(peer: &SocketAddr) -> std::io::Result<UdpSocket> {
         SocketAddr::V6(_) => SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)),
     });
     let socket = UdpSocket::bind(bind_addr).await?;
-    bind_device(&socket);
     Ok(socket)
 }
-
-fn configure(socket: &TcpSocket, local: &SocketAddr) -> std::io::Result<()> {
-    socket.bind(*local)?;
-    bind_device(socket);
-    Ok(())
-}
-
-/// Binds a socket to the device, best effort: `SO_BINDTODEVICE` wants
-/// `CAP_NET_RAW`, and on a desktop the address bind above is already the answer.
-#[cfg(unix)]
-fn bind_device<S: std::os::fd::AsRawFd>(socket: &S) {
-    let Some(name) = device_name() else {
-        return;
-    };
-    let mut buf: Vec<u8> = name.into_bytes();
-    buf.push(0);
-    // SAFETY: `buf` outlives the call and `socket` owns a live descriptor.
-    unsafe {
-        libc::setsockopt(
-            socket.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_BINDTODEVICE,
-            buf.as_ptr().cast(),
-            buf.len() as libc::socklen_t,
-        );
-    }
-}
-
-#[cfg(not(unix))]
-fn bind_device<S>(_socket: &S) {}
 
 #[cfg(test)]
 mod tests {
