@@ -3,12 +3,16 @@ resolver = "2"
 members = [
     "crates/dpi-core",
     "crates/dpi-detector",
+    # The crypto provider is the one vendored crate that IS a member: it performs
+    # certificate signature verification, so it has to be built, linted and tested
+    # in the configuration that ships. See vendor/rustls-rustcrypto/README-PATCH.md.
+    "vendor/rustls-rustcrypto",
 ]
 # The vendored crates are patched upstream sources (see
 # vendor/*/README-PATCH.md): rustls with a ClientHello-profile hook, h2 with the
 # request shape a browser puts in its h2 preface, and hyper with the two preface
 # settings a browser may leave out. They must NOT be workspace members (their
-# tests/examples are upstream's, not ours).
+# tests/examples are upstream's, not ours). The provider above is the exception.
 exclude = ["vendor/rustls", "vendor/h2", "vendor/hyper"]
 
 # Fingerprint hooks, applied through `[patch]` so that tokio-rustls /
@@ -33,7 +37,9 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 brotli-decompressor = "5"
 zlib-rs = "0.6"
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
-rustls-rustcrypto = "0.0.2-alpha"
+# Vendored and patched (the `rustls-webpki 0.102` dependency is gone):
+# see vendor/rustls-rustcrypto/README-PATCH.md.
+rustls-rustcrypto = { path = "vendor/rustls-rustcrypto" }
 webpki-roots = "1.0"
 hyper = { version = "1.4", default-features = false, features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio", "client-legacy", "http1", "http2"] }
