@@ -258,6 +258,13 @@ build_url_list() {
   echo "$_list"
 }
 
+# A mirror is accepted only when the file it served both downloaded and ran:
+# `--version` is executed, not stat'ed. The compact builds are UPX-packed, and a
+# packer's unpacking stub can be unusable on a given kernel even though the file
+# is intact — UPX 5.x needs `memfd_create`, i.e. Linux >= 3.17, and dies with
+# `Trace/breakpoint trap` on the 3.4 kernels several router firmwares ship (see
+# the UPX pin in `.github/workflows/release.yml`). Such a file counts as a failed
+# mirror, and the standard build gets its turn.
 try_download_and_verify() {
   _tgt="$1"
   echo "Downloading ${_tgt} (${VERSION}) to ${OUT_FILE}..."

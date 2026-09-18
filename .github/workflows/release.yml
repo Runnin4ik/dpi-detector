@@ -174,10 +174,24 @@ jobs:
           cp target/${{ matrix.target }}/release/dpi-detector dist/${{ matrix.name }}
           chmod +x dist/${{ matrix.name }}
 
+      # Pinned to 4.2.4 on purpose, and it is not a stale pin: the UPX 5.x
+      # unpacking stub calls `memfd_create` before anything else, and that
+      # syscall needs Linux >= 3.17 (October 2014). Router firmwares ship much
+      # older kernels, and there a 5.x-packed binary dies with
+      # `Trace/breakpoint trap` before the detector's first instruction —
+      # measured on a Xiaomi R3P (kernel 3.4.113): `execve` succeeds, the stub
+      # makes a couple of syscalls, not one of them a network call, then the
+      # kernel raises SIGTRAP. UPX closed exactly that report as "kernel too
+      # old" and points at 4.2.4, whose stub works through `/proc/self/exe` and
+      # `mmap` instead (upx/upx#904 for mipsel on 3.4, upx/upx#902 for arm32 on
+      # 3.14); 4.2.4 packs the same binary to the same ratio (32.0%), and the
+      # result runs on both the old kernel and the new one. Do not move this to
+      # `latest`, and check both kernels before considering a bump.
       - name: Set up UPX
         if: matrix.has_upx
         uses: crazy-max/ghaction-upx@v4
         with:
+          version: v4.2.4
           install-only: true
 
       - name: Create UPX compressed binary
