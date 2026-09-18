@@ -449,7 +449,7 @@ pub(crate) fn inner_hyper(
     let (msg, os_code, os_kind) = hyper_err_info(e);
     let lower = msg.to_ascii_lowercase();
 
-    // Read timeout inside the fat window → TCP16-20 signature
+    // Read timeout inside the fat window → the 16KB DROP signature
     if (e.is_timeout() || lower.contains("timed out")) && stage == "reading_data" {
         let kb = bytes as f64 / 1024.0;
         if kb >= min_kb as f64 && kb <= max_kb as f64 {

@@ -65,6 +65,10 @@ pub enum DpiStatus {
     SendTimeout,
     ReadTimeout,
     PoolTimeout,
+    /// Rule 5: the wire token is the `as_str()` one, which names the probe rather
+    /// than the variant. Without this the derived name (`tcp16_detected`) reaches
+    /// anything that serializes a `DpiStatus` whole.
+    #[serde(rename = "detected")]
     Tcp16Detected,
     TcpRst,
     TcpAbort,
@@ -81,9 +85,15 @@ pub enum DpiStatus {
     /// real server (`cert_expired` — UncensoredDNS answered that way for months),
     /// so the word read as a finding no matter which one it was.
     TlsErr,
+    /// Rule 5: `no_ca_bundle`, not the derived `no_ca` — the badge says the same
+    /// thing and the two have to agree.
+    #[serde(rename = "no_ca_bundle")]
     NoCa,
     TlsSpoof,
     TlsEof,
+    /// Rule 5: `tcp16_20`, the window the connection died in, not the derived
+    /// `tcp16_range`.
+    #[serde(rename = "tcp16_20")]
     Tcp16Range,
     NoTls13,
     SynDropped,
@@ -93,8 +103,12 @@ pub enum DpiStatus {
     OsErr,
     DnsFail,
     DnsFake,
+    /// Rule 5: the DNS tokens are the resolver vocabulary's own spellings —
+    /// `nxdomain`, `fakeip` — not the derived `nx_domain`/`fake_ip`.
+    #[serde(rename = "nxdomain")]
     NxDomain,
     DnsHijacked,
+    #[serde(rename = "fakeip")]
     FakeIp,
     HttpBlocked,
     Tcp16Dropped,
@@ -165,7 +179,7 @@ impl DpiStatus {
             Self::TlsAbort => "TLS ABORT",
             Self::TlsDropped => "TLS DROP",
             Self::TlsAlert => "TLS ALERT",
-            Self::Tcp16Range => "TCP16-20",
+            Self::Tcp16Range => "16KB DROP",
             Self::TlsBlock => "TLS BLOCK",
             Self::TlsErr => "TLS ERR",
             Self::NoCa => "NO CA BUNDLE",
@@ -264,5 +278,47 @@ mod tests {
         assert_eq!(DpiStatus::RedirSuspect.display_label(), "REDIR");
         assert!(!DpiStatus::RedirSuspect.is_ok_status());
         assert!(!DpiStatus::RedirSuspect.is_blocked());
+    }
+
+    /// Rule 5: serde and `as_str()` must agree on the wire token. Five variants
+    /// had drifted — `--json` carries `as_str()`, so a `DpiStatus` serialized
+    /// anywhere else said `tcp16_range`, `no_ca`, `nx_domain`, `fake_ip` or
+    /// `tcp16_detected` where the documented token was something else. Pinned one
+    /// by one: the enum cannot be iterated, and a list that rots is worse than
+    /// none, so the ones that drifted are the ones named here.
+    #[test]
+    fn the_wire_token_is_the_same_through_serde() {
+        for (status, token) in [
+            (DpiStatus::Tcp16Range, "tcp16_20"),
+            (DpiStatus::Tcp16Detected, "detected"),
+            (DpiStatus::NoCa, "no_ca_bundle"),
+            (DpiStatus::NxDomain, "nxdomain"),
+            (DpiStatus::FakeIp, "fakeip"),
+            (DpiStatus::RedirSuspect, "redir"),
+            (DpiStatus::TlsErr, "tls_err"),
+        ] {
+            assert_eq!(status.as_str(), token);
+            assert_eq!(
+                serde_json::to_string(&status).expect("a status serializes"),
+                format!("\"{token}\"")
+            );
+        }
+    }
+
+    /// The two 16 KB verdicts read differently on purpose. `Tcp16Range` is a
+    /// connection that died inside the fat window and its badge used to be
+    /// `TCP16-20` — the window, not what happened to the connection; `Tcp16Dropped`
+    /// is the probe of that window coming back empty. The wire token is untouched:
+    /// it still names the window, and rule 5 gives it away to `--json`, not to the
+    /// badge.
+    #[test]
+    fn the_two_16kb_verdicts_read_differently() {
+        assert_eq!(DpiStatus::Tcp16Range.display_label(), "16KB DROP");
+        assert_eq!(DpiStatus::Tcp16Dropped.display_label(), "TCP16 DROP");
+        assert_eq!(DpiStatus::Tcp16Range.as_str(), "tcp16_20");
+        assert_eq!(
+            serde_json::to_string(&DpiStatus::Tcp16Range).unwrap(),
+            "\"tcp16_20\""
+        );
     }
 }
