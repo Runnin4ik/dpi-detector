@@ -245,6 +245,10 @@ pub struct Messages {
     pub cfg_warn_upload_port: &'static str,
     pub cfg_warn_dc_port: &'static str,
     pub warn_unknown_lang: &'static str,
+    /// Shown before test 6 when the requested profile set is larger than
+    /// `DEFAULT_SET` — `all`, or any long explicit list. Two `{}`: the profiles
+    /// about to run and the size of the default set.
+    pub warn_burst_budget: &'static str,
     pub warn_unknown_fingerprint: &'static str,
     pub warn_unknown_burst_axis: &'static str,
     pub press_enter_to_exit: &'static str,

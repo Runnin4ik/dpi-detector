@@ -244,6 +244,18 @@ pub(crate) fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Mess
         alpn,
         profiles,
     );
+    // `all` and any long explicit list cost a handshake per profile per host per
+    // version axis, so the price is stated before the run rather than discovered
+    // in the wall clock. The default set stays quiet: it is the budget a run
+    // without flags already assumes.
+    if !args.json && settings.profiles.len() > TlsFingerprint::DEFAULT_SET.len() {
+        eprintln!(
+            "{}",
+            msg.warn_burst_budget
+                .replacen("{}", &settings.profiles.len().to_string(), 1)
+                .replacen("{}", &TlsFingerprint::DEFAULT_SET.len().to_string(), 1)
+        );
+    }
     // `-d` picks the targets, exactly as it does for test 2 — and goes through
     // the same cleaner, so `-d https://host/path` probes `host` instead of a name
     // no resolver knows. An input that cleans to nothing falls back to the

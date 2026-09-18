@@ -218,6 +218,7 @@ pub(crate) fn messages() -> Messages {
         cfg_warn_dc_port: "TELEGRAM_DC_PORT 无效，已重置为 443",
 
         warn_unknown_lang: "警告: 未知的 --lang '{}'（应为 ru|en|zh|fa|auto），改用 en",
+        warn_burst_budget: "警告: 测试 6 将运行 {} 个指纹，而默认集合为 {} 个；每个指纹都要为每个域名和每个 TLS 版本轴各做一次握手（名称见 --legend）",
         warn_unknown_fingerprint: "警告: 未知的 --fingerprint '{}'（配置名见 --legend），改用 {}",
         warn_unknown_burst_axis: "警告: 未知的 {} '{}'，改用 {}",
         press_enter_to_exit: "按回车键退出...",

@@ -222,6 +222,7 @@ pub(crate) fn messages() -> Messages {
         cfg_warn_dc_port: "TELEGRAM_DC_PORT invalid, reset to 443",
 
         warn_unknown_lang: "Warning: unknown --lang '{}' (expected ru|en|zh|fa|auto), using en",
+        warn_burst_budget: "Warning: test 6 will run {} profiles where the default set has {}; every profile costs one handshake per host, per TLS version axis (--legend lists the names)",
         warn_unknown_fingerprint: "Warning: unknown --fingerprint '{}' (--legend lists the profile names), using {}",
         warn_unknown_burst_axis: "Warning: unknown {} '{}', using {}",
         press_enter_to_exit: "Press Enter to exit...",

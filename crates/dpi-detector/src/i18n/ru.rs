@@ -222,6 +222,7 @@ pub(crate) fn messages() -> Messages {
         cfg_warn_dc_port: "TELEGRAM_DC_PORT недопустим, сброшено на 443",
 
         warn_unknown_lang: "Предупреждение: неизвестный --lang '{}' (ожидается ru|en|zh|fa|auto), используется en",
+        warn_burst_budget: "Предупреждение: тест 6 запустит {} профилей вместо {} в наборе по умолчанию; каждый профиль стоит рукопожатие на каждый домен и на каждую ось версии TLS (имена печатает --legend)",
         warn_unknown_fingerprint: "Предупреждение: неизвестный --fingerprint '{}' (имена профилей печатает --legend), используется {}",
         warn_unknown_burst_axis: "Предупреждение: неизвестное значение {} '{}', используется {}",
         press_enter_to_exit: "Нажмите Enter для выхода...",

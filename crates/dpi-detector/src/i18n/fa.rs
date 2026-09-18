@@ -216,6 +216,7 @@ pub(crate) fn messages() -> Messages {
         cfg_warn_dc_port: "TELEGRAM_DC_PORT na-motabar ast, be 443 reset shod",
 
         warn_unknown_lang: "Hoshdar: --lang '{}' nashenakhte (entezar: ru|en|zh|fa|auto), en estefade shod",
+        warn_burst_budget: "Hoshdar: test-e 6 ba {} profile ejra mishavad, dar halike majmooe-e pishfarz {} profile darad; har profile yek handshake baraye har domain va har mehvar-e version-e TLS hazine darad (nam ha ra --legend chap mikonad)",
         warn_unknown_fingerprint: "Hoshdar: --fingerprint '{}' nashenakhte (nam-e profile ha ra --legend chap mikonad), {} estefade shod",
         warn_unknown_burst_axis: "Hoshdar: meghdar-e nashenakhte {} '{}', {} estefade shod",
         press_enter_to_exit: "Baraye khorooj Enter ra feshar dahid...",
