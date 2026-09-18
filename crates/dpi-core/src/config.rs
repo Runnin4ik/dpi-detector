@@ -1104,10 +1104,10 @@ mod tests {
         assert_eq!(cfg.dns_udp_servers[0], vec!["8.8.8.8", "Google"]);
         assert_eq!(cfg.dns_availability_domains, vec!["vk.ru", "gosuslugi.ru"]);
         let servers = cfg.availability_servers();
-        assert_eq!(servers.iter().filter(|s| s.kind == "udp").count(), 54);
+        assert_eq!(servers.iter().filter(|s| s.kind == "udp").count(), 49);
         assert_eq!(servers.iter().filter(|s| s.kind == "doh_wire").count(), 37);
         assert_eq!(servers.iter().filter(|s| s.kind == "dot").count(), 34);
-        assert_eq!(servers.len(), 125);
+        assert_eq!(servers.len(), 120);
         assert_eq!(servers[0].addr, "94.140.14.14");
         assert_eq!(servers.last().map(|s| s.kind.as_str()), Some("dot"));
         assert_eq!(cfg.telegram_dc_list().len(), 5);
@@ -1176,6 +1176,6 @@ mod tests {
             .count();
         assert_eq!(burst.len(), shipped_burst, "every shipped burst target survives cleaning");
         let cfg = AppConfig::from_yaml_str(EMBEDDED_CONFIG_YML);
-        assert_eq!(cfg.availability_servers().len(), 125);
+        assert_eq!(cfg.availability_servers().len(), 120);
     }
 }

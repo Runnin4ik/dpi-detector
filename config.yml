@@ -180,16 +180,12 @@ DNS_AVAILABILITY_SERVERS:
   - ["45.155.204.190", "Geohide", "udp"]
   - ["83.220.169.155", "Comss.one", "udp"]
   - ["212.109.195.93", "Comss.one", "udp"]
-  - ["76.76.19.19", "Alternate DNS", "udp"]
-  - ["76.223.122.150", "Alternate DNS 2", "udp"]
   - ["8.26.56.26", "Comodo", "udp"]
   - ["8.20.247.20", "Comodo 2", "udp"]
   - ["84.200.69.80", "DNS Watch", "udp"]
   - ["84.200.70.40", "DNS Watch 2", "udp"]
   - ["209.244.0.3", "Level 3", "udp"]
-  - ["209.244.0.4", "Level 3 2", "udp"]
-  - ["209.224.0.3", "Level 3 (alt)", "udp"]
-  - ["209.224.0.4", "Level 3 2 (alt)", "udp"]
+  - ["209.244.0.4", "Level 3", "udp"]
   # Тот же оператор (AS3356, Lumen) по классическим адресам 4.2.2.x:
   # a/b.resolvers.level3.net. Публичных DoH/DoT у него нет — только 53/udp.
   - ["4.2.2.1", "Level 3", "udp"]
@@ -197,7 +193,6 @@ DNS_AVAILABILITY_SERVERS:
   # First Colo (AS44066, DE), resolver1/resolver2.fcint.de. Тоже только 53/udp.
   - ["212.224.71.71", "First Colo", "udp"]
   - ["79.133.62.62", "First Colo", "udp"]
-  - ["149.112.112.10", "Quad9 (UN 2)", "udp"]
   - ["77.88.8.88", "Yandex (Safe)", "udp"]
   - ["77.88.8.2", "Yandex (Safe 2)", "udp"]
 
