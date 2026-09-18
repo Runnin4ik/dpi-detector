@@ -195,9 +195,6 @@ if target_supports_upx "$BASE_TARGET"; then
       if [ -n "$AVAIL_KB" ] && [ "$AVAIL_KB" -lt 204800 ]; then
         PRIMARY_TARGET="${BASE_TARGET}-upx"
         FALLBACK_TARGET="${BASE_TARGET}"
-        AVAIL_MB=$((AVAIL_KB / 1024))
-        echo "Notice: low disk space in ${OUT_DIR} (~${AVAIL_MB} MB free, threshold 200 MB)."
-        echo "        Automatically selecting the compact UPX-compressed build."
       else
         PRIMARY_TARGET="${BASE_TARGET}"
         FALLBACK_TARGET="${BASE_TARGET}-upx"
@@ -263,6 +260,102 @@ build_url_list() {
   echo "$_list"
 }
 
+# Every mirror is started at once and the first download that finishes wins; the
+# others are stopped. This is about the one bad case the sequential loop cannot
+# escape: a mirror that accepts the connection and then trickles, which costs the
+# whole `--max-time` before the next one is tried. The race picks the fast mirror
+# whatever the order, and what it produces is still only a *candidate* — the
+# caller runs it (`--version`) exactly as in the sequential path, and a candidate
+# that fails sends every mirror down that path in turn.
+#
+# The race costs disk, not just traffic: every mirror writes its own copy into the
+# install directory at the same time, so it only runs when that directory can hold
+# one copy per mirror with room to spare — `mirrors × RACE_MIRROR_KB` against
+# `RACE_MIN_KB` as the floor, whichever is larger. When the space is not there (or
+# `df` cannot say), the mirrors are tried one by one and the install still
+# completes; it may just be slower when a mirror trickles.
+RACE_MIN_KB=30720        # 30 MB floor, enough for the shipped router targets
+RACE_MIRROR_KB=5120      # per-mirror share: the standard MIPS build is ~4.6 MB
+#
+# Completion is recorded as a file per mirror rather than by watching processes:
+# a finished background child stays a zombie that `kill -0` still reports as
+# alive, and the loop has to end when the last mirror is done, successful or not.
+race_download() {
+  _tgt="$1"
+  _urls=$(build_url_list "$_tgt")
+  _n=0
+  for _url in $_urls; do
+    _n=$((_n + 1))
+  done
+
+  _need=$((_n * RACE_MIRROR_KB))
+  [ "$_need" -ge "$RACE_MIN_KB" ] || _need="$RACE_MIN_KB"
+  _avail=$(get_avail_kb "$OUT_DIR")
+  if [ -z "$_avail" ] || [ "$_avail" -lt "$_need" ]; then
+    _have="unknown"
+    [ -n "$_avail" ] && _have="$((_avail / 1024)) MB"
+    echo "Notice: not enough free space in ${OUT_DIR} for ${_n} copies at once (need ~$((_need / 1024)) MB, have ${_have})."
+    echo "        Trying the mirrors one by one."
+    return 1
+  fi
+
+  _race_dir="${OUT_DIR}/.dpi-race.$$"
+  rm -rf "$_race_dir" 2>/dev/null
+  mkdir -p "$_race_dir" 2>/dev/null || return 1
+
+  _pids=""
+  _i=0
+  for _url in $_urls; do
+    _i=$((_i + 1))
+    _part="${_race_dir}/part.${_i}"
+    _flag="${_race_dir}/flag.${_i}"
+    _done="${_race_dir}/done.${_i}"
+    (
+      if download_file "$_url" "$_part" && [ -s "$_part" ]; then
+        printf '%s\n' "$_url" > "$_flag"
+      fi
+      : > "$_done"
+    ) &
+    _pids="${_pids} $!"
+  done
+  echo "Racing ${_n} mirrors for ${_tgt}..."
+
+  _winner=""
+  while [ -z "$_winner" ]; do
+    _i=0
+    _pending=""
+    while [ "$_i" -lt "$_n" ]; do
+      _i=$((_i + 1))
+      if [ -s "${_race_dir}/flag.${_i}" ]; then
+        [ -n "$_winner" ] || _winner="$_i"
+      elif [ ! -e "${_race_dir}/done.${_i}" ]; then
+        _pending="yes"
+      fi
+    done
+    [ -n "$_winner" ] && break
+    [ -n "$_pending" ] || break
+    sleep 1
+  done
+
+  for _p in $_pids; do
+    kill "$_p" 2>/dev/null
+  done
+
+  if [ -z "$_winner" ]; then
+    rm -rf "$_race_dir" 2>/dev/null
+    return 1
+  fi
+
+  echo "Fetched from: $(cat "${_race_dir}/flag.${_winner}")"
+  if mv -f "${_race_dir}/part.${_winner}" "$TMP_FILE" 2>/dev/null; then
+    rm -rf "$_race_dir" 2>/dev/null
+    return 0
+  fi
+  rm -f "$TMP_FILE" 2>/dev/null
+  rm -rf "$_race_dir" 2>/dev/null
+  return 1
+}
+
 # A mirror is accepted only when the file it served both downloaded and ran:
 # `--version` is executed, not stat'ed. The compact builds are UPX-packed, and a
 # packer's unpacking stub can be unusable on a given kernel even though the file
@@ -273,6 +366,17 @@ build_url_list() {
 try_download_and_verify() {
   _tgt="$1"
   echo "Downloading ${_tgt} (${VERSION}) to ${OUT_FILE}..."
+
+  if race_download "$_tgt"; then
+    chmod +x "$TMP_FILE"
+    if _ver=$("$TMP_FILE" --version 2>&1); then
+      echo "Verified: ${_ver}"
+      return 0
+    fi
+    echo "Warning: the first mirror's binary failed architecture/runtime check, trying the rest one by one..." >&2
+    rm -f "$TMP_FILE" 2>/dev/null || true
+  fi
+
   _urls=$(build_url_list "$_tgt")
   for _url in $_urls; do
     echo "Fetching from: ${_url} ..."
