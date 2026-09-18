@@ -33,6 +33,14 @@ pub struct H2Fingerprint {
     /// `SETTINGS_ENABLE_PUSH`; `None` omits the setting. Chrome and Firefox send
     /// `0`, Safari sends none.
     pub enable_push: Option<bool>,
+    /// `SETTINGS_ENABLE_CONNECT_PROTOCOL`; `None` omits the setting. Safari 18
+    /// sends `true` — Chrome and Firefox never do, and this build issues no
+    /// extended CONNECT request, so the setting is shape only.
+    pub enable_connect_protocol: Option<bool>,
+    /// `SETTINGS_NO_RFC7540_PRIORITIES`; `None` omits the setting. Safari 18 and
+    /// 26 send `true`, which tells the peer the RFC 7540 priority scheme is not
+    /// used — independently of the PRIORITY flag a `HEADERS` frame may carry.
+    pub no_rfc7540_priorities: Option<bool>,
     /// The order the preface lists its entries in, by setting id. Empty — every
     /// profile but Safari — is ascending, which is what those bundles send;
     /// Safari names `4` before `3`.
@@ -77,6 +85,8 @@ pub(crate) const CHROME120_H2: H2Fingerprint = H2Fingerprint {
     max_frame_size: None,
     max_header_list_size: Some(262_144),
     enable_push: Some(false),
+    enable_connect_protocol: None,
+    no_rfc7540_priorities: None,
     settings_order: &[],
     connection_window: 15_663_105 + 65_535,
     pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
@@ -97,6 +107,8 @@ pub(crate) const CHROME99_ANDROID_H2: H2Fingerprint = H2Fingerprint {
     max_frame_size: None,
     max_header_list_size: Some(262_144),
     enable_push: None,
+    enable_connect_protocol: None,
+    no_rfc7540_priorities: None,
     settings_order: &[],
     connection_window: 15_663_105 + 65_535,
     pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
@@ -113,6 +125,8 @@ pub(crate) const EDGE101_H2: H2Fingerprint = H2Fingerprint {
     max_frame_size: None,
     max_header_list_size: Some(262_144),
     enable_push: None,
+    enable_connect_protocol: None,
+    no_rfc7540_priorities: None,
     settings_order: &[],
     connection_window: 15_663_105 + 65_535,
     pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
@@ -123,12 +137,11 @@ pub(crate) const EDGE101_H2: H2Fingerprint = H2Fingerprint {
 /// `--http2-pseudo-headers-order "msap" --http2-stream-weight 256
 /// --http2-stream-exclusive 0`.
 ///
-/// The wrapper also sets `8:1` (`SETTINGS_ENABLE_CONNECT_PROTOCOL`) and `9:1`
-/// (`SETTINGS_NO_RFC7540_PRIORITIES`), which this preface cannot carry: both
-/// are beyond what the patched `h2` writes (see `vendor/h2/README-PATCH.md`),
-/// so the settings payload is two entries short of Safari 18's. The values it
-/// can send — the connection window, the stream cap and the window — are
-/// Safari's own.
+/// Safari 18.0, whose preface announces the extended CONNECT protocol (`8:1`)
+/// and `SETTINGS_NO_RFC7540_PRIORITIES` (`9:1`) — the two settings the wrapper
+/// names and the fork's own capture of Safari 18.0 records. Its iOS sibling
+/// sends `9:1` alone ([`SAFARI184_IOS_H2`]), and Safari 26.0 sends the same
+/// nine-only list with no request priority ([`SAFARI260_H2`]).
 pub(crate) const SAFARI18_H2: H2Fingerprint = H2Fingerprint {
     header_table_size: None,
     max_concurrent_streams: Some(100),
@@ -136,6 +149,34 @@ pub(crate) const SAFARI18_H2: H2Fingerprint = H2Fingerprint {
     max_frame_size: None,
     max_header_list_size: None,
     enable_push: Some(false),
+    enable_connect_protocol: Some(true),
+    no_rfc7540_priorities: Some(true),
+    settings_order: &[],
+    connection_window: 10_420_225 + 65_535,
+    pseudo_order: PseudoOrder::MethodSchemeAuthorityPath,
+    priority: Some((256, false)),
+};
+
+/// `2:0;3:100;4:2097152;9:1`, window 10420225,
+/// `--http2-pseudo-headers-order "msap" --http2-stream-weight 256
+/// --http2-stream-exclusive 0`.
+///
+/// Safari 18.4 on iOS: the same preface as 18.0 macOS minus
+/// `SETTINGS_ENABLE_CONNECT_PROTOCOL`. `curl_safari184_ios` names the same list
+/// (its `--http2-settings` carries an empty entry where `8:1` would be, which
+/// nghttp2 drops), and the fork's capture of Safari 18.4 on iOS records
+/// `2:0;3:100;4:2097152;9:1` for the browser itself — so the iOS build sends no
+/// extended-CONNECT setting, and the wrapper's stray separator is not a typo
+/// that changes the shape.
+pub(crate) const SAFARI184_IOS_H2: H2Fingerprint = H2Fingerprint {
+    header_table_size: None,
+    max_concurrent_streams: Some(100),
+    initial_window_size: 2_097_152,
+    max_frame_size: None,
+    max_header_list_size: None,
+    enable_push: Some(false),
+    enable_connect_protocol: None,
+    no_rfc7540_priorities: Some(true),
     settings_order: &[],
     connection_window: 10_420_225 + 65_535,
     pseudo_order: PseudoOrder::MethodSchemeAuthorityPath,
@@ -149,8 +190,6 @@ pub(crate) const SAFARI18_H2: H2Fingerprint = H2Fingerprint {
 /// PRIORITY flag on the request at all: the wrapper passes
 /// `--http2-no-priority`, so there is no weight and no exclusivity to send —
 /// which is a difference `peetprint` reads and the akamai fingerprint does not.
-/// `9:1` (`SETTINGS_NO_RFC7540_PRIORITIES`) is beyond what the patched `h2`
-/// writes, as it is for Safari 18.
 pub(crate) const SAFARI260_H2: H2Fingerprint = H2Fingerprint {
     header_table_size: None,
     max_concurrent_streams: Some(100),
@@ -158,6 +197,8 @@ pub(crate) const SAFARI260_H2: H2Fingerprint = H2Fingerprint {
     max_frame_size: None,
     max_header_list_size: None,
     enable_push: Some(false),
+    enable_connect_protocol: None,
+    no_rfc7540_priorities: Some(true),
     settings_order: &[],
     connection_window: 10_420_225 + 65_535,
     pseudo_order: PseudoOrder::MethodSchemeAuthorityPath,
@@ -173,6 +214,8 @@ pub(crate) const CHROME_H2: H2Fingerprint = H2Fingerprint {
     max_frame_size: None,
     max_header_list_size: Some(262_144),
     enable_push: Some(false),
+    enable_connect_protocol: None,
+    no_rfc7540_priorities: None,
     settings_order: &[],
     connection_window: 15_663_105 + 65_535,
     pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
@@ -189,6 +232,8 @@ pub(crate) const FIREFOX_H2: H2Fingerprint = H2Fingerprint {
     max_frame_size: Some(16_384),
     max_header_list_size: None,
     enable_push: Some(false),
+    enable_connect_protocol: None,
+    no_rfc7540_priorities: None,
     settings_order: &[],
     connection_window: 12_517_377 + 65_535,
     pseudo_order: PseudoOrder::MethodPathAuthorityScheme,
@@ -205,6 +250,8 @@ pub(crate) const SAFARI_H2: H2Fingerprint = H2Fingerprint {
     max_frame_size: None,
     max_header_list_size: None,
     enable_push: None,
+    enable_connect_protocol: None,
+    no_rfc7540_priorities: None,
     settings_order: &[4, 3],
     connection_window: 10_485_760 + 65_535,
     pseudo_order: PseudoOrder::MethodSchemePathAuthority,

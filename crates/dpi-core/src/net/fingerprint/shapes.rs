@@ -18,7 +18,7 @@ use rustls::client::ClientHelloProfile;
 
 use super::h2::{
     H2Fingerprint, CHROME120_H2, CHROME99_ANDROID_H2, CHROME_H2, EDGE101_H2, FIREFOX_H2,
-    SAFARI18_H2, SAFARI260_H2, SAFARI_H2,
+    SAFARI18_H2, SAFARI184_IOS_H2, SAFARI260_H2, SAFARI_H2,
 };
 use super::identity::{
     CHROME120_HEADERS, CHROME131_ANDROID_HEADERS, CHROME131_HEADERS, CHROME133_HEADERS,
@@ -92,9 +92,29 @@ pub(crate) struct TlsShape {
     pub(crate) padding_to: Option<u16>,
     /// Emit GREASE values. Chrome and Safari grease, Firefox does not.
     pub(crate) grease: bool,
+    /// Whether the impersonated client sends its `priority` header over
+    /// HTTP/1.1 as well as HTTP/2.
+    ///
+    /// Measured on the bundle's own h1 request (`tools/fingerprint`, stage
+    /// `headers`): `curl_firefox133`, `curl_firefox135`, `curl_firefox144` and
+    /// `curl_tor145` carry `Priority` on both protocols, every Chrome, Edge and
+    /// Safari wrapper carries it on HTTP/2 only. curl decides that per
+    /// impersonation profile, not per `-H` line — the four wrappers name it
+    /// exactly as the others do.
+    pub(crate) priority_on_h1: bool,
     /// RFC 8879 code points this shape advertises; empty means rustls's own
     /// empty list and no `compress_certificate` extension.
     pub(crate) cert_compression: &'static [u16],
+    /// The groups a key share is sent for, in wire order, `None` for rustls's
+    /// own choice of one share plus a hybrid component.
+    ///
+    /// `curl_firefox133`, `curl_firefox135`, `curl_firefox144` and `curl_tor145`
+    /// pass `--tls-key-shares-limit 3`, which puts three shares on the wire
+    /// (measured: `tools/fingerprint`, stage `hello`); every other wrapper
+    /// leaves the count where rustls puts it. A hybrid group named here brings
+    /// its component's share with it, so Firefox's list is
+    /// `[X25519MLKEM768, secp256r1]` — three entries on the wire, not two.
+    pub(crate) key_share_groups: Option<&'static [u16]>,
     /// Needs the provider that carries `X25519MLKEM768`, because the shape
     /// offers the hybrid group and its key share has to be the first group's.
     pub(crate) pq: bool,
@@ -593,6 +613,26 @@ const TOR_TLS_GROUPS: &[u16] = &[
     257, // ffdhe3072
 ];
 
+/// The groups `curl_firefox133` and `curl_firefox144` send a key share for:
+/// `--tls-key-shares-limit 3` with Firefox's curve list. The hybrid group's own
+/// entry carries its X25519 component, so these two groups are three shares on
+/// the wire — X25519MLKEM768, X25519 and P-256 — which is what both the bundle
+/// and the fork's capture of the browser put there.
+const FIREFOX_KEY_SHARE_GROUPS: &[u16] = &[
+    4588, // X25519MLKEM768, with its X25519 component
+    23,   // secp256r1
+];
+
+/// The groups `curl_tor145` sends a share for: its curve list's first three,
+/// which is what `--tls-key-shares-limit 3` produces without a hybrid group.
+/// The fork's capture of Tor 14.5 itself stops after P-256, so this record is
+/// one share longer than the browser it copies — the wrapper asks for three.
+const TOR_KEY_SHARE_GROUPS: &[u16] = &[
+    29, // X25519
+    23, // secp256r1
+    24, // secp384r1
+];
+
 /// Firefox 133–144's signature schemes. `curl_tor145` sends the same eleven in
 /// the same order.
 const FIREFOX_TLS_SIG_ALGS: &[u16] = &[
@@ -725,7 +765,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: &[],
         padding_to: None,
         grease: false,
+        priority_on_h1: false,
         cert_compression: &[],
+        key_share_groups: None,
         pq: false,
         legacy_versions: &[],
         headers: None,
@@ -789,11 +831,13 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         // Firefox sends no padding; the JA3 this profile is pinned to has none.
         padding_to: None,
         grease: false,
+        priority_on_h1: true,
         // zlib, brotli — the two this build can actually decompress (`zstd` is
         // not a rustls feature; advertising it would invite a
         // CompressedCertificate we cannot read). The algorithm *list* is not
         // part of JA3/JA4, only the presence of extension 27 is.
         cert_compression: &[1, 2],
+        key_share_groups: Some(FIREFOX_KEY_SHARE_GROUPS),
         pq: true,
         // Firefox 133 offers 1.3 and 1.2 only.
         legacy_versions: &[],
@@ -842,7 +886,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        priority_on_h1: false,
         cert_compression: BROTLI,
+        key_share_groups: None,
         pq: false,
         // Chrome 107 offers 1.3 and 1.2 only (`curl_chrome107` sends neither
         // 1.1 nor 1.0).
@@ -886,8 +932,10 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        priority_on_h1: false,
         // zlib, exactly what Safari advertises.
         cert_compression: &[1],
+        key_share_groups: None,
         pq: false,
         // Safari 15.5 keeps offering TLS 1.1 and 1.0 behind 1.2, and
         // `curl_safari155` sends both. They go on the wire verbatim; rustls still
@@ -952,7 +1000,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         // 256-byte floor anyway, with an ML-KEM share in it.
         padding_to: None,
         grease: true,
+        priority_on_h1: false,
         cert_compression: BROTLI,
+        key_share_groups: None,
         pq: true,
         legacy_versions: &[],
         headers: Some(CHROME133_HEADERS),
@@ -993,7 +1043,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        priority_on_h1: false,
         cert_compression: &[1],
+        key_share_groups: None,
         pq: false,
         legacy_versions: &[0x0302, 0x0301],
         headers: Some(SAFARI18_HEADERS),
@@ -1032,7 +1084,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        priority_on_h1: false,
         cert_compression: BROTLI,
+        key_share_groups: None,
         pq: false,
         legacy_versions: &[],
         headers: Some(EDGE101_HEADERS),
@@ -1078,7 +1132,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        priority_on_h1: false,
         cert_compression: BROTLI,
+        key_share_groups: None,
         pq: false,
         legacy_versions: &[],
         headers: Some(CHROME99_ANDROID_HEADERS),
@@ -1122,7 +1178,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: true,
+        priority_on_h1: false,
         cert_compression: BROTLI,
+        key_share_groups: None,
         pq: false,
         legacy_versions: &[],
         headers: Some(CHROME120_HEADERS),
@@ -1161,7 +1219,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: true,
+        priority_on_h1: false,
         cert_compression: BROTLI,
+        key_share_groups: None,
         pq: true,
         legacy_versions: &[],
         headers: Some(CHROME131_HEADERS),
@@ -1199,7 +1259,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: true,
+        priority_on_h1: false,
         cert_compression: BROTLI,
+        key_share_groups: None,
         pq: false,
         legacy_versions: &[],
         headers: Some(CHROME131_ANDROID_HEADERS),
@@ -1240,7 +1302,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: true,
+        priority_on_h1: false,
         cert_compression: BROTLI,
+        key_share_groups: None,
         pq: true,
         legacy_versions: &[],
         headers: Some(CHROME136_HEADERS),
@@ -1276,7 +1340,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: false,
+        priority_on_h1: true,
         cert_compression: &[1, 2],
+        key_share_groups: Some(FIREFOX_KEY_SHARE_GROUPS),
         pq: true,
         legacy_versions: &[],
         headers: Some(FIREFOX135_HEADERS),
@@ -1310,7 +1376,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: false,
+        priority_on_h1: true,
         cert_compression: &[1, 2],
+        key_share_groups: Some(FIREFOX_KEY_SHARE_GROUPS),
         pq: true,
         legacy_versions: &[],
         headers: Some(FIREFOX144_HEADERS),
@@ -1344,8 +1412,10 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        priority_on_h1: false,
         // No `compress_certificate`: the wrapper advertises none.
         cert_compression: &[],
+        key_share_groups: None,
         pq: false,
         legacy_versions: &[0x0302, 0x0301],
         headers: Some(SAFARI153_HEADERS),
@@ -1379,11 +1449,13 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        priority_on_h1: false,
         cert_compression: &[1],
+        key_share_groups: None,
         pq: false,
         legacy_versions: &[0x0302, 0x0301],
         headers: Some(SAFARI184_IOS_HEADERS),
-        h2: Some(&SAFARI18_H2),
+        h2: Some(&SAFARI184_IOS_H2),
     },
     // Safari 26.0 on macOS, as `curl_safari260` sends it: the first Safari in
     // the bundle that offers the hybrid group, and the first client of any
@@ -1416,7 +1488,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         // No padding either, and the hello says so.
         padding_to: None,
         grease: true,
+        priority_on_h1: false,
         cert_compression: &[1],
+        key_share_groups: None,
         pq: true,
         // Safari 26 offers 1.3 and 1.2 only, where 15.5–18.4 still listed 1.1
         // and 1.0 behind them.
@@ -1451,7 +1525,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: Some(512),
         grease: true,
+        priority_on_h1: false,
         cert_compression: &[1],
+        key_share_groups: None,
         pq: false,
         legacy_versions: &[],
         headers: Some(SAFARI260_IOS_HEADERS),
@@ -1495,7 +1571,9 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         alpn: H2_AND_HTTP11,
         padding_to: None,
         grease: false,
+        priority_on_h1: true,
         cert_compression: &[],
+        key_share_groups: Some(TOR_KEY_SHARE_GROUPS),
         pq: false,
         legacy_versions: &[],
         headers: Some(TOR_HEADERS),
@@ -1551,6 +1629,7 @@ impl TlsShape {
         Some(ClientHelloProfile {
             cipher_suites: Some(self.ciphers.to_vec()),
             groups: Some(self.groups.to_vec()),
+            key_share_groups: self.key_share_groups.map(|groups| groups.to_vec()),
             signature_schemes: Some(self.sig_algs.to_vec()),
             alpn: Some(self.alpn.iter().map(|protocol| protocol.to_vec()).collect()),
             extension_order: Some(self.ext_order.to_vec()),

@@ -54,6 +54,23 @@ pub struct ClientHelloProfile {
     /// `supported_groups` entries in wire order.
     pub groups: Option<Vec<u16>>,
 
+    /// The groups a key share is sent for, in wire order — the shape a browser's
+    /// `--tls-key-shares-limit` produces.
+    ///
+    /// `None`, the default, is rustls's own choice: one share for the first
+    /// usable group (the resumption hint's when there is one) plus, when that
+    /// group is hybrid, the component's share. A list overrides both: one
+    /// exchange per named group, each contributing its own share and — for a
+    /// hybrid group — its component's share directly afterwards, unless the list
+    /// names that component as a group of its own. So `[X25519MLKEM768,
+    /// secp256r1]` sends three shares, which is what `curl_firefox133`'s
+    /// `--tls-key-shares-limit 3` puts on the wire.
+    ///
+    /// Every group named here has to be one the provider serves and one this
+    /// handshake offers (`groups`); the handshake fails otherwise rather than
+    /// sending a share the client cannot complete.
+    pub key_share_groups: Option<Vec<u16>>,
+
     /// `signature_algorithms` entries in wire order.
     pub signature_schemes: Option<Vec<u16>>,
 

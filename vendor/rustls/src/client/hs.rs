@@ -56,7 +56,7 @@ struct ExpectServerHello {
     //
     // If this is `None` then we do not support early data.
     early_data_key_schedule: Option<KeyScheduleEarly>,
-    offered_key_share: Option<Box<dyn ActiveKeyExchange>>,
+    offered_key_shares: Vec<Box<dyn ActiveKeyExchange>>,
     suite: Option<SupportedCipherSuite>,
     ech_state: Option<EchState>,
 }
@@ -153,14 +153,14 @@ impl ClientHelloInput {
             transcript_buffer.set_client_auth_enabled();
         }
 
-        let key_share = if self.config.needs_key_share() {
-            Some(tls13::initial_key_share(
+        let key_shares = if self.config.needs_key_share() {
+            tls13::initial_key_shares(
                 &self.config,
                 &self.server_name,
                 &mut cx.common.kx_state,
-            )?)
+            )?
         } else {
-            None
+            Vec::new()
         };
 
         let ech_state = match self.config.ech_mode.as_ref() {
@@ -173,7 +173,7 @@ impl ClientHelloInput {
         emit_client_hello_for_retry(
             transcript_buffer,
             None,
-            key_share,
+            key_shares,
             extra_exts,
             None,
             self,
@@ -187,11 +187,12 @@ impl ClientHelloInput {
 /// a HelloRetryRequest.
 ///
 /// `retryreq` and `suite` are `None` if this is the initial
-/// ClientHello.
+/// ClientHello. `key_shares` carries one exchange per share the profile asks
+/// for; its first entry is the group rustls would have picked on its own.
 fn emit_client_hello_for_retry(
     mut transcript_buffer: HandshakeHashBuffer,
     retryreq: Option<&HelloRetryRequest>,
-    key_share: Option<Box<dyn ActiveKeyExchange>>,
+    key_shares: Vec<Box<dyn ActiveKeyExchange>>,
     extra_exts: ClientExtensionsInput<'static>,
     suite: Option<SupportedCipherSuite>,
     mut input: ClientHelloInput,
@@ -285,26 +286,35 @@ fn emit_client_hello_for_retry(
         (None, false) => None,
     };
 
-    if let Some(key_share) = &key_share {
+    if !key_shares.is_empty() {
         debug_assert!(offers_tls13);
-        let mut shares = vec![KeyShareEntry::new(key_share.group(), key_share.pub_key())];
+        let mut shares = Vec::new();
+        // One entry per exchange, and a hybrid group's component directly after
+        // it — unless the profile names that component as a group of its own, in
+        // which case its own exchange carries the share.
+        for key_share in &key_shares {
+            shares.push(KeyShareEntry::new(key_share.group(), key_share.pub_key()));
 
-        if !retryreq
-            .map(|rr| rr.key_share.is_some())
-            .unwrap_or_default()
-        {
+            if retryreq
+                .map(|rr| rr.key_share.is_some())
+                .unwrap_or_default()
+            {
+                // A HRR that names a group asks for that one alone.
+                continue;
+            }
+
             // Only for the initial client hello, or a HRR that does not specify a kx group,
             // see if we can send a second KeyShare for "free".  We only do this if the same
             // algorithm is also supported separately by our provider for this version
             // (`find_kx_group` looks that up).
-            if let Some((component_group, component_share)) =
-                key_share
-                    .hybrid_component()
-                    .filter(|(group, _)| {
-                        config
-                            .find_kx_group(*group, ProtocolVersion::TLSv1_3)
-                            .is_some()
-                    })
+            if let Some((component_group, component_share)) = key_share
+                .hybrid_component()
+                .filter(|(group, _)| {
+                    config
+                        .find_kx_group(*group, ProtocolVersion::TLSv1_3)
+                        .is_some()
+                })
+                .filter(|(group, _)| !key_shares.iter().any(|other| other.group() == *group))
             {
                 shares.push(KeyShareEntry::new(component_group, component_share));
             }
@@ -560,7 +570,7 @@ fn emit_client_hello_for_retry(
         input,
         transcript_buffer,
         early_data_key_schedule,
-        offered_key_share: key_share,
+        offered_key_shares: key_shares,
         suite,
         ech_state,
     };
@@ -872,7 +882,7 @@ impl State<ClientConnectionData> for ExpectServerHello {
                     transcript,
                     self.early_data_key_schedule,
                     // We always send a key share when TLS 1.3 is enabled.
-                    self.offered_key_share.unwrap(),
+                    self.offered_key_shares,
                     &m,
                     self.ech_state,
                     self.input,
@@ -913,21 +923,28 @@ impl ExpectServerHelloOrHelloRetryRequest {
         cx.common.check_aligned_handshake()?;
 
         // We always send a key share when TLS 1.3 is enabled.
-        let offered_key_share = self.next.offered_key_share.unwrap();
+        let offered_key_shares = self.next.offered_key_shares;
 
         // A retry request is illegal if it contains no cookie and asks for
         // retry of a group we already sent.
         let config = &self.next.input.config;
 
         if let (None, Some(req_group)) = (&hrr.cookie, hrr.key_share) {
-            let offered_hybrid = offered_key_share
-                .hybrid_component()
-                .and_then(|(group_name, _)| {
-                    config.find_kx_group(group_name, ProtocolVersion::TLSv1_3)
-                })
-                .map(|skxg| skxg.name());
+            let offered = offered_key_shares.iter().any(|share| {
+                if share.group() == req_group {
+                    return true;
+                }
 
-            if req_group == offered_key_share.group() || Some(req_group) == offered_hybrid {
+                share
+                    .hybrid_component()
+                    .and_then(|(group_name, _)| {
+                        config.find_kx_group(group_name, ProtocolVersion::TLSv1_3)
+                    })
+                    .map(|skxg| skxg.name() == req_group)
+                    .unwrap_or_default()
+            });
+
+            if offered {
                 return Err({
                     cx.common.send_fatal_alert(
                         AlertDescription::IllegalParameter,
@@ -1055,8 +1072,19 @@ impl ExpectServerHelloOrHelloRetryRequest {
             cx.data.early_data.rejected();
         }
 
-        let key_share = match hrr.key_share {
-            Some(group) if group != offered_key_share.group() => {
+        let key_shares = match hrr.key_share {
+            // The group the server asks for is one we already sent — keep that
+            // exchange (a hybrid one when the request names its component) so the
+            // handshake can complete with it.
+            Some(group)
+                if offered_key_shares.iter().any(|share| {
+                    share.group() == group
+                        || share.hybrid_component().map(|(component, _)| component) == Some(group)
+                }) =>
+            {
+                offered_key_shares
+            }
+            Some(group) => {
                 let Some(skxg) = config.find_kx_group(group, ProtocolVersion::TLSv1_3) else {
                     return Err(cx.common.send_fatal_alert(
                         AlertDescription::IllegalParameter,
@@ -1065,15 +1093,15 @@ impl ExpectServerHelloOrHelloRetryRequest {
                 };
 
                 cx.common.kx_state = KxState::Start(skxg);
-                skxg.start()?
+                vec![skxg.start()?]
             }
-            _ => offered_key_share,
+            None => offered_key_shares,
         };
 
         emit_client_hello_for_retry(
             transcript_buffer,
             Some(hrr),
-            Some(key_share),
+            key_shares,
             self.extra_exts,
             Some(cs),
             self.next.input,

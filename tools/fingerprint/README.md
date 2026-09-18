@@ -69,26 +69,14 @@ These are deliberate. Anything *else* it reports is a bug.
 * **Permuted extension order.** Chrome 110 and later shuffle their extensions per
   connection; a profile has one order, so its JA3 is one sample of the
   distribution (JA4 hashes the sorted set and is stable).
-* **Compression list and key shares (Firefox family, Tor).** The build has no
-  zstd decompressor, so `compress_certificate` stops at `zlib, brotli`, and it
-  sends the shares it needs rather than the bundle's `--tls-key-shares-limit`
-  count (`firefox*`: 2 against 3, `tor145`: 1 against 3).
-* **`SETTINGS_ENABLE_CONNECT_PROTOCOL` (8) and `SETTINGS_NO_RFC7540_PRIORITIES`
-  (9).** Safari 18 names both and Safari 26 names `9:1`; neither h2 nor hyper
-  exposes them, so they are absent from the preface
-  (`vendor/h2/README-PATCH.md`).
-* **HTTP/1.1 header-name case.** Our requests put every name on the wire
-  lowercased — hyper's `HeaderName` is lowercase by construction — while the
-  bundle (and the browser the wrapper was written from) sends `Host`,
-  `User-Agent`, `Accept`, `Accept-Encoding`, `Sec-Fetch-*` and friends in their
-  original case over h1. The wrapper is a `-H` list and curl sends the names as
-  written; only the profiles whose wrapper is written in lowercase (`safari18`,
-  `safari184ios`, `safari260`, `safari260ios`, `firefox144`) match us. Over h2
-  this cannot show: RFC 9113 lowercases every name.
-* **`priority` over h1.** `<profile>18`-era records send `priority: u=0, i` over
-  h1 (the wrapper names it, and the fork's h2 capture has it), but curl itself
-  drops it on an h1 connection: the bundle's h1 request is 18 bytes shorter. Over
-  h2 both send it.
+* **Compression list (Firefox family, Tor).** The build has no zstd decompressor,
+  so `compress_certificate` stops at `zlib, brotli` where the bundle sends
+  `zlib, brotli, zstd`.
+* **Tor's third key share, against the capture only.** `curl_tor145` passes
+  `--tls-key-shares-limit 3`, so the bundle and our record send X25519, P-256 and
+  P-521; the fork's capture of Tor 14.5 itself stops after P-256. The `captures`
+  stage reports that difference — the record follows its wrapper, which is what
+  it names.
 
 ## Requirements
 

@@ -46,7 +46,7 @@ probe in this project is built on (Rule 3).
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 0.4.19 — **513 lines across 6
+`PATCH.diff` is the exact diff against pristine 0.4.19 — **742 lines across 6
 files**. It applies to a pristine copy with `patch -p1` (`patch -p1 --dry-run`
 was run against the crates.io source, and the applied result was compared with
 this tree byte for byte).
@@ -73,6 +73,15 @@ this tree byte for byte).
   list but never drop a setting from it) and `client::Builder::settings_order`
   exposes it. The encoder, not the decoder, is affected, and an empty order — the
   default — bytes the frame exactly as before.
+* **Two settings the client could not send.** `SETTINGS_ENABLE_CONNECT_PROTOCOL`
+  (8) was already decoded and carried a *server* builder setter; the client gets
+  `client::Builder::enable_connect_protocol()` for the preface Safari 18 sends.
+  `SETTINGS_NO_RFC7540_PRIORITIES` (9, RFC 9218 §2.1) is new end to end — field,
+  `Setting::NoRfc7540Priorities`, decode arm, encoder, `Debug` — with
+  `client::Builder::no_rfc7540_priorities()` for Safari 18 and 26. Both write
+  `1`, both are shape only: this client issues no extended CONNECT and honours
+  the priority information it already sends. Neither setting is written unless
+  the caller asks, so every existing preface is unchanged.
 
 `hyper` needs no patch **for the request shape**: its h2 client rebuilds the
 outgoing request with `http::Request::from_parts(head, ())` and forwards the

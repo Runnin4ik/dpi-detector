@@ -427,6 +427,26 @@ where
         self
     }
 
+    /// Sets whether the preface advertises `SETTINGS_ENABLE_CONNECT_PROTOCOL`.
+    ///
+    /// Default is `None`, which omits the setting. `Some(true)` sends `8:1`, the
+    /// value Safari 18 announces; no request this client sends uses extended
+    /// CONNECT, so the setting is shape only.
+    pub fn enable_connect_protocol(&mut self, enabled: impl Into<Option<bool>>) -> &mut Self {
+        self.h2_builder.enable_connect_protocol = enabled.into();
+        self
+    }
+
+    /// Sets whether the preface advertises `SETTINGS_NO_RFC7540_PRIORITIES`.
+    ///
+    /// Default is `None`, which omits the setting. `Some(true)` sends `9:1`, the
+    /// value Safari 18 and 26 announce; it is independent of the PRIORITY flag a
+    /// request's `HEADERS` frame may still carry.
+    pub fn no_rfc7540_priorities(&mut self, no_priorities: impl Into<Option<bool>>) -> &mut Self {
+        self.h2_builder.no_rfc7540_priorities = no_priorities.into();
+        self
+    }
+
     /// Sets the header table size.
     ///
     /// This setting informs the peer of the maximum size of the header compression

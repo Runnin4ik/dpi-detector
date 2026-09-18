@@ -21,6 +21,7 @@ use crate::crypto::{ActiveKeyExchange, SharedSecret};
 use crate::enums::{
     AlertDescription, ContentType, HandshakeType, ProtocolVersion, SignatureScheme,
 };
+use crate::msgs::enums::NamedGroup;
 use crate::error::{Error, InvalidMessage, PeerIncompatible, PeerMisbehaved};
 use crate::hash_hs::{HandshakeHash, HandshakeHashBuffer};
 use crate::log::{debug, trace, warn};
@@ -74,7 +75,7 @@ pub(super) fn handle_server_hello(
     suite: &'static Tls13CipherSuite,
     mut transcript: HandshakeHash,
     early_data_key_schedule: Option<KeyScheduleEarly>,
-    our_key_share: Box<dyn ActiveKeyExchange>,
+    our_key_shares: Vec<Box<dyn ActiveKeyExchange>>,
     server_hello_msg: &Message<'_>,
     ech_state: Option<EchState>,
     input: ClientHelloInput,
@@ -108,7 +109,7 @@ pub(super) fn handle_server_hello(
         _ => None,
     };
 
-    let our_key_share = KeyExchangeChoice::new(&config, cx, our_key_share, their_key_share)
+    let our_key_share = KeyExchangeChoice::new(&config, cx, our_key_shares, their_key_share)
         .map_err(|_| {
             cx.common.send_fatal_alert(
                 AlertDescription::IllegalParameter,
@@ -256,19 +257,38 @@ enum KeyExchangeChoice {
 impl KeyExchangeChoice {
     /// Decide between `our_key_share` or `our_key_share.hybrid_component()`
     /// based on the selection of the server expressed in `their_key_share`.
+    ///
+    /// Every share the client sent is a candidate: the server names one group,
+    /// and the exchange that owns it — or whose hybrid component is it — is the
+    /// one that completes.
     fn new(
         config: &Arc<ClientConfig>,
         cx: &mut ClientContext<'_>,
-        our_key_share: Box<dyn ActiveKeyExchange>,
+        our_key_shares: Vec<Box<dyn ActiveKeyExchange>>,
         their_key_share: &KeyShareEntry,
     ) -> Result<Self, ()> {
-        if our_key_share.group() == their_key_share.group {
-            return Ok(Self::Whole(our_key_share));
+        let mut chosen = None;
+
+        for key_share in our_key_shares {
+            if key_share.group() == their_key_share.group {
+                return Ok(Self::Whole(key_share));
+            }
+
+            let is_component = key_share
+                .hybrid_component()
+                .map(|(component, _)| component == their_key_share.group)
+                .unwrap_or_default();
+
+            if is_component && chosen.is_none() {
+                chosen = Some(key_share);
+            }
         }
 
-        let (component_group, _) = our_key_share
-            .hybrid_component()
-            .ok_or(())?;
+        let Some(key_share) = chosen else {
+            return Err(());
+        };
+
+        let (component_group, _) = key_share.hybrid_component().ok_or(())?;
 
         if component_group != their_key_share.group {
             return Err(());
@@ -281,7 +301,7 @@ impl KeyExchangeChoice {
             .ok_or(())?;
         cx.common.kx_state = KxState::Start(actual_skxg);
 
-        Ok(Self::Component(our_key_share))
+        Ok(Self::Component(key_share))
     }
 
     fn complete(self, peer_pub_key: &[u8]) -> Result<SharedSecret, Error> {
@@ -304,6 +324,54 @@ fn validate_server_hello(
     }
 
     Ok(())
+}
+
+/// The key exchanges this handshake offers, one per key share.
+///
+/// The profile's [`ClientHelloProfile::key_share_groups`] replaces rustls's own
+/// choice — one share for the resumed group or the provider's first, which is
+/// what a profile that names none keeps. A profile that names groups the
+/// provider cannot serve, or that the handshake does not offer, is a
+/// configuration error the handshake reports rather than a shape it silently
+/// drops.
+pub(super) fn initial_key_shares(
+    config: &ClientConfig,
+    server_name: &ServerName<'_>,
+    kx_state: &mut KxState,
+) -> Result<Vec<Box<dyn ActiveKeyExchange>>, Error> {
+    let Some(groups) = config
+        .hello_profile
+        .as_ref()
+        .and_then(|profile| profile.key_share_groups.as_ref())
+    else {
+        return Ok(vec![initial_key_share(config, server_name, kx_state)?]);
+    };
+
+    let mut shares = Vec::with_capacity(groups.len());
+
+    for (index, group) in groups.iter().enumerate() {
+        let skxg = config
+            .find_kx_group(NamedGroup::from(*group), ProtocolVersion::TLSv1_3)
+            .ok_or_else(|| {
+                Error::General(alloc::format!(
+                    "key_share_groups names group {group:#06x}, which this provider does not serve"
+                ))
+            })?;
+
+        if index == 0 {
+            *kx_state = KxState::Start(skxg);
+        }
+
+        shares.push(skxg.start()?);
+    }
+
+    if shares.is_empty() {
+        return Err(Error::General(
+            "key_share_groups is empty: a TLS 1.3 handshake needs at least one share".into(),
+        ));
+    }
+
+    Ok(shares)
 }
 
 pub(super) fn initial_key_share(

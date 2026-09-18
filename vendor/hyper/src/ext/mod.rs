@@ -156,9 +156,17 @@ impl fmt::Debug for Protocol {
 /// ```
 ///
 /// [`preserve_header_case`]: /client/struct.Client.html#method.preserve_header_case
+///
+/// # Writing a request with a client's own casing
+///
+/// A client that has to write a name the way some other program writes it —
+/// `TE` rather than `Te`, `sec-ch-ua` lowercase next to `Sec-Fetch-Site` — puts
+/// one here, in the request's extensions, and the h1 encoder writes the
+/// spellings it finds, falling back to the lowercase `HeaderName` for a name the
+/// map does not mention.
 #[cfg(all(any(feature = "client", feature = "server"), feature = "http1"))]
 #[derive(Clone, Debug)]
-pub(crate) struct HeaderCaseMap(HeaderMap<Bytes>);
+pub struct HeaderCaseMap(HeaderMap<Bytes>);
 
 #[cfg(all(any(feature = "client", feature = "server"), feature = "http1"))]
 impl HeaderCaseMap {
@@ -179,8 +187,10 @@ impl HeaderCaseMap {
         self.0.get_all(name).into_iter()
     }
 
+    /// An empty map: every header name goes out as the lowercase
+    /// `http::HeaderName` it is.
     #[cfg(any(feature = "client", feature = "server"))]
-    pub(crate) fn default() -> Self {
+    pub fn default() -> Self {
         Self(HeaderMap::default())
     }
 
@@ -189,8 +199,9 @@ impl HeaderCaseMap {
         self.0.insert(name, orig);
     }
 
+    /// Records the spelling `orig` was written with, under its lowercase name.
     #[cfg(any(feature = "client", feature = "server"))]
-    pub(crate) fn append<N>(&mut self, name: N, orig: Bytes)
+    pub fn append<N>(&mut self, name: N, orig: Bytes)
     where
         N: IntoHeaderName,
     {

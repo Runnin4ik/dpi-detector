@@ -23,7 +23,8 @@ use std::time::Duration;
 
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
-use hyper::header::HOST;
+use hyper::ext::HeaderCaseMap;
+use hyper::header::{HeaderName, HOST};
 use hyper::{Method, Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use parking_lot::Mutex;
@@ -71,6 +72,9 @@ pub struct HttpRequest<'a> {
     pub path: &'a str,
     /// Sent in this order, minus the connection-specific ones HTTP/2 rejects.
     pub headers: Vec<(&'a str, String)>,
+    /// Whether the client the profile copies sends `priority` over HTTP/1.1 as
+    /// well ([`HttpIdentity::priority_on_h1`]); HTTP/2 always carries it.
+    pub priority_on_h1: bool,
 }
 
 /// The headers a probe sends: the profile's identity followed by the extras the
@@ -150,6 +154,8 @@ impl HttpSender {
                     .max_frame_size(h2.max_frame_size)
                     .max_header_list_size(h2.max_header_list_size)
                     .enable_push(h2.enable_push)
+                    .enable_connect_protocol(h2.enable_connect_protocol)
+                    .no_rfc7540_priorities(h2.no_rfc7540_priorities)
                     .settings_order(h2.settings_order.iter().copied())
                     .max_concurrent_streams(h2.max_concurrent_streams);
             }
@@ -202,8 +208,10 @@ impl HttpSender {
 /// Builds the wire request for one of the two protocols.
 ///
 /// The shape an h2 profile pinned is attached by [`HttpSender::send`], which is
-/// where the protocol is known.
+/// where the protocol is known; the h1 header casing is attached here, because
+/// it is a property of the message.
 fn build_request(req: HttpRequest<'_>, h2: bool) -> Request<Full<Bytes>> {
+    let case_map = (!h2).then(|| header_case_map(&req));
     let mut builder = Request::builder().method(req.method);
     if h2 {
         builder = builder.uri(format!("https://{}{}", req.host, req.path));
@@ -214,11 +222,56 @@ fn build_request(req: HttpRequest<'_>, h2: bool) -> Request<Full<Bytes>> {
         if h2 && is_connection_specific(name) {
             continue;
         }
+        // `Priority` is an h2-only header for the clients curl puts it there
+        // for and an ordinary one for the Firefox family and Tor, which send it
+        // over h1 as well — the profile carries the measurement
+        // (`TlsShape::priority_on_h1`, taken from the bundle's own h1 request).
+        if !h2 && !req.priority_on_h1 && name.eq_ignore_ascii_case("priority") {
+            continue;
+        }
+        // RFC 9113 §8.2.2 allows `TE` on an h2 request with `trailers` as its
+        // only value, and curl normalizes the wrapper's `TE: Trailers` for h2 as
+        // well: the bundle's own request has `te: trailers` there and
+        // `TE: Trailers` over h1. hyper drops the header rather than rewriting
+        // it, so the h2 spelling is ours to make.
+        if h2 && name.eq_ignore_ascii_case("te") {
+            builder = builder.header(name, "trailers");
+            continue;
+        }
         builder = builder.header(name, value);
     }
     // Method, URI and every header above are already-validated constants and
     // caller strings, so the request cannot fail to build.
-    builder.body(Full::new(Bytes::new())).expect("valid request")
+    let mut request = builder.body(Full::new(Bytes::new())).expect("valid request");
+    if let Some(case_map) = case_map {
+        request.extensions_mut().insert(case_map);
+    }
+    request
+}
+
+/// The spellings an identity writes its header names with, for hyper's h1
+/// encoder.
+///
+/// `http::HeaderName` is lowercase, so a request built from a `HeaderMap` goes
+/// out lowercased — and no browser writes `Sec-Fetch-Site`, `TE` or `Accept-
+/// Encoding` that way over HTTP/1.1. hyper's encoder writes the spelling this
+/// map holds for a name (and the lowercase name for one it does not mention), so
+/// every spelling the identity carries is recorded, `Host` included: the builder
+/// adds that one, not the profile, and curl capitalizes it.
+///
+/// HTTP/2 needs none of this: RFC 9113 §8.2.1 requires lowercase field names,
+/// and the h2 encoder writes them lowercased whatever this map says.
+fn header_case_map(req: &HttpRequest<'_>) -> HeaderCaseMap {
+    let mut map = HeaderCaseMap::default();
+    map.append(HOST, Bytes::from_static(b"Host"));
+    for (name, _) in &req.headers {
+        // `HeaderName::from_bytes` lowercases the key the encoder looks up; the
+        // bytes recorded beside it are the spelling the client writes.
+        if let Ok(key) = HeaderName::from_bytes(name.as_bytes()) {
+            map.append(key, Bytes::copy_from_slice(name.as_bytes()));
+        }
+    }
+    map
 }
 
 /// The headers RFC 7540 §8.1.2.2 forbids on an HTTP/2 request: sending one is a
@@ -410,16 +463,18 @@ pub(crate) async fn check_http(
         // The headers are the profile's identity, so a probe that looks like
         // `curl_chrome107` at the TLS layer looks like it here too.
         let user_agent = cfg.user_agent_for(fingerprint);
+        let identity = http_identity(fingerprint);
         let req = HttpRequest {
             method: Method::GET,
             host: domain,
             path: "/",
             headers: request_headers(
-                &http_identity(fingerprint),
+                &identity,
                 user_agent,
                 [("Connection", "close".to_string())],
                 identity_encoding,
             ),
+            priority_on_h1: identity.priority_on_h1,
         };
 
         *stage.lock() = "sending_data".to_string();
@@ -509,6 +564,7 @@ mod tests {
                 ("accept-encoding", "identity".to_string()),
                 ("connection", "close".to_string()),
             ],
+            priority_on_h1: false,
         }
     }
 
@@ -530,5 +586,54 @@ mod tests {
         assert_eq!(request.uri().to_string(), "/x");
         assert_eq!(request.headers().get(HOST).expect("host"), "example.com");
         assert_eq!(request.headers().get("connection").expect("close"), "close");
+    }
+
+    /// The h1 request carries the spellings its identity writes, and the h2 one
+    /// carries none: RFC 9113 lowercases every field name, so a case map on an
+    /// h2 request would be dead weight. hyper reads the map from the request's
+    /// extensions (`vendor/hyper/src/proto/h1/role.rs`, `Client::encode`).
+    #[test]
+    fn only_the_h1_request_carries_the_name_spellings() {
+        let mut chrome = request();
+        chrome.headers.push(("Sec-Fetch-Site", "none".to_string()));
+        assert!(build_request(chrome, false).extensions().get::<HeaderCaseMap>().is_some());
+        let mut chrome = request();
+        chrome.headers.push(("Sec-Fetch-Site", "none".to_string()));
+        assert!(build_request(chrome, true).extensions().get::<HeaderCaseMap>().is_none());
+    }
+
+    /// `priority` goes out on h1 only for a client that sends it there: the
+    /// bundle's own h1 request carries it for Firefox and Tor and not for
+    /// Chrome, Safari or Edge.
+    #[test]
+    fn priority_is_h1_only_for_the_clients_that_send_it_there() {
+        let with_priority = |on_h1: bool| {
+            let mut req = request();
+            req.priority_on_h1 = on_h1;
+            req.headers.push(("Priority", "u=0, i".to_string()));
+            req
+        };
+        let kept = build_request(with_priority(true), false);
+        assert_eq!(kept.headers().get("priority").expect("kept on h1"), "u=0, i");
+        let dropped = build_request(with_priority(false), false);
+        assert!(dropped.headers().get("priority").is_none(), "h2-only for this client");
+        let h2 = build_request(with_priority(false), true);
+        assert_eq!(h2.headers().get("priority").expect("always on h2"), "u=0, i");
+    }
+
+    /// `TE` travels as the client writes it over h1 and as RFC 9113 §8.2.2
+    /// allows over h2 — `trailers`, which is what curl puts there too; hyper
+    /// drops the header rather than rewriting a value it cannot send.
+    #[test]
+    fn te_keeps_its_spelling_on_h1_and_normalizes_on_h2() {
+        let with_te = || {
+            let mut req = request();
+            req.headers.push(("TE", "Trailers".to_string()));
+            req
+        };
+        let h1 = build_request(with_te(), false);
+        assert_eq!(h1.headers().get("te").expect("kept"), "Trailers");
+        let h2 = build_request(with_te(), true);
+        assert_eq!(h2.headers().get("te").expect("kept"), "trailers");
     }
 }

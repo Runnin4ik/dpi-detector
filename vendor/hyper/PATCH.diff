@@ -1,7 +1,7 @@
-diff -r a/src/client/conn/http2.rs b/src/client/conn/http2.rs
---- a/src/client/conn/http2.rs	2026-09-14 15:08:19.629575800 +0300
-+++ b/src/client/conn/http2.rs	2026-09-14 15:08:19.830032200 +0300
-@@ -395,9 +395,35 @@
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/conn/http2.rs b/src/client/conn/http2.rs
+--- a/src/client/conn/http2.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/client/conn/http2.rs	2026-09-18 12:57:01.529300400 +0300
+@@ -395,9 +395,55 @@
  
      /// Sets the max size of received header frames.
      ///
@@ -37,13 +37,78 @@ diff -r a/src/client/conn/http2.rs b/src/client/conn/http2.rs
 +        order: impl IntoIterator<Item = u16>,
 +    ) -> &mut Self {
 +        self.h2_builder.settings_order = order.into_iter().collect();
++        self
++    }
++
++    /// Sets whether the preface advertises `SETTINGS_ENABLE_CONNECT_PROTOCOL`.
++    ///
++    /// Default is `None`, which omits the setting. `Some(true)` sends `8:1`, the
++    /// value Safari 18 announces; no request this client sends uses extended
++    /// CONNECT, so the setting is shape only.
++    pub fn enable_connect_protocol(&mut self, enabled: impl Into<Option<bool>>) -> &mut Self {
++        self.h2_builder.enable_connect_protocol = enabled.into();
++        self
++    }
++
++    /// Sets whether the preface advertises `SETTINGS_NO_RFC7540_PRIORITIES`.
++    ///
++    /// Default is `None`, which omits the setting. `Some(true)` sends `9:1`, the
++    /// value Safari 18 and 26 announce; it is independent of the PRIORITY flag a
++    /// request's `HEADERS` frame may still carry.
++    pub fn no_rfc7540_priorities(&mut self, no_priorities: impl Into<Option<bool>>) -> &mut Self {
++        self.h2_builder.no_rfc7540_priorities = no_priorities.into();
          self
      }
  
-diff -r a/src/proto/h2/client.rs b/src/proto/h2/client.rs
---- a/src/proto/h2/client.rs	2026-09-14 15:08:19.709956800 +0300
-+++ b/src/proto/h2/client.rs	2026-09-14 15:08:19.858809700 +0300
-@@ -67,7 +67,14 @@
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/ext/mod.rs b/src/ext/mod.rs
+--- a/src/ext/mod.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/ext/mod.rs	2026-09-18 13:02:39.698339100 +0300
+@@ -156,9 +156,17 @@
+ /// ```
+ ///
+ /// [`preserve_header_case`]: /client/struct.Client.html#method.preserve_header_case
++///
++/// # Writing a request with a client's own casing
++///
++/// A client that has to write a name the way some other program writes it —
++/// `TE` rather than `Te`, `sec-ch-ua` lowercase next to `Sec-Fetch-Site` — puts
++/// one here, in the request's extensions, and the h1 encoder writes the
++/// spellings it finds, falling back to the lowercase `HeaderName` for a name the
++/// map does not mention.
+ #[cfg(all(any(feature = "client", feature = "server"), feature = "http1"))]
+ #[derive(Clone, Debug)]
+-pub(crate) struct HeaderCaseMap(HeaderMap<Bytes>);
++pub struct HeaderCaseMap(HeaderMap<Bytes>);
+ 
+ #[cfg(all(any(feature = "client", feature = "server"), feature = "http1"))]
+ impl HeaderCaseMap {
+@@ -179,8 +187,10 @@
+         self.0.get_all(name).into_iter()
+     }
+ 
++    /// An empty map: every header name goes out as the lowercase
++    /// `http::HeaderName` it is.
+     #[cfg(any(feature = "client", feature = "server"))]
+-    pub(crate) fn default() -> Self {
++    pub fn default() -> Self {
+         Self(HeaderMap::default())
+     }
+ 
+@@ -189,8 +199,9 @@
+         self.0.insert(name, orig);
+     }
+ 
++    /// Records the spelling `orig` was written with, under its lowercase name.
+     #[cfg(any(feature = "client", feature = "server"))]
+-    pub(crate) fn append<N>(&mut self, name: N, orig: Bytes)
++    pub fn append<N>(&mut self, name: N, orig: Bytes)
+     where
+         N: IntoHeaderName,
+     {
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/proto/h2/client.rs b/src/proto/h2/client.rs
+--- a/src/proto/h2/client.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/proto/h2/client.rs	2026-09-18 12:57:01.505244900 +0300
+@@ -67,7 +67,18 @@
      pub(crate) initial_stream_window_size: u32,
      pub(crate) initial_max_send_streams: usize,
      pub(crate) max_frame_size: Option<u32>,
@@ -56,10 +121,14 @@ diff -r a/src/proto/h2/client.rs b/src/proto/h2/client.rs
 +    // The order the initial SETTINGS frame lists its entries in; empty keeps the
 +    // h2 default, ascending by id. Safari sends `4` before `3`.
 +    pub(crate) settings_order: Vec<u16>,
++    // `Some(true)` sends `SETTINGS_ENABLE_CONNECT_PROTOCOL = 1`; Safari 18 does.
++    pub(crate) enable_connect_protocol: Option<bool>,
++    // `Some(true)` sends `SETTINGS_NO_RFC7540_PRIORITIES = 1`; Safari 18 and 26 do.
++    pub(crate) no_rfc7540_priorities: Option<bool>,
      pub(crate) keep_alive_interval: Option<Duration>,
      pub(crate) keep_alive_timeout: Duration,
      pub(crate) keep_alive_while_idle: bool,
-@@ -88,7 +95,9 @@
+@@ -88,7 +99,11 @@
              initial_stream_window_size: DEFAULT_STREAM_WINDOW,
              initial_max_send_streams: DEFAULT_INITIAL_MAX_SEND_STREAMS,
              max_frame_size: Some(DEFAULT_MAX_FRAME_SIZE),
@@ -67,10 +136,12 @@ diff -r a/src/proto/h2/client.rs b/src/proto/h2/client.rs
 +            max_header_list_size: Some(DEFAULT_MAX_HEADER_LIST_SIZE),
 +            enable_push: Some(false),
 +            settings_order: Vec::new(),
++            enable_connect_protocol: None,
++            no_rfc7540_priorities: None,
              keep_alive_interval: None,
              keep_alive_timeout: Duration::from_secs(20),
              keep_alive_while_idle: false,
-@@ -109,10 +118,17 @@
+@@ -109,10 +124,23 @@
          .initial_max_send_streams(config.initial_max_send_streams)
          .initial_window_size(config.initial_stream_window_size)
          .initial_connection_window_size(config.initial_conn_window_size)
@@ -87,6 +158,12 @@ diff -r a/src/proto/h2/client.rs b/src/proto/h2/client.rs
 +    }
 +    if !config.settings_order.is_empty() {
 +        builder.settings_order(config.settings_order.iter().copied());
++    }
++    if config.enable_connect_protocol == Some(true) {
++        builder.enable_connect_protocol();
++    }
++    if config.no_rfc7540_priorities == Some(true) {
++        builder.no_rfc7540_priorities();
 +    }
      if let Some(max) = config.max_frame_size {
          builder.max_frame_size(max);

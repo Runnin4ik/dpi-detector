@@ -75,6 +75,10 @@ pub(crate) struct Config {
     // The order the initial SETTINGS frame lists its entries in; empty keeps the
     // h2 default, ascending by id. Safari sends `4` before `3`.
     pub(crate) settings_order: Vec<u16>,
+    // `Some(true)` sends `SETTINGS_ENABLE_CONNECT_PROTOCOL = 1`; Safari 18 does.
+    pub(crate) enable_connect_protocol: Option<bool>,
+    // `Some(true)` sends `SETTINGS_NO_RFC7540_PRIORITIES = 1`; Safari 18 and 26 do.
+    pub(crate) no_rfc7540_priorities: Option<bool>,
     pub(crate) keep_alive_interval: Option<Duration>,
     pub(crate) keep_alive_timeout: Duration,
     pub(crate) keep_alive_while_idle: bool,
@@ -98,6 +102,8 @@ impl Default for Config {
             max_header_list_size: Some(DEFAULT_MAX_HEADER_LIST_SIZE),
             enable_push: Some(false),
             settings_order: Vec::new(),
+            enable_connect_protocol: None,
+            no_rfc7540_priorities: None,
             keep_alive_interval: None,
             keep_alive_timeout: Duration::from_secs(20),
             keep_alive_while_idle: false,
@@ -128,6 +134,12 @@ fn new_builder(config: &Config) -> Builder {
     }
     if !config.settings_order.is_empty() {
         builder.settings_order(config.settings_order.iter().copied());
+    }
+    if config.enable_connect_protocol == Some(true) {
+        builder.enable_connect_protocol();
+    }
+    if config.no_rfc7540_priorities == Some(true) {
+        builder.no_rfc7540_priorities();
     }
     if let Some(max) = config.max_frame_size {
         builder.max_frame_size(max);

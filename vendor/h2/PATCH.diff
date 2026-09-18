@@ -1,6 +1,130 @@
-diff -r a/src/client.rs b/src/client.rs
---- a/src/client.rs	2026-09-14 15:08:18.968915000 +0300
-+++ b/src/client.rs	2026-09-14 15:08:19.086810400 +0300
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/.github/FUNDING.yml b/.github/FUNDING.yml
+--- a/.github/FUNDING.yml	2006-07-24 04:21:28.000000000 +0300
++++ b/.github/FUNDING.yml	1970-01-01 03:00:00.000000000 +0300
+@@ -1 +0,0 @@
+-github: seanmonstar
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/.github/workflows/CI.yml b/.github/workflows/CI.yml
+--- a/.github/workflows/CI.yml	2006-07-24 04:21:28.000000000 +0300
++++ b/.github/workflows/CI.yml	1970-01-01 03:00:00.000000000 +0300
+@@ -1,115 +0,0 @@
+-name: CI
+-on:
+-  pull_request:
+-  push:
+-    branches:
+-      - master
+-env:
+-  RUST_BACKTRACE: 1
+-
+-jobs:
+-  style:
+-    name: Check Style
+-    runs-on: ubuntu-latest
+-    steps:
+-      - name: Checkout
+-        uses: actions/checkout@v6
+-
+-      - name: Install Rust
+-        uses: dtolnay/rust-toolchain@stable
+-        with:
+-          components: rustfmt
+-
+-      - run: cargo fmt --all --check
+-
+-  test:
+-    name: Test
+-    needs: [style]
+-    runs-on: ubuntu-latest
+-    env:
+-      RUSTFLAGS: -Dwarnings
+-    strategy:
+-      matrix:
+-        rust:
+-          - nightly
+-          - beta
+-          - stable
+-    steps:
+-      - name: Checkout
+-        uses: actions/checkout@v6
+-
+-      - name: Install Rust (${{ matrix.rust }})
+-        uses: dtolnay/rust-toolchain@master
+-        with:
+-          toolchain: ${{ matrix.rust }}
+-
+-      - name: Install libssl-dev
+-        run: sudo apt-get update && sudo apt-get install libssl-dev
+-      - name: Build without unstable flag
+-        run: cargo build
+-
+-      - name: Check with unstable flag
+-        run: cargo check --features unstable
+-
+-      - name: Run lib tests and doc tests
+-        run: cargo test
+-
+-      - name: Run integration tests
+-        run: cargo test -p h2-tests
+-
+-      - name: Run h2spec
+-        run: ./ci/h2spec.sh
+-        if: matrix.rust == 'stable'
+-
+-  #clippy_check:
+-  #  runs-on: ubuntu-latest
+-  #  steps:
+-  #    - uses: actions/checkout@v6
+-  #    - name: Run Clippy
+-  #      run: cargo clippy --all-targets --all-features
+-
+-  msrv:
+-    name: Check MSRV
+-    needs: [style]
+-
+-    runs-on: ubuntu-latest
+-
+-    steps:
+-      - name: Checkout
+-        uses: actions/checkout@v6
+-
+-      - name: Get MSRV from package metadata
+-        id: msrv
+-        run: grep rust-version Cargo.toml | cut -d '"' -f2 | sed 's/^/version=/' >> $GITHUB_OUTPUT
+-
+-      - name: Install Rust (${{ steps.metadata.outputs.msrv }})
+-        id: msrv-toolchain
+-        uses: dtolnay/rust-toolchain@master
+-        with:
+-          toolchain: ${{ steps.msrv.outputs.version }}
+-
+-      - name: Pin some dependencies for MSRV
+-        run: |
+-          cargo update --package tokio-util --precise 0.7.11
+-          cargo update --package tokio --precise 1.38.1
+-          cargo update --package indexmap --precise 2.11.3
+-          cargo update --package hashbrown --precise 0.15.0
+-          cargo update --package once_cell --precise 1.20.3
+-          cargo update --package tracing --precise 0.1.41
+-          cargo update --package tracing-subscriber --precise 0.3.19
+-          cargo update --package tracing-core --precise 0.1.33
+-          cargo update --package itoa --precise 1.0.15
+-
+-
+-      - run: cargo check -p h2
+-
+-  minimal-versions:
+-    runs-on: ubuntu-latest
+-    needs: [style]
+-    steps:
+-      - uses: actions/checkout@v6
+-      - uses: dtolnay/rust-toolchain@nightly
+-      - uses: dtolnay/rust-toolchain@stable
+-      - uses: taiki-e/install-action@cargo-hack
+-      - uses: taiki-e/install-action@cargo-minimal-versions
+-      - run: cargo minimal-versions --ignore-private check
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client.rs b/src/client.rs
+--- a/src/client.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/client.rs	2026-09-18 12:56:47.986762400 +0300
 @@ -138,6 +138,11 @@
  use crate::codec::{Codec, SendError, UserError};
  use crate::ext::Protocol;
@@ -13,7 +137,7 @@ diff -r a/src/client.rs b/src/client.rs
  use crate::proto::{self, Error};
  use crate::{FlowControl, PingPong, RecvStream, SendStream};
  
-@@ -1118,6 +1123,29 @@
+@@ -1118,6 +1123,65 @@
          self
      }
  
@@ -40,10 +164,46 @@ diff -r a/src/client.rs b/src/client.rs
 +        self
 +    }
 +
++    /// Send `SETTINGS_ENABLE_CONNECT_PROTOCOL = 1` in the preface.
++    ///
++    /// A client that imitates Safari 18 announces the extended CONNECT
++    /// protocol; this crate never issues such a request, but the setting is part
++    /// of the shape, and a peer that reads the preface counts it.
++    ///
++    /// # Examples
++    ///
++    /// ```no_run
++    /// # use h2::client;
++    /// let mut builder = client::Builder::new();
++    /// builder.enable_connect_protocol();
++    /// ```
++    pub fn enable_connect_protocol(&mut self) -> &mut Self {
++        self.settings.set_enable_connect_protocol(Some(1));
++        self
++    }
++
++    /// Send `SETTINGS_NO_RFC7540_PRIORITIES = 1` in the preface.
++    ///
++    /// This is the value Safari 18 and 26 send: the peer is told not to expect
++    /// the RFC 7540 priority scheme. It says nothing about the PRIORITY flag on
++    /// a request's `HEADERS` frame, which Safari 18 still sets.
++    ///
++    /// # Examples
++    ///
++    /// ```no_run
++    /// # use h2::client;
++    /// let mut builder = client::Builder::new();
++    /// builder.no_rfc7540_priorities();
++    /// ```
++    pub fn no_rfc7540_priorities(&mut self) -> &mut Self {
++        self.settings.set_no_rfc7540_priorities(Some(1));
++        self
++    }
++
      /// Sets the header table size.
      ///
      /// This setting informs the peer of the maximum size of the header compression
-@@ -1637,6 +1665,7 @@
+@@ -1637,6 +1701,7 @@
          id: StreamId,
          request: Request<()>,
          protocol: Option<Protocol>,
@@ -51,7 +211,7 @@ diff -r a/src/client.rs b/src/client.rs
          end_of_stream: bool,
      ) -> Result<Headers, SendError> {
          use http::request::Parts;
-@@ -1689,6 +1718,10 @@
+@@ -1689,6 +1754,10 @@
          // Create the HEADERS frame
          let mut frame = Headers::new(id, pseudo, headers);
  
@@ -62,9 +222,9 @@ diff -r a/src/client.rs b/src/client.rs
          if end_of_stream {
              frame.set_end_stream()
          }
-diff -r a/src/frame/headers.rs b/src/frame/headers.rs
---- a/src/frame/headers.rs	2026-09-14 15:08:18.872922000 +0300
-+++ b/src/frame/headers.rs	2026-09-14 15:08:19.054834600 +0300
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/frame/headers.rs b/src/frame/headers.rs
+--- a/src/frame/headers.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/frame/headers.rs	2026-09-14 14:21:11.147973700 +0300
 @@ -12,7 +12,7 @@
  use std::io::Cursor;
  use std::ops::ControlFlow;
@@ -84,15 +244,15 @@ diff -r a/src/frame/headers.rs b/src/frame/headers.rs
  }
  
  #[derive(Copy, Clone, Eq, PartialEq)]
-@@ -84,8 +87,70 @@
+@@ -84,6 +87,68 @@
  
      /// Header fields
      fields: header::IntoIter<HeaderValue>,
 +
 +    /// The order the pseudo headers go out in
 +    order: PseudoOrder,
- }
- 
++}
++
 +/// The order a request puts its pseudo-header fields in.
 +///
 +/// RFC 9113 leaves the order open and the clients disagree, so a client that
@@ -150,11 +310,9 @@ diff -r a/src/frame/headers.rs b/src/frame/headers.rs
 +    /// exclusive)`. The weight is the one the client names on the wire plus
 +    /// one: a browser's `256` becomes the frame's `255`, which is 255.
 +    pub priority: Option<(u16, bool)>,
-+}
-+
+ }
+ 
  #[derive(Debug, PartialEq, Eq)]
- struct HeaderBlock {
-     /// The decoded header fields
 @@ -128,6 +193,7 @@
                  pseudo,
              },
@@ -179,13 +337,16 @@ diff -r a/src/frame/headers.rs b/src/frame/headers.rs
          };
  
          Ok((headers, src))
-@@ -284,12 +352,45 @@
+@@ -284,10 +352,43 @@
  
          // Get the HEADERS frame head
          let head = self.head();
 +        let stream_dep = self.stream_dep;
 +        let order = self.shape.map_or(PseudoOrder::default(), |shape| shape.pseudo_order);
-+
+ 
+-        self.header_block
+-            .into_encoding(encoder)
+-            .encode(&head, dst, Some(encoder), |_| {})
 +        self.header_block.into_encoding(encoder, order).encode(
 +            &head,
 +            dst,
@@ -197,10 +358,7 @@ diff -r a/src/frame/headers.rs b/src/frame/headers.rs
 +            },
 +        )
 +    }
- 
--        self.header_block
--            .into_encoding(encoder)
--            .encode(&head, dst, Some(encoder), |_| {})
++
 +    /// Ask for the frame's PRIORITY flag: the dependency it names, the weight
 +    /// and whether it is exclusive.
 +    pub(crate) fn set_priority(
@@ -215,19 +373,17 @@ diff -r a/src/frame/headers.rs b/src/frame/headers.rs
 +            weight.saturating_sub(1) as u8,
 +            is_exclusive,
 +        ));
-     }
- 
++    }
++
 +    /// Record what the request asked for; the encoder reads it back.
 +    pub(crate) fn set_shape(&mut self, shape: RequestShape) {
 +        self.shape = Some(shape);
 +        if let Some((weight, exclusive)) = shape.priority {
 +            self.set_priority(StreamId::ZERO, weight, exclusive);
 +        }
-+    }
-+
-     fn head(&self) -> Head {
-         Head::new(Kind::Headers, self.flags.into(), self.stream_id)
      }
+ 
+     fn head(&self) -> Head {
 @@ -507,7 +608,7 @@
          let promised_id = self.promised_id;
  
@@ -314,9 +470,9 @@ diff -r a/src/frame/headers.rs b/src/frame/headers.rs
          };
  
          encoder.encode(headers, &mut hpack);
-diff -r a/src/frame/mod.rs b/src/frame/mod.rs
---- a/src/frame/mod.rs	2026-09-14 15:08:18.875222100 +0300
-+++ b/src/frame/mod.rs	2026-09-14 15:08:19.054834600 +0300
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/frame/mod.rs b/src/frame/mod.rs
+--- a/src/frame/mod.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/frame/mod.rs	2026-09-14 14:21:11.149050800 +0300
 @@ -52,7 +52,8 @@
  pub use self::go_away::GoAway;
  pub use self::head::{Head, Kind};
@@ -327,9 +483,9 @@ diff -r a/src/frame/mod.rs b/src/frame/mod.rs
  };
  pub use self::ping::Ping;
  pub use self::priority::{Priority, StreamDependency};
-diff -r a/src/frame/priority.rs b/src/frame/priority.rs
---- a/src/frame/priority.rs	2026-09-14 15:08:18.879118900 +0300
-+++ b/src/frame/priority.rs	2026-09-14 15:08:19.056903300 +0300
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/frame/priority.rs b/src/frame/priority.rs
+--- a/src/frame/priority.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/frame/priority.rs	2026-09-14 14:21:11.148499800 +0300
 @@ -1,4 +1,6 @@
 +use crate::frame::headers::EncodeBuf;
  use crate::frame::*;
@@ -360,9 +516,9 @@ diff -r a/src/frame/priority.rs b/src/frame/priority.rs
 +        dst.put_u8(self.weight);
 +    }
  }
-diff -r a/src/frame/settings.rs b/src/frame/settings.rs
---- a/src/frame/settings.rs	2026-09-14 15:08:18.884475500 +0300
-+++ b/src/frame/settings.rs	2026-09-14 15:08:19.059455200 +0300
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/frame/settings.rs b/src/frame/settings.rs
+--- a/src/frame/settings.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/frame/settings.rs	2026-09-18 12:58:57.608695000 +0300
 @@ -6,6 +6,15 @@
  #[derive(Clone, Default, Eq, PartialEq)]
  pub struct Settings {
@@ -379,7 +535,23 @@ diff -r a/src/frame/settings.rs b/src/frame/settings.rs
      // Fields
      header_table_size: Option<u32>,
      enable_push: Option<u32>,
-@@ -62,6 +71,24 @@
+@@ -14,6 +23,7 @@
+     max_frame_size: Option<u32>,
+     max_header_list_size: Option<u32>,
+     enable_connect_protocol: Option<u32>,
++    no_rfc7540_priorities: Option<u32>,
+ }
+ 
+ /// An enum that lists all valid settings that can be sent in a SETTINGS
+@@ -29,6 +39,7 @@
+     MaxFrameSize(u32),
+     MaxHeaderListSize(u32),
+     EnableConnectProtocol(u32),
++    NoRfc7540Priorities(u32),
+ }
+ 
+ #[derive(Copy, Clone, Eq, PartialEq, Default)]
+@@ -62,6 +73,24 @@
          }
      }
  
@@ -404,7 +576,33 @@ diff -r a/src/frame/settings.rs b/src/frame/settings.rs
      pub fn is_ack(&self) -> bool {
          self.flags.is_ack()
      }
-@@ -219,8 +246,18 @@
+@@ -117,6 +146,10 @@
+         self.enable_connect_protocol = val;
+     }
+ 
++    pub fn set_no_rfc7540_priorities(&mut self, val: Option<u32>) {
++        self.no_rfc7540_priorities = val;
++    }
++
+     pub fn header_table_size(&self) -> Option<u32> {
+         self.header_table_size
+     }
+@@ -197,6 +230,14 @@
+                         return Err(Error::InvalidSettingValue);
+                     }
+                 },
++                Some(NoRfc7540Priorities(val)) => match val {
++                    0 | 1 => {
++                        settings.no_rfc7540_priorities = Some(val);
++                    }
++                    _ => {
++                        return Err(Error::InvalidSettingValue);
++                    }
++                },
+                 None => {}
+             }
+         }
+@@ -219,8 +260,18 @@
  
          head.encode(payload_len, dst);
  
@@ -424,7 +622,36 @@ diff -r a/src/frame/settings.rs b/src/frame/settings.rs
              tracing::trace!("encoding setting; val={:?}", setting);
              setting.encode(dst)
          });
-@@ -337,20 +374,39 @@
+@@ -256,6 +307,10 @@
+         if let Some(v) = self.enable_connect_protocol {
+             f(EnableConnectProtocol(v));
+         }
++
++        if let Some(v) = self.no_rfc7540_priorities {
++            f(NoRfc7540Priorities(v));
++        }
+     }
+ }
+ 
+@@ -292,6 +347,9 @@
+             Setting::EnableConnectProtocol(v) => {
+                 builder.field("enable_connect_protocol", &v);
+             }
++            Setting::NoRfc7540Priorities(v) => {
++                builder.field("no_rfc7540_priorities", &v);
++            }
+         });
+ 
+         builder.finish()
+@@ -315,6 +373,7 @@
+             5 => Some(MaxFrameSize(val)),
+             6 => Some(MaxHeaderListSize(val)),
+             8 => Some(EnableConnectProtocol(val)),
++            9 => Some(NoRfc7540Priorities(val)),
+             _ => None,
+         }
+     }
+@@ -337,20 +396,41 @@
      }
  
      fn encode(&self, dst: &mut BytesMut) {
@@ -455,6 +682,7 @@ diff -r a/src/frame/settings.rs b/src/frame/settings.rs
 +            MaxFrameSize(_) => 5,
 +            MaxHeaderListSize(_) => 6,
 +            EnableConnectProtocol(_) => 8,
++            NoRfc7540Priorities(_) => 9,
 +        }
 +    }
 +
@@ -470,14 +698,15 @@ diff -r a/src/frame/settings.rs b/src/frame/settings.rs
 +            | InitialWindowSize(v)
 +            | MaxFrameSize(v)
 +            | MaxHeaderListSize(v)
-+            | EnableConnectProtocol(v) => v,
++            | EnableConnectProtocol(v)
++            | NoRfc7540Priorities(v) => v,
 +        }
      }
  }
  
-diff -r a/src/proto/streams/streams.rs b/src/proto/streams/streams.rs
---- a/src/proto/streams/streams.rs	2026-09-14 15:08:18.950678200 +0300
-+++ b/src/proto/streams/streams.rs	2026-09-14 15:08:19.080996700 +0300
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/proto/streams/streams.rs b/src/proto/streams/streams.rs
+--- a/src/proto/streams/streams.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/proto/streams/streams.rs	2026-09-14 14:21:11.150114300 +0300
 @@ -3,7 +3,7 @@
  use super::{Buffer, BufferStatus, Config, Counts, Prioritized, Recv, Send, Stream, StreamId};
  use crate::codec::{Codec, SendError, UserError};

@@ -44,7 +44,7 @@ their patched rustls rejected valid server configurations.
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 0.23.43 — 760 lines across 7
+`PATCH.diff` is the exact diff against pristine 0.23.43 — 1103 lines across 8
 files, one of them new (`src/client/hello_profile.rs`). It applies to a pristine
 copy with `patch -p1` (`patch -p1 --binary` was run against the crates.io source
 before this file was replaced, and the result compared against this tree with
@@ -56,10 +56,11 @@ below.
 
 | File | Change |
 | --- | --- |
-| `src/client/hello_profile.rs` | **new**: public `ClientHelloProfile` (cipher list, groups, signature schemes, ALPN, extension order with `GREASE_EXTENSION_MARKER` placeholders, verbatim extra extensions, suppressed extensions, GREASE, certificate compression, `padding_to`, `legacy_versions`) and its `apply`. An empty certificate-compression list clears the typed value instead of setting an empty one: the profiles whose client advertises no algorithm (Safari 15.3, Tor 14.5) must send no extension 27 at all, not one with zero entries |
+| `src/client/hello_profile.rs` | **new**: public `ClientHelloProfile` (cipher list, groups, the key-share group list, signature schemes, ALPN, extension order with `GREASE_EXTENSION_MARKER` placeholders, verbatim extra extensions, suppressed extensions, GREASE, certificate compression, `padding_to`, `legacy_versions`) and its `apply`. An empty certificate-compression list clears the typed value instead of setting an empty one: the profiles whose client advertises no algorithm (Safari 15.3, Tor 14.5) must send no extension 27 at all, not one with zero entries |
 | `src/client/client_conn.rs` | `ClientConfig::hello_profile: Option<Arc<ClientHelloProfile>>` |
 | `src/client/builder.rs` | initializes it to `None` |
-| `src/client/hs.rs` | applies the profile while building the ClientHello, with a per-connection GREASE seed from the provider's CSPRNG; adds the GREASE key share and the GREASE `supported_versions` entry for a greasing profile; records the *encoded* extension set as `sent_extensions`; gates `compress_certificate` on the hello offering TLS 1.3 |
+| `src/client/hs.rs` | applies the profile while building the ClientHello, with a per-connection GREASE seed from the provider's CSPRNG; adds the GREASE key share and the GREASE `supported_versions` entry for a greasing profile; carries a *list* of key exchanges (`offered_key_shares`) instead of one, so a profile can send the shares a browser's `--tls-key-shares-limit` produces, and handles the HelloRetryRequest against that list; records the *encoded* extension set as `sent_extensions`; gates `compress_certificate` on the hello offering TLS 1.3 |
+| `src/client/tls13.rs` | `initial_key_shares` builds one exchange per group `key_share_groups` names; `KeyExchangeChoice::new` looks the server's group up among every share the client sent (whole or hybrid component) |
 | `src/msgs/handshake.rs` | `SupportedProtocolVersions` gains `grease: Option<u16>` (written ahead of the real versions) and `legacy: Vec<u16>` (the fallbacks a browser advertises behind 1.2, written after them); `ClientExtensions` gains `profile_order`, `raw_extensions`, `suppress_extensions`, `padding_to`; the encoder honours them, computes RFC 7685 padding to the profile's target size, and still keeps ECH/PSK last; a certificate entry carrying SCTs (type 18) is accepted and ignored |
 | `src/lib.rs` | exports the module and `ClientHelloProfile` |
 | `src/server/test.rs` | upstream's own test constructor uses `..Default::default()` now that the version carrier has a field it does not care about |

@@ -34,19 +34,29 @@ plain `u32`, and `enable_push` has no setter at all.
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 1.11.1 — **93 lines across 2
+`PATCH.diff` is the exact diff against pristine 1.11.1 — **170 lines across 3
 files**. It applies to a pristine copy with `patch -p1` (`patch -p1 --dry-run`
 was run against the crates.io source, and the applied result was compared with
 this tree byte for byte).
 
 * `proto::h2::client::Config` carries `max_header_list_size: Option<u32>`, a new
-  `enable_push: Option<bool>` and a new `settings_order: Vec<u16>`, defaulting to
-  the values hyper sent before (`Some(16 KB)`, `Some(false)`, empty), and
-  `new_builder` only calls the matching `h2` setter when it has something to say.
+  `enable_push: Option<bool>`, a new `settings_order: Vec<u16>`, and the two new
+  `enable_connect_protocol: Option<bool>` / `no_rfc7540_priorities: Option<bool>`,
+  defaulting to the values hyper sent before (`Some(16 KB)`, `Some(false)`, empty,
+  `None`, `None`), and `new_builder` only calls the matching `h2` setter when it
+  has something to say.
 * `client::conn::http2::Builder` follows: `max_header_list_size` now takes
   `impl Into<Option<u32>>` — hyper's own idiom for its other settings — and the
-  new `enable_push(impl Into<Option<bool>>)` and
-  `settings_order(impl IntoIterator<Item = u16>)` were added.
+  new `enable_push(impl Into<Option<bool>>)`,
+  `settings_order(impl IntoIterator<Item = u16>)`,
+  `enable_connect_protocol(impl Into<Option<bool>>)` and
+  `no_rfc7540_priorities(impl Into<Option<bool>>)` were added.
+* `ext::HeaderCaseMap` is public, with a public `default()` and `append()`: the
+  h1 encoder has written the original casing of a name since 0.12
+  (`write_headers_original_case`, driven by the request's extensions), but only a
+  parsed message or the C API could build the map. A client that has to write
+  `Sec-Fetch-Site`, `TE` or `sec-ch-ua` the way its profile does can now put one
+  in the request's extensions; a request without one is unaffected.
 
 Nothing else changes: a caller that touches neither setter gets byte-identical
 behaviour to upstream, which is what the DNS/DoH paths and the rustls baseline

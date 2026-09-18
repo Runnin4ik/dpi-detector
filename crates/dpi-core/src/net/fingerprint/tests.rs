@@ -19,6 +19,101 @@ const CHROME_107_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-5
 const SAFARI_155_JA4: &str = "t13d2014h2_a09f3c656075_14788d8d241b";
 const FIREFOX_133_JA4_LESS_ECH: &str = "t13d1715h2_5b57614c22b0_8fb63dbc839a";
 
+/// Every identity is spelled the way its own client writes it, and the two
+/// protocols differ in what that costs.
+///
+/// The bundle's own h1 request is the measurement: the Safari 18 and later
+/// wrappers write lowercase names throughout, every other client writes
+/// `Accept-Encoding`, `Sec-Fetch-Site` and `TE` capitalized, and `curl_firefox144`
+/// — a `--impersonate` one-liner — writes `Te`. HTTP/2 lowercases both (RFC 9113
+/// §8.2.1), so the spelling only reaches the wire through the h1 case map
+/// (`probe::http::header_case_map`); the `priority` header reaches it on h1 only
+/// for the clients that send it there, which the second column pins.
+#[test]
+fn every_identity_is_spelled_the_way_its_client_writes_it() {
+    let expected: [(TlsFingerprint, &str, bool); 19] = [
+        (TlsFingerprint::Rustls, "accept-encoding", false),
+        (TlsFingerprint::Firefox, "Accept-Encoding", true),
+        (TlsFingerprint::Chrome, "Accept-Encoding", false),
+        (TlsFingerprint::Safari, "Accept-Encoding", false),
+        (TlsFingerprint::Chrome133, "Accept-Encoding", false),
+        (TlsFingerprint::Safari18, "accept-encoding", false),
+        (TlsFingerprint::Edge, "Accept-Encoding", false),
+        (TlsFingerprint::Chrome99Android, "Accept-Encoding", false),
+        (TlsFingerprint::Chrome120, "Accept-Encoding", false),
+        (TlsFingerprint::Chrome131, "Accept-Encoding", false),
+        (TlsFingerprint::Chrome131Android, "Accept-Encoding", false),
+        (TlsFingerprint::Chrome136, "Accept-Encoding", false),
+        (TlsFingerprint::Firefox135, "Accept-Encoding", true),
+        (TlsFingerprint::Firefox144, "Accept-Encoding", true),
+        (TlsFingerprint::Safari153, "Accept-Encoding", false),
+        (TlsFingerprint::Safari184Ios, "accept-encoding", false),
+        (TlsFingerprint::Safari260, "accept-encoding", false),
+        (TlsFingerprint::Safari260Ios, "accept-encoding", false),
+        (TlsFingerprint::Tor145, "Accept-Encoding", true),
+    ];
+
+    for (fingerprint, spelling, priority_on_h1) in expected {
+        let code = fingerprint.code();
+        let identity = http_identity(fingerprint);
+        let (name, _) = identity
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("accept-encoding"))
+            .expect("every identity states its encoding");
+        assert_eq!(*name, spelling, "{code} spells its header names this way");
+        assert_eq!(identity.priority_on_h1, priority_on_h1, "{code} on h1");
+    }
+}
+
+/// The key shares every profile sends, in wire order.
+///
+/// rustls's own choice is one share for the first offered group plus, when that
+/// group is hybrid, its component's — which is what `chrome131`, `chrome133`,
+/// `chrome136` and `safari260` keep. Four wrappers pass
+/// `--tls-key-shares-limit 3`, and their records name the groups instead
+/// (`TlsShape::key_share_groups`): the Firefox family sends three entries, its
+/// hybrid group's component included, and Tor three without one. The bundle puts
+/// the same lists on the wire, so this is the count a censor matching a
+/// `curl_firefox133` handshake reads.
+#[test]
+fn every_profile_sends_the_key_shares_its_wrapper_asks_for() {
+    let shares = |fingerprint: TlsFingerprint| {
+        let config = create_tls_config(&TlsProfile::insecure(fingerprint));
+        let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
+        let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
+        let mut buf = Vec::new();
+        conn.write_tls(&mut buf).expect("write ClientHello");
+        crate::net::ja3::key_share_groups(&buf)
+    };
+
+    let expected = [
+        (TlsFingerprint::Rustls, "29"),
+        (TlsFingerprint::Firefox, "4588,29,23"),
+        (TlsFingerprint::Chrome, "29"),
+        (TlsFingerprint::Safari, "29"),
+        (TlsFingerprint::Chrome133, "4588,29"),
+        (TlsFingerprint::Safari18, "29"),
+        (TlsFingerprint::Edge, "29"),
+        (TlsFingerprint::Chrome99Android, "29"),
+        (TlsFingerprint::Chrome120, "29"),
+        (TlsFingerprint::Chrome131, "4588,29"),
+        (TlsFingerprint::Chrome131Android, "29"),
+        (TlsFingerprint::Chrome136, "4588,29"),
+        (TlsFingerprint::Firefox135, "4588,29,23"),
+        (TlsFingerprint::Firefox144, "4588,29,23"),
+        (TlsFingerprint::Safari153, "29"),
+        (TlsFingerprint::Safari184Ios, "29"),
+        (TlsFingerprint::Safari260, "4588,29"),
+        (TlsFingerprint::Safari260Ios, "29"),
+        (TlsFingerprint::Tor145, "29,23,24"),
+    ];
+
+    for (fingerprint, groups) in expected {
+        assert_eq!(shares(fingerprint), groups, "{}", fingerprint.code());
+    }
+}
+
 /// The HTTP identity and the ClientHello of a profile have to describe the
 /// same client: a `chrome107` hello behind a `Chrome/133` UA is a mismatch a
 /// header-matching middlebox reads in a single packet.
@@ -53,7 +148,11 @@ fn http_identity_names_the_version_the_hello_imitates() {
             .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
             .expect("the UA is part of the list, in its wire position");
         assert_eq!(*in_list, ua, "{}: field and list disagree", fingerprint.code());
-        if let Some((_, value)) = identity.headers.iter().find(|(name, _)| *name == "sec-ch-ua") {
+        if let Some((_, value)) = identity
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("sec-ch-ua"))
+        {
             let version = ua.split("Chrome/").nth(1).and_then(|v| v.split('.').next()).expect("UA version");
             assert!(value.contains(&format!("v=\"{version}\"")), "{}: {value}", fingerprint.code());
         }
@@ -62,7 +161,7 @@ fn http_identity_names_the_version_the_hello_imitates() {
         let (_, encoding) = identity
             .headers
             .iter()
-            .find(|(name, _)| *name == "accept-encoding")
+            .find(|(name, _)| name.eq_ignore_ascii_case("accept-encoding"))
             .expect("every identity states its encoding");
         let expected = match fingerprint {
             TlsFingerprint::Firefox
@@ -133,6 +232,12 @@ fn every_h2_preface_matches_the_wrapper_it_copies() {
         if let Some(value) = h2.max_header_list_size {
             present.push((6, value));
         }
+        if let Some(value) = h2.enable_connect_protocol {
+            present.push((8, value as u32));
+        }
+        if let Some(value) = h2.no_rfc7540_priorities {
+            present.push((9, value as u32));
+        }
         let first: Vec<(u16, u32)> = h2
             .settings_order
             .iter()
@@ -170,10 +275,10 @@ fn every_h2_preface_matches_the_wrapper_it_copies() {
         (TlsFingerprint::Chrome136, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Safari, "4:4194304;3:100", 10_485_760, MethodSchemePathAuthority, Some((255, false))),
         (TlsFingerprint::Safari153, "4:4194304;3:100", 10_485_760, MethodSchemePathAuthority, Some((255, false))),
-        (TlsFingerprint::Safari18, "2:0;3:100;4:2097152", 10_420_225, MethodSchemeAuthorityPath, Some((256, false))),
-        (TlsFingerprint::Safari184Ios, "2:0;3:100;4:2097152", 10_420_225, MethodSchemeAuthorityPath, Some((256, false))),
-        (TlsFingerprint::Safari260, "2:0;3:100;4:2097152", 10_420_225, MethodSchemeAuthorityPath, None),
-        (TlsFingerprint::Safari260Ios, "2:0;3:100;4:2097152", 10_420_225, MethodSchemeAuthorityPath, None),
+        (TlsFingerprint::Safari18, "2:0;3:100;4:2097152;8:1;9:1", 10_420_225, MethodSchemeAuthorityPath, Some((256, false))),
+        (TlsFingerprint::Safari184Ios, "2:0;3:100;4:2097152;9:1", 10_420_225, MethodSchemeAuthorityPath, Some((256, false))),
+        (TlsFingerprint::Safari260, "2:0;3:100;4:2097152;9:1", 10_420_225, MethodSchemeAuthorityPath, None),
+        (TlsFingerprint::Safari260Ios, "2:0;3:100;4:2097152;9:1", 10_420_225, MethodSchemeAuthorityPath, None),
     ];
 
     for (fingerprint, settings, increment, pseudo, priority) in expected {

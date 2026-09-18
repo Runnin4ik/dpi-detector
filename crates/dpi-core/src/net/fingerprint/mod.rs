@@ -64,28 +64,20 @@
 //!   the browser's own, fallbacks included: Safari 15.5 lists TLS 1.1 and 1.0
 //!   behind 1.2 (`legacy_versions`), and a peer that actually selects one is
 //!   refused by the config and reported `NO TLS1.3`, not as a block.
-//! * Two HTTP/2 settings are out of reach: Safari 18 names
-//!   `SETTINGS_ENABLE_CONNECT_PROTOCOL` (`8:1`) and Safari 18 and 26
-//!   `SETTINGS_NO_RFC7540_PRIORITIES` (`9:1`), which neither h2 nor hyper
-//!   exposes, so a Safari preface is short of them
-//!   (`vendor/h2/README-PATCH.md`). Everything else about the preface — which
-//!   settings go out and in what order, the connection window, the request's
-//!   pseudo-header order and the priority its `HEADERS` frame carries — is in
-//!   [`h2_fingerprint`].
-//!
-//! * Over HTTP/1.1 every header name goes out lowercased: hyper's `HeaderName`
-//!   is lowercase by construction, while the impersonated client sends `Host`,
-//!   `User-Agent`, `Accept`, `Accept-Encoding` and `Sec-Fetch-*` in the case its
-//!   `-H` list was written in. Over HTTP/2 this cannot show — RFC 9113
-//!   lowercases every name — and no other part of the request differs
-//!   (`tools/fingerprint/`, stage `headers`).
+//! * A Chrome 110 or later profile carries one fixed extension order where the
+//!   browser shuffles its extensions per connection, so its JA3 is one sample of
+//!   a distribution (JA4 hashes the sorted set and is stable). Every other list —
+//!   ciphers, groups, signature schemes, the key shares a
+//!   `--tls-key-shares-limit` asks for, the h2 preface including the settings
+//!   Safari names and the request's priority — is the client's own.
 //!
 //! Measured against `tls.peet.ws` with `tools/fingerprint/`, the TLS hashes, the
 //! header list and order, the UA, the whole HTTP/2 `SETTINGS`/`WINDOW_UPDATE`
-//! pair, the pseudo-header order and the priority match the bundle exactly on
-//! every profile that carries no ECH; `ja3`, `ja4` and `peetprint` differ only
-//! where the omitted `encrypted_client_hello` makes them differ, which is the
-//! extension the profile's own pin records.
+//! pair, the pseudo-header order, the priority, and the HTTP/1.1 request block
+//! with its header spellings match the bundle exactly on every profile that
+//! carries no ECH; `ja3`, `ja4` and `peetprint` differ only where the omitted
+//! `encrypted_client_hello` makes them differ, which is the extension the
+//! profile's own pin records.
 //!
 //! # Adding a profile
 //!

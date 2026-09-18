@@ -1146,6 +1146,42 @@ impl Builder {
         self
     }
 
+    /// Send `SETTINGS_ENABLE_CONNECT_PROTOCOL = 1` in the preface.
+    ///
+    /// A client that imitates Safari 18 announces the extended CONNECT
+    /// protocol; this crate never issues such a request, but the setting is part
+    /// of the shape, and a peer that reads the preface counts it.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use h2::client;
+    /// let mut builder = client::Builder::new();
+    /// builder.enable_connect_protocol();
+    /// ```
+    pub fn enable_connect_protocol(&mut self) -> &mut Self {
+        self.settings.set_enable_connect_protocol(Some(1));
+        self
+    }
+
+    /// Send `SETTINGS_NO_RFC7540_PRIORITIES = 1` in the preface.
+    ///
+    /// This is the value Safari 18 and 26 send: the peer is told not to expect
+    /// the RFC 7540 priority scheme. It says nothing about the PRIORITY flag on
+    /// a request's `HEADERS` frame, which Safari 18 still sets.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use h2::client;
+    /// let mut builder = client::Builder::new();
+    /// builder.no_rfc7540_priorities();
+    /// ```
+    pub fn no_rfc7540_priorities(&mut self) -> &mut Self {
+        self.settings.set_no_rfc7540_priorities(Some(1));
+        self
+    }
+
     /// Sets the header table size.
     ///
     /// This setting informs the peer of the maximum size of the header compression

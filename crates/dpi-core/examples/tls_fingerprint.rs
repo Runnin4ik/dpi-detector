@@ -311,6 +311,7 @@ async fn headers(fingerprint: TlsFingerprint, host: &str) {
         host,
         path: "/",
         headers: request_headers(&identity, user_agent, Vec::new(), false),
+        priority_on_h1: identity.priority_on_h1,
     };
     println!("profile   = {} -> {host} over HTTP/1.1", fingerprint.code());
     match sender.send(request).await {
@@ -350,6 +351,7 @@ async fn peet(fingerprint: TlsFingerprint) {
         host: HOST,
         path: "/api/all",
         headers: request_headers(&identity, user_agent, Vec::new(), false),
+        priority_on_h1: identity.priority_on_h1,
     };
     let response = match sender.send(request).await {
         Ok(response) => response,

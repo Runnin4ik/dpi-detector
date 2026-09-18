@@ -23,6 +23,7 @@ pub struct Settings {
     max_frame_size: Option<u32>,
     max_header_list_size: Option<u32>,
     enable_connect_protocol: Option<u32>,
+    no_rfc7540_priorities: Option<u32>,
 }
 
 /// An enum that lists all valid settings that can be sent in a SETTINGS
@@ -38,6 +39,7 @@ pub enum Setting {
     MaxFrameSize(u32),
     MaxHeaderListSize(u32),
     EnableConnectProtocol(u32),
+    NoRfc7540Priorities(u32),
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Default)]
@@ -144,6 +146,10 @@ impl Settings {
         self.enable_connect_protocol = val;
     }
 
+    pub fn set_no_rfc7540_priorities(&mut self, val: Option<u32>) {
+        self.no_rfc7540_priorities = val;
+    }
+
     pub fn header_table_size(&self) -> Option<u32> {
         self.header_table_size
     }
@@ -224,6 +230,14 @@ impl Settings {
                         return Err(Error::InvalidSettingValue);
                     }
                 },
+                Some(NoRfc7540Priorities(val)) => match val {
+                    0 | 1 => {
+                        settings.no_rfc7540_priorities = Some(val);
+                    }
+                    _ => {
+                        return Err(Error::InvalidSettingValue);
+                    }
+                },
                 None => {}
             }
         }
@@ -293,6 +307,10 @@ impl Settings {
         if let Some(v) = self.enable_connect_protocol {
             f(EnableConnectProtocol(v));
         }
+
+        if let Some(v) = self.no_rfc7540_priorities {
+            f(NoRfc7540Priorities(v));
+        }
     }
 }
 
@@ -329,6 +347,9 @@ impl fmt::Debug for Settings {
             Setting::EnableConnectProtocol(v) => {
                 builder.field("enable_connect_protocol", &v);
             }
+            Setting::NoRfc7540Priorities(v) => {
+                builder.field("no_rfc7540_priorities", &v);
+            }
         });
 
         builder.finish()
@@ -352,6 +373,7 @@ impl Setting {
             5 => Some(MaxFrameSize(val)),
             6 => Some(MaxHeaderListSize(val)),
             8 => Some(EnableConnectProtocol(val)),
+            9 => Some(NoRfc7540Priorities(val)),
             _ => None,
         }
     }
@@ -392,6 +414,7 @@ impl Setting {
             MaxFrameSize(_) => 5,
             MaxHeaderListSize(_) => 6,
             EnableConnectProtocol(_) => 8,
+            NoRfc7540Priorities(_) => 9,
         }
     }
 
@@ -405,7 +428,8 @@ impl Setting {
             | InitialWindowSize(v)
             | MaxFrameSize(v)
             | MaxHeaderListSize(v)
-            | EnableConnectProtocol(v) => v,
+            | EnableConnectProtocol(v)
+            | NoRfc7540Priorities(v) => v,
         }
     }
 }

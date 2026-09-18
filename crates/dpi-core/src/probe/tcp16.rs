@@ -246,16 +246,18 @@ pub async fn probe_tcp_16_20(
             if let Some(p) = pad {
                 extras.push(("X-Pad", p.to_string()));
             }
+            let identity = http_identity(cfg.fingerprint());
             HttpRequest {
                 method: Method::HEAD,
                 host: &host_val,
                 path: "/",
                 headers: request_headers(
-                    &http_identity(cfg.fingerprint()),
+                    &identity,
                     cfg.user_agent_for(cfg.fingerprint()),
                     extras,
                     true,
                 ),
+                priority_on_h1: identity.priority_on_h1,
             }
         };
 
