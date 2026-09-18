@@ -323,12 +323,29 @@ SIZE_KB=$(du -k "$OUT_FILE" 2>/dev/null | awk 'NR == 1 { print $1 + 0 }')
 SIZE_MB=$(awk -v kb="$SIZE_KB" 'BEGIN { printf "%.1f", kb / 1024 }' 2>/dev/null)
 [ -n "$SIZE_MB" ] || SIZE_MB=$((SIZE_KB / 1024))
 RUN_FILE="$OUT_FILE"
-CMD_RUN="${RUN_FILE}"
-case ":$PATH:" in
-  *":${OUT_DIR}:"*)
-    CMD_RUN="dpi-detector"
-    ;;
-esac
+
+# The command to suggest: the bare name when the shell would reach this very file
+# by walking PATH — then `dpi-detector` is what the user types — and the full path
+# otherwise, including when PATH resolves the name to a *different* dpi-detector,
+# because then the bare name would start something else. `command -v` is not an
+# option here for the same reason the downloaders are tried by running them:
+# BusyBox hush has no `command` builtin.
+CMD_RUN="$RUN_FILE"
+_resolved=""
+_old_ifs="$IFS"
+IFS=:
+for _dir in $PATH; do
+  [ -n "$_dir" ] || _dir="."
+  _candidate="${_dir%/}/dpi-detector"
+  if [ -x "$_candidate" ]; then
+    _resolved="$_candidate"
+    break
+  fi
+done
+IFS="$_old_ifs"
+if [ "$_resolved" = "$RUN_FILE" ]; then
+  CMD_RUN="dpi-detector"
+fi
 
 echo ""
 echo "=============================================="
@@ -336,13 +353,12 @@ echo "  DPI Detector successfully installed!"
 echo "  Location: ${RUN_FILE}"
 case "$CHOSEN_TARGET" in
   *-upx)
-    echo "  Variant:  Compact UPX"
+    echo "  Variant:  Compact UPX (${SIZE_MB} MB)"
     ;;
   *)
-    echo "  Variant:  Standard"
+    echo "  Variant:  Standard (${SIZE_MB} MB)"
     ;;
 esac
-echo "  Size:     ${SIZE_MB} MB"
 echo "=============================================="
 echo ""
 echo "To start the interactive menu:"
