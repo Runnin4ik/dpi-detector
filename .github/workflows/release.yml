@@ -54,6 +54,9 @@ jobs:
             name: dpi-detector-linux-mipsel
             use_cross: true
             has_upx: true
+            # `-L` names the alias step's directory as the cross container sees
+            # it (the host's `target/` is the container's `/target/`).
+            rustflags: "-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-mipsel-unknown-linux-musl"
 
           # 6. MIPS Big-Endian Routers (TP-Link Archer C7, MikroTik hAP ac lite)
           - os: ubuntu-latest
@@ -61,6 +64,7 @@ jobs:
             name: dpi-detector-linux-mips
             use_cross: true
             has_upx: true
+            rustflags: "-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-mips-unknown-linux-musl"
           # 7. macOS Intel
           - os: macos-14
             target: x86_64-apple-darwin
@@ -131,7 +135,12 @@ jobs:
       - name: Build with cross (MIPS & Cross targets)
         if: matrix.use_cross
         env:
-          RUSTFLAGS: "--cfg rustix_use_libc -C force-unwind-tables=no ${{ (matrix.target == 'mipsel-unknown-linux-musl' || matrix.target == 'mips-unknown-linux-musl') && '-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-${{ matrix.target }}' || '' }}"
+          # Built from one expression only: the flags used to be assembled with a
+          # nested `${{ }}` around `matrix.target`, which GitHub renders verbatim
+          # — rustc was handed `${{ matrix.target }}` as three separate arguments
+          # and the MIPS build never started. What differs per target lives in
+          # the matrix; the two flags every cross build wants stay here.
+          RUSTFLAGS: "--cfg rustix_use_libc -C force-unwind-tables=no ${{ matrix.rustflags }}"
         run: cross build --release --target ${{ matrix.target }}
 
       - name: Build with cargo (Windows 7 legacy)

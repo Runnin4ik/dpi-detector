@@ -23,7 +23,7 @@ h2 = { path = "vendor/h2" }
 hyper = { path = "vendor/hyper" }
 
 [workspace.package]
-version = "5.0.0-alpha.17"
+version = "5.0.0-alpha.18"
 edition = "2021"
 authors = ["runnin"]
 license = "MIT"
