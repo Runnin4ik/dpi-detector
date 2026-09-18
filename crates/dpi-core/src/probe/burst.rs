@@ -60,13 +60,14 @@ use crate::net::tls::TlsProfile;
 /// Port every attempt dials (the probes' TLS column uses the same one).
 pub const BURST_PORT: u16 = 443;
 /// Bounds of the per-round attempt count — the connections one shape fires at
-/// one host, launched [`BURST_LAUNCH_GAP`] apart. Two is the smallest number that can differ from
-/// a single probe; the upper bound keeps a stray keystroke from turning the test
-/// into a flood. The default sits one above the commonest throttle (a link that
-/// cuts the fourth connection): at four, the run ends exactly where the answer
-/// starts.
-pub const BURST_MIN_ATTEMPTS: usize = 2;
-pub const BURST_MAX_ATTEMPTS: usize = 16;
+/// one host, launched [`BURST_LAUNCH_GAP`] apart. One is a single connection, the
+/// floor the settings row wraps around to; a hundred is the ceiling, high enough to
+/// flood deliberately (crossing a rate threshold is the question the test asks) and
+/// still a bound, so a mistyped `--burst` cannot turn the run into an accident. The
+/// default sits one above the commonest throttle (a link that cuts the fourth
+/// connection): at four, the run ends exactly where the answer starts.
+pub const BURST_MIN_ATTEMPTS: usize = 1;
+pub const BURST_MAX_ATTEMPTS: usize = 100;
 pub const BURST_DEFAULT_ATTEMPTS: usize = 5;
 /// Delay between the starts of two consecutive attempts of one round.
 ///
@@ -1032,7 +1033,7 @@ mod tests {
     fn settings_are_clamped_into_the_meaningful_range() {
         let axes = (BurstTlsVersion::Tls13And12, BurstAlpn::Http2);
         assert_eq!(BurstSettings::clamped(0, 0, axes.0, axes.1, vec![]).attempts, BURST_MIN_ATTEMPTS);
-        assert_eq!(BurstSettings::clamped(99, 999, axes.0, axes.1, vec![]).attempts, BURST_MAX_ATTEMPTS);
+        assert_eq!(BurstSettings::clamped(999, 999, axes.0, axes.1, vec![]).attempts, BURST_MAX_ATTEMPTS);
         assert_eq!(
             BurstSettings::clamped(4, 0, axes.0, axes.1, vec![]).timeout,
             Duration::from_secs(BURST_MIN_TIMEOUT_SECS)

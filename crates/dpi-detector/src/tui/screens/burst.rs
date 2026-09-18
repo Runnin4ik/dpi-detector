@@ -204,7 +204,7 @@ async fn burst_settings_loop(
             | KeyCode::Char('-')
             | KeyCode::Char('<')
             if !editing => match cursor {
-                BURST_ROW_ATTEMPTS => attempts = attempts.saturating_sub(1).max(BURST_MIN_ATTEMPTS),
+                BURST_ROW_ATTEMPTS => attempts = cycle(attempts, false, BURST_MIN_ATTEMPTS, BURST_MAX_ATTEMPTS),
                 BURST_ROW_TIMEOUT => timeout_secs = timeout_secs.saturating_sub(1).max(BURST_MIN_TIMEOUT_SECS),
                 // The TLS axis has three values, so each direction steps it.
                 BURST_ROW_TLS => tls = flip_tls(tls, false),
@@ -226,7 +226,7 @@ async fn burst_settings_loop(
             | KeyCode::Char('>')
             if !editing => match cursor {
                 BURST_ROW_DOMAIN => editing = true,
-                BURST_ROW_ATTEMPTS => attempts = (attempts + 1).min(BURST_MAX_ATTEMPTS),
+                BURST_ROW_ATTEMPTS => attempts = cycle(attempts, true, BURST_MIN_ATTEMPTS, BURST_MAX_ATTEMPTS),
                 BURST_ROW_TIMEOUT => timeout_secs = (timeout_secs + 1).min(BURST_MAX_TIMEOUT_SECS),
                 BURST_ROW_TLS => tls = flip_tls(tls, true),
                 BURST_ROW_HTTP => alpn = flip_alpn(alpn),
@@ -409,6 +409,23 @@ const TLS_CHOICES: [BurstTlsVersion; 3] = [
     BurstTlsVersion::Tls12Only,
 ];
 
+/// Steps a bounded value with wrap-around, the way the fingerprint cycler does:
+/// leaving the floor lands on the ceiling and leaving the ceiling lands on the
+/// floor, so a row offering `1..=100` has the far end one key away.
+fn cycle(value: usize, forward: bool, min: usize, max: usize) -> usize {
+    if forward {
+        if value >= max {
+            min
+        } else {
+            value + 1
+        }
+    } else if value <= min {
+        max
+    } else {
+        value - 1
+    }
+}
+
 /// Either direction steps through [`TLS_CHOICES`].
 fn flip_tls(tls: BurstTlsVersion, forward: bool) -> BurstTlsVersion {
     let at = TLS_CHOICES.iter().position(|choice| *choice == tls).unwrap_or(0);
@@ -564,6 +581,18 @@ mod tests {
         let joined = strip_ansi(&rows.join("\n"));
         assert!(joined.contains(&format!("все [1/{PROFILE_CHOICES}]")), "{joined}");
         assert!(!joined.contains("RUSTLS,"), "no list of names: {joined}");
+    }
+
+    /// The attempts row is a cycler over the whole range: stepping past either end
+    /// wraps, so the ceiling is one key away from the floor.
+    #[test]
+    fn the_attempts_cycler_wraps_at_both_ends() {
+        let (min, max) = (BURST_MIN_ATTEMPTS, BURST_MAX_ATTEMPTS);
+        assert_eq!((min, max), (1, 100), "the row offers one connection to a hundred");
+        assert_eq!(cycle(min, false, min, max), max, "left from the floor lands on the ceiling");
+        assert_eq!(cycle(max, true, min, max), min, "right from the ceiling lands on the floor");
+        assert_eq!(cycle(5, false, min, max), 4);
+        assert_eq!(cycle(5, true, min, max), 6);
     }
 
     /// The row offers every shape the detector can present, one press away, and

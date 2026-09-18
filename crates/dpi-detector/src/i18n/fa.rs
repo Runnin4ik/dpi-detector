@@ -242,7 +242,7 @@ pub(crate) fn messages() -> Messages {
         cli_concurrency: "Hadde aksar-e darkhast haye hamzaman",
         cli_domain: "Domain haye khass baraye barresi (mitavanid tekrar konid: -d vk.com -d ya.ru)",
         cli_output: "Masir-e file baraye zakhire-ye report",
-        cli_burst: "Fingerprint/Sibir blocking (test 6): darkhast be har host, ba ta'khir-e 20 ms [pishfarz: 5]",
+        cli_burst: "Fingerprint/Sibir blocking (test 6): darkhast be har host, ba ta'khir-e 20 ms [1-100, pishfarz: 5]",
         cli_burst_timeout: "Test 6: timeout-e mosafehe, sanie [pishfarz: 8]; darkhast-e baad az aan montazer-e read_timeout mimanad",
         cli_burst_profiles: "Fingerprint haye test 6: all ya nam-e profile ha ba kama; list ra --legend chap mikonad [pishfarz: set-e pishfarz]",
         cli_burst_tls: "TLS baraye test 6: 1.3+1.2 (pishnahad-e browser, pasokh bayad 1.3 bashad)|1.3 (faghat 1.3)|1.2 (faghat 1.2) [pishfarz: 1.3+1.2]",

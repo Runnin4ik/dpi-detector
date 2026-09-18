@@ -248,7 +248,7 @@ pub(crate) fn messages() -> Messages {
         cli_concurrency: "Concurrency limit for parallel requests",
         cli_domain: "Specific domain(s) to test (repeat the flag: -d vk.com -d ya.ru)",
         cli_output: "Output file path to save report",
-        cli_burst: "Fingerprint stress (test 6): connections per host, launched 20 ms apart [default: 5]",
+        cli_burst: "Fingerprint stress (test 6): connections per host, launched 20 ms apart [1-100, default: 5]",
         cli_burst_timeout: "Test 6: handshake timeout, seconds [default: 8]; the request that follows waits read_timeout",
         cli_burst_profiles: "Test 6 fingerprints: all, or profile names separated by commas; --legend lists them [default: the default set]",
         cli_burst_tls: "Test 6 TLS: 1.3+1.2 (the browser's own offer, must answer 1.3)|1.3 (offers 1.3 only)|1.2 (offers 1.2 only) [default: 1.3+1.2]",
