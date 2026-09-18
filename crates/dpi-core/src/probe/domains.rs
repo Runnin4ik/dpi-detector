@@ -818,6 +818,36 @@ mod tests {
         }
     }
 
+    /// The exception list is a pair list, not a family: `www.messenger.com` →
+    /// `www.facebook.com` is a redirect the site itself makes and reads `OK`,
+    /// while the same hop the other way round, a hop from either of them
+    /// somewhere else, and a host that merely looks like one of them all keep
+    /// the default `REDIR`.
+    #[test]
+    fn test_a_declared_exception_reads_ok_and_only_that_pair_does() {
+        let cases: &[(&str, &str, bool, DpiStatus)] = &[
+            // (requested domain, Location, http phase, expected status)
+            ("www.messenger.com", "https://www.facebook.com/", false, DpiStatus::Ok),
+            ("www.messenger.com", "https://www.facebook.com/", true, DpiStatus::Ok),
+            ("messenger.com", "https://www.facebook.com/x", false, DpiStatus::Ok),
+            // The pair is directional, and it names two hosts, not two sites.
+            ("www.facebook.com", "https://www.messenger.com/", false, DpiStatus::RedirSuspect),
+            ("www.messenger.com", "https://www.google.com/", false, DpiStatus::RedirSuspect),
+            ("www.messenger.com", "https://www.facebook.com.evil.com/", false, DpiStatus::RedirSuspect),
+            ("notmessenger.com", "https://www.facebook.com/", false, DpiStatus::RedirSuspect),
+            ("www.messenger.com", "https://www.instagram.com/", false, DpiStatus::RedirSuspect),
+        ];
+        for (domain, location, http_phase, want) in cases {
+            let base = format!("http{}://{domain}", if *http_phase { "" } else { "s" });
+            let (s, d) = classify_redirect(domain, &base, 301, location, *http_phase);
+            assert_eq!(s, *want, "{domain} + {location} (http_phase {http_phase}) -> {}", d.code());
+        }
+        // The exception still reports where the browser was sent.
+        let (s, d) = classify_redirect("www.messenger.com", "https://www.messenger.com/", 301, "https://www.facebook.com/", false);
+        assert_eq!(s, DpiStatus::Ok);
+        assert_eq!(d, Detail::Redirect { host: "www.facebook.com".to_string() });
+    }
+
     /// Same-host-or-subdomain redirects read as a plain `OK`, a redirect to
     /// another domain is a red `REDIR` (`RedirSuspect`, not counted as ok), and
     /// a protocol-relative `Location` belongs to the host it names - it is not a

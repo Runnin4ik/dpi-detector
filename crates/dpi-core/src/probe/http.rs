@@ -293,6 +293,23 @@ fn strip_www(host: &str) -> &str {
     host.strip_prefix("www.").unwrap_or(host)
 }
 
+/// Redirects that are expected rather than suspicious: the host that was asked
+/// for and the host the site sends the browser to, both lower-case and with a
+/// leading `www.` dropped (`strip_www` runs before the lookup, so
+/// `www.messenger.com` → `www.facebook.com` is the pair below).
+///
+/// The site-family rule in [`site_of`] reads these two hosts as different sites,
+/// so a redirect between them lands on `RedirSuspect` — the red `REDIR` — and
+/// this is the list where such a redirect is declared the site's own behaviour
+/// instead. It grows by one line per pair; the direction matters, and a host
+/// that is not in the list keeps the default verdict.
+const REDIRECT_EXCEPTIONS: &[(&str, &str)] = &[("messenger.com", "facebook.com")];
+
+/// True when `from` → `to` is a declared exception in [`REDIRECT_EXCEPTIONS`].
+fn is_expected_redirect(from: &str, to: &str) -> bool {
+    REDIRECT_EXCEPTIONS.iter().any(|(known_from, known_to)| *known_from == from && *known_to == to)
+}
+
 pub(crate) fn parse_host(url_or_host: &str) -> String {
     let mut s = url_or_host.trim().to_ascii_lowercase();
     if let Some(idx) = s.find("://") {
@@ -362,7 +379,8 @@ fn site_of(host: &str) -> Option<&str> {
 ///
 /// Everything else counts as foreign, so `www.instagram.com` →
 /// `www.facebook.com` stays a red REDIR — and so does `a.example.com` →
-/// `b.other.com`, which are two sites under different parents.
+/// `b.other.com`, which are two sites under different parents. A pair listed in
+/// [`REDIRECT_EXCEPTIONS`] is the one way a foreign hop comes out `OK`.
 pub(crate) fn classify_redirect(
     domain: &str,
     base_url: &str,
@@ -383,6 +401,14 @@ pub(crate) fn classify_redirect(
         || norm_dom.ends_with(&format!(".{}", norm_loc))
         || (site_loc.is_some() && site_loc == site_of(&norm_dom));
     let short_host: String = loc_host.chars().take(30).collect();
+
+    // A declared exception ([`REDIRECT_EXCEPTIONS`]) is the site's own redirect:
+    // OK, and the detail still names the host the browser is sent to — the pair
+    // is `(asked for, sent to)`, so `www.messenger.com` → `www.facebook.com`
+    // reads as that redirect rather than as an upgrade on the same host.
+    if is_expected_redirect(&norm_dom, &norm_loc) {
+        return (DpiStatus::Ok, Detail::Redirect { host: short_host });
+    }
 
     if http_phase {
         if same_site && scheme_https {

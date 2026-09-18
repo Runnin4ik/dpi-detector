@@ -16,7 +16,6 @@ www.torproject.org
 protonvpn.com
 amnezia.org
 nnmclub.to
-standby-rezka.tv
 hub.docker.com
 www.intel.com
 www.canva.com

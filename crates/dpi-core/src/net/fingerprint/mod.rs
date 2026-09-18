@@ -238,36 +238,40 @@ impl TlsFingerprint {
             .map(|shape| shape.variant)
     }
 
-    /// Values accepted by the config validator and the CLI, in report order.
+    /// Values accepted by the config validator and the CLI, in report order:
+    /// the baseline, then one browser at a time alphabetically, newest version
+    /// first inside each browser (a desktop shape before the phone shape of the
+    /// same version). A new record goes where its browser and version put it —
+    /// `chrome146` heads the Chromium block, `safari153` closes Safari's.
     ///
     /// The single hand-written list on this side of the table: `spec()` panics
     /// on a variant missing from `SHAPES`, and the totality test compares this
     /// list with the table, so the two cannot drift apart unnoticed.
     ///
-    /// The first seven are the profiles a run presents by default; the rest are
-    /// older and newer releases of the same clients plus the mobile, Tor and
-    /// missing-version shapes, selectable one at a time (`--fingerprint`) or as
-    /// a burst list (`--burst-profiles all`).
+    /// The seven in [`Self::DEFAULT_SET`] are the profiles a run presents by
+    /// default; the rest are older and newer releases of the same clients plus
+    /// the mobile, Tor and missing-version shapes, selectable one at a time
+    /// (`--fingerprint`) or as a burst list (`--burst-profiles all`).
     pub const ALL: [TlsFingerprint; 20] = [
         Self::Rustls,
-        Self::Firefox133,
-        Self::Chrome107,
-        Self::Chrome116,
-        Self::Safari155,
-        Self::Safari170,
-        Self::Safari172Ios,
-        Self::Safari180,
-        Self::Edge101,
-        Self::Chrome99Android,
-        Self::Chrome123,
+        Self::Chrome146,
         Self::Chrome131,
         Self::Chrome131Android,
-        Self::Chrome146,
+        Self::Chrome123,
+        Self::Chrome116,
+        Self::Chrome107,
+        Self::Chrome99Android,
+        Self::Edge101,
         Self::Firefox147,
-        Self::Safari153,
-        Self::Safari184Ios,
+        Self::Firefox133,
         Self::Safari260,
         Self::Safari260Ios,
+        Self::Safari184Ios,
+        Self::Safari180,
+        Self::Safari172Ios,
+        Self::Safari170,
+        Self::Safari155,
+        Self::Safari153,
         Self::Tor145,
     ];
 
@@ -278,14 +282,17 @@ impl TlsFingerprint {
     /// `profiles × hosts × 2 version axes`: every shape added here is paid for
     /// on every run, so a profile joins the default set deliberately and `all`
     /// stays the explicit way to ask for everything, however many that is.
+    ///
+    /// Ordered like [`Self::ALL`] — baseline, then browser, newest first — so a
+    /// column of the burst table reads the same way as the legend behind it.
     pub const DEFAULT_SET: [TlsFingerprint; 7] = [
         Self::Rustls,
-        Self::Firefox133,
-        Self::Chrome107,
-        Self::Safari155,
         Self::Chrome146,
-        Self::Safari180,
+        Self::Chrome107,
         Self::Edge101,
+        Self::Firefox133,
+        Self::Safari180,
+        Self::Safari155,
     ];
 
     /// Parses a profile list for test 6: `all`, or comma/space separated names.
