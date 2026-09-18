@@ -90,8 +90,8 @@ pub(crate) fn messages() -> Messages {
                          Set IPV6_ENABLED=1 in /opt/etc/nfqws2/nfqws2.conf.",
         intercept_tunnel: "The detector's traffic goes through a tunnel (VPN), partly or entirely.\n\
                            Leave it as it is, or add the tunnel interface to ISP_INTERFACE in the config.",
-        intercept_list_recipe: "The config has strategies using hostlist/ipset, so the targets the detector\n\
-                                tests may not be picked up.\n\
+        intercept_list_recipe: "Every strategy that takes the ports the detector tests filters by hostlist/ipset,\n\
+                                so the targets it tests may not be picked up.\n\
                                 To test the strategies correctly, set the following in the config:",
         intercept_list_named: "Profile \"{}\" filters by a list: {}\n\
                                Drop it for the tests.",

@@ -90,8 +90,8 @@ pub(crate) fn messages() -> Messages {
         intercept_tunnel: "Traffic-e detector be tore koll ya ghesmatan az tunnel (VPN) miravad.\n\
                            An ra be haman hal bagozarid ya interface-e tunnel ra be ISP_INTERFACE\n\
                            dar config ezafe konid.",
-        intercept_list_recipe: "Dar config strategy-hayi ba hostlist/ipset peyda shod, pas momken ast\n\
-                                target-haye test-e detector gerefte nashavand.\n\
+        intercept_list_recipe: "Har profile-i ke port-haye test-e detector ra migirad ba hostlist/ipset filter shode ast,\n\
+                                pas momken ast target-haye test gerefte nashavand.\n\
                                 Baraye barrasi-e dorost-e strategy-ha, dar config bezarid:",
         intercept_list_named: "Profile \"{}\" ba list filter mikonad: {}\n\
                                An ra baraye test-ha hazf konid.",

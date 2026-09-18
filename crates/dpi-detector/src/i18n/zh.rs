@@ -87,7 +87,7 @@ pub(crate) fn messages() -> Messages {
                          请把 IPV6_ENABLED=1 写入 /opt/etc/nfqws2/nfqws2.conf。",
         intercept_tunnel: "检测器的流量部分或全部走隧道（VPN）。\n\
                            可以保持现状，或把隧道接口加入配置中的 ISP_INTERFACE。",
-        intercept_list_recipe: "配置中发现了使用 hostlist/ipset 的策略，因此检测器测试的目标可能不会被接管。\n\
+        intercept_list_recipe: "检测器所用端口的每个策略都用 hostlist/ipset 过滤，因此检测器测试的目标可能不会被接管。\n\
                                 为了正确测试策略，测试期间请在配置中设置：",
         intercept_list_named: "配置档案「{}」使用列表过滤：{}\n\
                                测试期间请移除它。",

@@ -83,11 +83,11 @@ pub enum Problem {
     /// Our traffic is IPv6 and the package installs no IPv6 rules at all
     /// (`IPV6_ENABLED=0`). The v4 rules can be perfect and this still holds.
     Ipv6,
-    /// The rules take our traffic, but the strategy filters it by lists, so a
-    /// run's numbers are a mixture of bypassed and unbypassed. Nothing is
-    /// broken; this is a property of the strategy. The entry carries the config
-    /// lines that drop those filters for a test, because that is what a reader
-    /// has to paste.
+    /// The rules take our traffic, but every profile that could take it filters
+    /// by lists, so a run's numbers are a mixture of bypassed and unbypassed —
+    /// or, for a target on no list at all, no desync. Nothing is broken; this is
+    /// a property of the strategy. The entry carries the config lines that drop
+    /// those filters for a test, because that is what a reader has to paste.
     ListRecipe { fixes: Vec<ListFix> },
     /// The same, for a filter written in no config variable the detector can
     /// name: the profile and the option are pointed at instead.
@@ -302,28 +302,22 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         None => Flow::default(),
     };
     let strategy = strategy(pid);
-    // Every list that can filter a run, across the profiles that decide the
-    // ports it speaks. Deduplicated: two ports can meet the same profile, and
-    // naming its filter twice says nothing new.
-    let mut options: Vec<(String, String)> = Vec::new();
-    for deciding in &strategy.deciding {
-        for option in &deciding.list_options {
-            let pair = (deciding.profile.clone(), option.clone());
-            if !options.contains(&pair) {
-                options.push(pair);
-            }
-        }
-    }
     // The recipe needs the config the service was started from; without it the
     // options are still named, just not resolved to a variable.
     let (list_fixes, list_unnamed) = match std::fs::read_to_string(CONF) {
         Ok(conf) => {
-            let flat: Vec<String> = options.iter().map(|(_, option)| option.clone()).collect();
+            let mut flat: Vec<String> = Vec::new();
+            for (_, option) in &strategy.lists {
+                if !flat.contains(option) {
+                    flat.push(option.clone());
+                }
+            }
             let (fixes, unnamed) = list_fixes(&conf, &flat);
             let named = unnamed
                 .into_iter()
                 .map(|option| {
-                    let profile = options
+                    let profile = strategy
+                        .lists
                         .iter()
                         .find(|(_, held)| *held == option)
                         .map(|(profile, _)| profile.clone())
@@ -333,7 +327,7 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
                 .collect();
             (fixes, named)
         }
-        Err(_) => (Vec::new(), options),
+        Err(_) => (Vec::new(), strategy.lists.clone()),
     };
     let facts = Facts {
         v6,
@@ -418,23 +412,15 @@ const TEST_PORTS: [u16; 2] = [80, 443];
 const MODE_VARIABLE: &str = "NFQWS_EXTRA_ARGS";
 const MODE_ALL: &str = "$MODE_ALL";
 
-/// The profile that decides a connection to one of the ports the tests speak,
-/// and the lists it filters by.
-#[derive(Debug)]
-struct Deciding {
-    /// The profile's own filters, as the argv spells them: `tcp=443 l7=tls`.
-    profile: String,
-    /// Its positive list options, in the order written.
-    list_options: Vec<String>,
-}
-
-/// What the running strategy does to a test run: one deciding profile per port
-/// it speaks, and the ports nothing takes.
+/// What the running strategy does to a test run: the positive lists that stand
+/// between the tests and the desync, and the ports nothing takes.
 #[derive(Debug, Default)]
 struct Strategy {
-    /// A run speaks several ports and can meet a different profile on each, so
-    /// the answer is per port rather than one profile for the whole run.
-    deciding: Vec<Deciding>,
+    /// Every list that filters *all* the acting profiles able to take one of
+    /// the test ports, each with the profile it is written in. Empty when some
+    /// profile takes the port without a list — then no host can be turned away
+    /// from the desync, whatever the lists of the other profiles say.
+    lists: Vec<(String, String)>,
     /// The test ports no acting profile takes, so nothing desyncs them.
     untaken: Vec<u16>,
 }
@@ -464,34 +450,47 @@ fn strategy(pid: u32) -> Strategy {
 /// next, the `--filter-*` options that follow are the profile's own filters and
 /// they all have to match (a `--filter-tcp=443 --filter-l7=tls` profile takes
 /// TLS on 443, nothing else). Profiles are tried in order and the first one that
-/// matches a connection handles it, so the question is asked of that profile
-/// alone: if it desyncs everything it takes, a run's numbers are all from one
-/// world, whatever the later profiles do.
+/// matches a connection handles it, so the question is asked per test port: a
+/// profile can take one of them without taking the other.
 ///
-/// One thing this does not model: a profile with a positive list takes only the
-/// hosts that list names. A host outside it falls through to the next matching
-/// profile ("если имя хоста удовлетворяет листам, выбирается этот профиль.
-/// иначе идет переход к следующему" — the package's own `docs/readme.md`), so
-/// which profile decides depends on the host. This answers for the first
-/// profile that could take the traffic, without checking the host against the
-/// list.
+/// A profile with a positive list takes only the hosts that list names, and a
+/// host outside it falls through to the next matching profile ("если имя хоста
+/// удовлетворяет листам, выбирается этот профиль. иначе идет переход к
+/// следующему" — the package's `docs/readme.md`). So a run is a mixture only
+/// when *every* profile that takes the port is filtered by a list: a custom
+/// strategy narrowed to its own domains ahead of the main one leaves the web
+/// targets to the main strategy, which desyncs all of them. What the recipe has
+/// to name in the other case is all of those lists — a host turned away by one
+/// falls to the next, so dropping a single list changes nothing.
 fn strategy_in(args: &[String]) -> Strategy {
     let profiles = profiles(args);
-    let mut deciding = Vec::new();
+    let mut lists: Vec<(String, String)> = Vec::new();
     let mut untaken = Vec::new();
     for port in TEST_PORTS {
-        // The first profile that takes a connection to this port handles it, and
-        // the later ones never see it — asked per port, because a run speaks
-        // three and a profile can take one of them without taking the others.
-        match profiles.iter().find(|profile| profile.acts && takes_port(&profile.filters, port)) {
-            Some(profile) => deciding.push(Deciding {
-                profile: profile_label(&profile.filters),
-                list_options: profile.list_options.clone(),
-            }),
-            None => untaken.push(port),
+        let taking: Vec<&Profile> = profiles
+            .iter()
+            .filter(|profile| profile.acts && takes_port(&profile.filters, port))
+            .collect();
+        if taking.is_empty() {
+            untaken.push(port);
+            continue;
+        }
+        if taking.iter().any(|profile| profile.list_options.is_empty()) {
+            // One of them takes every host that reaches it, so the desync is
+            // not a question of which host a test names.
+            continue;
+        }
+        for profile in taking {
+            let label = profile_label(&profile.filters);
+            for option in &profile.list_options {
+                let pair = (label.clone(), option.clone());
+                if !lists.contains(&pair) {
+                    lists.push(pair);
+                }
+            }
         }
     }
-    Strategy { deciding, untaken }
+    Strategy { lists, untaken }
 }
 
 /// The config lines that drop a profile's positive lists for a test.
@@ -1114,23 +1113,22 @@ mod tests {
     /// these tests ask about.
     fn lists(args: &[String]) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        for deciding in strategy_in(args).deciding {
-            for option in deciding.list_options {
-                if !out.contains(&option) {
-                    out.push(option);
-                }
+        for (_, option) in strategy_in(args).lists {
+            if !out.contains(&option) {
+                out.push(option);
             }
         }
         out
     }
 
     /// The profile layout of a real strategy on a Keenetic: QUIC, then a
-    /// discord hostlist on its own ports, then TLS on 443 with no list at all,
-    /// then HTTP, and only at the end a profile filtered by ipset. The TLS
-    /// profile is the one a web test meets, and it desyncs everything it takes —
-    /// so this is *not* list mode, whatever the later profile does.
+    /// discord hostlist on its own ports, then TLS on 443 and HTTP on 80 with no
+    /// list of their own, and only at the end a profile of the mode's own lists
+    /// — which carries no `--lua-desync` and so sends nothing through anything.
+    /// Both test ports meet a profile that takes them without a list, so this is
+    /// *not* list mode.
     #[test]
-    fn the_first_profile_that_takes_our_traffic_decides() {
+    fn a_layout_with_an_unfiltered_profile_for_each_port_is_not_list_mode() {
         let real = argv(&[
             "--daemon",
             "--qnum=300",
@@ -1158,6 +1156,95 @@ mod tests {
         assert!(lists(&real).is_empty(), "the TLS profile has no list of its own");
     }
 
+    /// A custom strategy narrowed to its own domains is not what a web run
+    /// meets. The init script appends `NFQWS_ARGS_CUSTOM` first, so a 443/tls
+    /// profile with a google hostlist comes ahead of the main strategy — but a
+    /// host that is not on the list falls through to it, and the main profile
+    /// takes 80/443 without a list, so every target still gets the desync.
+    ///
+    /// The argv below is the one a Keenetic runs with the preset, its
+    /// line-continuation backslashes included — the config is read as shell and
+    /// the init script leaves them in the argument list, which is why anything
+    /// reading a value back has to drop them. The QUIC and UDP profiles keep
+    /// only their filters: they cannot take a port a web test speaks.
+    #[test]
+    fn a_profile_narrowed_to_its_own_domains_does_not_make_a_run_a_mixture() {
+        let keenetic = argv(&[
+            "--user=nobody",
+            "--qnum=300",
+            "--lua-init=@/opt/etc/nfqws2/lua/zapret-lib.lua",
+            "--filter-tcp=2053,2083,2087,2096,8443",
+            "--filter-l7=tls",
+            "\\",
+            "--hostlist-domains=discord.media",
+            "--lua-desync=fake:blob=tls_google:repeats=7:tcp_ts=-600000:tcp_ts_up",
+            "--new",
+            "\\",
+            "--filter-tcp=443",
+            "--filter-l7=tls",
+            "--hostlist=/opt/etc/nfqws2/lists/google.list",
+            "\\",
+            "--lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000:tcp_ts_up",
+            "--new",
+            "--filter-udp=19294-19344,50000-50100",
+            "--filter-l7=discord,stun",
+            "--new",
+            "--filter-udp=443",
+            "--filter-l7=quic",
+            "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
+            "--ipset-ip=0.0.0.0",
+            "--new",
+            "--filter-tcp=80,443",
+            "--filter-l7=http,tls",
+            "\\",
+            "--lua-desync=fake:blob=tls_sochi:repeats=5:tcp_ts=-600000:tcp_ts_up",
+            "--lua-desync=fake:blob=stun2_fake:repeats=5:tcp_ts=-600000:tcp_ts_up",
+            "--lua-desync=hostfakesplit:host=mail.ru:tcp_ts=-600000:tcp_ts_up",
+            "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
+            "--ipset-ip=0.0.0.0",
+            "--new",
+            "--filter-tcp=80,443",
+            "--filter-l7=http,tls",
+            "--lua-desync=fake:blob=tls_sochi:repeats=5:tcp_ts=-600000:tcp_ts_up",
+            "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
+        ]);
+        assert!(lists(&keenetic).is_empty(), "the main profile takes 80/443 without a list");
+        assert!(strategy_in(&keenetic).untaken.is_empty());
+    }
+
+    /// When every profile that takes the port is filtered by a list, each of
+    /// them is a wall the host has to be on the right side of: turned away by
+    /// one, it falls to the next and is turned away there too. So the recipe
+    /// names all of them, and each against the profile it is written in — the
+    /// reader has to edit every one of them, not the first.
+    #[test]
+    fn every_profile_that_takes_the_port_is_reported_when_they_all_filter() {
+        let two = argv(&[
+            "--filter-tcp=443",
+            "--filter-l7=tls",
+            "--hostlist=/opt/etc/nfqws2/lists/google.list",
+            "--lua-desync=hostfakesplit",
+            "--new",
+            "--filter-tcp=80,443",
+            "--filter-l7=http,tls",
+            "--hostlist=/opt/etc/nfqws2/lists/user.list",
+            "--lua-desync=multisplit",
+        ]);
+        assert_eq!(
+            strategy_in(&two).lists,
+            vec![
+                (
+                    "tcp=80,443 l7=http,tls".to_string(),
+                    "--hostlist=/opt/etc/nfqws2/lists/user.list".to_string(),
+                ),
+                (
+                    "tcp=443 l7=tls".to_string(),
+                    "--hostlist=/opt/etc/nfqws2/lists/google.list".to_string(),
+                ),
+            ]
+        );
+    }
+
     /// The same layout with the list moved onto the TLS profile: now a web run
     /// is half bypassed and half not, which is what the reader has to be told.
     #[test]
@@ -1172,11 +1259,10 @@ mod tests {
             "--lua-desync=hostfakesplit:repeats=8",
             "--new",
         ]);
-        let deciding = strategy_in(&listed).deciding;
-        assert_eq!(deciding.len(), 1, "only 443 is taken by a profile that acts");
-        assert_eq!(deciding[0].profile, "tcp=443 l7=tls");
-        let option = deciding[0].list_options.first().expect("the TLS profile filters by ipset");
-        assert!(option.starts_with("--ipset="), "{option}");
+        let found = strategy_in(&listed).lists;
+        assert_eq!(found.len(), 1, "only 443 is taken by a profile that acts");
+        assert_eq!(found[0].0, "tcp=443 l7=tls");
+        assert!(found[0].1.starts_with("--ipset="), "{found:?}");
     }
 
     /// A profile can carry several positive lists — `--hostlist` beside
@@ -1198,8 +1284,11 @@ mod tests {
         assert_eq!(options.len(), 2, "both positive lists, no exclusions: {options:?}");
         assert!(options[0].starts_with("--hostlist="), "{options:?}");
         assert!(options[1].starts_with("--hostlist-auto="), "{options:?}");
-        let deciding = strategy_in(&two).deciding;
-        assert_eq!(deciding[0].profile, "tcp=80,443 l7=http,tls");
+        let listed = strategy_in(&two).lists;
+        assert!(
+            listed.iter().all(|(profile, _)| profile == "tcp=80,443 l7=http,tls"),
+            "{listed:?}"
+        );
     }
 
     /// Filters of one profile are all required: a TLS-on-443 profile does not
