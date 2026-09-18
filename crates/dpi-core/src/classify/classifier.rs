@@ -183,12 +183,22 @@ fn dns_failure_text(msg: &str) -> bool {
 /// lost the `sending_data` / `reading_data` arms, so the same condition was
 /// reported as a bare `Timeout` on one path and as `SendTimeout`/`ReadTimeout`
 /// on the other.
-fn timeout_at_stage(stage: &str) -> (DpiStatus, Detail) {
+fn timeout_at_stage(stage: &str, bytes_read: usize) -> (DpiStatus, Detail) {
+    // The data phases carry the offset with them: `READ TIMEOUT at N KB` is the
+    // same sentence in every test, and a read that never got a byte says `at 0KB`
+    // instead of switching to a second wording for the same thing.
+    let kb = bytes_read as f64 / 1024.0;
     match stage {
         "tls_handshake" => (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout),
         "tcp_connect" => (DpiStatus::SynDropped, Detail::TcpSynTimeout),
-        "sending_data" => (DpiStatus::SendTimeout, Detail::SendTimeout),
-        "reading_data" => (DpiStatus::ReadTimeout, Detail::ReadTimeout),
+        "sending_data" => (
+            DpiStatus::SendTimeout,
+            Detail::at_kb(Detail::WriteTimeoutWord, kb),
+        ),
+        "reading_data" => (
+            DpiStatus::ReadTimeout,
+            Detail::at_kb(Detail::ReadTimeoutWordCaps, kb),
+        ),
         _ => (DpiStatus::Timeout, Detail::TimeoutStage { stage: stage.to_string() }),
     }
 }
@@ -244,7 +254,7 @@ pub fn classify_connect_error_full(
     }
 
     if full.contains("connect timeout") || full.contains("connection timed out") || full.contains("timed out") || full.contains("timeout") {
-        return timeout_at_stage(stage);
+        return timeout_at_stage(stage, bytes_read);
     }
 
     // DNS resolution failures (socket.gaierror equivalent)
@@ -318,7 +328,7 @@ pub fn classify_connect_error_full(
         || matches!(raw_os_error, Some(110) | Some(10060))
         || full.contains("timed out");
     if timed_out {
-        return timeout_at_stage(stage);
+        return timeout_at_stage(stage, bytes_read);
     }
 
     // A connection that ended before the message it announced: the peer — or

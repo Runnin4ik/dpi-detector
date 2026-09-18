@@ -304,7 +304,7 @@ pub async fn probe_tcp_16_20(
                 if is_read_timeout {
                     let err_type = if lower.contains("write") { Detail::WriteTimeoutWord } else { Detail::ReadTimeoutWordCaps };
                     if i == 0 {
-                        return (DpiStatus::ReadTimeout, err_type, measured_rtt);
+                        return (DpiStatus::ReadTimeout, Detail::at_kb(err_type, 0.0), measured_rtt);
                     }
                     // Before the window opens the verdict is a plain timeout, but
                     // the offset it died at is still the useful part of it.
@@ -340,7 +340,7 @@ pub async fn probe_tcp_16_20(
             }
             Err(_) => {
                 if i == 0 {
-                    return (DpiStatus::ReadTimeout, Detail::ReadTimeoutWordCaps, measured_rtt);
+                    return (DpiStatus::ReadTimeout, Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0), measured_rtt);
                 }
                 if i < min_detect_chunk {
                     return (

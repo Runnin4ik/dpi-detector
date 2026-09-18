@@ -308,13 +308,23 @@ pub async fn check_http_injection(
                     } else {
                         DpiStatus::ReadTimeout
                     };
-                    return HttpCheck { status: kind, detail: Detail::TimeoutWord };
+                    return HttpCheck {
+                        status: kind,
+                        detail: if kind == DpiStatus::SendTimeout {
+                            Detail::at_kb(Detail::WriteTimeoutWord, 0.0)
+                        } else {
+                            Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0)
+                        },
+                    };
                 }
                 let (s, d) = inner_hyper(&e, "reading_data", 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
                 return HttpCheck { status: s, detail: d };
             }
             Err(_) => {
-                return HttpCheck { status: DpiStatus::ReadTimeout, detail: Detail::TimeoutWord };
+                return HttpCheck {
+                    status: DpiStatus::ReadTimeout,
+                    detail: Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0),
+                };
             }
         };
 
@@ -341,7 +351,10 @@ pub async fn check_http_injection(
 
     match timeout(total_timeout, fut).await {
         Ok(r) => r,
-        Err(_) => HttpCheck { status: DpiStatus::ReadTimeout, detail: Detail::TimeoutWord },
+        Err(_) => HttpCheck {
+            status: DpiStatus::ReadTimeout,
+            detail: Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0),
+        },
     }
 }
 

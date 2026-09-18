@@ -657,7 +657,11 @@ async fn handshake_attempt(
             .await
             {
                 Ok(result) => result,
-                Err(_) => (DpiStatus::ReadTimeout, Detail::ReadTimeoutWord, 0),
+                Err(_) => (
+                    DpiStatus::ReadTimeout,
+                    Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0),
+                    0,
+                ),
             };
             let (axis_status, axis_detail) = answered(axis, negotiated);
             // A peer that answered the browser's offer with 1.2 answered, but

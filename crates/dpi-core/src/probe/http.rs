@@ -461,7 +461,7 @@ pub(crate) fn fat_read_verdict(bytes: usize, min_kb: u64, max_kb: u64) -> (DpiSt
             Detail::at_kb(Detail::ReadTimeoutWord, kb),
         );
     }
-    (DpiStatus::ReadTimeout, Detail::ReadTimeoutWord)
+    (DpiStatus::ReadTimeout, Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0))
 }
 
 pub(crate) fn inner_hyper(
@@ -540,7 +540,7 @@ pub(crate) async fn check_http(
                 return (s, d, 0usize);
             }
             Err(_) => {
-                return (DpiStatus::ReadTimeout, Detail::ReadTimeoutWord, 0usize);
+                return (DpiStatus::ReadTimeout, Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0), 0usize);
             }
         };
 
@@ -619,7 +619,7 @@ mod tests {
 
         let (s, d) = fat_read_verdict(0, 14, 36);
         assert_eq!(s, DpiStatus::ReadTimeout);
-        assert_eq!(d.code(), "read_timeout_word");
+        assert_eq!(d.code(), "read_timeout_word_at_0kb");
     }
 
     fn request() -> HttpRequest<'static> {
