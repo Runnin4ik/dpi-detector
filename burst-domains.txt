@@ -3,12 +3,13 @@
 # The burst test asks a different question — does the act of connecting to this
 # host N times in a row change the answer? — so it needs hosts that answer
 # normally on the first connection and are not censored by address or SNI. A
-# blocked site would fail every attempt for a reason the test does not measure.
+# blocked site would fail every attempt for a reason the test does not measure,
+# and a host that only redirects fails differently: scpslgame.ru answers a 301 to
+# its www form, so the burst asks the address the redirect lands on instead.
 realmeteo.ru
 ezgame.su
-scpslgame.ru
+www.scpslgame.ru
 kyles.ru
 amserg.com
-smartape.ru
-reg.ru
+www.smartape.ru
 info.paymaster.ru

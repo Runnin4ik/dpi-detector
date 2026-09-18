@@ -1168,7 +1168,7 @@ mod tests {
         let burst = embedded_burst_domains();
         assert!(!burst.is_empty(), "the fallback ships a list");
         assert!(burst.contains(&"info.paymaster.ru".to_string()));
-        assert!(burst.contains(&"reg.ru".to_string()));
+        assert!(burst.contains(&"www.scpslgame.ru".to_string()));
         assert!(!burst.iter().any(|d| domains.contains(d)), "the two lists ask different questions");
         let shipped_burst = EMBEDDED_BURST_DOMAINS_TXT
             .lines()
