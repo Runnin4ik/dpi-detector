@@ -111,7 +111,6 @@ pub enum DpiStatus {
     #[serde(rename = "fakeip")]
     FakeIp,
     HttpBlocked,
-    Tcp16Dropped,
     Unreachable,
     Err,
     Unknown,
@@ -154,7 +153,6 @@ impl DpiStatus {
             Self::DnsHijacked => "dns_hijacked",
             Self::FakeIp => "fakeip",
             Self::HttpBlocked => "http_blocked",
-            Self::Tcp16Dropped => "tcp16_dropped",
             Self::Unreachable => "unreachable",
             Self::Err => "err",
             Self::Unknown => "unknown",
@@ -197,7 +195,6 @@ impl DpiStatus {
             Self::DnsHijacked => "DNS HIJACK",
             Self::FakeIp => "FAKE IP",
             Self::HttpBlocked => "HTTP BLOCK",
-            Self::Tcp16Dropped => "TCP16 DROP",
             Self::Unreachable => "UNREACHABLE",
             Self::Err => "ERR",
             Self::Unknown => "UNKNOWN",
@@ -217,7 +214,6 @@ impl DpiStatus {
             Self::Blocked
                 | Self::IspPage
                 | Self::Tcp16Detected
-                | Self::Tcp16Dropped
                 | Self::Tcp16Range
                 | Self::TlsRst
                 | Self::TlsAbort
@@ -305,20 +301,20 @@ mod tests {
         }
     }
 
-    /// The two 16 KB verdicts read differently on purpose. `Tcp16Range` is a
-    /// connection that died inside the fat window and its badge used to be
-    /// `TCP16-20` — the window, not what happened to the connection; `Tcp16Dropped`
-    /// is the probe of that window coming back empty. The wire token is untouched:
-    /// it still names the window, and rule 5 gives it away to `--json`, not to the
-    /// badge.
+    /// One badge for the fat window outside test 3 — `16KB DROP` — and `DETECTED`
+    /// for test 3 itself, which sends rather than reads. The window is carried by
+    /// the detail (`READ TIMEOUT at N KB`), not by the badge, and a connection
+    /// that dies before the window is a plain timeout, so `TCP16 DROP` is gone.
     #[test]
-    fn the_two_16kb_verdicts_read_differently() {
+    fn the_fat_window_has_one_badge_outside_test_3() {
         assert_eq!(DpiStatus::Tcp16Range.display_label(), "16KB DROP");
-        assert_eq!(DpiStatus::Tcp16Dropped.display_label(), "TCP16 DROP");
+        assert_eq!(DpiStatus::Tcp16Detected.display_label(), "DETECTED");
         assert_eq!(DpiStatus::Tcp16Range.as_str(), "tcp16_20");
         assert_eq!(
             serde_json::to_string(&DpiStatus::Tcp16Range).unwrap(),
             "\"tcp16_20\""
         );
+        assert!(DpiStatus::Tcp16Range.is_blocked());
+        assert!(DpiStatus::Tcp16Detected.is_blocked());
     }
 }

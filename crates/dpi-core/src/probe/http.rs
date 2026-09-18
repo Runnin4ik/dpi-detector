@@ -439,6 +439,31 @@ pub(crate) fn classify_redirect(
     (DpiStatus::RedirSuspect, Detail::Redirect { host: short_host })
 }
 
+/// The verdict for a read that died after `bytes` had already arrived.
+///
+/// Inside the fat window the badge is `16KB DROP` — the same one in every test but
+/// the 16 KB test, which sends rather than reads and calls it `DETECTED` — and the
+/// detail names the offset (`READ TIMEOUT at N KB`). Before the window opens it is
+/// a plain read timeout that still says the offset, because where it died is the
+/// useful part either way. One function for the h1 and h2 paths, which asked the
+/// same question and used to answer it with two copies of the same eight lines.
+pub(crate) fn fat_read_verdict(bytes: usize, min_kb: u64, max_kb: u64) -> (DpiStatus, Detail) {
+    let kb = bytes as f64 / 1024.0;
+    if kb >= min_kb as f64 && kb <= max_kb as f64 {
+        return (
+            DpiStatus::Tcp16Range,
+            Detail::at_kb(Detail::ReadTimeoutWordCaps, kb),
+        );
+    }
+    if bytes > 0 {
+        return (
+            DpiStatus::ReadTimeout,
+            Detail::at_kb(Detail::ReadTimeoutWord, kb),
+        );
+    }
+    (DpiStatus::ReadTimeout, Detail::ReadTimeoutWord)
+}
+
 pub(crate) fn inner_hyper(
     e: &hyper::Error,
     stage: &str,
@@ -449,16 +474,11 @@ pub(crate) fn inner_hyper(
     let (msg, os_code, os_kind) = hyper_err_info(e);
     let lower = msg.to_ascii_lowercase();
 
-    // Read timeout inside the fat window → the 16KB DROP signature
+    // Read timeout inside the fat window → the 16KB DROP badge, and the detail
+    // names the offset the way the fat probe does: `READ TIMEOUT at N KB`. The
+    // badge is the same in every test but test 3; the window is the detail's job.
     if (e.is_timeout() || lower.contains("timed out")) && stage == "reading_data" {
-        let kb = bytes as f64 / 1024.0;
-        if kb >= min_kb as f64 && kb <= max_kb as f64 {
-            return (DpiStatus::Tcp16Range, Detail::Kb { head: Box::new(Detail::TimeoutWord), kb });
-        }
-        if bytes > 0 {
-            return (DpiStatus::ReadTimeout, Detail::Kb { head: Box::new(Detail::ReadTimeoutWord), kb });
-        }
-        return (DpiStatus::ReadTimeout, Detail::ReadTimeoutWord);
+        return fat_read_verdict(bytes, min_kb, max_kb);
     }
 
     let (s, d) = classify_ssl_error(&msg, bytes, ConnectionStage::TlsClientHelloSent);
@@ -565,14 +585,8 @@ pub(crate) async fn check_http(
                 }
                 Ok(None) => break,
                 Err(_) => {
-                    let kb = bytes_read as f64 / 1024.0;
-                    if kb >= cfg.tcp_block_min_kb as f64 && kb <= cfg.tcp_block_max_kb as f64 {
-                        return (DpiStatus::Tcp16Range, Detail::Kb { head: Box::new(Detail::TimeoutWord), kb }, bytes_read);
-                    }
-                    if bytes_read > 0 {
-                        return (DpiStatus::ReadTimeout, Detail::Kb { head: Box::new(Detail::ReadTimeoutWord), kb }, bytes_read);
-                    }
-                    return (DpiStatus::ReadTimeout, Detail::ReadTimeoutWord, bytes_read);
+                    let (s, d) = fat_read_verdict(bytes_read, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                    return (s, d, bytes_read);
                 }
             }
         }
@@ -587,6 +601,26 @@ pub(crate) async fn check_http(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A read that died inside the fat window is the `16KB DROP` badge with the
+    /// offset in the detail (`READ TIMEOUT at N KB`); before the window opens the
+    /// verdict is a plain read timeout that still names the offset, and a read that
+    /// got nothing has no offset to name.
+    #[test]
+    fn a_read_cut_says_where_it_happened() {
+        let (s, d) = fat_read_verdict(20 * 1024, 14, 36);
+        assert_eq!(s, DpiStatus::Tcp16Range);
+        assert_eq!(d.code(), "read_timeout_word_at_20kb");
+        assert_eq!(s.display_label(), "16KB DROP");
+
+        let (s, d) = fat_read_verdict(8 * 1024, 14, 36);
+        assert_eq!(s, DpiStatus::ReadTimeout);
+        assert_eq!(d.code(), "read_timeout_word_at_8kb");
+
+        let (s, d) = fat_read_verdict(0, 14, 36);
+        assert_eq!(s, DpiStatus::ReadTimeout);
+        assert_eq!(d.code(), "read_timeout_word");
+    }
 
     fn request() -> HttpRequest<'static> {
         HttpRequest {

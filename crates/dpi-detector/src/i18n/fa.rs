@@ -297,7 +297,8 @@ pub(crate) fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("REDIR", "Ghermez - hedayat be domain-e bigane (mashkuk); hedayat be haman domain ya subdomain = OK"),
         ]),
         ("- Azmun-e TCP 16-20KB -", vec![
-            ("DETECTED", "Ghat'-e ettesal pas az ersal-e 14 ta 36 kilobyte"),
+            ("16KB DROP", "Ghat'-e khanesh dar panjere-ye 14 ta 36 kilobyte; dar tafsilat: READ TIMEOUT at N KB"),
+            ("DETECTED", "Ghat' dar ersal dar hamaan panjere-ye 14 ta 36 kilobyte - hamaan 16KB DROP, baraye azmun-e 16 KB ke ersal mikonad na khanesh"),
             ("OK", "Har 10 darkhast (ta 40 kilobyte) bedun-e ghat'i anjam shodand"),
         ]),
         ("- Sayer -", vec![

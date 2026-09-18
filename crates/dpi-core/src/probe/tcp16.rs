@@ -306,8 +306,14 @@ pub async fn probe_tcp_16_20(
                     if i == 0 {
                         return (DpiStatus::ReadTimeout, err_type, measured_rtt);
                     }
+                    // Before the window opens the verdict is a plain timeout, but
+                    // the offset it died at is still the useful part of it.
                     if i < min_detect_chunk {
-                        return (DpiStatus::Timeout, err_type, measured_rtt);
+                        return (
+                            DpiStatus::Timeout,
+                            Detail::at_kb(err_type, kb_sent(i, chunk_size) as f64),
+                            measured_rtt,
+                        );
                     }
                     return (
                         DpiStatus::Tcp16Detected,
@@ -320,7 +326,11 @@ pub async fn probe_tcp_16_20(
                     return (s, d, measured_rtt);
                 }
                 if i < min_detect_chunk {
-                    return (DpiStatus::Timeout, d, measured_rtt);
+                    return (
+                        DpiStatus::Timeout,
+                        Detail::at_kb(d, kb_sent(i, chunk_size) as f64),
+                        measured_rtt,
+                    );
                 }
                 return (
                     DpiStatus::Tcp16Detected,
@@ -333,7 +343,11 @@ pub async fn probe_tcp_16_20(
                     return (DpiStatus::ReadTimeout, Detail::ReadTimeoutWordCaps, measured_rtt);
                 }
                 if i < min_detect_chunk {
-                    return (DpiStatus::Timeout, Detail::ReadTimeoutWordCaps, measured_rtt);
+                    return (
+                        DpiStatus::Timeout,
+                        Detail::at_kb(Detail::ReadTimeoutWordCaps, kb_sent(i, chunk_size) as f64),
+                        measured_rtt,
+                    );
                 }
                 return (
                     DpiStatus::Tcp16Detected,
@@ -373,12 +387,7 @@ pub async fn probe_tcp16(target: SocketAddr, _payload_size: usize, timeout_dur: 
     let (status, detail, _rtt) =
         probe_tcp_16_20(&target.ip().to_string(), target.port(), &cfg.fat_default_sni.clone(), &cfg, None).await;
     metrics.duration_ms = start.elapsed().as_millis() as u64;
-    metrics.status = match status {
-        DpiStatus::Ok => DpiStatus::Ok,
-        DpiStatus::Tcp16Detected => DpiStatus::Tcp16Detected,
-        DpiStatus::Timeout | DpiStatus::ReadTimeout => DpiStatus::Tcp16Dropped,
-        other => other,
-    };
+    metrics.status = status;
     metrics.detail = detail;
     metrics
 }

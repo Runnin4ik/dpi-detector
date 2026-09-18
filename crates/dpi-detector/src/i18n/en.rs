@@ -301,7 +301,8 @@ pub(crate) fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("REDIR", "Red — redirect to a foreign domain (suspicious); a redirect to the same domain/subdomain reads as OK"),
         ]),
         ("— TCP 16-20KB test —", vec![
-            ("DETECTED", "Connection break after sending 14–36 KB"),
+            ("16KB DROP", "Read cut inside the 14–36 KB window; the detail says READ TIMEOUT at N KB"),
+            ("DETECTED", "Send-side cut inside the same 14–36 KB window — the same 16KB DROP, for the 16 KB test, which sends instead of reading"),
             ("OK", "All 10 requests (up to 40 KB) passed without a break"),
         ]),
         ("— Other —", vec![
