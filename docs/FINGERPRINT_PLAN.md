@@ -1,0 +1,257 @@
+# План: расширение набора фингерпринтов (до десятков профилей)
+
+Документ описывает, как добавлять новые TLS/HTTP-профили (более новые версии браузеров, Edge,
+мобильные) без роста ручного кода пропорционально их числу, откуда брать данные и как каждый
+профиль принимается в репозиторий.
+
+Цель: **десятки профилей как данные, а не как код**, с оффлайновой верификацией (JA3/JA4-пины)
+и одним и тем же набором приёмочных прогонов на каждый новый профиль.
+
+Не-цели этого плана:
+
+* HTTP/3 и QUIC — отдельный блокер: в `vendor/rustls-rustcrypto/src/quic.rs` стоит `todo!()`, а
+  все TLS 1.3-сьюты объявлены `quic: None` (см. §10).
+* ECH — нет HPKE в провайдере; профиль, которому ECH обязателен, пока не принимается (§6).
+* Запись-уровневые трюки (дробление ClientHello по records, record size limit, middlebox CCS) —
+  фиксируются как известное расхождение, но не воспроизводятся.
+
+---
+
+## 1. Что есть сейчас
+
+| Элемент | Где | Что делает |
+|---|---|---|
+| `enum TlsFingerprint` + `SPECS: [Spec; 4]` | `crates/dpi-core/src/net/fingerprint.rs:84`, `:100`, `:111` | вариант, `token` (латиница, Rule 4), `label` («CHROME 107»), `code` (для JSON/конфига) |
+| `ALL`, `parse`, `parse_list` | `:199`, `:177`, `:210` | выбор профиля из конфига/CLI и списка для теста 6 |
+| Данные ClientHello | `firefox_like()` `:586`, `chrome_like()` `:694`, `safari_like()` `:791` | по одному рукописному `ClientHelloProfile` на профиль (~100 строк каждый) |
+| Установка в конфиг | `apply()` `:539`, `pinned_drop()` `:515` | профиль в `ClientConfig.hello_profile`, вычистка «чужой» версии при пине |
+| HTTP/2 префейс | `H2Fingerprint` `:350`, `h2_fingerprint()` `:384` | SETTINGS+порядок, WINDOW_UPDATE, PRIORITY, порядок псевдозаголовков, окно соединения |
+| HTTP-идентичность | `http_identity()` `:330` | User-Agent и набор/порядок заголовков (переопределяется `config.user_agent`) |
+| Гейты провайдера | `needs_pq()` `:475`, `advertises_cert_compression()` `:488` | нужен ли провайдер с `X25519MLKEM768`; заявляем ли `compress_certificate` |
+| Селекторы | config `TLS_FINGERPRINT` (`config.rs:618`, валидатор `:644`), CLI `--fingerprint` (`args.rs:142`), список теста 6 (`runner.rs:213`) | один профиль на прогон либо список для теста 6 |
+| Пробы | `probe/domains.rs:162` (тест 2), `probe/burst.rs:197,225,245` (тест 6, по умолчанию `ALL`) | где профиль реально попадает на провод |
+| Вывод | `json.rs:23` (`tls_fingerprint`), `:44`,`:130` (`fingerprint_burst` по `code`) | машиночитаемая часть (Rule 5) |
+| Верификация | `examples/tls_fingerprint.rs`: `dump`, `dump13`, `dump12`, `live`, `live13`, `live12`, `liveany` | дамп JA3/JA4/порядка расширений из байтов и реальные хендшейки |
+| Пины | тесты `bundle_versions_match_their_ja3` `:1227`, `bundle_versions_match_their_ja4` `:1317` | JA3 и JA4 каждого профиля против `curl-impersonate` |
+| Прочие тесты профилей | `:1045` (лейблы), `:1057` (токены), `:1066` (парсинг), `:1111` (списки), `:1366` (пин версии/ALPN), `:1427` (GREASE), `:1509` (PQ), `:1524`, `:1545` (сжатие сертификата) | |
+| i18n | `i18n/{en,ru,zh,fa}.rs`: `fingerprint_label`, `fingerprint_note`, `cli_fingerprint`, `cli_burst_profiles`, `warn_unknown_fingerprint`, `cfg_warn_fingerprint` | **эти строки перечисляют четыре имени профиля** |
+
+## 2. Почему «десятки» нельзя добавить в текущем виде
+
+1. **Данные зашиты кодом.** Три билдера ≈ 100 строк каждый. Двадцать профилей — это ~2000 строк
+   почти одинакового кода и двадцать мест, где можно ошибиться в одной константе.
+2. **Строки i18n перечисляют профили.** `cli_fingerprint` и `warn_unknown_fingerprint` содержат
+   «rustls|firefox|chrome|safari» — при N профилях это N×4 переводов и постоянный дрейф.
+3. **Парсер знает про диапазоны версий вручную.** `curl_version()` (`:463`) плюс условия вида
+   `version <= 107`, `matches!(version, 155|170|172|180|184)`.
+4. **Нет машинного гейта «профиль ⊆ провайдер».** Сейчас проверяется только сжатие сертификата
+   (`:1545`); что заявленный cipher/group/sig-alg провайдер действительно умеет — не проверяется.
+5. **Тест 6 по умолчанию гоняет `ALL`.** N профилей × домены × 2 версии TLS — это сетевой бюджет,
+   который растёт линейно и молча.
+
+## 3. Целевая архитектура: профиль как данные
+
+Разбить `net/fingerprint.rs` (1564 строки) на модули, сохранив публичный API:
+
+```
+net/fingerprint/
+├── mod.rs        // TlsFingerprint, SPECS, parse/parse_list, apply, pinned_drop, гейты
+├── shapes.rs     // SHAPES: &[TlsShape] — все данные профилей
+├── h2.rs         // H2Fingerprint и таблица префейсов
+├── identity.rs   // HttpIdentity: UA и заголовки
+└── tests.rs      // пины JA3/JA4 и структурные тесты
+```
+
+Один профиль — одна запись данных:
+
+```rust
+struct TlsShape {
+    code: &'static str,               // "chrome133" — JSON, конфиг, round-trip
+    token: &'static str,              // "CHROME" — таблицы и логи (Rule 4)
+    label: &'static str,              // "CHROME 133" — заголовки, где есть место версии
+    family: Family,                   // Chrome | Firefox | Safari | Edge | Other
+    source: &'static str,             // "curl_chrome133 (lexiforest v2.2.2)" — версия источника
+    ciphers: &'static [u16],
+    groups: &'static [u16],
+    key_shares: &'static [u16],       // группы, для которых шлём шар (может быть ⊂ groups)
+    sig_algs: &'static [u16],
+    ext_order: &'static [Ext],        // с маркерами GREASE на своих позициях
+    raw_exts: &'static [(u16, &'static [u8])],
+    suppress: &'static [u16],
+    alpn: &'static [&'static [u8]],
+    versions: &'static [u16],         // supported_versions + legacy-фолбэки
+    padding_to: Option<usize>,        // Chrome: Some(512)
+    grease: bool,
+    cert_compression: &'static [u16],
+    pq: bool,                         // нужен провайдер с X25519MLKEM768
+    aliases: &'static [&'static str], // "curl_chrome133", "chrome133"
+}
+
+static SHAPES: &[TlsShape] = &[ /* ... */ ];
+```
+
+`ClientHelloProfile` собирается из записи одним билдером; `SPECS`, `ALL`, `parse`, `parse_list`,
+`h2_fingerprint()`, `http_identity()` и `needs_pq()` читают те же данные, а не свои `match`-ветки.
+Правило: **вариант в `TlsFingerprint` без строки в `SHAPES` — ошибка компиляции/теста**, а не
+тихий дефолт.
+
+## 4. Откуда брать данные
+
+| Источник | Что даёт | Как переносить |
+|---|---|---|
+| **uTLS** (refraction-networking, v1.8.2, янв 2026) | эталонные спеки hello: списки cipher suites, порядок расширений, curves, sig algs, ALPN; профиль Chrome 133 добавлен в v1.8.0 | механический перенос таблиц Go → `TlsShape`; источник **спеки**, не пруф |
+| **lexiforest/curl-impersonate** v2.x (активный форк; оригинал `lwthiker` застыл на 2024-07-18) | эталонные JA3/JA4 и h2-захваты (`SSLKEYLOGFILE`) | эталон для пинов §5.3; версия бандла пишется в `source` |
+| **bogdanfinn/tls-client** v1.16.0 (сен 2026) | широкий каталог по версиям, включая h2-профили | сверка h2-таблиц и «а есть ли вообще такой профиль» |
+| **FoxIO JA4+** (Rust, активен) и база ja4db | сверка JA4, готовые описания «фич» hello | кросс-проверка пинов JA4 |
+| Живой браузер + mitmproxy/Wireshark (`SSLKEYLOGFILE`) | «как реально шлёт» для новой версии | источник истины, когда библиотек под версию ещё нет |
+
+У каждого профиля в `source` фиксируется, из какого релиза источника он снят: обновление
+источника = осознанный пересмотр пинов, а не молчаливая смена формы.
+
+## 5. Процедура добавления одного профиля
+
+1. Запись в `SHAPES` + алиасы; `TlsFingerprint` расширяется тривиально.
+2. Парсинг: алиасы и правила диапазонов — в данных; тест `fingerprint_parses_known_values_and_rejects_others`.
+3. Пины `bundle_versions_match_their_ja3` / `_ja4`: **ожидаемые строки берутся из источника**, не
+   из нашего же дампа (иначе тест закрепляет нашу ошибку). JA4 строже JA3: он хеширует
+   `signature_algorithms` и ALPN — так у Safari нашлась отсутствовавшая `ecdsa_sha1`.
+4. `cargo test -p dpi-core fingerprint`.
+5. Дамп без сети: `cargo run --release --example tls_fingerprint dump <code>` (+ `dump12`, `dump13`) —
+   глазами сверить порядок расширений, GREASE-позиции, padding.
+6. Живой прогон: `live <code>` по базовым хостам, обязательно включая `hub.docker.com` и
+   `danbooru.donmai.us` (добавляют SCT в certificate entry) и `standby-rezka.tv` (GREASE-шар;
+   исторически отдавал fatal alert 12/12 без правильной формы).
+7. HTTP/2: `tls.peet.ws` должен показать ожидаемый akamai-фингерпринт (порядок SETTINGS и
+   псевдозаголовков этим и проверяется).
+8. Регрессия: JSON тестов 1–6 для существующих `code` не изменился (на локальном стенде).
+9. Если профилю нужно новое расширение — патч в `vendor/rustls` + строка в
+   `vendor/rustls/README-PATCH.md` и пункт в `PATCH.diff`.
+
+## 6. Машинные гейты (то, что должно падать само)
+
+* **Профиль ⊆ провайдер.** Новый тест: для каждой записи `SHAPES` каждый cipher, group и
+  sig-alg присутствует у провайдера (`cipher_suites`, `kx_groups`,
+  `signature_verification_algorithms.all`), а каждый алгоритм сжатия проходит существующую
+  проверку `cert_compression::covers`. Нарушение = либо не заявлять, либо дописать в провайдер
+  (как `X25519MLKEM768` в `crates/dpi-core/src/net/pq_kx.rs`).
+* **Группы vs шары.** Браузеры перечисляют в `supported_groups` больше, чем шлют шаром (например,
+  P-521). Наш провайдер P-521 и DHE не умеет. Тест обязан проверять: каждая группа из
+  `key_shares` обслуживается провайдером; группы «только в списке» допустимы, но тогда это
+  осознанное решение и оно отмечено в `TlsShape` комментарием.
+* **Версии.** Пин версии меняет `supported_versions` (документированное отклонение) — для профиля
+  решается, нужны ли `legacy_versions`, и это закреплено тестом `grease_version_leads_supported_versions`.
+* **ECH.** Профиль без ECH допустим, но это отражается в JA4 (счётчик на 1 меньше) и в комментарии;
+  ECH включаем только после появления HPKE в провайдере.
+* **Сертификатные расширения.** SCT (18) — уже принимается; delegated credentials (34) — не
+  поддерживаются, не заявлять.
+
+## 7. Масштабирование интерфейса и бюджета
+
+* Ввести `DEFAULT_SET` (5–8 профилей) и `ALL` (всё, только по явному запросу). Тест 6 по умолчанию
+  ходит по `DEFAULT_SET`; JSON и таблица показывают только выбранное.
+* i18n: перестать перечислять профили в `cli_fingerprint` и `warn_unknown_fingerprint`
+  (Rule 6 — строки остаются в i18n, но без списка имён: список генерируется из `SPECS`).
+* `--legend`: добавить таблицу профилей, собранную из `SPECS` (лейблы латиницей, Rule 4).
+* Бюджет прогона: N профилей × домены × 2 версии; зафиксировать в README ориентир по времени для
+  `DEFAULT_SET` и предупреждение для `ALL`.
+* JSON: `fingerprint_burst` уже ключуется `code` — расширение аддитивно и схему не ломает (Rule 5).
+
+## 8. Этапы
+
+| Этап | Содержание | Готово, если |
+|---|---|---|
+| **M1. Данные** | Chrome 133, Safari 18, Edge (по одному JA3) как новые записи | JA3/JA4-пины, live-прогон, `dump` совпадает с источником |
+| **M2. Рефакторинг** | разбиение файла, `TlsShape` + билдер, h2/identity таблицами; четыре нынешних профиля переводятся без изменения байтов | существующие пины JA3/JA4 не изменились, JSON тестов 1–6 байт-в-байт тот же |
+| **M3. Гейты и UX** | тест «профиль ⊆ провайдер», `DEFAULT_SET`, i18n без перечислений, таблица в `--legend` | `cargo test --workspace`, `clippy -D warnings` чисто; неизвестный профиль в конфиге предупреждает и падает на дефолт |
+| **M4. Масштаб** | доведение до ~15–20 профилей (десктоп + Android/iOS-варианты), у каждого указан источник | каждый профиль прошёл §5 |
+| **M5. QUIC/h3** | отдельный план: QUIC в провайдере → `quinn`/`h3` за фичей | вне этого документа |
+
+## 9. Риски
+
+| Риск | Наш опыт | Что делаем |
+|---|---|---|
+| Padding — часть JA3/JA4 | uTLS 1.8.2 отдельным релизом чинил «fingerprint mismatch on Chrome 120» — не хватало padding-расширения | `padding_to` в данных + пин JA3/JA4 |
+| GREASE: позиция и шар | `standby-rezka.tv`: без GREASE-шара — fatal alert 12/12, с шаром — проходит; добавление GREASE-версии вердикт не меняло | держим хост в живом свипе, позиции задаём в данных, а не флагом |
+| ECH | подделка ECH заставляла Google/Cloudflare отвечать `fatal alert: DecodeError` | профиль без ECH, отличие JA4 зафиксировано |
+| Сертификатные расширения | SCT ломал `hub.docker.com`, `danbooru.donmai.us`; delegated credentials не поддержаны | патч для SCT уже есть; 34 — не заявлять |
+| Неполнота провайдера | нет P-521/DHE/SHA-1 | гейт §6, иначе группа не заявляется |
+| Дрейф источника | `curl_chrome110+` (перемешанный порядок), `curl_safari260` (PQ), `curl_firefox135+` (SCT) описывают формы, которых у нас нет — `parse()` их честно отвергает | версия источника в `source`, пины пересматриваются вручную |
+
+## 10. Что осталось за границей этого плана
+
+QUIC/HTTP/3: в `vendor/rustls-rustcrypto/src/quic.rs` — заглушка (`todo!()` в
+`encrypt_in_place`/`decrypt_in_place`), все TLS 1.3-сьюты `quic: None`. Пока это так, ни один
+HTTP/3-профиль невозможен, независимо от наличия `quinn`/`h3`. Порядок работ для него: (1) QUIC
+header protection по RFC 9001 §5.4 с тест-векторами §A.2, (2) `quinn` без дефолтного `rustls-ring`
++ `h3`, (3) патч transport parameters (в quinn они жёстко зашиты), (4) фича `http3`, по умолчанию
+выключенная (Rule 2).
+
+## 11. Definition of Done для «профиль добавлен»
+
+* Запись в `SHAPES` с `source` и алиасами; `parse` принимает канонические и `curl_*` имена.
+* Пины JA3 **и** JA4 из источника; `cargo test -p dpi-core fingerprint` зелёный.
+* `dump`/`dump12`/`dump13` совпадают с источником; `live` проходит по базовым хостам + SCT-хосты +
+  `standby-rezka.tv`; `tls.peet.ws` показывает ожидаемый akamai-фингерпринт.
+* JSON существующих профилей не изменился; `cargo test --workspace` и
+  `cargo clippy --workspace --all-targets -- -D warnings` чисто.
+* Обновлены `--legend`/README-упоминания, если профиль попадает в `DEFAULT_SET`.
+
+---
+
+## 12. Состояние на 2026-09-18
+
+Сделано в этом репозитории:
+
+* **M2 (данные вместо кода).** `net/fingerprint.rs` разбит на
+  `net/fingerprint/{mod,shapes,h2,identity,tests}.rs`. Профиль — запись в
+  `SHAPES`: имена и алиасы, правила `curl_*`, `source`, TLS-списки, гейты `pq`
+  и сжатия сертификата, ссылки на identity и h2-преамбулу. Билдер, парсеры,
+  `apply`, `pinned_drop`, `hello_profile` и `--legend` читают таблицу;
+  `TlsFingerprint::ALL` — единственный рукописный список, и
+  `fingerprint_table_is_total` сверяет его с таблицей в обе стороны.
+  Байты четырёх прежних профилей не изменились: пины JA3/JA4
+  (`bundle_versions_match_their_ja3` / `_ja4`) те же, JSON тестов 1–6 — тот же.
+* **M1 (новые профили).** `chrome133` (`curl_chrome133a` v2.2.3 + uTLS
+  `HelloChrome_133` v1.8.2), `safari18` (`curl_safari180`) и `edge101`
+  (`curl_edge101` + uTLS `HelloEdge_106`).
+  * Edge и Safari 18 называют те же TLS-списки, что `chrome` и `safari`: у
+    бандла тот же JA3 (`safari_18.0_macOS` публикует `ja3_hash`
+    `773906b0efdefa24a7f2b8eb6985bf37`, его же вернул `tls.peet.ws`), поэтому
+    их пины — пины старших записей, а `profiles_that_share_a_tls_shape_send_the_same_hello`
+    это фиксирует. Отличаются identity и преамбула h2.
+  * Chrome 133 — отдельная форма: `X25519MLKEM768` первым (и в списке, и
+    шаром), ALPS на новом кодпойнте 17613, без padding. Опубликованный
+    `ja3_text` бандла для 133 снят с базы Chrome 131 (файл сам это оговаривает)
+    и расходится с обёрткой по кодпойнту ALPS, поэтому порядок расширений взят
+    из uTLS, ECH опущен (как у `firefox`), а JA4 пинится по частям: счётчики и
+    хеш шифров (`8daaf6152771` — публикуемый для Chrome 133+) из источника,
+    хеш расширений — наш (`_LESS_ECH`).
+  * Живые прогоны: `liveany chrome133` и `liveany safari18` проходят на
+    `tls.peet.ws`, `cloudflare.com`, `www.google.com`, `www.wikipedia.org`,
+    `www.microsoft.com`, `dns.google`, `hub.docker.com`, `danbooru.donmai.us`;
+    `peet` подтверждает akamai-фингерпринт преамбул (`1:65536;2:0;4:6291456;6:262144|…`
+    у 133, `2:0;3:100;4:2097152|10420225|0|m,s,p,a` у Safari 18).
+* **M3 (гейты).** `every_advertised_code_point_is_served_or_named`: каждый шифр,
+  группа и схема подписи каждого профиля либо обслуживается провайдером, либо
+  назван в `UNIMPLEMENTED` с причиной, и наоборот — устаревшая запись валит
+  тест. `the_advertised_group_list_opens_with_the_group_we_share` требует, чтобы
+  список групп открывался той группой, которой профиль шлёт шар
+  (`initial_key_share` берёт первую группу провайдера). Плюс
+  `the_baseline_is_the_only_shape_that_impersonates_nobody`,
+  `profile_names_are_unique_and_lowercase`, `default_set_is_a_subset_of_all`.
+* **M3 (UX).** `DEFAULT_SET` введён и на него переведены умолчания теста 6 (CLI
+  и циклический переключатель). Строки i18n больше не перечисляют профили:
+  `cli_fingerprint`, `cli_burst_profiles`, `warn_unknown_fingerprint` и
+  `fingerprint_note` переписаны без имён, а список с версиями и источниками
+  печатает секция `--legend`, сгенерированная из таблицы
+  (`legend_profiles_heading` / `legend_profiles_default`).
+
+Не сделано: M4 (масштаб до 15–20 профилей, мобильные варианты) и M5 (QUIC/h3).
+
+Замечание к §9, строка про GREASE. Измерено 2026-09-18: `standby-rezka.tv`
+отвечает `fatal alert: IllegalParameter` **всем** профилям, которые гласят
+GREASE (`chrome`, `safari`, `edge101`, `chrome133`, `safari18`), тогда как
+`rustls` и `firefox` (не гласят) проходят. Это поведение хоста, а не регрессия
+этих записей: байты `chrome`/`safari` не менялись (их пины JA3/JA4 те же), и
+набор падающих форм в точности совпадает с набором гласящих. Хост остаётся в
+живом свипе именно поэтому.

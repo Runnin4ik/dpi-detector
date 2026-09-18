@@ -222,7 +222,7 @@ impl Default for BurstSettings {
             timeout: Duration::from_secs(BURST_DEFAULT_TIMEOUT_SECS),
             tls: BurstTlsVersion::default(),
             alpn: BurstAlpn::default(),
-            profiles: TlsFingerprint::ALL.to_vec(),
+            profiles: TlsFingerprint::DEFAULT_SET.to_vec(),
         }
     }
 }
@@ -242,7 +242,7 @@ impl BurstSettings {
             tls,
             alpn,
             profiles: if profiles.is_empty() {
-                TlsFingerprint::ALL.to_vec()
+                TlsFingerprint::DEFAULT_SET.to_vec()
             } else {
                 profiles
             },

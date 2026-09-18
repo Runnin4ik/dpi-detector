@@ -44,7 +44,9 @@ pub(crate) fn messages() -> Messages {
         burst_profiles_all: "all",
         burst_testing: "Testing",
         fingerprint_label: "Fingerprint",
-        fingerprint_note: "Each profile reproduces one pinned curl-impersonate shape: FIREFOX = firefox133, CHROME = chrome107 (also edge 99-101), SAFARI = safari155. All offer h2 and http/1.1 as browsers do. None is byte-for-byte a real browser — deeper fingerprinting (HTTP/2 settings, record timing) can still distinguish them.",
+        fingerprint_note: "Each profile reproduces one pinned curl-impersonate shape: the ClientHello, the User-Agent with its headers, and the HTTP/2 preface of one client version. --legend lists every profile with the version it reproduces. None is byte-for-byte a real browser — deeper fingerprinting (HTTP/2 settings, record timing) can still distinguish them.",
+        legend_profiles_heading: "— FINGERPRINT PROFILES —",
+        legend_profiles_default: "default",
         lang: Language::En,
         replies_label: "replies",
         blocked_short: "blocked",
@@ -220,7 +222,7 @@ pub(crate) fn messages() -> Messages {
         cfg_warn_dc_port: "TELEGRAM_DC_PORT invalid, reset to 443",
 
         warn_unknown_lang: "Warning: unknown --lang '{}' (expected ru|en|zh|fa|auto), using en",
-        warn_unknown_fingerprint: "Warning: unknown --fingerprint '{}' (expected rustls|firefox|chrome|safari), using {}",
+        warn_unknown_fingerprint: "Warning: unknown --fingerprint '{}' (--legend lists the profile names), using {}",
         warn_unknown_burst_axis: "Warning: unknown {} '{}', using {}",
         press_enter_to_exit: "Press Enter to exit...",
         invalid_proxy_err: "Invalid proxy {}: {}\n",
@@ -247,7 +249,7 @@ pub(crate) fn messages() -> Messages {
         cli_output: "Output file path to save report",
         cli_burst: "Fingerprint stress (test 6): connections per host, launched 20 ms apart [default: 5]",
         cli_burst_timeout: "Test 6: handshake timeout, seconds [default: 8]; the request that follows waits read_timeout",
-        cli_burst_profiles: "Test 6 fingerprints: all|rustls,firefox(firefox133),chrome(chrome107),safari(safari155) [default: all]",
+        cli_burst_profiles: "Test 6 fingerprints: all, or profile names separated by commas; --legend lists them [default: the default set]",
         cli_burst_tls: "Test 6 TLS: 1.3+1.2 (the browser's own offer, must answer 1.3)|1.3 (offers 1.3 only)|1.2 (offers 1.2 only) [default: 1.3+1.2]",
         cli_burst_alpn: "Test 6 ALPN: h2 (offers h2 with the http/1.1 fallback)|http/1.1 (offers http/1.1 only) [default: h2]",
         cli_trace: "Test 6 trace: one line per attempt (round, shape, host, status, detail, ms); without a path to stderr, with one to that file [default: off]",
@@ -255,7 +257,7 @@ pub(crate) fn messages() -> Messages {
         cli_domains: "Path to custom domain list file",
         cli_tcp16: "Path to custom TCP16 target file",
         cli_ascii: "ASCII-only output for legacy consoles (no Unicode glyphs or borders)",
-        cli_fingerprint: "Fingerprint profile (rustls|firefox|chrome|safari): the ClientHello, the User-Agent and headers, and the HTTP/2 preface. firefox = Firefox 133, chrome = Chrome 107 / Edge 99-101, safari = Safari 15.5-18.4 curl-impersonate shapes, all offering h2",
+        cli_fingerprint: "Fingerprint profile: the ClientHello, the User-Agent with its headers, and the HTTP/2 preface of one pinned client version; --legend lists the names and the version each reproduces",
     }
 }
 

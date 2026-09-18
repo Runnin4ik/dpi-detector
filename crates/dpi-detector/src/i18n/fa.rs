@@ -44,7 +44,9 @@ pub(crate) fn messages() -> Messages {
         burst_profiles_all: "hame",
         burst_testing: "Dar hal-e test",
         fingerprint_label: "Fingerprint",
-        fingerprint_note: "Har profile yek shape-e pin-shode-ye curl-impersonate ra bazsazi mikonad: FIREFOX = firefox133, CHROME = chrome107 (va edge 99-101), SAFARI = safari155. Hame h2 va http/1.1 ra mesl-e browser ha pishnahad mikonand. Hich yek copy-e byte-be-byte-e yek browser-e vaghe-i nist - fingerprinting-e amigh-tar (HTTP/2 settings, record timing) hanuz mitavanad anha ra tafzil konad.",
+        fingerprint_note: "Har profile yek shape-e pin-shode-ye curl-impersonate ra bazsazi mikonad: ClientHello, User-Agent va header ha, va moqaddame-e HTTP/2 yek version-e client. --legend list-e profile ha ra ba version-e har yek chap mikonad. Hich yek copy-e byte-be-byte-e yek browser-e vaghe-i nist - fingerprinting-e amigh-tar (HTTP/2 settings, record timing) hanuz mitavanad anha ra tafzil konad.",
+        legend_profiles_heading: "- PROFILE HAYE FINGERPRINT -",
+        legend_profiles_default: "pishfarz",
         lang: Language::Fa,
         replies_label: "pasokh ha",
         blocked_short: "masdood",
@@ -214,7 +216,7 @@ pub(crate) fn messages() -> Messages {
         cfg_warn_dc_port: "TELEGRAM_DC_PORT na-motabar ast, be 443 reset shod",
 
         warn_unknown_lang: "Hoshdar: --lang '{}' nashenakhte (entezar: ru|en|zh|fa|auto), en estefade shod",
-        warn_unknown_fingerprint: "Hoshdar: --fingerprint '{}' nashenakhte (entezar: rustls|firefox|chrome|safari), {} estefade shod",
+        warn_unknown_fingerprint: "Hoshdar: --fingerprint '{}' nashenakhte (nam-e profile ha ra --legend chap mikonad), {} estefade shod",
         warn_unknown_burst_axis: "Hoshdar: meghdar-e nashenakhte {} '{}', {} estefade shod",
         press_enter_to_exit: "Baraye khorooj Enter ra feshar dahid...",
         invalid_proxy_err: "Proxy-e na-motabar {}: {}\n",
@@ -241,7 +243,7 @@ pub(crate) fn messages() -> Messages {
         cli_output: "Masir-e file baraye zakhire-ye report",
         cli_burst: "Fingerprint/Sibir blocking (test 6): darkhast be har host, ba ta'khir-e 20 ms [pishfarz: 5]",
         cli_burst_timeout: "Test 6: timeout-e mosafehe, sanie [pishfarz: 8]; darkhast-e baad az aan montazer-e read_timeout mimanad",
-        cli_burst_profiles: "Fingerprint haye test 6: all|rustls,firefox(firefox133),chrome(chrome107),safari(safari155) [pishfarz: all]",
+        cli_burst_profiles: "Fingerprint haye test 6: all ya nam-e profile ha ba kama; list ra --legend chap mikonad [pishfarz: set-e pishfarz]",
         cli_burst_tls: "TLS baraye test 6: 1.3+1.2 (pishnahad-e browser, pasokh bayad 1.3 bashad)|1.3 (faghat 1.3)|1.2 (faghat 1.2) [pishfarz: 1.3+1.2]",
         cli_burst_alpn: "ALPN baraye test 6: h2 (h2 ba bazgasht be http/1.1)|http/1.1 (faghat http/1.1) [pishfarz: h2]",
         cli_trace: "Trace baraye test 6: yek khat baraye har talash (dore, fingerPrint, domain, vaziyat, joz'yat, ms); bedun-e masir be stderr, ba masir be an file [pishfarz: khamush]",
@@ -249,7 +251,7 @@ pub(crate) fn messages() -> Messages {
         cli_domains: "Masir-e file-e list-e domain ha",
         cli_tcp16: "Masir-e file-e target haye TCP16",
         cli_ascii: "Khorooj-e faghat ASCII baraye console haye ghadimi (bedun-e glyph ya border-e Unicode)",
-        cli_fingerprint: "Profile-e fingerprint (rustls|firefox|chrome|safari): ClientHello, User-Agent va header ha, moqaddame-e HTTP/2. firefox = Firefox 133, chrome = Chrome 107 / Edge 99-101, safari = Safari 15.5-18.4 az curl-impersonate; hame h2 pishnahad mikonand",
+        cli_fingerprint: "Profile-e fingerprint: ClientHello, User-Agent va header ha, va moqaddame-e HTTP/2 yek version-e pin-shode-ye client; nam ha va version ha ra --legend chap mikonad",
     }
 }
 

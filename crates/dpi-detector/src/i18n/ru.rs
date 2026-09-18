@@ -44,7 +44,9 @@ pub(crate) fn messages() -> Messages {
         burst_profiles_all: "все",
         burst_testing: "Тестируем",
         fingerprint_label: "Fingerprint",
-        fingerprint_note: "Каждый профиль воспроизводит одну закреплённую форму curl-impersonate: FIREFOX = firefox133, CHROME = chrome107 (и edge 99-101), SAFARI = safari155. Все предлагают h2 и http/1.1, как браузеры. Ни один не является побайтовой копией настоящего браузера — более глубокий фингерпринтинг (настройки HTTP/2, тайминги записей) всё ещё может их отличить.",
+        fingerprint_note: "Каждый профиль воспроизводит одну закреплённую форму curl-impersonate: ClientHello, User-Agent с заголовками и преамбулу HTTP/2 одной версии клиента. Список профилей с воспроизводимой версией печатает --legend. Ни один не является побайтовой копией настоящего браузера — более глубокий фингерпринтинг (настройки HTTP/2, тайминги записей) всё ещё может их отличить.",
+        legend_profiles_heading: "— ПРОФИЛИ ОТПЕЧАТКА —",
+        legend_profiles_default: "по умолчанию",
         lang: Language::Ru,
         replies_label: "ответов",
         blocked_short: "блок.",
@@ -220,7 +222,7 @@ pub(crate) fn messages() -> Messages {
         cfg_warn_dc_port: "TELEGRAM_DC_PORT недопустим, сброшено на 443",
 
         warn_unknown_lang: "Предупреждение: неизвестный --lang '{}' (ожидается ru|en|zh|fa|auto), используется en",
-        warn_unknown_fingerprint: "Предупреждение: неизвестный --fingerprint '{}' (ожидается rustls|firefox|chrome|safari), используется {}",
+        warn_unknown_fingerprint: "Предупреждение: неизвестный --fingerprint '{}' (имена профилей печатает --legend), используется {}",
         warn_unknown_burst_axis: "Предупреждение: неизвестное значение {} '{}', используется {}",
         press_enter_to_exit: "Нажмите Enter для выхода...",
         invalid_proxy_err: "Некорректный прокси {}: {}\n",
@@ -247,7 +249,7 @@ pub(crate) fn messages() -> Messages {
         cli_output: "Путь к файлу отчёта",
         cli_burst: "Fingerprint/Сибирская блокировка (тест 6): соединений на домен, с задержкой 20 мс между стартами [по умолчанию: 5]",
         cli_burst_timeout: "Тест 6: таймаут рукопожатия, секунды [по умолчанию: 8]; запрос после него ждёт read_timeout",
-        cli_burst_profiles: "Fingerprint для теста 6: all|rustls,firefox(firefox133),chrome(chrome107),safari(safari155) [по умолчанию: all]",
+        cli_burst_profiles: "Fingerprint для теста 6: all или имена профилей через запятую; список печатает --legend [по умолчанию: набор по умолчанию]",
         cli_burst_tls: "TLS для теста 6: 1.3+1.2 (предложение браузера, ответ должен быть 1.3)|1.3 (только 1.3)|1.2 (только 1.2) [по умолчанию: 1.3+1.2]",
         cli_burst_alpn: "ALPN для теста 6: h2 (предлагает h2 с откатом на http/1.1)|http/1.1 (только http/1.1) [по умолчанию: h2]",
         cli_trace: "Трассировка теста 6: строка на каждую попытку (раунд, отпечаток, домен, статус, деталь, мс); без пути — в stderr, с путём — в указанный файл [по умолчанию: выключено]",
@@ -255,7 +257,7 @@ pub(crate) fn messages() -> Messages {
         cli_domains: "Путь к файлу со списком доменов",
         cli_tcp16: "Путь к файлу целей TCP16",
         cli_ascii: "Только ASCII для старых консолей (без Unicode-глифов и рамок)",
-        cli_fingerprint: "Профиль отпечатка (rustls|firefox|chrome|safari): ClientHello, User-Agent и заголовки, преамбула HTTP/2. firefox — форма Firefox 133, chrome — Chrome 107 / Edge 99-101, safari — Safari 15.5-18.4 из curl-impersonate; все предлагают h2",
+        cli_fingerprint: "Профиль отпечатка: ClientHello, User-Agent с заголовками и преамбула HTTP/2 одной закреплённой версии клиента; имена и воспроизводимые версии печатает --legend",
     }
 }
 

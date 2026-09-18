@@ -366,7 +366,7 @@ fn burst_settings_rows(
                 // Latin with the pinned version, like the table headers: the
                 // cycler names the exact shape the run will use (rule 4, never
                 // translated).
-                TlsFingerprint::ALL[index - 1].display_label().to_string()
+                TlsFingerprint::DEFAULT_SET[index - 1].display_label().to_string()
             };
             format!("{} \x1b[2m[{}/{}]\x1b[0m", name, index + 1, PROFILE_CHOICES)
         }
@@ -429,18 +429,22 @@ fn flip_alpn(alpn: BurstAlpn) -> BurstAlpn {
     }
 }
 
-/// Choices of the profile cycler: `all`, then one per profile — the same shape
-/// as the main menu's fingerprint row.
-const PROFILE_CHOICES: usize = TlsFingerprint::ALL.len() + 1;
+/// Choices of the profile cycler: the default set, then one profile each — the
+/// same shape as the main menu's fingerprint row.
+///
+/// The first choice is the set a run presents when nothing is asked for
+/// (`DEFAULT_SET`), not `ALL`: test 6 costs one round of network time per
+/// profile, so "everything" stays an explicit `--burst-profiles all`.
+const PROFILE_CHOICES: usize = TlsFingerprint::DEFAULT_SET.len() + 1;
 
-/// The cycler position a selection corresponds to: `Some(0)` = all, `Some(1+n)`
-/// = the n-th profile alone, `None` = a combination the cycler cannot show (only
-/// `--burst-profiles` can ask for one).
+/// The cycler position a selection corresponds to: `Some(0)` = the default set,
+/// `Some(1+n)` = the n-th profile alone, `None` = a combination the cycler
+/// cannot show (only `--burst-profiles` can ask for one).
 fn profile_index_of(profiles: &[TlsFingerprint]) -> Option<usize> {
-    if profiles.len() == TlsFingerprint::ALL.len() {
+    if profiles.len() == TlsFingerprint::DEFAULT_SET.len() {
         Some(0)
     } else if profiles.len() == 1 {
-        TlsFingerprint::ALL.iter().position(|f| *f == profiles[0]).map(|i| i + 1)
+        TlsFingerprint::DEFAULT_SET.iter().position(|f| *f == profiles[0]).map(|i| i + 1)
     } else {
         None
     }
@@ -449,9 +453,9 @@ fn profile_index_of(profiles: &[TlsFingerprint]) -> Option<usize> {
 /// The selection a cycler position means.
 fn profiles_for_index(index: usize) -> Vec<TlsFingerprint> {
     if index == 0 {
-        TlsFingerprint::ALL.to_vec()
+        TlsFingerprint::DEFAULT_SET.to_vec()
     } else {
-        vec![TlsFingerprint::ALL[index - 1]]
+        vec![TlsFingerprint::DEFAULT_SET[index - 1]]
     }
 }
 
@@ -526,7 +530,7 @@ mod tests {
         let single = burst_settings_rows(
             &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12Only, BurstAlpn::Http2, "", false, &chrome, profile_index_of(&chrome), 35,
         );
-        let chrome_position = TlsFingerprint::ALL
+        let chrome_position = TlsFingerprint::DEFAULT_SET
             .iter()
             .position(|f| *f == TlsFingerprint::Chrome)
             .expect("the cycler lists chrome")

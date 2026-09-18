@@ -134,6 +134,7 @@ pub fn legend_text(lang: Language, msg: &Messages) -> String {
         }
         out.push('\n');
     }
+    out.push_str(&profile_section(msg, lang));
     out
 }
 
@@ -157,6 +158,32 @@ pub fn fingerprint_label(fp: dpi_core::net::fingerprint::TlsFingerprint, lang: L
         _ => "default",
     };
     format!("{} ({})", fp.token(), qualifier)
+}
+
+/// The profile rows of `--legend`, built from the profile table instead of
+/// being written out per language: the names, the version each shape
+/// reproduces and the bundle it came from stay Latin (rule 4), so only the
+/// heading and the "default" marker are translated. A profile added to the
+/// table appears here with no new text anywhere.
+fn profile_section(msg: &Messages, lang: Language) -> String {
+    use dpi_core::net::fingerprint::TlsFingerprint;
+    let mut out = format!("  {}\n", format_bidi(msg.legend_profiles_heading, lang));
+    for fingerprint in TlsFingerprint::ALL {
+        let marker = if TlsFingerprint::DEFAULT_SET.contains(&fingerprint) {
+            format!(" · {}", msg.legend_profiles_default)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "    \x1b[36m{:<14}\x1b[0m \x1b[2m{} - {}{}\x1b[0m\n",
+            fingerprint.code(),
+            fingerprint.display_label(),
+            fingerprint.source(),
+            marker
+        ));
+    }
+    out.push('\n');
+    out
 }
 
 /// Transfer rate in the interface's speed units (Ru uses Cyrillic units).

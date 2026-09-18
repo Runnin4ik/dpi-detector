@@ -44,7 +44,9 @@ pub(crate) fn messages() -> Messages {
         burst_profiles_all: "全部",
         burst_testing: "正在测试",
         fingerprint_label: "Fingerprint",
-        fingerprint_note: "每个配置复现一个固定的 curl-impersonate 形态：FIREFOX = firefox133，CHROME = chrome107（以及 edge 99-101），SAFARI = safari155。三者都像浏览器一样提供 h2 与 http/1.1。它们均非真实浏览器的逐字节复制，更深层的指纹识别（HTTP/2 设置、记录时序）仍可能将它们区分开。",
+        fingerprint_note: "每个配置复现一个固定的 curl-impersonate 形态：某个客户端版本的 ClientHello、User-Agent 及其请求头，以及 HTTP/2 前导帧。--legend 会列出全部配置及各自复现的版本。它们均非真实浏览器的逐字节复制，更深层的指纹识别（HTTP/2 设置、记录时序）仍可能将它们区分开。",
+        legend_profiles_heading: "— 指纹配置 —",
+        legend_profiles_default: "默认",
         lang: Language::Zh,
         replies_label: "响应",
         blocked_short: "阻断",
@@ -216,7 +218,7 @@ pub(crate) fn messages() -> Messages {
         cfg_warn_dc_port: "TELEGRAM_DC_PORT 无效，已重置为 443",
 
         warn_unknown_lang: "警告: 未知的 --lang '{}'（应为 ru|en|zh|fa|auto），改用 en",
-        warn_unknown_fingerprint: "警告: 未知的 --fingerprint '{}'（应为 rustls|firefox|chrome|safari），改用 {}",
+        warn_unknown_fingerprint: "警告: 未知的 --fingerprint '{}'（配置名见 --legend），改用 {}",
         warn_unknown_burst_axis: "警告: 未知的 {} '{}'，改用 {}",
         press_enter_to_exit: "按回车键退出...",
         invalid_proxy_err: "无效代理 {}: {}\n",
@@ -243,7 +245,7 @@ pub(crate) fn messages() -> Messages {
         cli_output: "保存报告的输出文件路径",
         cli_burst: "Fingerprint/西伯利亚封锁 (测试 6): 每主机连接数, 间隔 20 毫秒发起 [默认: 5]",
         cli_burst_timeout: "测试 6: 握手超时, 秒 [默认: 8]; 之后的请求等待 read_timeout",
-        cli_burst_profiles: "测试 6 的 Fingerprint: all|rustls,firefox(firefox133),chrome(chrome107),safari(safari155) [默认: all]",
+        cli_burst_profiles: "测试 6 的 Fingerprint: all，或以逗号分隔的配置名；列表见 --legend [默认: 默认集合]",
         cli_burst_tls: "测试 6 的 TLS: 1.3+1.2（浏览器提议，应答必须为 1.3）|1.3（仅提供 1.3）|1.2（仅提供 1.2）[默认: 1.3+1.2]",
         cli_burst_alpn: "测试 6 的 ALPN: h2（提供 h2 并回退 http/1.1）|http/1.1（仅 http/1.1）[默认: h2]",
         cli_trace: "测试 6 追踪: 每次尝试一行（轮次、指纹、域名、状态、详情、毫秒）；无路径写入 stderr，有路径写入该文件 [默认: 关闭]",
@@ -251,7 +253,7 @@ pub(crate) fn messages() -> Messages {
         cli_domains: "自定义域名列表文件路径",
         cli_tcp16: "自定义 TCP16 目标文件路径",
         cli_ascii: "面向旧终端的纯 ASCII 输出（无 Unicode 符号或边框）",
-        cli_fingerprint: "指纹配置（rustls|firefox|chrome|safari）：ClientHello、User-Agent 与请求头、HTTP/2 前导帧。firefox = Firefox 133，chrome = Chrome 107 / Edge 99-101，safari = Safari 15.5-18.4（curl-impersonate 形态），均提供 h2",
+        cli_fingerprint: "指纹配置：某个固定客户端版本的 ClientHello、User-Agent 及其请求头，以及 HTTP/2 前导帧；名称与各自复现的版本见 --legend",
     }
 }
 

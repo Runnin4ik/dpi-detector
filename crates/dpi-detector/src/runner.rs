@@ -211,7 +211,7 @@ pub(crate) fn warn_unknown_axis(msg: &Messages, args: &CliArgs, flag: &str, valu
 pub(crate) fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Messages) -> BurstPlan {
     let (profiles, unknown) = match &args.burst_profiles {
         Some(value) => TlsFingerprint::parse_list(value),
-        None => (TlsFingerprint::ALL.to_vec(), Vec::new()),
+        None => (TlsFingerprint::DEFAULT_SET.to_vec(), Vec::new()),
     };
     if !args.json {
         for token in unknown {

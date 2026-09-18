@@ -51,7 +51,16 @@ pub struct Messages {
     /// (`Тестируем: CHROME 107 2/4`).
     pub burst_testing: &'static str,
     pub fingerprint_label: &'static str,
+    /// Prose under a non-default profile's header line. Names no profile: the
+    /// list is generated from the profile table into `--legend`
+    /// (`legend_profiles_heading`).
     pub fingerprint_note: &'static str,
+    /// Heading of the generated profile table in `--legend`. The rows
+    /// themselves are data: names, versions and sources stay Latin (rule 4).
+    pub legend_profiles_heading: &'static str,
+    /// Marks a profile that a run presents when no set was asked for, inside
+    /// the `--legend` profile rows.
+    pub legend_profiles_default: &'static str,
     pub lang: Language,
     pub replies_label: &'static str,
     pub blocked_short: &'static str,
