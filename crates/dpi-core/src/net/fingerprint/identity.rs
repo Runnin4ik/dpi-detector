@@ -124,6 +124,33 @@ pub(crate) const CHROME_HEADERS: &[(&str, &str)] = &[
     ("Accept-Language", "en-US,en;q=0.9"),
 ];
 
+/// Chrome 116 headers, in `curl_chrome116.bat` order.
+///
+/// The identity Chrome 110–116 send: the same set as Chrome 107 above, on the
+/// same platform, with the version its `sec-ch-ua` brand list and `User-Agent`
+/// name. The TLS half differs from 107 only in that Chromium shuffles the
+/// extension order from 110 on, which is why both records exist.
+pub(crate) const CHROME116_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#""Chromium";v="116", "Not)A;Brand";v="24", "Google Chrome";v="116""#),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", r#""Windows""#),
+    ("Upgrade-Insecure-Requests", "1"),
+    (
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+    ),
+    (
+        "Accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    ),
+    ("Sec-Fetch-Site", "none"),
+    ("Sec-Fetch-Mode", "navigate"),
+    ("Sec-Fetch-User", "?1"),
+    ("Sec-Fetch-Dest", "document"),
+    ("Accept-Encoding", "gzip, deflate, br"),
+    ("Accept-Language", "en-US,en;q=0.9"),
+];
+
 /// Firefox 133 headers, in `curl_firefox133.bat` order.
 pub(crate) const FIREFOX_HEADERS: &[(&str, &str)] = &[
     (
@@ -151,6 +178,42 @@ pub(crate) const SAFARI_HEADERS: &[(&str, &str)] = &[
     ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
     ("Accept-Language", "en-GB,en-US;q=0.9,en;q=0.8"),
     ("Accept-Encoding", "gzip, deflate, br"),
+];
+
+/// Safari 17.0 headers, in `curl_safari170.bat` order.
+///
+/// The identity Safari 17.0 sends where 15.5 sent four headers: the same four
+/// plus the three `Sec-Fetch-*` fields, and `accept-language` moved from
+/// `en-GB,en-US;q=0.9,en;q=0.8` to `en-US,en;q=0.9`. Its hello is 15.5's, so the
+/// two records differ in the preface and above it, not in TLS.
+pub(crate) const SAFARI170_HEADERS: &[(&str, &str)] = &[
+    ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("Sec-Fetch-Site", "none"),
+    ("Accept-Encoding", "gzip, deflate, br"),
+    ("Sec-Fetch-Mode", "navigate"),
+    (
+        "User-Agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    ),
+    ("Accept-Language", "en-US,en;q=0.9"),
+    ("Sec-Fetch-Dest", "document"),
+];
+
+/// Safari 17.2 on iOS headers, in `curl_safari172_ios.bat` order.
+///
+/// The same set as [`SAFARI170_HEADERS`] behind the iPhone `User-Agent`; the
+/// preface below is the other half of what makes 17.2 a record of its own.
+pub(crate) const SAFARI172_IOS_HEADERS: &[(&str, &str)] = &[
+    ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("Sec-Fetch-Site", "none"),
+    ("Accept-Encoding", "gzip, deflate, br"),
+    ("Sec-Fetch-Mode", "navigate"),
+    (
+        "User-Agent",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+    ),
+    ("Accept-Language", "en-US,en;q=0.9"),
+    ("Sec-Fetch-Dest", "document"),
 ];
 
 /// Safari 15.3 headers, in `curl_safari153.bat` order. The same set as 15.5's
@@ -190,18 +253,20 @@ pub(crate) const CHROME99_ANDROID_HEADERS: &[(&str, &str)] = &[
     ("Accept-Language", "en-US,en;q=0.9"),
 ];
 
-/// Chrome 120 headers, in `curl_chrome120.bat` order. Two differences from
-/// Chrome 133's below: `accept-encoding` has no `zstd` yet, and there is no
-/// `priority` header — Chrome added both at 133, so a record that sent 133's
-/// list under a 120 UA would be inconsistent in the packet a censor reads.
-pub(crate) const CHROME120_HEADERS: &[(&str, &str)] = &[
-    ("sec-ch-ua", r#""Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120""#),
+/// Chrome 123 headers, in `curl_chrome123.bat` order. One difference from
+/// Chrome 131's below: no `priority` header — Chrome added it at 124, so a
+/// record that sent 131's list under a 123 UA would be inconsistent in the
+/// packet a censor reads. `accept-encoding` does carry `zstd`, which arrived
+/// with this release (the 119/120 identity this one replaced still sent the
+/// three-codec list).
+pub(crate) const CHROME123_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#""Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123""#),
     ("sec-ch-ua-mobile", "?0"),
     ("sec-ch-ua-platform", r#""macOS""#),
     ("Upgrade-Insecure-Requests", "1"),
     (
         "User-Agent",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     ),
     (
         "Accept",
@@ -211,7 +276,7 @@ pub(crate) const CHROME120_HEADERS: &[(&str, &str)] = &[
     ("Sec-Fetch-Mode", "navigate"),
     ("Sec-Fetch-User", "?1"),
     ("Sec-Fetch-Dest", "document"),
-    ("Accept-Encoding", "gzip, deflate, br"),
+    ("Accept-Encoding", "gzip, deflate, br, zstd"),
     ("Accept-Language", "en-US,en;q=0.9"),
 ];
 
@@ -292,20 +357,19 @@ pub(crate) const CHROME146_HEADERS: &[(&str, &str)] = &[
     ("priority", "u=0, i"),
 ];
 
-/// Firefox 135 headers, in `curl_firefox135.bat` order: Firefox 133's set with
-/// the version it names.
-/// Firefox 144 headers. `curl_firefox144.bat` is `--impersonate firefox144`, so
-/// the list comes from the bundle's own `firefox_144.0.0_linux` capture, which
-/// is the same set with 144 in the UA. The `TE` spelling comes from that
-/// request too: the bundle's built-in profile writes `Te`, where
-/// `curl_firefox135` — and Firefox itself — writes `TE`.
-pub(crate) const FIREFOX144_HEADERS: &[(&str, &str)] = &[
+/// Firefox 147 headers. `curl_firefox147.bat` is `--impersonate firefox147`, so
+/// the list comes from the bundle's own `firefox_144.0.0_linux` capture — the
+/// same set the 135 and 144 wrappers send — with the version this release names
+/// and its `accept-language`, which moved from `q=0.5` to `q=0.9` at 147. The
+/// `TE` spelling comes from that request too: the bundle's built-in profile
+/// writes `Te`, where Firefox itself writes `TE`.
+pub(crate) const FIREFOX147_HEADERS: &[(&str, &str)] = &[
     (
         "User-Agent",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:147.0) Gecko/20100101 Firefox/147.0",
     ),
     ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
-    ("Accept-Language", "en-US,en;q=0.5"),
+    ("Accept-Language", "en-US,en;q=0.9"),
     ("Accept-Encoding", "gzip, deflate, br, zstd"),
     ("Upgrade-Insecure-Requests", "1"),
     ("Sec-Fetch-Dest", "document"),

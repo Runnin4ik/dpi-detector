@@ -75,10 +75,10 @@ pub fn h2_fingerprint(fingerprint: super::TlsFingerprint) -> Option<H2Fingerprin
 /// `--http2-stream-weight 256 --http2-stream-exclusive 1`, pseudo-headers `masp`
 /// (the curl default, no flag).
 ///
-/// Chrome's preface from 120 on, and the one every desktop record here sends:
+/// Chrome's preface from 119 on, and the one every desktop record with this shape sends:
 /// 99–107 still carried `3:1000` (`SETTINGS_MAX_CONCURRENT_STREAMS`), 120 and
-/// later dropped it, and 133, 136 and the 131 records send this same list.
-pub(crate) const CHROME120_H2: H2Fingerprint = H2Fingerprint {
+/// later dropped it, and the 123, 131 and 146 records send this same list.
+pub(crate) const CHROME123_H2: H2Fingerprint = H2Fingerprint {
     header_table_size: Some(65_536),
     max_concurrent_streams: None,
     initial_window_size: 6_291_456,
@@ -203,6 +203,52 @@ pub(crate) const SAFARI260_H2: H2Fingerprint = H2Fingerprint {
     connection_window: 10_420_225 + 65_535,
     pseudo_order: PseudoOrder::MethodSchemeAuthorityPath,
     priority: None,
+};
+
+/// `2:0;4:4194304;3:100`, window 10485760,
+/// `--http2-stream-weight 255 --http2-stream-exclusive 0`,
+/// `--http2-pseudo-headers-order "mspa"`.
+///
+/// Safari 17.0 and 17.2 on iOS: [`SAFARI_H2`]'s list with
+/// `SETTINGS_ENABLE_PUSH = 0` ahead of it, which is the first Safari preface
+/// here that names `2` first — `settings_order` carries that (`[2, 4, 3]`, and
+/// the frozen ids are `ENABLE_PUSH`, `INITIAL_WINDOW_SIZE`,
+/// `MAX_CONCURRENT_STREAMS`). Its iOS sibling sends a 2 MiB stream window
+/// ([`SAFARI172_IOS_H2`]); everything else is 15.5's.
+pub(crate) const SAFARI170_H2: H2Fingerprint = H2Fingerprint {
+    header_table_size: None,
+    max_concurrent_streams: Some(100),
+    initial_window_size: 4_194_304,
+    max_frame_size: None,
+    max_header_list_size: None,
+    enable_push: Some(false),
+    enable_connect_protocol: None,
+    no_rfc7540_priorities: None,
+    settings_order: &[2, 4, 3],
+    connection_window: 10_485_760 + 65_535,
+    pseudo_order: PseudoOrder::MethodSchemePathAuthority,
+    priority: Some((255, false)),
+};
+
+/// `2:0;4:2097152;3:100`, window 10485760,
+/// `--http2-stream-weight 255 --http2-stream-exclusive 0`,
+/// `--http2-pseudo-headers-order "mspa"`.
+///
+/// Safari 17.2 on iOS: the same preface as 17.0 with a 2 MiB initial stream
+/// window, which is what the phone's build of Safari names.
+pub(crate) const SAFARI172_IOS_H2: H2Fingerprint = H2Fingerprint {
+    header_table_size: None,
+    max_concurrent_streams: Some(100),
+    initial_window_size: 2_097_152,
+    max_frame_size: None,
+    max_header_list_size: None,
+    enable_push: Some(false),
+    enable_connect_protocol: None,
+    no_rfc7540_priorities: None,
+    settings_order: &[2, 4, 3],
+    connection_window: 10_485_760 + 65_535,
+    pseudo_order: PseudoOrder::MethodSchemePathAuthority,
+    priority: Some((255, false)),
 };
 
 /// `1:65536;2:0;3:1000;4:6291456;6:262144`, window 15663105,

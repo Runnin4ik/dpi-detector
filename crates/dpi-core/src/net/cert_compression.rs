@@ -48,7 +48,7 @@ pub const ZLIB: &dyn CertDecompressor = &Zlib;
 
 /// `zstd` (RFC 8878), the third algorithm the Firefox family advertises.
 ///
-/// `curl_firefox133`, `curl_firefox135` and `curl_firefox144` name
+/// `curl_firefox133` and `curl_firefox147` name
 /// `--cert-compression zlib,brotli,zstd` and the bundle's own hello carries
 /// `06000100020003` — zlib, brotli, zstd in that order. Advertising it without a
 /// decoder is not an option: a server that picks zstd would end the handshake.

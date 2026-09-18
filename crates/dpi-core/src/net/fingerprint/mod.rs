@@ -51,7 +51,7 @@
 //!
 //! It is **not** a byte-for-byte browser. What is left, and why:
 //!
-//! * The nine shapes whose client sends `encrypted_client_hello` send it as
+//! * The seven shapes whose client sends `encrypted_client_hello` send it as
 //!   GREASE, because that is what their own wrappers send: curl needs DoH or an
 //!   explicit `--ecl:` for a real ECHConfigList and no wrapper passes either
 //!   (`net::tls` installs `EchMode::Grease`, `net::hpke` is the HPKE suite
@@ -70,7 +70,7 @@
 //!   the groups, the signature schemes, the key shares a `--tls-key-shares-limit`
 //!   asks for, the h2 preface including the settings Safari names and the
 //!   request's priority are the client's own.
-//! * `chrome120` and `chrome131android` are the only shapes whose hello can fall
+//! * `chrome123` and `chrome131android` are the only shapes whose hello can fall
 //!   under the 512-byte floor a browser pads to — 497 bytes with the shortest
 //!   GREASE ECH body — and this build never pads there: the profile's
 //!   `padding_to` measures the hello before rustls appends the typed ECH body, so
@@ -98,13 +98,12 @@
 //!
 //! # Adding a profile
 //!
-//! Write the record, add the alias set and the `curl_*` names it reproduces,
-//! pin its JA3 **and** JA4 against the source the record claims, and run
-//! `python tools/fingerprint/fingerprint.py all <code>` — it drives the bundle
-//! the record copies and diffs the two clients three ways. The gate in
-//! `tests::every_advertised_code_point_is_served_or_named` refuses a record
-//! whose cipher, group or signature scheme this build cannot serve unless the
-//! gap is named and has a reason — the provider is the second half of a
+//! Write the record, pin its JA3 **and** JA4 against the source the record
+//! claims, and run `python tools/fingerprint/fingerprint.py all <code>` — it
+//! drives the bundle the record copies and diffs the two clients three ways. The
+//! gate in `tests::every_advertised_code_point_is_served_or_named` refuses a
+//! record whose cipher, group or signature scheme this build cannot serve unless
+//! the gap is named and has a reason — the provider is the second half of a
 //! profile, and a shape it cannot execute is a shape the probe does not send.
 
 mod h2;
@@ -146,9 +145,14 @@ pub enum TlsFingerprint {
     /// Chrome 99's on Android (`curl_chrome99_android`): Chrome 107's hello
     /// behind a Pixel 6's identity.
     Chrome99Android,
-    /// Chrome 120's (`curl_chrome120`): the first release here whose hello
+    /// Chrome 116's (`curl_chrome116`): Chrome 107's hello with the extension
+    /// order shuffled, which Chromium turned on at 110 and has kept since.
+    Chrome116,
+    /// Chrome 123's (`curl_chrome123`): the first release here whose hello
     /// carries ECH (as GREASE) and shuffles its extension order per connection.
-    Chrome120,
+    /// Chrome 119 through 123 send this one hello; the record carries the newest
+    /// identity, whose `accept-encoding` gained `zstd` at this release.
+    Chrome123,
     /// Chrome 131's (`curl_chrome131`): the hybrid group, ALPS at 17513.
     Chrome131,
     /// Chrome 131's on Android (`curl_chrome131_android`): the same shape
@@ -159,12 +163,19 @@ pub enum TlsFingerprint {
     /// set, same h2 preface — so a single record covers them, under the newest
     /// identity; keeping four names for it would only multiply the report.
     Chrome146,
-    /// Firefox 144's (`curl_firefox144`): Firefox 133's hello plus a certificate
-    /// timestamp extension. Firefox 135 and 147 send the same hello.
-    Firefox144,
+    /// Firefox 147's (`curl_firefox147`): Firefox 133's hello plus a certificate
+    /// timestamp extension. Firefox 135, 144 and 147 send this one hello, so the
+    /// record carries the newest identity.
+    Firefox147,
     /// Safari 15.3's (`curl_safari153`): 15.5's hello with six more suites and
     /// no `compress_certificate`.
     Safari153,
+    /// Safari 17.0's (`curl_safari170`): Safari 15.5's hello with
+    /// `SETTINGS_ENABLE_PUSH` ahead of the rest and 17.0's fuller identity.
+    Safari170,
+    /// Safari 17.2's on iOS (`curl_safari172_ios`): 17.0's shape with a 2 MiB
+    /// stream window behind the phone's identity.
+    Safari172Ios,
     /// Safari 18.4's on iOS (`curl_safari184_ios`): Safari 18's hello behind an
     /// iPhone's identity.
     Safari184Ios,
@@ -212,7 +223,7 @@ impl TlsFingerprint {
     /// warn and fall back instead of silently changing what gets measured.
     ///
     /// One name per record, and the name is the `code` `--legend` prints and
-    /// `--json` carries — `chrome146`, `firefox144`, `tor145`. The bundle's
+    /// `--json` carries — `chrome146`, `firefox147`, `tor145`. The bundle's
     /// `curl_*` wrapper names are not accepted: a name that resolves to a
     /// different client version than it says (the wrappers name 133, 135, 142,
     /// 145 … for hellos this build sends as a single newest profile) is worse
@@ -237,19 +248,22 @@ impl TlsFingerprint {
     /// older and newer releases of the same clients plus the mobile, Tor and
     /// missing-version shapes, selectable one at a time (`--fingerprint`) or as
     /// a burst list (`--burst-profiles all`).
-    pub const ALL: [TlsFingerprint; 17] = [
+    pub const ALL: [TlsFingerprint; 20] = [
         Self::Rustls,
         Self::Firefox133,
         Self::Chrome107,
+        Self::Chrome116,
         Self::Safari155,
+        Self::Safari170,
+        Self::Safari172Ios,
         Self::Safari180,
         Self::Edge101,
         Self::Chrome99Android,
-        Self::Chrome120,
+        Self::Chrome123,
         Self::Chrome131,
         Self::Chrome131Android,
         Self::Chrome146,
-        Self::Firefox144,
+        Self::Firefox147,
         Self::Safari153,
         Self::Safari184Ios,
         Self::Safari260,
@@ -349,13 +363,13 @@ pub fn needs_pq(fingerprint: TlsFingerprint) -> bool {
 
 /// True when this shape carries `encrypted_client_hello` (65037) as GREASE.
 ///
-/// Nine shapes do: every wrapper that names `--ech true` — `curl_chrome120`,
-/// `curl_chrome131`, `curl_chrome131_android`, `curl_chrome133`,
-/// `curl_chrome136`, `curl_firefox133`, `curl_firefox135`, `curl_firefox144` and
-/// `curl_tor145` — and each sends it as grease, because curl needs DoH or an
-/// explicit `--ecl:` to have a real config at all. The wrapper's own flags are
-/// the source; the captures agree (`encrypted_client_hello` in
-/// `firefox_133.0.3_linux.yaml`, `chrome_136.0.7103.93.yaml` and the rest).
+/// Seven shapes do: every wrapper that names `--ech true` — `curl_chrome123`,
+/// `curl_chrome131`, `curl_chrome131_android`, `curl_chrome146`,
+/// `curl_firefox133`, `curl_firefox147` and `curl_tor145` — and each sends it as
+/// grease, because curl needs DoH or an explicit `--ecl:` to have a real config
+/// at all. The wrapper's own flags are the source; the captures agree
+/// (`encrypted_client_hello` in `firefox_133.0.3_linux.yaml`,
+/// `chrome_136.0.7103.93.yaml` and the rest).
 pub fn sends_ech(fingerprint: TlsFingerprint) -> bool {
     fingerprint.spec().ech
 }

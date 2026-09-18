@@ -61,7 +61,7 @@ the sampled tests that pinned everything else.
 
 These are deliberate. Anything *else* it reports is a bug.
 
-* **ECH body content.** The nine shapes whose wrapper names `--ech true` send
+* **ECH body content.** The seven shapes whose wrapper names `--ech true` send
   `encrypted_client_hello` (65037) as GREASE, like the wrapper does. `enc` and the
   payload are rebuilt per connection, so the extension's *bytes* always differ —
   for a real browser too. What `hello-diff` compares instead is the length the
@@ -70,9 +70,9 @@ These are deliberate. Anything *else* it reports is a bug.
   tag, `setup_ech_grease()` in its `ssl/encrypted_client_hello.cc`). A body of
   any other size — the 400 bytes an inner-hello encoding produced here before —
   is reported as a difference.
-* **Padding under the 512-byte floor, on two shapes.** `chrome120` and
+* **Padding under the 512-byte floor, on two shapes.** `chrome123` and
   `chrome131android` reach 497 bytes with the shortest GREASE ECH body, and
-  `curl_chrome120`/`curl_chrome131_android` pad there — 16 bytes, to 517 — while
+  `curl_chrome123`/`curl_chrome131_android` pad there — 16 bytes, to 517 — while
   this build never does: the profile's `padding_to` is measured before rustls
   appends the typed ECH body, so a slot for it overshoots by the whole body.
   When the bundle draws that shortest body, `hello-diff` reports one extension
