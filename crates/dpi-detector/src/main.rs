@@ -692,8 +692,8 @@ mod tests {
     fn burst_targets_come_from_their_own_list() {
         let args = CliArgs::default();
         let burst = load_burst_domains(&args, RegionProfile::Ru);
+        assert!(burst.contains(&"ezgame.su".to_string()), "{burst:?}");
         assert!(burst.contains(&"www.smartape.ru".to_string()), "{burst:?}");
-        assert!(burst.contains(&"info.paymaster.ru".to_string()), "{burst:?}");
         let shared = load_domains(&args, &AppConfig::default(), RegionProfile::Ru);
         assert!(!burst.is_empty() && !shared.is_empty());
         assert!(!burst.iter().any(|d| shared.contains(d)), "the two lists ask different questions");
