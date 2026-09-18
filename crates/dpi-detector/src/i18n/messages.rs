@@ -46,7 +46,6 @@ pub struct Messages {
     pub burst_field_tls: &'static str,
     pub burst_field_http: &'static str,
     pub burst_field_profiles: &'static str,
-    pub burst_profiles_all: &'static str,
     /// Word in front of the profile the burst is firing right now
     /// (`Тестируем: CHROME 107 2/4`).
     pub burst_testing: &'static str,

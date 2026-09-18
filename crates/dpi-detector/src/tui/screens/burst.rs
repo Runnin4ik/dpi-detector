@@ -357,17 +357,12 @@ fn burst_settings_rows(
     ));
 
     // Profiles cycle like the main menu's fingerprint row: one value with its
-    // position, moved by the same keys.
+    // position, moved by the same keys. The value is one shape, never a set.
     let profile_value = match profile_index {
         Some(index) => {
-            let name = if index == 0 {
-                label(msg.burst_profiles_all)
-            } else {
-                // Latin with the pinned version, like the table headers: the
-                // cycler names the exact shape the run will use (rule 4, never
-                // translated).
-                TlsFingerprint::DEFAULT_SET[index - 1].display_label().to_string()
-            };
+            // Latin with the pinned version, like the table headers: the cycler
+            // names the exact shape the run will use (rule 4, never translated).
+            let name = TlsFingerprint::ALL[index].display_label().to_string();
             format!("{} \x1b[2m[{}/{}]\x1b[0m", name, index + 1, PROFILE_CHOICES)
         }
         None => profiles.iter().map(|f| f.display_label()).collect::<Vec<_>>().join(", "),
@@ -429,34 +424,27 @@ fn flip_alpn(alpn: BurstAlpn) -> BurstAlpn {
     }
 }
 
-/// Choices of the profile cycler: the default set, then one profile each — the
-/// same shape as the main menu's fingerprint row.
-///
-/// The first choice is the set a run presents when nothing is asked for
-/// (`DEFAULT_SET`), not `ALL`: test 6 costs one round of network time per
-/// profile, so "everything" stays an explicit `--burst-profiles all`.
-const PROFILE_CHOICES: usize = TlsFingerprint::DEFAULT_SET.len() + 1;
+/// Choices of the profile cycler: one entry per shape, and every shape there is
+/// — a run presents exactly one, because test 6 spends a round of network time
+/// on each and a settings screen cannot show what a multi-profile run is doing
+/// row by row.
+const PROFILE_CHOICES: usize = TlsFingerprint::ALL.len();
 
-/// The cycler position a selection corresponds to: `Some(0)` = the default set,
-/// `Some(1+n)` = the n-th profile alone, `None` = a combination the cycler
-/// cannot show (only `--burst-profiles` can ask for one).
+/// The cycler position a selection corresponds to: `Some(n)` = the n-th profile
+/// alone, `None` = a combination the cycler cannot show, which only
+/// `--burst-profiles` can ask for, so the row names the shapes until a press
+/// picks one.
 fn profile_index_of(profiles: &[TlsFingerprint]) -> Option<usize> {
-    if profiles.len() == TlsFingerprint::DEFAULT_SET.len() {
-        Some(0)
-    } else if profiles.len() == 1 {
-        TlsFingerprint::DEFAULT_SET.iter().position(|f| *f == profiles[0]).map(|i| i + 1)
+    if profiles.len() == 1 {
+        TlsFingerprint::ALL.iter().position(|f| *f == profiles[0])
     } else {
         None
     }
 }
 
-/// The selection a cycler position means.
+/// The selection a cycler position means: that profile alone.
 fn profiles_for_index(index: usize) -> Vec<TlsFingerprint> {
-    if index == 0 {
-        TlsFingerprint::DEFAULT_SET.to_vec()
-    } else {
-        vec![TlsFingerprint::DEFAULT_SET[index - 1]]
-    }
+    vec![TlsFingerprint::ALL[index.min(PROFILE_CHOICES - 1)]]
 }
 
 /// Footer of the settings screen: the same keycap style as the main menu. The
@@ -501,8 +489,15 @@ mod tests {
         assert!(joined.contains("Переключитесь для ввода"), "{joined}");
         assert!(joined.contains("По умолчанию — все домены (35)"), "{joined}");
         // The cycler's position and size come from the profile table, so this
-        // is the count the tool actually offers rather than a number here.
-        assert!(joined.contains(&format!("все [1/{PROFILE_CHOICES}]")), "{joined}");
+        // is the count the tool actually offers rather than a number here: the
+        // row names one shape, the first of every shape there is.
+        assert!(
+            joined.contains(&format!(
+                "{} [1/{PROFILE_CHOICES}]",
+                TlsFingerprint::ALL[0].display_label()
+            )),
+            "{joined}"
+        );
 
         // Measured without styling: an escape contains '[' and would be mistaken
         // for the input box.
@@ -524,23 +519,39 @@ mod tests {
         assert!(!joined.contains("Переключитесь для ввода"), "{joined}");
 
         // A single-profile selection is what the cycler shows after a press: the
-        // position counts the `all` entry, so CHROME is the fourth of five — and
-        // it is named with the version it reproduces, not with the bare family.
+        // position is the shape's place in the full list — and the row names it
+        // with the version it reproduces, not with the bare family.
         let chrome = [TlsFingerprint::Chrome107];
         let single = burst_settings_rows(
             &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12Only, BurstAlpn::Http2, "", false, &chrome, profile_index_of(&chrome), 35,
         );
-        let chrome_position = TlsFingerprint::DEFAULT_SET
+        let chrome_position = TlsFingerprint::ALL
             .iter()
             .position(|f| *f == TlsFingerprint::Chrome107)
             .expect("the cycler lists chrome")
-            + 2;
+            + 1;
         assert!(
             strip_ansi(&single.join("\n"))
                 .contains(&format!("CHROME 107 [{chrome_position}/{PROFILE_CHOICES}]")),
             "{}",
             strip_ansi(&single.join("\n"))
         );
+    }
+
+    /// Every shape the detector can present is reachable from the row, and each
+    /// press means that shape alone — the row cannot land on a set, and a
+    /// selection it did not produce (a `--burst-profiles` list) has no position,
+    /// so the row names the shapes until a press picks one.
+    #[test]
+    fn the_profile_cycler_covers_every_shape_one_at_a_time() {
+        assert_eq!(PROFILE_CHOICES, TlsFingerprint::ALL.len(), "every shape is offered");
+        for index in 0..PROFILE_CHOICES {
+            let chosen = profiles_for_index(index);
+            assert_eq!(chosen.len(), 1, "{index}: one shape at a time");
+            assert_eq!(chosen[0], TlsFingerprint::ALL[index]);
+            assert_eq!(profile_index_of(&chosen), Some(index), "the position round-trips");
+        }
+        assert_eq!(profile_index_of(&TlsFingerprint::DEFAULT_SET), None, "a set has no position");
     }
 
     /// A pasted URL must survive in the box and come out as its host, not as the

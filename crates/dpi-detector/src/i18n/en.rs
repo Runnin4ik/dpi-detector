@@ -41,7 +41,6 @@ pub(crate) fn messages() -> Messages {
         burst_field_tls: "TLS version",
         burst_field_http: "HTTP protocol",
         burst_field_profiles: "Fingerprint",
-        burst_profiles_all: "all",
         burst_testing: "Testing",
         fingerprint_label: "Fingerprint",
         fingerprint_note: "Each profile reproduces one pinned curl-impersonate shape: the ClientHello, the User-Agent with its headers, and the HTTP/2 preface of one client version. --legend lists every profile with the version it reproduces. None is byte-for-byte a real browser — deeper fingerprinting (HTTP/2 settings, record timing) can still distinguish them.",
