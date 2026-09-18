@@ -190,6 +190,13 @@ DNS_AVAILABILITY_SERVERS:
   - ["209.244.0.4", "Level 3 2", "udp"]
   - ["209.224.0.3", "Level 3 (alt)", "udp"]
   - ["209.224.0.4", "Level 3 2 (alt)", "udp"]
+  # Тот же оператор (AS3356, Lumen) по классическим адресам 4.2.2.x:
+  # a/b.resolvers.level3.net. Публичных DoH/DoT у него нет — только 53/udp.
+  - ["4.2.2.1", "Level 3", "udp"]
+  - ["4.2.2.2", "Level 3", "udp"]
+  # First Colo (AS44066, DE), resolver1/resolver2.fcint.de. Тоже только 53/udp.
+  - ["212.224.71.71", "First Colo", "udp"]
+  - ["79.133.62.62", "First Colo", "udp"]
   - ["149.112.112.10", "Quad9 (UN 2)", "udp"]
   - ["77.88.8.88", "Yandex (Safe)", "udp"]
   - ["77.88.8.2", "Yandex (Safe 2)", "udp"]
@@ -398,6 +405,8 @@ DNS_KNOWN_RESOLVER_NAMES:
   - "yandex"
   - "cisco"
   - "woodynet"
+  - "e1-emea"
+  - "gtt-backbone"
   # Бренды резолверов: белый org всегда зелёный.
   - "cloudflare"
   - "quad9"

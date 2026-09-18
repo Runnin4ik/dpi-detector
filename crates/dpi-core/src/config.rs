@@ -162,6 +162,7 @@ fn d_dns_known_resolver_names() -> Vec<String> {
         "google", "cloudflarenet", "i3dnet", "cdn77", "alibaba-cn-net",
         "as-vultr", "cdnext", "xtom", "tencent-net-ap-cn", "misaka-cis-as",
         "as-anexia", "ru-jsciot", "yandex", "cisco", "woodynet",
+        "e1-emea", "gtt-backbone",
         // Resolver-brand tokens, substring-matched against the egress ASN name:
         // a whitelisted org is always green, even if a sibling endpoint
         // of the same brand was hijacked elsewhere.
@@ -1089,10 +1090,10 @@ mod tests {
         assert_eq!(cfg.dns_udp_servers[0], vec!["8.8.8.8", "Google"]);
         assert_eq!(cfg.dns_availability_domains, vec!["vk.ru", "gosuslugi.ru"]);
         let servers = cfg.availability_servers();
-        assert_eq!(servers.iter().filter(|s| s.kind == "udp").count(), 50);
+        assert_eq!(servers.iter().filter(|s| s.kind == "udp").count(), 54);
         assert_eq!(servers.iter().filter(|s| s.kind == "doh_wire").count(), 37);
         assert_eq!(servers.iter().filter(|s| s.kind == "dot").count(), 34);
-        assert_eq!(servers.len(), 121);
+        assert_eq!(servers.len(), 125);
         assert_eq!(servers[0].addr, "94.140.14.14");
         assert_eq!(servers.last().map(|s| s.kind.as_str()), Some("dot"));
         assert_eq!(cfg.telegram_dc_list().len(), 5);
@@ -1104,7 +1105,7 @@ mod tests {
         assert_eq!(cfg.concurrency_presets, vec![1, 5, 20, 50, 100]);
         assert_eq!(cfg.cymru_doh_servers.len(), 5);
         assert_eq!(cfg.ip6_lookup_urls.len(), 4);
-        assert_eq!(cfg.dns_known_resolver_names.len(), 27);
+        assert_eq!(cfg.dns_known_resolver_names.len(), 29);
         assert!(cfg.dns_known_resolver_names.contains(&"google".to_string()));
         assert!(cfg.dns_known_resolver_names.contains(&"yandex".to_string()));
     }
@@ -1159,6 +1160,6 @@ mod tests {
             .count();
         assert_eq!(burst.len(), shipped_burst, "every shipped burst target survives cleaning");
         let cfg = AppConfig::from_yaml_str(EMBEDDED_CONFIG_YML);
-        assert_eq!(cfg.availability_servers().len(), 121);
+        assert_eq!(cfg.availability_servers().len(), 125);
     }
 }
