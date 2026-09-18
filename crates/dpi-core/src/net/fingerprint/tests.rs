@@ -16,7 +16,7 @@ use crate::net::tls::{create_tls_config, crypto_provider, crypto_provider_with_p
 const CHROME_107_JA4: &str = "t13d1516h2_8daaf6152771_e5627efa2ab1";
 const CHROME_107_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-\
              49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513-21,29-23-24,0";
-const SAFARI_155_JA4: &str = "t13d2014h2_a09f3c656075_2a6581477f52";
+const SAFARI_155_JA4: &str = "t13d2014h2_a09f3c656075_14788d8d241b";
 const FIREFOX_133_JA4_LESS_ECH: &str = "t13d1715h2_5b57614c22b0_8fb63dbc839a";
 
 /// The HTTP identity and the ClientHello of a profile have to describe the
@@ -31,6 +31,18 @@ fn http_identity_names_the_version_the_hello_imitates() {
         (TlsFingerprint::Chrome133, "Chrome/133.0.0.0"),
         (TlsFingerprint::Safari18, "Version/18.0"),
         (TlsFingerprint::Edge, "Edg/101.0.1210.47"),
+        (TlsFingerprint::Chrome99Android, "Chrome/99.0.4844.58 Mobile"),
+        (TlsFingerprint::Chrome120, "Chrome/120.0.0.0"),
+        (TlsFingerprint::Chrome131, "Chrome/131.0.0.0"),
+        (TlsFingerprint::Chrome131Android, "Chrome/131.0.0.0 Mobile"),
+        (TlsFingerprint::Chrome136, "Chrome/136.0.0.0"),
+        (TlsFingerprint::Firefox135, "Firefox/135.0"),
+        (TlsFingerprint::Firefox144, "Firefox/144.0"),
+        (TlsFingerprint::Safari153, "Version/15.3"),
+        (TlsFingerprint::Safari184Ios, "Version/18.4 Mobile"),
+        (TlsFingerprint::Safari260, "Version/26.0"),
+        (TlsFingerprint::Safari260Ios, "Version/26.0 Mobile"),
+        (TlsFingerprint::Tor145, "Firefox/128.0"),
     ] {
         let identity = http_identity(fingerprint);
         let ua = identity.user_agent.expect("a browser profile carries a UA");
@@ -53,11 +65,24 @@ fn http_identity_names_the_version_the_hello_imitates() {
             .find(|(name, _)| *name == "accept-encoding")
             .expect("every identity states its encoding");
         let expected = match fingerprint {
-            TlsFingerprint::Firefox | TlsFingerprint::Chrome133 => "gzip, deflate, br, zstd",
+            TlsFingerprint::Firefox
+            | TlsFingerprint::Chrome133
+            | TlsFingerprint::Chrome131
+            | TlsFingerprint::Chrome131Android
+            | TlsFingerprint::Chrome136
+            | TlsFingerprint::Firefox135
+            | TlsFingerprint::Firefox144
+            | TlsFingerprint::Safari260
+            | TlsFingerprint::Safari260Ios
+            | TlsFingerprint::Tor145 => "gzip, deflate, br, zstd",
             TlsFingerprint::Chrome
             | TlsFingerprint::Safari
             | TlsFingerprint::Safari18
-            | TlsFingerprint::Edge => "gzip, deflate, br",
+            | TlsFingerprint::Edge
+            | TlsFingerprint::Chrome99Android
+            | TlsFingerprint::Chrome120
+            | TlsFingerprint::Safari153
+            | TlsFingerprint::Safari184Ios => "gzip, deflate, br",
             TlsFingerprint::Rustls => "identity",
         };
         assert_eq!(*encoding, expected, "{}: {}", fingerprint.code(), *encoding);
@@ -225,28 +250,49 @@ fn fingerprint_parses_known_values_and_rejects_others() {
     assert_eq!(TlsFingerprint::parse("curl_chrome133a"), Some(TlsFingerprint::Chrome133));
     assert_eq!(TlsFingerprint::parse("safari18"), Some(TlsFingerprint::Safari18));
     assert_eq!(TlsFingerprint::parse("curl_safari180"), Some(TlsFingerprint::Safari18));
-    // Chrome 131 is the same hello with ALPS at the *old* code point, and
-    // Safari 18.4 an extra h2 setting: neither is a shape these records send.
-    assert_eq!(TlsFingerprint::parse("curl_chrome131"), None);
-    assert_eq!(TlsFingerprint::parse("safari184"), Some(TlsFingerprint::Safari));
-    assert_eq!(
-        TlsFingerprint::parse("curl_safari155"),
-        Some(TlsFingerprint::Safari)
-    );
-    assert_eq!(
-        TlsFingerprint::parse("curl_safari184_ios"),
-        Some(TlsFingerprint::Safari)
-    );
+    // Every shape M4 added answers to its own bundle name, and to no other
+    // version's: `curl_chrome131` used to be rejected (the hello is Chrome
+    // 133's with ALPS one code point earlier, which this build now sends) and
+    // `curl_chrome120` used not to be accepted at all.
     assert_eq!(
         TlsFingerprint::parse("curl_firefox133"),
         Some(TlsFingerprint::Firefox)
     );
-    // Shapes no profile sends: shuffled extension order, post-quantum
-    // group, signed certificate timestamps.
+    for (name, fingerprint) in [
+        ("chrome99android", TlsFingerprint::Chrome99Android),
+        ("curl_chrome99_android", TlsFingerprint::Chrome99Android),
+        ("curl_chrome120", TlsFingerprint::Chrome120),
+        ("curl_chrome131", TlsFingerprint::Chrome131),
+        ("curl_chrome131_android", TlsFingerprint::Chrome131Android),
+        ("curl_chrome136", TlsFingerprint::Chrome136),
+        ("curl_firefox135", TlsFingerprint::Firefox135),
+        ("curl_firefox144", TlsFingerprint::Firefox144),
+        ("curl_safari153", TlsFingerprint::Safari153),
+        ("curl_safari184_ios", TlsFingerprint::Safari184Ios),
+        ("curl_safari260", TlsFingerprint::Safari260),
+        ("curl_safari260_ios", TlsFingerprint::Safari260Ios),
+        ("curl_tor145", TlsFingerprint::Tor145),
+        ("tor", TlsFingerprint::Tor145),
+    ] {
+        assert_eq!(TlsFingerprint::parse(name), Some(fingerprint), "{name}");
+    }
+    // The desktop wrapper of a device profile is a different identity, so the
+    // device suffix is part of the name: `curl_chrome99_android` is not
+    // `curl_chrome99` and vice versa.
+    assert_eq!(TlsFingerprint::parse("curl_chrome99"), Some(TlsFingerprint::Chrome));
+    assert_eq!(TlsFingerprint::parse("curl_safari184"), Some(TlsFingerprint::Safari18));
+    assert_eq!(TlsFingerprint::parse("safari184"), Some(TlsFingerprint::Safari18));
+    assert_eq!(
+        TlsFingerprint::parse("curl_safari155"),
+        Some(TlsFingerprint::Safari)
+    );
+    // Shapes no profile sends: a permuted hello whose UA names another version
+    // (116, 119, 123, 147), an iOS release with no record (17.2), and the
+    // prefix that carries no version at all.
     assert_eq!(TlsFingerprint::parse("curl_chrome116"), None);
-    assert_eq!(TlsFingerprint::parse("curl_safari260"), None);
     assert_eq!(TlsFingerprint::parse("curl_firefox147"), None);
-    assert_eq!(TlsFingerprint::parse("curl_firefox144"), None);
+    assert_eq!(TlsFingerprint::parse("curl_safari172_ios"), None);
+    assert_eq!(TlsFingerprint::parse("curl_chrome"), None);
     assert_eq!(TlsFingerprint::parse(""), None);
 }
 
@@ -350,12 +396,17 @@ fn the_baseline_is_the_only_shape_that_impersonates_nobody() {
             assert!(shape.headers.is_some(), "{}: a profile presents a header set", shape.code);
             assert!(shape.h2.is_some(), "{}: a profile pins its h2 preface", shape.code);
             assert!(!shape.alpn.is_empty(), "{}: a profile offers an ALPN list", shape.code);
-            assert_eq!(
-                shape.baseline,
-                shape.cert_compression.is_empty(),
-                "{}: only the baseline sends no compress_certificate",
-                shape.code
-            );
+            // A profile that advertises no certificate compression has to say
+            // so: the empty list is what keeps extension 27 off the wire, and a
+            // shape that lists the extension but no algorithm would be one no
+            // client sends. Safari 15.3 and Tor 14.5 send none.
+            if shape.cert_compression.is_empty() {
+                assert!(
+                    matches!(shape.variant, TlsFingerprint::Safari153 | TlsFingerprint::Tor145),
+                    "{}: a profile with no compress_certificate must name the client that sends none",
+                    shape.code
+                );
+            }
         }
         assert_eq!(
             shape.baseline,
@@ -483,18 +534,55 @@ fn bundle_versions_match_their_ja3() {
          49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-34-13-28,\
          4588-29-23-24-25-256-257,0";
 
-    for (version, profiles) in [
+    // The M4 shapes, all of them clients that do not permute, so their JA3 is
+    // one string. `chrome99android` is Chrome 107's hello behind a phone's
+    // identity and carries exactly that JA3; the two Firefox rows are 133's with
+    // the certificate-timestamp extension and no ECH; Tor stops where its ECH
+    // would start. `chrome120`, `chrome131`, `chrome131android` and `chrome136`
+    // are absent on purpose: Chromium permutes the extension order, so their JA3
+    // differs per connection and only JA4 can be pinned (see
+    // `added_shapes_match_the_captures_they_were_read_from`).
+    const FIREFOX_135: &str = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49162-\
+         49161-49171-49172-156-157-47-53,\
+         0-23-65281-10-11-35-16-5-34-18-51-43-13-45-28-27,4588-29-23-24-25-256-257,0";
+    const SAFARI_153: &str = "771,4865-4866-4867-49196-49195-52393-49200-49199-52392-49188-\
+         49187-49162-49161-49192-49191-49172-49171-157-156-61-60-53-47-49160-49170-10,\
+         0-23-65281-10-11-16-5-13-18-51-45-43-21,29-23-24-25,0";
+    const SAFARI_180: &str = SAFARI_155;
+    // Safari 26.0 on macOS reorders the three TLS 1.3 suites, drops padding and
+    // sends the session ticket; the iOS hello keeps the older order and pads.
+    const SAFARI_260: &str = "771,4866-4867-4865-49196-49195-52393-49200-49199-52392-49162-\
+         49161-49172-49171-157-156-53-47-49160-49170-10,\
+         0-23-65281-10-11-35-16-5-13-18-51-45-43-27,4588-29-23-24-25,0";
+    const SAFARI_260_IOS: &str = "771,4865-4866-4867-49196-49195-52393-49200-49199-52392-\
+         49162-49161-49172-49171-157-156-53-47-49160-49170-10,\
+         0-23-65281-10-11-35-16-5-13-18-51-45-43-27-21,29-23-24-25,0";
+    const TOR_145: &str = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49171-\
+         49172-156-157-47-53,0-23-65281-10-11-16-5-34-51-43-13-28,29-23-24-25-256-257,0";
+
+    // The pinned-version rows cover the three profiles the report names, which
+    // is where the version pinning was measured; the rest of the table is the
+    // unpinned hello.
+    let rows: [(TlsVersion, &[(TlsFingerprint, &str)]); 3] = [
         (
             TlsVersion::Any,
-            [
+            &[
                 (TlsFingerprint::Chrome, CHROME_107),
                 (TlsFingerprint::Safari, SAFARI_155),
                 (TlsFingerprint::Firefox, FIREFOX_133),
+                (TlsFingerprint::Chrome99Android, CHROME_107),
+                (TlsFingerprint::Firefox135, FIREFOX_135),
+                (TlsFingerprint::Firefox144, FIREFOX_135),
+                (TlsFingerprint::Safari153, SAFARI_153),
+                (TlsFingerprint::Safari184Ios, SAFARI_180),
+                (TlsFingerprint::Safari260, SAFARI_260),
+                (TlsFingerprint::Safari260Ios, SAFARI_260_IOS),
+                (TlsFingerprint::Tor145, TOR_145),
             ],
         ),
         (
             TlsVersion::Tls13,
-            [
+            &[
                 (TlsFingerprint::Chrome, CHROME_107_TLS13),
                 (TlsFingerprint::Safari, SAFARI_155_TLS13),
                 (TlsFingerprint::Firefox, FIREFOX_133_TLS13),
@@ -502,17 +590,18 @@ fn bundle_versions_match_their_ja3() {
         ),
         (
             TlsVersion::Tls12,
-            [
+            &[
                 (TlsFingerprint::Chrome, CHROME_107_TLS12),
                 (TlsFingerprint::Safari, SAFARI_155_TLS12),
                 (TlsFingerprint::Firefox, FIREFOX_133_TLS12),
             ],
         ),
-    ] {
-        for (fingerprint, expected) in profiles {
+    ];
+    for (version, rows) in rows {
+        for (fingerprint, expected) in rows {
             assert_eq!(
-                client_hello_of(fingerprint, version).0,
-                expected,
+                client_hello_of(*fingerprint, version).0,
+                *expected,
                 "{fingerprint} ({version:?})"
             );
         }
@@ -541,22 +630,28 @@ fn bundle_versions_match_their_ja3() {
 /// `curl_safari155`, `curl_firefox133`) and cross-checked against what
 /// `tls.peet.ws` reports for our own probes.
 ///
-/// Firefox's differs in the extension count and hash only, and only because
-/// of the omitted `encrypted_client_hello` (see its record); the cipher hash
-/// is the bundle's.
+/// The unpinned strings are the bundle's own. The version-pinned ones cannot be
+/// captured from the wrapper — a `.bat` sets its own `--tlsv1.0`/`--tlsv1.2`
+/// and the pinned client is a configuration this build makes, not a bundle
+/// profile — so those are this build's own hellos, recorded so that a change to
+/// the pinning path (a dropped `compress_certificate`, a lost ALPS) shows up as
+/// a diff rather than as silence.
+///
+/// Firefox's differs from the bundle's in the extension count and hash only, and
+/// only because of the omitted `encrypted_client_hello` (see its record); the
+/// cipher hash is the bundle's.
 #[test]
 fn bundle_versions_match_their_ja4() {
-    // The pinned 1.3 hashes are the bundle's: those hellos are byte-identical
-    // to `curl_chrome107`/`curl_safari155`/`curl_firefox133` pinned with
-    // `--tlsv1.3 --tls-max 1.3`. The 1.2 hashes are ours alone — the pinned
-    // configuration is the one where rustls cannot send the bundle's
-    // `compress_certificate`, so the extension count and hash differ by that
-    // one extension.
+    // The 1.3 unpinned hashes are the bundle's: those hellos are byte-identical
+    // to `curl_chrome107`/`curl_safari155`/`curl_firefox133`. A pinned hello
+    // drops what belongs to the other version — the 1.2-era extensions from a
+    // 1.3-only hello and, at 1.2, `supported_versions` plus the padding — and
+    // the strings below are the ones this build sends for that configuration.
     const CHROME_107_TLS13: &str = "t13d0312h2_55b375c5d22e_89e42599e699";
-    const SAFARI_155_TLS13: &str = "t13d0311h2_55b375c5d22e_3727ed65331a";
+    const SAFARI_155_TLS13: &str = "t13d0311h2_55b375c5d22e_14aed462abe7";
     const FIREFOX_133_TLS13: &str = "t13d0313h2_55b375c5d22e_1dac57d28bce";
     const CHROME_107_TLS12: &str = "t12d1210h2_d34a8e72043a_fae48490d0f6";
-    const SAFARI_155_TLS12: &str = "t12d1709h2_ba5946811be1_8c31861e0dbb";
+    const SAFARI_155_TLS12: &str = "t12d1709h2_ba5946811be1_e0e2b8a7da62";
     const FIREFOX_133_TLS12: &str = "t12d1411h2_c866b44c5a26_242292a3764d";
 
     for (version, chrome, safari, firefox) in [
@@ -647,9 +742,14 @@ fn chrome_133_ja4_pins_the_parts_a_source_covers() {
 }
 
 /// Records that name the same TLS lists must put the same hello on the wire.
-/// Edge is Chromium and Safari 18.0 is Safari 15.5's hello, so the JA3/JA4 pins
-/// above are theirs too — the alternative, a second set of constants per
-/// record, is how two records of one shape drift apart.
+/// Edge is Chromium, Chrome 136 is Chrome 133's hello, and the two device rows
+/// are their desktop siblings behind a phone's or a phone-shaped identity — so
+/// the JA3/JA4 pins above are theirs too, rather than a second set of constants
+/// per record that would let two records of one shape drift apart.
+///
+/// Safari 18 is deliberately *not* in this list: its cipher, group and extension
+/// lists are Safari 15.5's, but its signature schemes are not (`ecdsa_sha1` is
+/// gone, and JA4 hashes that list), which is why it has a pin of its own.
 ///
 /// The sharing is a fact about the sources, not a convenience: the bundle's own
 /// `safari_18.0_macOS` capture publishes the identical `ja3_text` (and a
@@ -664,12 +764,96 @@ fn profiles_that_share_a_tls_shape_send_the_same_hello() {
             client_hello_full(TlsFingerprint::Chrome, version),
             "edge101 sends Chrome's hello ({version:?})"
         );
-        assert_eq!(
-            client_hello_full(TlsFingerprint::Safari18, version),
-            client_hello_full(TlsFingerprint::Safari, version),
-            "safari18 sends Safari 15.5's hello ({version:?})"
-        );
+        // The M4 rows that are an identity rather than a hello: Chrome 99's
+        // Android build, Chrome 136 (which is Chrome 133's shape), Safari 18.4
+        // on iOS and Firefox 144.
+        for (left, right, why) in [
+            (
+                TlsFingerprint::Chrome99Android,
+                TlsFingerprint::Chrome,
+                "chrome99android is Chrome 107's hello behind a phone's identity",
+            ),
+            (
+                TlsFingerprint::Chrome136,
+                TlsFingerprint::Chrome133,
+                "chrome136 is Chrome 133's hello behind the current identity",
+            ),
+            (
+                TlsFingerprint::Safari184Ios,
+                TlsFingerprint::Safari18,
+                "safari184ios is Safari 18.4's hello behind an iPhone's identity",
+            ),
+            (
+                TlsFingerprint::Firefox144,
+                TlsFingerprint::Firefox135,
+                "firefox144 is Firefox 135's hello behind the current identity",
+            ),
+        ] {
+            assert_eq!(
+                client_hello_full(left, version),
+                client_hello_full(right, version),
+                "{why} ({version:?})"
+            );
+        }
     }
+}
+
+/// The twelve shapes M4 added, pinned against the capture each record names:
+/// the bundle's `.bat` wrapper read through a local ClientHello sniffer, and the
+/// fork's own `tests/signatures/*.yaml` for the releases it publishes one for.
+///
+/// Six of them reproduce their source exactly, so the pin *is* the source's own
+/// value and can be re-derived from the bundle without running this build:
+/// `curl_chrome99_android` (Chrome 107's hello, and its JA4 with it),
+/// `curl_safari153`, `curl_safari184_ios`, `curl_safari260` and
+/// `curl_safari260_ios`, whose JA4s are what `safari_15.3_macos11.6.4.yaml`,
+/// `safari_18.4_iOS.yaml`, `safari_26.0_macOS.yaml` and `safari_26.0_iOS.yaml`
+/// compute — the iOS row among them because the two 26.0 hellos differ by three
+/// extensions, not by one omission.
+///
+/// The other six carry `encrypted_client_hello`, which this build omits (see the
+/// Firefox record), so their counts are one extension below the source's and the
+/// extension hash is ours; the counts, the cipher hash and the ALPN field are
+/// the source's, and the last one would move if the shape stopped being the
+/// client's. Chrome 133, 136, 142, 145 and 146 send one hello, so `chrome136`
+/// repeats Chrome 133's pin rather than carrying a second constant.
+#[test]
+fn added_shapes_match_the_captures_they_were_read_from() {
+    for (fingerprint, ja4) in [
+        (TlsFingerprint::Chrome99Android, "t13d1516h2_8daaf6152771_e5627efa2ab1"),
+        (TlsFingerprint::Safari153, "t13d2613h2_2802a3db6c62_845d286b0d67"),
+        (TlsFingerprint::Safari184Ios, "t13d2014h2_a09f3c656075_e42f34c56612"),
+        (TlsFingerprint::Safari260, "t13d2014h2_a09f3c656075_d0a99439f9b1"),
+        (TlsFingerprint::Safari260Ios, "t13d2015h2_a09f3c656075_c258b721e490"),
+    ] {
+        let (_, _, got) = client_hello_full(fingerprint, TlsVersion::Any);
+        assert_eq!(got, ja4, "{fingerprint}: the source's own JA4");
+    }
+
+    // Our extension *hash* is the source's too: JA4 sorts what it hashes, so
+    // removing ECH changes the hash and nothing else — the counts stay the
+    // source's minus one extension, and the cipher hash is the source's own,
+    // which is the one part a wrong cipher list moves silently.
+    for (fingerprint, ours, cipher_hash) in [
+        (TlsFingerprint::Chrome120, "t13d1515h2_8daaf6152771_f37e75b10bcc", "8daaf6152771"),
+        (TlsFingerprint::Chrome131, "t13d1515h2_8daaf6152771_f37e75b10bcc", "8daaf6152771"),
+        (TlsFingerprint::Chrome131Android, "t13d1515h2_8daaf6152771_f37e75b10bcc", "8daaf6152771"),
+        (TlsFingerprint::Chrome136, "t13d1515h2_8daaf6152771_22334254f9f7", "8daaf6152771"),
+        (TlsFingerprint::Firefox135, "t13d1716h2_5b57614c22b0_ddc8930e364f", "5b57614c22b0"),
+        (TlsFingerprint::Firefox144, "t13d1716h2_5b57614c22b0_ddc8930e364f", "5b57614c22b0"),
+        (TlsFingerprint::Tor145, "t13d1512h2_8daaf6152771_40c704383e9d", "8daaf6152771"),
+    ] {
+        let (_, _, got) = client_hello_full(fingerprint, TlsVersion::Any);
+        assert_eq!(got.split('_').nth(1), Some(cipher_hash), "{fingerprint}: the source's cipher hash");
+        assert_eq!(got, ours, "{fingerprint}: our extension hash");
+    }
+
+    // Chrome 133's hello, which 136 shares: the pin is the one that test carries.
+    assert_eq!(
+        client_hello_full(TlsFingerprint::Chrome136, TlsVersion::Any),
+        client_hello_full(TlsFingerprint::Chrome133, TlsVersion::Any),
+        "chrome136 sends Chrome 133's hello"
+    );
 }
 
 /// Test 6 pins the TLS version and the ALPN it offers, and both have to
@@ -911,8 +1095,18 @@ const UNIMPLEMENTED: &[(Unimplemented, u16, &str)] = &[
     // every `TLS_RSA_WITH_*` a browser offers is out of reach.
     (Unimplemented::Cipher, 0x002f, "RSA-AES128-CBC-SHA: rustls offers no RSA key exchange"),
     (Unimplemented::Cipher, 0x0035, "RSA-AES256-CBC-SHA: rustls offers no RSA key exchange"),
+    (Unimplemented::Cipher, 0x003c, "RSA-AES128-CBC-SHA256: rustls offers no RSA key exchange"),
+    (Unimplemented::Cipher, 0x003d, "RSA-AES256-CBC-SHA256: rustls offers no RSA key exchange"),
     (Unimplemented::Cipher, 0x009c, "RSA-AES128-GCM-SHA256: rustls offers no RSA key exchange"),
     (Unimplemented::Cipher, 0x009d, "RSA-AES256-GCM-SHA384: rustls offers no RSA key exchange"),
+    // --- The CBC/SHA-256 suites Safari 15.3 still offered and 15.5 dropped:
+    // CBC again, and absent from the provider for the same reason as the group
+    // above. They exist here because `safari153`'s cipher list is the only one
+    // that carries them.
+    (Unimplemented::Cipher, 0xc023, "ECDHE-ECDSA-AES128-CBC-SHA256: no CBC suite in the provider"),
+    (Unimplemented::Cipher, 0xc024, "ECDHE-ECDSA-AES256-CBC-SHA384: no CBC suite in the provider"),
+    (Unimplemented::Cipher, 0xc027, "ECDHE-RSA-AES128-CBC-SHA256: no CBC suite in the provider"),
+    (Unimplemented::Cipher, 0xc028, "ECDHE-RSA-AES256-CBC-SHA384: no CBC suite in the provider"),
     // --- 3DES: dropped by rustls and absent from the provider, and every peer
     // that still selects it is one a modern browser would also have offered.
     (Unimplemented::Cipher, 0x000a, "RSA-3DES-EDE-CBC-SHA: no 3DES in the provider"),

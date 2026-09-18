@@ -122,6 +122,37 @@ pub enum TlsFingerprint {
     Safari18,
     /// `curl_edge99,101`-shaped: Chromium's hello behind Edge's identity.
     Edge,
+    /// `curl_chrome99_android`-shaped: Chrome 99's hello behind a Pixel 6's
+    /// identity.
+    Chrome99Android,
+    /// `curl_chrome120`-shaped: the first Chromium release here with no padding
+    /// extension and with ECH (which this build omits).
+    Chrome120,
+    /// `curl_chrome131`-shaped: the hybrid group and ALPS at its old code point.
+    Chrome131,
+    /// `curl_chrome131_android`-shaped: Chrome 131 on a phone, no hybrid group.
+    Chrome131Android,
+    /// `curl_chrome136`-shaped: Chrome 133's hello under the current identity.
+    Chrome136,
+    /// `curl_firefox135`-shaped: Firefox 133's hello plus a certificate
+    /// timestamp extension.
+    Firefox135,
+    /// `curl_firefox144`-shaped: the same hello under the current identity.
+    Firefox144,
+    /// `curl_safari153`-shaped: Safari 15.3, whose cipher list is 15.5's plus six
+    /// CBC/SHA-256 suites.
+    Safari153,
+    /// `curl_safari184_ios`-shaped: Safari 18.4's hello behind an iPhone's
+    /// identity.
+    Safari184Ios,
+    /// `curl_safari260`-shaped: Safari 26.0 with the hybrid group, no padding and
+    /// no request priority.
+    Safari260,
+    /// `curl_safari260_ios`-shaped: Safari 26.0's hello on iOS, which keeps
+    /// X25519 first and pads to 512 bytes.
+    Safari260Ios,
+    /// `curl_tor145`-shaped: Tor Browser 14.5's Firefox 128 ESR hello, ungreased.
+    Tor145,
 }
 
 impl TlsFingerprint {
@@ -177,7 +208,12 @@ impl TlsFingerprint {
     /// The single hand-written list on this side of the table: `spec()` panics
     /// on a variant missing from `SHAPES`, and the totality test compares this
     /// list with the table, so the two cannot drift apart unnoticed.
-    pub const ALL: [TlsFingerprint; 7] = [
+    ///
+    /// The first seven are the profiles a run presents by default; the rest are
+    /// older and newer releases of the same clients plus the mobile, Tor and
+    /// missing-version shapes, selectable one at a time (`--fingerprint`) or as
+    /// a burst list (`--burst-profiles all`).
+    pub const ALL: [TlsFingerprint; 19] = [
         Self::Rustls,
         Self::Firefox,
         Self::Chrome,
@@ -185,6 +221,18 @@ impl TlsFingerprint {
         Self::Chrome133,
         Self::Safari18,
         Self::Edge,
+        Self::Chrome99Android,
+        Self::Chrome120,
+        Self::Chrome131,
+        Self::Chrome131Android,
+        Self::Chrome136,
+        Self::Firefox135,
+        Self::Firefox144,
+        Self::Safari153,
+        Self::Safari184Ios,
+        Self::Safari260,
+        Self::Safari260Ios,
+        Self::Tor145,
     ];
 
     /// The profiles a run presents when nothing asked for a specific set: test

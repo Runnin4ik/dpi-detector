@@ -65,15 +65,38 @@ pub fn h2_fingerprint(fingerprint: super::TlsFingerprint) -> Option<H2Fingerprin
 
 /// `1:65536;2:0;4:6291456;6:262144`, window 15663105,
 /// `--http2-stream-weight 256 --http2-stream-exclusive 1`, pseudo-headers `masp`
-/// (the curl default, no flag). Chrome 133 stops sending
-/// `SETTINGS_MAX_CONCURRENT_STREAMS` where 107 sent `3:1000`.
-pub(crate) const CHROME133_H2: H2Fingerprint = H2Fingerprint {
+/// (the curl default, no flag).
+///
+/// Chrome's preface from 120 on, and the one every desktop record here sends:
+/// 99–107 still carried `3:1000` (`SETTINGS_MAX_CONCURRENT_STREAMS`), 120 and
+/// later dropped it, and 133, 136 and the 131 records send this same list.
+pub(crate) const CHROME120_H2: H2Fingerprint = H2Fingerprint {
     header_table_size: Some(65_536),
     max_concurrent_streams: None,
     initial_window_size: 6_291_456,
     max_frame_size: None,
     max_header_list_size: Some(262_144),
     enable_push: Some(false),
+    settings_order: &[],
+    connection_window: 15_663_105 + 65_535,
+    pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
+    priority: Some((256, true)),
+};
+
+/// `1:65536;3:1000;4:6291456;6:262144`, window 15663105,
+/// `--http2-stream-weight 256 --http2-stream-exclusive 1`, pseudo-headers `masp`.
+///
+/// Chrome on Android, which is `curl_chrome99_android`'s preface: it keeps the
+/// stream cap Chrome 99–107 sent and, unlike those, sends no
+/// `SETTINGS_ENABLE_PUSH` — the same shape Chromium's Android build had while
+/// the desktop build did not.
+pub(crate) const CHROME99_ANDROID_H2: H2Fingerprint = H2Fingerprint {
+    header_table_size: Some(65_536),
+    max_concurrent_streams: Some(1000),
+    initial_window_size: 6_291_456,
+    max_frame_size: None,
+    max_header_list_size: Some(262_144),
+    enable_push: None,
     settings_order: &[],
     connection_window: 15_663_105 + 65_535,
     pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
@@ -117,6 +140,28 @@ pub(crate) const SAFARI18_H2: H2Fingerprint = H2Fingerprint {
     connection_window: 10_420_225 + 65_535,
     pseudo_order: PseudoOrder::MethodSchemePathAuthority,
     priority: Some((256, false)),
+};
+
+/// `2:0;3:100;4:2097152;9:1`, window 10420225,
+/// `--http2-pseudo-headers-order "msap" --http2-no-priority`.
+///
+/// Safari 26.0, on macOS and iOS alike, and the first preface here with no
+/// PRIORITY flag on the request at all: the wrapper passes
+/// `--http2-no-priority`, so there is no weight and no exclusivity to send —
+/// which is a difference `peetprint` reads and the akamai fingerprint does not.
+/// `9:1` (`SETTINGS_NO_RFC7540_PRIORITIES`) is beyond what the patched `h2`
+/// writes, as it is for Safari 18.
+pub(crate) const SAFARI260_H2: H2Fingerprint = H2Fingerprint {
+    header_table_size: None,
+    max_concurrent_streams: Some(100),
+    initial_window_size: 2_097_152,
+    max_frame_size: None,
+    max_header_list_size: None,
+    enable_push: Some(false),
+    settings_order: &[],
+    connection_window: 10_420_225 + 65_535,
+    pseudo_order: PseudoOrder::MethodSchemePathAuthority,
+    priority: None,
 };
 
 /// `1:65536;2:0;3:1000;4:6291456;6:262144`, window 15663105,

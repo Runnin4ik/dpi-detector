@@ -168,3 +168,245 @@ pub(crate) const SAFARI_HEADERS: &[(&str, &str)] = &[
     ("accept-language", "en-GB,en-US;q=0.9,en;q=0.8"),
     ("accept-encoding", "gzip, deflate, br"),
 ];
+
+/// Safari 15.3 headers, in `curl_safari153.bat` order. The same set as 15.5's
+/// with the version it names and `en-us` where 15.5 sends `en-GB,en-US;q=0.9,
+/// en;q=0.8` — the wrapper's own list, not a normalised one.
+pub(crate) const SAFARI153_HEADERS: &[(&str, &str)] = &[
+    (
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.3 Safari/605.1.15",
+    ),
+    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("accept-language", "en-us"),
+    ("accept-encoding", "gzip, deflate, br"),
+];
+
+/// Chrome 99 on Android headers, in `curl_chrome99_android.bat` order: the
+/// desktop 99 brand line (including its leading space), a Pixel 6 UA and
+/// `sec-ch-ua-mobile: ?1`.
+pub(crate) const CHROME99_ANDROID_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#"" Not A;Brand";v="99", "Chromium";v="99", "Google Chrome";v="99""#),
+    ("sec-ch-ua-mobile", "?1"),
+    ("sec-ch-ua-platform", r#""Android""#),
+    ("upgrade-insecure-requests", "1"),
+    (
+        "user-agent",
+        "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.58 Mobile Safari/537.36",
+    ),
+    (
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+    ),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-user", "?1"),
+    ("sec-fetch-dest", "document"),
+    ("accept-encoding", "gzip, deflate, br"),
+    ("accept-language", "en-US,en;q=0.9"),
+];
+
+/// Chrome 120 headers, in `curl_chrome120.bat` order. Two differences from
+/// Chrome 133's below: `accept-encoding` has no `zstd` yet, and there is no
+/// `priority` header — Chrome added both at 133, so a record that sent 133's
+/// list under a 120 UA would be inconsistent in the packet a censor reads.
+pub(crate) const CHROME120_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#""Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120""#),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", r#""macOS""#),
+    ("upgrade-insecure-requests", "1"),
+    (
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ),
+    (
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    ),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-user", "?1"),
+    ("sec-fetch-dest", "document"),
+    ("accept-encoding", "gzip, deflate, br"),
+    ("accept-language", "en-US,en;q=0.9"),
+];
+
+/// Chrome 131 headers, in `curl_chrome131.bat` order: Chrome 133's set with the
+/// version it names.
+pub(crate) const CHROME131_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#""Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24""#),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", r#""macOS""#),
+    ("upgrade-insecure-requests", "1"),
+    (
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    ),
+    (
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    ),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-user", "?1"),
+    ("sec-fetch-dest", "document"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+    ("accept-language", "en-US,en;q=0.9"),
+    ("priority", "u=0, i"),
+];
+
+/// Chrome 131 on Android headers, in `curl_chrome131_android.bat` order. The
+/// bundle's own capture reads `sec-ch-ua-mobile: ?0` with
+/// `sec-ch-ua-platform: "Android"`, which is what the wrapper sends; the
+/// fingerprint is what the bundle does, not what the browser would do.
+pub(crate) const CHROME131_ANDROID_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#""Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24""#),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", r#""Android""#),
+    ("upgrade-insecure-requests", "1"),
+    (
+        "user-agent",
+        "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+    ),
+    (
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    ),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-user", "?1"),
+    ("sec-fetch-dest", "document"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+    ("accept-language", "en-US,en;q=0.9"),
+    ("priority", "u=0, i"),
+];
+
+/// Chrome 136 headers, in `curl_chrome136.bat` order: Chrome 133's set with the
+/// 136 brand list (`"Chromium"` first, `"Not(A:Brand";v="99"` last) and UA.
+pub(crate) const CHROME136_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#""Chromium";v="136", "Google Chrome";v="136", "Not(A:Brand";v="99""#),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", r#""macOS""#),
+    ("upgrade-insecure-requests", "1"),
+    (
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+    ),
+    (
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    ),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-user", "?1"),
+    ("sec-fetch-dest", "document"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+    ("accept-language", "en-US,en;q=0.9"),
+    ("priority", "u=0, i"),
+];
+
+/// Firefox 135 headers, in `curl_firefox135.bat` order: Firefox 133's set with
+/// the version it names.
+pub(crate) const FIREFOX135_HEADERS: &[(&str, &str)] = &[
+    (
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:135.0) Gecko/20100101 Firefox/135.0",
+    ),
+    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("accept-language", "en-US,en;q=0.5"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+    ("upgrade-insecure-requests", "1"),
+    ("sec-fetch-dest", "document"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-user", "?1"),
+    ("priority", "u=0, i"),
+    ("te", "trailers"),
+];
+
+/// Firefox 144 headers. `curl_firefox144.bat` is `--impersonate firefox144`, so
+/// the list comes from the bundle's own `firefox_144.0.0_linux` capture, which
+/// is the same set with 144 in the UA.
+pub(crate) const FIREFOX144_HEADERS: &[(&str, &str)] = &[
+    (
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0",
+    ),
+    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("accept-language", "en-US,en;q=0.5"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+    ("upgrade-insecure-requests", "1"),
+    ("sec-fetch-dest", "document"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-user", "?1"),
+    ("priority", "u=0, i"),
+    ("te", "trailers"),
+];
+
+/// Safari 18.4 on iOS headers, in `curl_safari184_ios.bat` order.
+pub(crate) const SAFARI184_IOS_HEADERS: &[(&str, &str)] = &[
+    ("sec-fetch-dest", "document"),
+    (
+        "user-agent",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1",
+    ),
+    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "navigate"),
+    ("accept-language", "en-US,en;q=0.9"),
+    ("priority", "u=0, i"),
+    ("accept-encoding", "gzip, deflate, br"),
+];
+
+/// Safari 26.0 headers, in `curl_safari260.bat` order: 18.x's set with the
+/// version it names and `zstd` added to `accept-encoding`.
+pub(crate) const SAFARI260_HEADERS: &[(&str, &str)] = &[
+    ("sec-fetch-dest", "document"),
+    (
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+    ),
+    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "navigate"),
+    ("accept-language", "en-US,en;q=0.9"),
+    ("priority", "u=0, i"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+];
+
+/// Safari 26.0 on iOS headers, in `curl_safari260_ios.bat` order.
+pub(crate) const SAFARI260_IOS_HEADERS: &[(&str, &str)] = &[
+    ("sec-fetch-dest", "document"),
+    (
+        "user-agent",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1",
+    ),
+    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "navigate"),
+    ("accept-language", "en-US,en;q=0.9"),
+    ("priority", "u=0, i"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+];
+
+/// Tor Browser 14.5 headers, in `curl_tor145.bat` order. The UA is Firefox 128
+/// ESR's, which is the release Tor Browser 14.5 is built on; `Sec-GPC` is Tor's
+/// own addition and `TE: trailers` the one Firefox sends too.
+pub(crate) const TOR_HEADERS: &[(&str, &str)] = &[
+    (
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:128.0) Gecko/20100101 Firefox/128.0",
+    ),
+    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("accept-language", "en-US,en;q=0.5"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
+    ("sec-gpc", "1"),
+    ("upgrade-insecure-requests", "1"),
+    ("sec-fetch-dest", "document"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-user", "?1"),
+    ("priority", "u=0, i"),
+    ("te", "trailers"),
+];

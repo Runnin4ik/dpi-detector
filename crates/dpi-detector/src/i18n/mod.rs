@@ -175,7 +175,7 @@ fn profile_section(msg: &Messages, lang: Language) -> String {
             String::new()
         };
         out.push_str(&format!(
-            "    \x1b[36m{:<14}\x1b[0m \x1b[2m{} - {}{}\x1b[0m\n",
+            "    \x1b[36m{:<16}\x1b[0m \x1b[2m{} - {}{}\x1b[0m\n",
             fingerprint.code(),
             fingerprint.display_label(),
             fingerprint.source(),

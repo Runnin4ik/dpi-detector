@@ -1041,10 +1041,13 @@ mod tests {
             BurstSettings::clamped(4, 999, axes.0, axes.1, vec![]).timeout,
             Duration::from_secs(BURST_MAX_TIMEOUT_SECS)
         );
-        // An empty profile set means "no preference", not "run nothing".
+        // An empty profile set means "no preference", not "run nothing" — and
+        // "no preference" is the default set, not everything: `all` is an
+        // explicit request (`--burst-profiles all`), and the two lists stopped
+        // being the same one the day the mobile and older rows arrived.
         assert_eq!(
             BurstSettings::clamped(4, 8, axes.0, axes.1, vec![]).profiles,
-            TlsFingerprint::ALL.to_vec()
+            TlsFingerprint::DEFAULT_SET.to_vec()
         );
         // The axes survive clamping untouched.
         let kept = BurstSettings::clamped(4, 8, BurstTlsVersion::Tls12Only, BurstAlpn::Http11, vec![]);
