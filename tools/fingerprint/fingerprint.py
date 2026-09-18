@@ -288,9 +288,10 @@ def wrapper_flags(bundle, wrapper):
     flags, headers = {}, []
     for line in text.splitlines():
         stripped = line.strip()
-        match = re.match(r"""^-H\s+"([^"]*)"\s*\^?$""", stripped)
+        match = re.match(r"""^-H\s+"((?:[^"\\]|\\.)*)"\s*\^?$""", stripped)
         if match:
-            name, _, value = match.group(1).partition(":")
+            raw = match.group(1).replace('\\"', '"')
+            name, _, value = raw.partition(":")
             headers.append((name.strip(), value.strip()))
             continue
         for m in FLAG_WITH_VALUE.finditer(stripped):
