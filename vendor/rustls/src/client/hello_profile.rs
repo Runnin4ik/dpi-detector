@@ -208,14 +208,25 @@ impl ClientHelloProfile {
         // RFC 8879: `compress_certificate` is a TLS 1.3 extension. rustls sets it
         // only for a hello that offers 1.3, so a profile must not reintroduce it
         // into a 1.2-only hello (the probes pin 1.2 for their second TLS column).
-        if let (true, Some(algorithms)) = (tls13, &self.cert_compression) {
-            exts.certificate_compression_algorithms = Some(
-                algorithms
-                    .iter()
-                    .copied()
-                    .map(crate::CertificateCompressionAlgorithm::from)
-                    .collect(),
-            );
+        //
+        // An empty list means "this client advertises no algorithm" — Safari
+        // 15.3 and Tor 14.5 send no such extension — and it has to clear the
+        // typed value rather than set an empty one, which would put a
+        // `compress_certificate` with zero entries on the wire: a hello with an
+        // extension the client does not send, which is exactly what the profiles
+        // exist to avoid.
+        if tls13 {
+            exts.certificate_compression_algorithms =
+                match &self.cert_compression {
+                    Some(algorithms) if !algorithms.is_empty() => Some(
+                        algorithms
+                            .iter()
+                            .copied()
+                            .map(crate::CertificateCompressionAlgorithm::from)
+                            .collect(),
+                    ),
+                    _ => None,
+                };
         }
 
         let mut raw: Vec<(ExtensionType, Vec<u8>)> = self

@@ -44,17 +44,19 @@ their patched rustls rejected valid server configurations.
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 0.23.43 — 746 lines across 7
+`PATCH.diff` is the exact diff against pristine 0.23.43 — 760 lines across 7
 files, one of them new (`src/client/hello_profile.rs`). It applies to a pristine
-copy with `patch -p1` (`patch -p1 --dry-run` was run against the crates.io
-source before this file was replaced) and reproduces this tree byte for byte, up
-to the line endings git checks out. Two of the changes are not
-about the profile hook itself but about making a *browser-shaped* hello survive
-real servers; they are described under "findings" below.
+copy with `patch -p1` (`patch -p1 --binary` was run against the crates.io source
+before this file was replaced, and the result compared against this tree with
+`diff -r --strip-trailing-cr`: identical apart from these two files) and
+reproduces this tree byte for byte, up to the line endings git checks out. Two of
+the changes are not about the profile hook itself but about making a
+*browser-shaped* hello survive real servers; they are described under "findings"
+below.
 
 | File | Change |
 | --- | --- |
-| `src/client/hello_profile.rs` | **new**: public `ClientHelloProfile` (cipher list, groups, signature schemes, ALPN, extension order with `GREASE_EXTENSION_MARKER` placeholders, verbatim extra extensions, suppressed extensions, GREASE, certificate compression, `padding_to`, `legacy_versions`) and its `apply` |
+| `src/client/hello_profile.rs` | **new**: public `ClientHelloProfile` (cipher list, groups, signature schemes, ALPN, extension order with `GREASE_EXTENSION_MARKER` placeholders, verbatim extra extensions, suppressed extensions, GREASE, certificate compression, `padding_to`, `legacy_versions`) and its `apply`. An empty certificate-compression list clears the typed value instead of setting an empty one: the profiles whose client advertises no algorithm (Safari 15.3, Tor 14.5) must send no extension 27 at all, not one with zero entries |
 | `src/client/client_conn.rs` | `ClientConfig::hello_profile: Option<Arc<ClientHelloProfile>>` |
 | `src/client/builder.rs` | initializes it to `None` |
 | `src/client/hs.rs` | applies the profile while building the ClientHello, with a per-connection GREASE seed from the provider's CSPRNG; adds the GREASE key share and the GREASE `supported_versions` entry for a greasing profile; records the *encoded* extension set as `sent_extensions`; gates `compress_certificate` on the hello offering TLS 1.3 |
@@ -95,8 +97,11 @@ patch -p1 -d vendor/rustls < PATCH.diff      # expect hunks only in the 6 files 
   (`curl_chrome107`, `curl_safari155`, `curl_firefox133`), measured with a local
   ClientHello sniffer. `cargo test -p dpi-core fingerprint` pins both strings for
   both TLS config builders, so a regression is caught without network access.
-  JA4 is the stricter of the two: it hashes the signature-algorithms list, which
-  is how Safari's missing `ecdsa_sha1` was found while its JA3 matched.
+  JA4 is the stricter of the two — it hashes the signature-algorithms list — and
+  that is how both Safari shape errors were found while the JA3s matched:
+  `rsa_pss_rsae_sha384` is on the wire *twice* (BoringSSL does not collapse the
+  wrapper's duplicate list) and Safari 18 dropped `ecdsa_sha1`, so the 15.5 and
+  18.x records need two different lists even though every other one is shared.
 * The one JA4 difference from the bundle is Firefox's extension count and hash:
   `curl_firefox133` sends `encrypted_client_hello` and this profile cannot (see
   the ECH bullet above).

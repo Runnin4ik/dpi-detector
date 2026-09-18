@@ -1,6 +1,6 @@
 diff -r a/src\client\builder.rs b/src\client\builder.rs
---- a/src\client\builder.rs	2026-09-14 12:54:48.848324800 +0300
-+++ b/src\client\builder.rs	2026-09-14 12:54:49.162660600 +0300
+--- a/src\client\builder.rs	2026-09-18 11:00:47.717548500 +0300
++++ b/src\client\builder.rs	2026-09-18 11:00:47.586181000 +0300
 @@ -168,6 +168,7 @@
          ClientConfig {
              provider: self.provider,
@@ -10,8 +10,8 @@ diff -r a/src\client\builder.rs b/src\client\builder.rs
              resumption: Resumption::default(),
              max_fragment_size: None,
 diff -r a/src\client\client_conn.rs b/src\client\client_conn.rs
---- a/src\client\client_conn.rs	2026-09-14 12:54:48.850349700 +0300
-+++ b/src\client\client_conn.rs	2026-09-14 12:54:49.163707300 +0300
+--- a/src\client\client_conn.rs	2026-09-18 11:00:47.719656300 +0300
++++ b/src\client\client_conn.rs	2026-09-18 11:00:47.587193800 +0300
 @@ -6,6 +6,7 @@
  use pki_types::{ServerName, UnixTime};
  
@@ -38,8 +38,8 @@ diff -r a/src\client\client_conn.rs b/src\client\client_conn.rs
      /// The default is true.
 diff -r a/src\client\hello_profile.rs b/src\client\hello_profile.rs
 --- a/src\client\hello_profile.rs	1970-01-01 03:00:00.000000000 +0300
-+++ b/src\client\hello_profile.rs	2026-09-14 12:54:49.171655700 +0300
-@@ -0,0 +1,320 @@
++++ b/src\client\hello_profile.rs	2026-09-18 11:00:47.590299300 +0300
+@@ -0,0 +1,334 @@
 +//! ClientHello profile override (dpi-detector patch).
 +//!
 +//! Upstream rustls fixes the ClientHello shape: the cipher-suite list and its
@@ -250,14 +250,25 @@ diff -r a/src\client\hello_profile.rs b/src\client\hello_profile.rs
 +        // RFC 8879: `compress_certificate` is a TLS 1.3 extension. rustls sets it
 +        // only for a hello that offers 1.3, so a profile must not reintroduce it
 +        // into a 1.2-only hello (the probes pin 1.2 for their second TLS column).
-+        if let (true, Some(algorithms)) = (tls13, &self.cert_compression) {
-+            exts.certificate_compression_algorithms = Some(
-+                algorithms
-+                    .iter()
-+                    .copied()
-+                    .map(crate::CertificateCompressionAlgorithm::from)
-+                    .collect(),
-+            );
++        //
++        // An empty list means "this client advertises no algorithm" — Safari
++        // 15.3 and Tor 14.5 send no such extension — and it has to clear the
++        // typed value rather than set an empty one, which would put a
++        // `compress_certificate` with zero entries on the wire: a hello with an
++        // extension the client does not send, which is exactly what the profiles
++        // exist to avoid.
++        if tls13 {
++            exts.certificate_compression_algorithms =
++                match &self.cert_compression {
++                    Some(algorithms) if !algorithms.is_empty() => Some(
++                        algorithms
++                            .iter()
++                            .copied()
++                            .map(crate::CertificateCompressionAlgorithm::from)
++                            .collect(),
++                    ),
++                    _ => None,
++                };
 +        }
 +
 +        let mut raw: Vec<(ExtensionType, Vec<u8>)> = self
@@ -282,7 +293,10 @@ diff -r a/src\client\hello_profile.rs b/src\client\hello_profile.rs
 +                    if *ext_type == GREASE_EXTENSION_MARKER {
 +                        let value = grease_value(grease_seed, 2 + nth);
 +                        nth += 1;
-+                        let body = if nth as usize == markers { vec![0] } else { Vec::new() };
++                        let mut body = Vec::new();
++                        if nth as usize == markers {
++                            body.push(0);
++                        }
 +                        raw.push((ExtensionType::from(value), body));
 +                        value
 +                    } else {
@@ -361,8 +375,8 @@ diff -r a/src\client\hello_profile.rs b/src\client\hello_profile.rs
 +    pub const RENEGOTIATION_INFO: u16 = 65281;
 +}
 diff -r a/src\client\hs.rs b/src\client\hs.rs
---- a/src\client\hs.rs	2026-09-14 12:54:48.860336600 +0300
-+++ b/src\client\hs.rs	2026-09-14 12:55:17.351569000 +0300
+--- a/src\client\hs.rs	2026-09-18 11:00:47.729608800 +0300
++++ b/src\client\hs.rs	2026-09-18 11:00:47.590299300 +0300
 @@ -207,11 +207,21 @@
          tls12: config.supports_version(ProtocolVersion::TLSv1_2, cx.common.protocol)
              && !forbids_tls12,
@@ -489,8 +503,8 @@ diff -r a/src\client\hs.rs b/src\client\hs.rs
              next,
              extra_exts: extra_exts.into_owned(),
 diff -r a/src\lib.rs b/src\lib.rs
---- a/src\lib.rs	2026-09-14 12:54:49.067146300 +0300
-+++ b/src\lib.rs	2026-09-14 12:54:49.246137100 +0300
+--- a/src\lib.rs	2026-09-18 11:00:47.919048200 +0300
++++ b/src\lib.rs	2026-09-18 11:00:47.649242900 +0300
 @@ -586,6 +586,7 @@
      mod ech;
      pub(super) mod handy;
@@ -508,8 +522,8 @@ diff -r a/src\lib.rs b/src\lib.rs
      #[cfg(any(feature = "std", feature = "hashbrown"))]
      pub use handy::ClientSessionMemoryCache;
 diff -r a/src\msgs\handshake.rs b/src\msgs\handshake.rs
---- a/src\msgs\handshake.rs	2026-09-14 12:54:48.986006500 +0300
-+++ b/src\msgs\handshake.rs	2026-09-14 12:54:49.221484900 +0300
+--- a/src\msgs\handshake.rs	2026-09-18 11:00:47.842965500 +0300
++++ b/src\msgs\handshake.rs	2026-09-18 11:00:47.624753700 +0300
 @@ -694,10 +694,23 @@
  /// ignore the preference of the client.
  ///
@@ -734,8 +748,8 @@ diff -r a/src\msgs\handshake.rs b/src\msgs\handshake.rs
              })?;
          }
 diff -r a/src\server\test.rs b/src\server\test.rs
---- a/src\server\test.rs	2026-09-14 12:54:49.011685100 +0300
-+++ b/src\server\test.rs	2026-09-14 12:54:49.231395500 +0300
+--- a/src\server\test.rs	2026-09-18 11:00:47.865924700 +0300
++++ b/src\server\test.rs	2026-09-18 11:00:47.633472000 +0300
 @@ -359,6 +359,7 @@
              supported_versions: Some(SupportedProtocolVersions {
                  tls12: true,
