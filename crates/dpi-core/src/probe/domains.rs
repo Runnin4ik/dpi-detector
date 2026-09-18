@@ -804,8 +804,9 @@ mod tests {
             ("youtube.com", "https://example.com/x", DpiStatus::RedirSuspect, "example.com"),
             ("m.youtube.com", "https://www.google.com/x", DpiStatus::RedirSuspect, "www.google.com"),
             // A different registrable domain is not the same site, however it
-            // reads: this is the instagram → facebook case.
-            ("www.instagram.com", "https://www.facebook.com/x", DpiStatus::RedirSuspect, "www.facebook.com"),
+            // reads, and a declared exception does not make one: the pairs in
+            // `REDIRECT_EXCEPTIONS` are exact, not families.
+            ("www.instagram.com", "https://www.messenger.com/x", DpiStatus::RedirSuspect, "www.messenger.com"),
             ("holod.media", "https://not-holod.media/x", DpiStatus::RedirSuspect, "not-holod.media"),
             ("holod.media", "https://holod.media.evil.com/x", DpiStatus::RedirSuspect, "holod.media.evil.com"),
         ];
@@ -818,9 +819,10 @@ mod tests {
         }
     }
 
-    /// The exception list is a pair list, not a family: `www.messenger.com` →
-    /// `www.facebook.com` is a redirect the site itself makes and reads `OK`,
-    /// while the same hop the other way round, a hop from either of them
+    /// The exception list is a pair list, not a family: the Meta sign-in hop
+    /// (`www.messenger.com` → `www.facebook.com`, `www.instagram.com` →
+    /// `www.facebook.com`) is a redirect the sites themselves make and reads
+    /// `OK`, while the same hop the other way round, a hop from either of them
     /// somewhere else, and a host that merely looks like one of them all keep
     /// the default `REDIR`.
     #[test]
@@ -830,12 +832,17 @@ mod tests {
             ("www.messenger.com", "https://www.facebook.com/", false, DpiStatus::Ok),
             ("www.messenger.com", "https://www.facebook.com/", true, DpiStatus::Ok),
             ("messenger.com", "https://www.facebook.com/x", false, DpiStatus::Ok),
+            ("www.instagram.com", "https://www.facebook.com/", false, DpiStatus::Ok),
+            ("www.instagram.com", "https://www.facebook.com/", true, DpiStatus::Ok),
+            ("instagram.com", "https://www.facebook.com/x", false, DpiStatus::Ok),
             // The pair is directional, and it names two hosts, not two sites.
             ("www.facebook.com", "https://www.messenger.com/", false, DpiStatus::RedirSuspect),
+            ("www.facebook.com", "https://www.instagram.com/", false, DpiStatus::RedirSuspect),
+            ("www.messenger.com", "https://www.instagram.com/", false, DpiStatus::RedirSuspect),
+            ("www.instagram.com", "https://www.messenger.com/", false, DpiStatus::RedirSuspect),
             ("www.messenger.com", "https://www.google.com/", false, DpiStatus::RedirSuspect),
             ("www.messenger.com", "https://www.facebook.com.evil.com/", false, DpiStatus::RedirSuspect),
             ("notmessenger.com", "https://www.facebook.com/", false, DpiStatus::RedirSuspect),
-            ("www.messenger.com", "https://www.instagram.com/", false, DpiStatus::RedirSuspect),
         ];
         for (domain, location, http_phase, want) in cases {
             let base = format!("http{}://{domain}", if *http_phase { "" } else { "s" });

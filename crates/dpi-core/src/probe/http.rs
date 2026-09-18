@@ -298,12 +298,20 @@ fn strip_www(host: &str) -> &str {
 /// leading `www.` dropped (`strip_www` runs before the lookup, so
 /// `www.messenger.com` → `www.facebook.com` is the pair below).
 ///
-/// The site-family rule in [`site_of`] reads these two hosts as different sites,
-/// so a redirect between them lands on `RedirSuspect` — the red `REDIR` — and
-/// this is the list where such a redirect is declared the site's own behaviour
-/// instead. It grows by one line per pair; the direction matters, and a host
-/// that is not in the list keeps the default verdict.
-const REDIRECT_EXCEPTIONS: &[(&str, &str)] = &[("messenger.com", "facebook.com")];
+/// The site-family rule in [`site_of`] reads each pair's two hosts as different
+/// sites, so a redirect between them lands on `RedirSuspect` — the red `REDIR` —
+/// and this is the list where such a redirect is declared the site's own
+/// behaviour instead. It grows by one line per pair; the direction matters, and
+/// a host that is not in the list keeps the default verdict.
+///
+/// Both entries are Meta's own sign-in hop, measured on the live sites: the two
+/// names answer `301` to `https://www.facebook.com/` and nothing else, so the
+/// row reads `OK` with the target named. A hop between the two of them
+/// (`www.instagram.com` → `www.messenger.com`) is not a pair and stays `REDIR`.
+const REDIRECT_EXCEPTIONS: &[(&str, &str)] = &[
+    ("messenger.com", "facebook.com"),
+    ("instagram.com", "facebook.com"),
+];
 
 /// True when `from` → `to` is a declared exception in [`REDIRECT_EXCEPTIONS`].
 fn is_expected_redirect(from: &str, to: &str) -> bool {
@@ -377,10 +385,10 @@ fn site_of(host: &str) -> Option<&str> {
 /// * two subdomains of the same site (`m.youtube.com` → `www.youtube.com`) —
 ///   the site is the host minus its first label, see [`site_of`].
 ///
-/// Everything else counts as foreign, so `www.instagram.com` →
-/// `www.facebook.com` stays a red REDIR — and so does `a.example.com` →
-/// `b.other.com`, which are two sites under different parents. A pair listed in
-/// [`REDIRECT_EXCEPTIONS`] is the one way a foreign hop comes out `OK`.
+/// Everything else counts as foreign, so `youtube.com` → `example.com` stays a
+/// red REDIR — and so does `a.example.com` → `b.other.com`, which are two sites
+/// under different parents. A pair listed in [`REDIRECT_EXCEPTIONS`] is the one
+/// way a foreign hop comes out `OK`.
 pub(crate) fn classify_redirect(
     domain: &str,
     base_url: &str,
