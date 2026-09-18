@@ -169,7 +169,12 @@ get_avail_kb() {
 
 # Determine primary and fallback targets (UPX vs standard):
 # 1. Explicit user override via DPI_UPX (1/force vs 0/never)
-# 2. Auto-detection: if free disk space < 7 MB (7168 KB), prioritize compact UPX (~1.4 MB)
+# 2. Auto-detection: if free disk space < 200 MB (204800 KB), prioritize the
+#    compact UPX build. The threshold is a policy number, not a fit check: a
+#    router's `/opt` or a `/tmp` install has little room to spare, and the
+#    compact build costs nothing but the packing (it is verified by running it
+#    before it is installed, and falls back to the standard build if it does not
+#    start).
 BASE_TARGET="$TARGET"
 PRIMARY_TARGET="$BASE_TARGET"
 FALLBACK_TARGET=""
@@ -179,7 +184,7 @@ if target_supports_upx "$BASE_TARGET"; then
     1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Ff][Oo][Rr][Cc][Ee])
       PRIMARY_TARGET="${BASE_TARGET}-upx"
       FALLBACK_TARGET="${BASE_TARGET}"
-      echo "Notice: DPI_UPX enabled. Preferring compact UPX-compressed binary (~1.4 MB)."
+      echo "Notice: DPI_UPX enabled. Preferring the compact UPX-compressed build."
       ;;
     0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|[Nn][Ee][Vv][Ee][Rr])
       PRIMARY_TARGET="${BASE_TARGET}"
@@ -187,12 +192,12 @@ if target_supports_upx "$BASE_TARGET"; then
       ;;
     auto|*)
       AVAIL_KB=$(get_avail_kb "$OUT_DIR")
-      if [ -n "$AVAIL_KB" ] && [ "$AVAIL_KB" -lt 7168 ]; then
+      if [ -n "$AVAIL_KB" ] && [ "$AVAIL_KB" -lt 204800 ]; then
         PRIMARY_TARGET="${BASE_TARGET}-upx"
         FALLBACK_TARGET="${BASE_TARGET}"
         AVAIL_MB=$((AVAIL_KB / 1024))
-        echo "Notice: low disk space in ${OUT_DIR} (~${AVAIL_MB} MB free, threshold 7 MB)."
-        echo "        Automatically selecting compact UPX-compressed binary (~1.4 MB)."
+        echo "Notice: low disk space in ${OUT_DIR} (~${AVAIL_MB} MB free, threshold 200 MB)."
+        echo "        Automatically selecting the compact UPX-compressed build."
       else
         PRIMARY_TARGET="${BASE_TARGET}"
         FALLBACK_TARGET="${BASE_TARGET}-upx"
@@ -310,6 +315,13 @@ fi
 # Atomic install: replace destination file with verified temp binary
 mv -f "$TMP_FILE" "$OUT_FILE"
 chmod +x "$OUT_FILE"
+# What the file really occupies, measured after it is in place — not the size the
+# release notes promise. `du` counts allocated blocks (what `df` will report as
+# used); when it is unavailable, the apparent size rounded up to a block does.
+SIZE_KB=$(du -k "$OUT_FILE" 2>/dev/null | awk 'NR == 1 { print $1 + 0 }')
+[ -n "$SIZE_KB" ] && [ "$SIZE_KB" -gt 0 ] || SIZE_KB=$(( ($(wc -c < "$OUT_FILE") + 1023) / 1024 ))
+SIZE_MB=$(awk -v kb="$SIZE_KB" 'BEGIN { printf "%.1f", kb / 1024 }' 2>/dev/null)
+[ -n "$SIZE_MB" ] || SIZE_MB=$((SIZE_KB / 1024))
 RUN_FILE="$OUT_FILE"
 CMD_RUN="${RUN_FILE}"
 case ":$PATH:" in
@@ -324,22 +336,20 @@ echo "  DPI Detector successfully installed!"
 echo "  Location: ${RUN_FILE}"
 case "$CHOSEN_TARGET" in
   *-upx)
-    echo "  Variant:  Compact UPX (~1.4 MB)"
+    echo "  Variant:  Compact UPX"
     ;;
   *)
-    echo "  Variant:  Standard (~3.9 MB)"
+    echo "  Variant:  Standard"
     ;;
 esac
+echo "  Size:     ${SIZE_MB} MB"
 echo "=============================================="
 echo ""
 echo "To start the interactive menu:"
 echo "  ${CMD_RUN}"
 echo ""
-echo "Quick test:"
-echo "  ${CMD_RUN} -t 1"
-echo ""
-echo "All tests:"
-echo "  ${CMD_RUN} -t 12345"
+echo "For help:"
+echo "  ${CMD_RUN} --help"
 echo ""
 
 # Only run automatically if user explicitly passed arguments (e.g. sh -s -- -t 1)

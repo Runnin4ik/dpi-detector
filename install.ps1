@@ -86,8 +86,8 @@ if (-not $downloaded) {
 Move-Item -Force $tmp $out
 
 Write-Host "Binary: $out" -ForegroundColor Cyan
-Write-Host "Run:    & `"$out`" -t 1" -ForegroundColor Cyan
 Write-Host "Menu:   & `"$out`"" -ForegroundColor Cyan
+Write-Host "Help:   & `"$out`" --help" -ForegroundColor Cyan
 Write-Host "Starting DPI Detector..." -ForegroundColor Green
 if ($AppArgs -and $AppArgs.Count -gt 0) {
     & $out @AppArgs
