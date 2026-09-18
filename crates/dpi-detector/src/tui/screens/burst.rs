@@ -15,6 +15,7 @@ use futures_util::StreamExt;
 
 use crate::render::{
     asc, clean_output, frame_home, frame_repaint, output_str, panel_to_string, plain_mode,
+    strip_ansi_len, BOX_WIDTH,
 };
 use crate::tui::input::{nav_key, normalize_key_char};
 use crate::tui::screens::main::pad_width;
@@ -63,6 +64,32 @@ fn tail_of(text: &str, width: usize) -> String {
     } else {
         text.to_string()
     }
+}
+
+/// Columns left for a row's value: the box, its two borders and the space inside
+/// each, the mark, the gap and the label column.
+const BURST_VALUE_WIDTH: usize = BOX_WIDTH - 3 - (2 + 1 + BURST_LABEL_WIDTH + 1);
+
+/// The shapes as one value, cut to `width` columns with an ellipsis. A selection
+/// the cycler has no position for is a list whose names would otherwise run past
+/// the box's right edge — the row is one line, so what does not fit is dropped
+/// rather than pushed off the screen.
+fn names_value(names: &[&str], width: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0usize;
+    for (index, name) in names.iter().enumerate() {
+        let separator = if index > 0 { 2 } else { 0 };
+        if used + separator + strip_ansi_len(name) + 1 > width {
+            out.push('…');
+            return out;
+        }
+        if index > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(name);
+        used += separator + strip_ansi_len(name);
+    }
+    out
 }
 
 /// Test 6's own screen: how many handshakes at once, how long each may take,
@@ -371,7 +398,12 @@ fn burst_settings_rows(
             };
             format!("{} \x1b[2m[{}/{}]\x1b[0m", name, index + 1, PROFILE_CHOICES)
         }
-        None => profiles.iter().map(|f| f.display_label()).collect::<Vec<_>>().join(", "),
+        // A selection the cycler has no position for (`--burst-profiles`): its
+        // names are shown while they fit the column, so the box keeps its edge.
+        None => names_value(
+            &profiles.iter().map(|f| f.display_label()).collect::<Vec<_>>(),
+            BURST_VALUE_WIDTH,
+        ),
     };
     lines.push(field(BURST_ROW_PROFILES, msg.burst_field_profiles, profile_value));
 
@@ -541,6 +573,25 @@ mod tests {
             "{}",
             strip_ansi(&single.join("\n"))
         );
+    }
+
+    /// A selection the cycler has no position for is the CLI's default set: the
+    /// row names the shapes while they fit the column and drops the rest, so the
+    /// box keeps its right edge — the names of seven shapes used to run past it.
+    #[test]
+    fn a_selection_without_a_position_is_cut_to_the_column() {
+        let msg = get_messages(Language::Ru);
+        let chosen = TlsFingerprint::DEFAULT_SET.to_vec();
+        let rows = burst_settings_rows(
+            &msg, Language::Ru, BURST_ROW_PROFILES, 4, 8, BurstTlsVersion::Tls13And12,
+            BurstAlpn::Http2, "", false, &chosen, profile_index_of(&chosen), 35,
+        );
+        for row in rows.iter().take(rows.len() - 1) {
+            assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{row:?}");
+        }
+        let joined = strip_ansi(&rows.join("\n"));
+        assert!(joined.contains('…'), "what does not fit is cut: {joined}");
+        assert!(joined.contains(TlsFingerprint::DEFAULT_SET[0].display_label()), "{joined}");
     }
 
     /// The row offers every shape the detector can present, one press away, and
