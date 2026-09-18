@@ -258,8 +258,15 @@ pub fn classify_connect_error_full(
         return (DpiStatus::DnsFail, Detail::DnsError);
     }
 
-    // TLS alerts surfacing inside connect errors (DPI)
-    if full.contains("sslv3_alert") || full.contains("ssl alert") || (full.contains("alert") && full.contains("handshake")) {
+    // TLS alerts surfacing inside connect errors (DPI). The last arm is rustls's
+    // own wording — `received fatal alert: InternalError` — which says "alert"
+    // without saying handshake, and used to fall through to `UNKNOWN` while the
+    // alert table already knew the description.
+    if full.contains("sslv3_alert")
+        || full.contains("ssl alert")
+        || (full.contains("alert") && full.contains("handshake"))
+        || (full.contains("alert") && alert::from_message(&full).is_some())
+    {
         if let Some(verdict) = alert_verdict(&full) {
             return verdict;
         }
@@ -312,6 +319,25 @@ pub fn classify_connect_error_full(
         || full.contains("timed out");
     if timed_out {
         return timeout_at_stage(stage);
+    }
+
+    // A connection that ended before the message it announced: the peer — or
+    // something on the path — closed it mid-message. The vocabulary names that an
+    // EOF at whichever layer it happened, and a close inside the handshake that
+    // read nothing is the reset it usually is.
+    if full.contains("connection closed before message complete")
+        || full.contains("incomplete message")
+        || full.contains("connection closed")
+        || full.contains("early eof")
+        || full.contains("premature eof")
+    {
+        if bytes_read == 0 && stage == "tls_handshake" {
+            return (DpiStatus::TlsRst, Detail::RstHello);
+        }
+        return match stage {
+            "tls_handshake" => (DpiStatus::TlsEof, Detail::HandshakeEof),
+            _ => (DpiStatus::TlsEof, Detail::TransferEof),
+        };
     }
 
     if matches!(raw_os_error, Some(NET_UNREACH) | Some(NET_DOWN)) || full.contains("network is unreachable") || full.contains("network is down") {
@@ -485,6 +511,56 @@ mod tests {
 
         let (s, _) = classify_read_error(localized, None, None, 0);
         assert_eq!(s, DpiStatus::Unknown, "the localized text alone is unrecognisable");
+    }
+
+    /// Two messages a real test-3 run reported as `UNKNOWN`: rustls's own wording
+    /// for an alert it received, and hyper's for a body the peer closed before
+    /// finishing. Both name events the vocabulary already has.
+    #[test]
+    fn test_alert_and_incomplete_message_are_not_unknown() {
+        let (s, d) = classify_connect_error_full(
+            "received fatal alert: InternalError",
+            None,
+            None,
+            0,
+            "tls_handshake",
+        );
+        assert_eq!(s, DpiStatus::TlsAlert);
+        assert_eq!(d, Detail::Alert(AlertKind::InternalError));
+
+        let (s, d) = classify_connect_error_full(
+            "connection closed before message complete",
+            None,
+            None,
+            0,
+            "reading_data",
+        );
+        assert_eq!(s, DpiStatus::TlsEof);
+        assert_eq!(d, Detail::TransferEof);
+
+        // The same close inside the handshake, having read nothing, is still the
+        // reset it usually is — the rule `classify_ssl_error` already applies.
+        let (s, d) = classify_connect_error_full(
+            "connection closed before message complete",
+            None,
+            None,
+            0,
+            "tls_handshake",
+        );
+        assert_eq!(s, DpiStatus::TlsRst);
+        assert_eq!(d, Detail::RstHello);
+
+        // A certificate failure must stay a certificate verdict: `UnknownCa` and
+        // `UnknownIssuer` are both in the alert table's vocabulary, and the alert
+        // branch may only take a message that actually says "alert".
+        let (s, _) = classify_connect_error_full(
+            "invalid peer certificate: UnknownIssuer",
+            None,
+            None,
+            0,
+            "tls_handshake",
+        );
+        assert_eq!(s, DpiStatus::NoCa);
     }
 
     #[test]
