@@ -90,8 +90,9 @@ net/fingerprint/
 
 ## 5. Процедура добавления одного профиля
 
-1. Запись в `SHAPES` + алиасы; `TlsFingerprint` расширяется тривиально.
-2. Парсинг: алиасы и правила диапазонов — в данных; тест `fingerprint_parses_known_values_and_rejects_others`.
+1. Запись в `SHAPES` с одним именем-версией; `TlsFingerprint` расширяется тривиально.
+2. Тест `fingerprint_parses_known_values_and_rejects_others`: новое имя принимается,
+   имена обёрток (`curl_*`) и имена без версии — нет.
 3. Пины `bundle_versions_match_their_ja3` / `_ja4`: **ожидаемые строки берутся из источника**, не
    из нашего же дампа (иначе тест закрепляет нашу ошибку). JA4 строже JA3: он хеширует
    `signature_algorithms` и ALPN — так у Safari нашлась отсутствовавшая `ecdsa_sha1`.
@@ -169,7 +170,8 @@ header protection по RFC 9001 §5.4 с тест-векторами §A.2, (2) 
 
 ## 11. Definition of Done для «профиль добавлен»
 
-* Запись в `SHAPES` с `source` и алиасами; `parse` принимает канонические и `curl_*` имена.
+* Запись в `SHAPES` с одним `code` (имя = версия клиента) и `source`; `parse` принимает
+  это имя в любом регистре и отвергает имена обёрток.
 * Пины JA3 **и** JA4 из источника; `cargo test -p dpi-core fingerprint` зелёный.
 * `dump`/`dump12`/`dump13` совпадают с источником; `live` проходит по базовым хостам + SCT-хосты +
   `standby-rezka.tv`; `tls.peet.ws` показывает ожидаемый akamai-фингерпринт.
@@ -185,7 +187,7 @@ header protection по RFC 9001 §5.4 с тест-векторами §A.2, (2) 
 
 * **M2 (данные вместо кода).** `net/fingerprint.rs` разбит на
   `net/fingerprint/{mod,shapes,h2,identity,tests}.rs`. Профиль — запись в
-  `SHAPES`: имена и алиасы, правила `curl_*`, `source`, TLS-списки, гейты `pq`
+  `SHAPES`: имена и `source`, TLS-списки, гейты `pq`
   и сжатия сертификата, ссылки на identity и h2-преамбулу. Билдер, парсеры,
   `apply`, `pinned_drop`, `hello_profile` и `--legend` читают таблицу;
   `TlsFingerprint::ALL` — единственный рукописный список, и
@@ -219,7 +221,7 @@ header protection по RFC 9001 §5.4 с тест-векторами §A.2, (2) 
   список групп открывался той группой, которой профиль шлёт шар
   (`initial_key_share` берёт первую группу провайдера). Плюс
   `the_baseline_is_the_only_shape_that_impersonates_nobody`,
-  `profile_names_are_unique_and_lowercase`, `default_set_is_a_subset_of_all`.
+  `profile_names_are_unique_lowercase_and_versioned`, `default_set_is_a_subset_of_all`.
 * **M3 (UX).** `DEFAULT_SET` введён и на него переведены умолчания теста 6 (CLI
   и циклический переключатель). Строки i18n больше не перечисляют профили:
   `cli_fingerprint`, `cli_burst_profiles`, `warn_unknown_fingerprint` и
