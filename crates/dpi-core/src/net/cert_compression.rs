@@ -10,10 +10,10 @@
 //! alone, so these two live here, over the decoder-only crates.
 //!
 //! Which algorithms the hello *offers* is the profile's business
-//! ([`super::fingerprint::chrome_profile`] and friends pin the RFC 8879 code
-//! points). This list only tells rustls which decompressor to pick for the
-//! algorithm the server chose in its `CompressedCertificate`, so it holds both
-//! algorithms for every profile.
+//! (`net::fingerprint::shapes` pins the RFC 8879 code points per shape). This
+//! list only tells rustls which decompressor to pick for the algorithm the
+//! server chose in its `CompressedCertificate`, so it holds both algorithms for
+//! every profile.
 //!
 //! Both decoders write into the caller's buffer, sized by rustls to the length
 //! the server declared, and neither allocates: a certificate that decompresses to
