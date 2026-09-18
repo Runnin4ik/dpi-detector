@@ -339,3 +339,257 @@ fn offers_version(version: TlsVersion, suite: u16) -> bool {
         TlsVersion::Any => true,
     }
 }
+
+/// Why the two tests below exist, and why nothing else covers this.
+///
+/// `vendor/rustls-rustcrypto` is upstream's provider with its `rustls-webpki
+/// 0.102` dependency removed: the OID table it took from `webpki::alg_id` now
+/// comes from `rustls-pki-types` (`vendor/rustls-rustcrypto/README-PATCH.md`).
+/// That table is what the provider reports as the algorithms it can verify, so a
+/// mistake there is invisible to every other test in this crate — JA3 and JA4
+/// hash a ClientHello and never verify anything, and the probes'
+/// `TlsProfile::insecure` accepts any certificate. It surfaces in the field as a
+/// site that opens in a browser and not here, which is the one failure this tool
+/// must never report as censorship.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
+    use rustls::{
+        ClientConnection, RootCertStore, ServerConfig, ServerConnection, SignatureScheme,
+        StreamOwned,
+    };
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    /// One test chain, generated once and checked in: a CA (EC P-256,
+    /// `CN=dpi-detector test CA`, `CA:TRUE` + `keyCertSign`) and three leaves
+    /// under it, one per key type the provider can verify — `CN=localhost`,
+    /// `SAN DNS:localhost, IP:127.0.0.1`, `EKU serverAuth`, keys EC P-256,
+    /// RSA-2048 and Ed25519 as PKCS#8.
+    ///
+    /// `testdata/generate.py` is the script that wrote these files; run it again
+    /// only if the 20-year validity window ever runs out.
+    const CA: &[u8] = include_bytes!("testdata/ca.der");
+    const LEAVES: &[(&str, &[u8], &[u8])] = &[
+        ("ecdsa", include_bytes!("testdata/ecdsa.der"), include_bytes!("testdata/ecdsa.key.der")),
+        ("rsa", include_bytes!("testdata/rsa.der"), include_bytes!("testdata/rsa.key.der")),
+        (
+            "ed25519",
+            include_bytes!("testdata/ed25519.der"),
+            include_bytes!("testdata/ed25519.key.der"),
+        ),
+    ];
+
+    /// The `AlgorithmIdentifier` DER a peer's certificate carries, exactly as
+    /// `rustls-pki-types` ships it in `src/data/alg-*.der`, for the five cases
+    /// that between them cover every shape the provider reports: an OID alone
+    /// (Ed25519, `ecdsa-with-SHA256`), an OID with the named curve as a
+    /// parameter (`id-ecPublicKey` + prime256v1), and an OID with explicit
+    /// parameters (`rsaEncryption` with NULL, `id-RSASSA-PSS` with its hash and
+    /// salt parameters). Hardcoded rather than read back from `pki_types`: the
+    /// point is to pin the data a certificate carries independently of the crate
+    /// the provider imports it from.
+    ///
+    /// 1.2.840.10045.4.3.2 — `ecdsa-with-SHA256`.
+    const ECDSA_SHA256: &[u8] = &[0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+    /// 1.2.840.10045.2.1 + 1.2.840.10045.3.1.7 — `id-ecPublicKey` with `prime256v1`.
+    const ECDSA_P256: &[u8] = &[
+        0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce,
+        0x3d, 0x03, 0x01, 0x07,
+    ];
+    /// 1.2.840.10045.4.3.3 — `ecdsa-with-SHA384`.
+    const ECDSA_SHA384: &[u8] = &[0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
+    /// 1.2.840.10045.2.1 + 1.3.132.0.34 — `id-ecPublicKey` with `secp384r1`.
+    const ECDSA_P384: &[u8] = &[
+        0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x05, 0x2b, 0x81, 0x04, 0x00,
+        0x22,
+    ];
+    /// 1.3.101.112 — `id-Ed25519`.
+    const ED25519: &[u8] = &[0x06, 0x03, 0x2b, 0x65, 0x70];
+    /// 1.2.840.113549.1.1.1 — `rsaEncryption` with an explicit NULL parameter.
+    const RSA_ENCRYPTION: &[u8] = &[
+        0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00,
+    ];
+    /// 1.2.840.113549.1.1.11 — `sha256WithRSAEncryption` with an explicit NULL.
+    const RSA_PKCS1_SHA256: &[u8] = &[
+        0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b, 0x05, 0x00,
+    ];
+    /// 1.2.840.113549.1.1.10 — `id-RSASSA-PSS` with SHA-256, MGF1-SHA-256 and a
+    /// 32-byte salt, which is the parameter set the provider's verifier uses.
+    const RSA_PSS_SHA256: &[u8] = &[
+        0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x34, 0xa0, 0x0f,
+        0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00,
+        0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08,
+        0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00,
+        0xa2, 0x03, 0x02, 0x01, 0x20,
+    ];
+
+    /// The provider must report, for every scheme it claims, the identifier pair
+    /// a certificate signed by such a key carries: rustls hands these to path
+    /// validation, and a pair that does not match the certificate is a
+    /// verification failure that no ClientHello-level test can see.
+    #[test]
+    fn provider_reports_the_algorithm_identifiers_a_certificate_carries() {
+        let provider = crypto_provider();
+        let expected: &[(SignatureScheme, &[u8], &[u8])] = &[
+            (SignatureScheme::ECDSA_NISTP256_SHA256, ECDSA_SHA256, ECDSA_P256),
+            (SignatureScheme::ECDSA_NISTP384_SHA384, ECDSA_SHA384, ECDSA_P384),
+            (SignatureScheme::ED25519, ED25519, ED25519),
+            (SignatureScheme::RSA_PKCS1_SHA256, RSA_PKCS1_SHA256, RSA_ENCRYPTION),
+            (SignatureScheme::RSA_PSS_SHA256, RSA_PSS_SHA256, RSA_ENCRYPTION),
+        ];
+
+        for (scheme, signature_oid, public_key_oid) in expected {
+            let algorithms = provider
+                .signature_verification_algorithms
+                .mapping
+                .iter()
+                .find(|(mapped, _)| mapped == scheme)
+                .map(|(_, algorithms)| *algorithms)
+                .unwrap_or_else(|| panic!("{scheme:?} has no verification algorithm"));
+            // TLS 1.3 tries only the first algorithm of a mapping, and a mapping
+            // that leads with the wrong identifier breaks exactly that path.
+            let first = algorithms
+                .first()
+                .unwrap_or_else(|| panic!("{scheme:?} maps to an empty algorithm list"));
+            assert_eq!(
+                first.signature_alg_id().as_ref(),
+                *signature_oid,
+                "{scheme:?} signature AlgorithmIdentifier"
+            );
+            assert_eq!(
+                first.public_key_alg_id().as_ref(),
+                *public_key_oid,
+                "{scheme:?} public key AlgorithmIdentifier"
+            );
+        }
+    }
+
+    /// A full verifying handshake against a local rustls server, with the
+    /// fixture CA as the only trust anchor. The client config is built straight
+    /// from the provider, not from `create_tls_config`, because the verifying
+    /// profile trusts `webpki-roots` and a test cannot add a root to it.
+    ///
+    /// Returns the client's view: `Ok(())` once the certificate verified and the
+    /// request round-tripped, `Err(message)` otherwise. With `trust_ca = false`
+    /// the root store is empty, which is the control: it must fail, otherwise the
+    /// client would be accepting anything and would prove nothing.
+    fn handshake(leaf: &'static [u8], key: &'static [u8], trust_ca: bool) -> Result<(), String> {
+        let provider = crypto_provider();
+        let server_config = ServerConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .expect("the provider serves TLS 1.2 and 1.3")
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from(leaf)],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)),
+            )
+            .expect("the fixture leaf and its key form a valid certified key");
+
+        let mut roots = RootCertStore::empty();
+        if trust_ca {
+            roots.add(CertificateDer::from(CA)).expect("the fixture CA parses");
+        }
+        let client_config = ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("the provider serves TLS 1.2 and 1.3")
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+        let addr = listener.local_addr().expect("a bound listener has an address");
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().expect("the client connects");
+            socket.set_read_timeout(Some(Duration::from_secs(10))).expect("a read timeout");
+            let connection =
+                ServerConnection::new(Arc::new(server_config)).expect("a server connection");
+            let mut stream = StreamOwned::new(connection, socket);
+            // A rejected certificate fails the handshake on the first read, so
+            // the server's own error is not the signal here — the client decides.
+            let mut request = [0u8; 4];
+            if stream.read_exact(&mut request).is_ok() {
+                let _ = stream.write_all(b"pong");
+                let _ = stream.flush();
+            }
+        });
+
+        let socket = TcpStream::connect(addr).expect("the local server is reachable");
+        socket.set_read_timeout(Some(Duration::from_secs(10))).expect("a read timeout");
+        let connection = ClientConnection::new(
+            Arc::new(client_config),
+            ServerName::try_from("localhost").expect("a static server name"),
+        )
+        .expect("a client connection");
+        let mut stream = StreamOwned::new(connection, socket);
+        let reply = stream.write_all(b"ping").and_then(|()| {
+            let mut reply = [0u8; 4];
+            stream.read_exact(&mut reply).map(|()| reply)
+        });
+        let _ = server.join();
+
+        match reply {
+            Ok(reply) if reply == *b"pong" => Ok(()),
+            Ok(_) => Err("the server answered something other than pong".to_string()),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    /// Every key type the provider can verify, end to end: the handshake covers
+    /// `ecdsa-with-SHA256`, `rsa_pss_rsae_sha256` (TLS 1.3 with an RSA key) and
+    /// Ed25519, i.e. one algorithm per verifier module the patch touched.
+    #[test]
+    fn verifying_handshake_accepts_the_fixture_chain() {
+        for (name, leaf, key) in LEAVES {
+            handshake(leaf, key, true).unwrap_or_else(|err| panic!("{name} leaf rejected: {err}"));
+        }
+    }
+
+    /// The control for the test above: the same server, the same handshake, an
+    /// empty root store. Without this, a client that accepted every certificate
+    /// (the probes' `InsecureDpiCertVerifier`) would pass the positive test too.
+    #[test]
+    fn verifying_handshake_rejects_a_chain_whose_ca_is_not_trusted() {
+        let (name, leaf, key) = LEAVES[0];
+        let err = handshake(leaf, key, false)
+            .expect_err("an untrusted chain must not verify");
+        assert!(err.contains("UnknownIssuer"), "{name} leaf: {err}");
+    }
+
+    /// RFC 8446 §4.2.8.2 on the provider's own X25519 group, which is what every
+    /// probe that negotiates X25519 uses. An all-zero share is a low-order point
+    /// and its Diffie-Hellman output is the identity; x25519-dalek returns that
+    /// as zeros and only *reports* `was_contributory`, so a provider that does
+    /// not read the report completes a handshake on a secret the peer can
+    /// predict. Upstream RustCrypto leaves it unread (0.0.2-alpha and `master`
+    /// alike), which is why `vendor/rustls-rustcrypto` carries the check.
+    ///
+    /// `net::pq_kx`'s own two paths are covered by `rejects_a_low_order_x25519_share`.
+    #[test]
+    fn provider_x25519_group_rejects_a_low_order_peer_key() {
+        let provider = crypto_provider();
+        let group = provider
+            .kx_groups
+            .iter()
+            .copied()
+            .find(|group| group.name() == rustls::NamedGroup::X25519)
+            .expect("the provider offers X25519");
+
+        let active = group.start().expect("the group starts a key exchange");
+        let err = match active.complete(&[0u8; 32]) {
+            Ok(_) => panic!("a low-order peer key must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(
+                err,
+                RustlsError::PeerMisbehaved(rustls::PeerMisbehaved::InvalidKeyShare)
+            ),
+            "unexpected error: {err:?}"
+        );
+    }
+}

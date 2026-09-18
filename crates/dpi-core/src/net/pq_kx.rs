@@ -98,6 +98,14 @@ impl ActiveKeyExchange for ActiveX25519MlKem768 {
 
         let x_peer: [u8; X25519_LEN] = x_peer.try_into().map_err(|_| invalid_key_share())?;
         let x_dh = self.x_secret.diffie_hellman(&PublicKey::from(x_peer));
+        // RFC 8446 §4.2.8.2 through the draft: a peer key of low order yields the
+        // all-zero secret, and the handshake must abort instead of deriving keys
+        // from it. x25519-dalek reports that as `was_contributory` rather than
+        // failing on its own, and the bare X25519 group in the provider does not
+        // check it either (upstream's, both in 0.0.2-alpha and `master`).
+        if !x_dh.was_contributory() {
+            return Err(invalid_key_share());
+        }
 
         // PQ first, matching the key-share layout above.
         let mut secret = Vec::with_capacity(64);
@@ -115,7 +123,13 @@ impl ActiveKeyExchange for ActiveX25519MlKem768 {
         peer_pub_key: &[u8],
     ) -> Result<SharedSecret, Error> {
         let peer: [u8; X25519_LEN] = peer_pub_key.try_into().map_err(|_| invalid_key_share())?;
-        Ok(self.x_secret.diffie_hellman(&PublicKey::from(peer)).as_ref().into())
+        let secret = self.x_secret.diffie_hellman(&PublicKey::from(peer));
+        // This path is pure X25519, so an unchecked low-order peer key here is a
+        // fully known secret — the check matters more than in `complete`.
+        if !secret.was_contributory() {
+            return Err(invalid_key_share());
+        }
+        Ok(secret.as_ref().into())
     }
 
     fn pub_key(&self) -> &[u8] {
@@ -194,5 +208,26 @@ mod tests {
     fn rejects_short_share() {
         let active = X25519MlKem768.start().expect("start");
         assert!(active.complete(&[0u8; 10]).is_err());
+    }
+
+    /// RFC 8446 §4.2.8.2, both paths. An all-zero X25519 share is a low-order
+    /// point whose Diffie-Hellman output is the identity, so the "secret" is
+    /// zero — known to anyone. x25519-dalek computes it happily and only reports
+    /// `was_contributory`, which is why the check has to be here; the hybrid path
+    /// (`complete_hybrid_component`, the bare-X25519 share rustls offers
+    /// alongside the PQ one) would otherwise negotiate a fully predictable key.
+    #[test]
+    fn rejects_a_low_order_x25519_share() {
+        let group = X25519MlKem768;
+
+        let active = group.start().expect("start");
+        // The ciphertext half stays zero: any 1088 bytes decapsulate — FIPS 203
+        // implicit rejection turns a bad ciphertext into a pseudorandom secret —
+        // so what this asserts is the X25519 half and nothing else.
+        let share = [0u8; MLKEM768_CIPHERTEXT_LEN + X25519_LEN];
+        assert!(active.complete(&share).is_err());
+
+        let active = group.start().expect("start");
+        assert!(active.complete_hybrid_component(&[0u8; X25519_LEN]).is_err());
     }
 }
