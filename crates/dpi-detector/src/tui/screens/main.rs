@@ -36,6 +36,19 @@ pub struct MenuSelection {
     pub interface: Option<String>,
 }
 
+/// Applies the interface a menu selection carries to the process-wide bind.
+///
+/// The bind is a global rather than a field of the run, so *every* place that
+/// takes a `MenuSelection` has to call this: a run that returned to the menu with
+/// `M` and picked another interface kept the first one, because the second
+/// selection only updated the locals beside it.
+pub fn apply_interface(selection: &MenuSelection) {
+    match &selection.interface {
+        Some(name) => dpi_core::net::bind::set_target(dpi_core::net::bind::resolve(name)),
+        None => dpi_core::net::bind::set_target(None),
+    }
+}
+
 pub enum MenuResult {
     Run(MenuSelection),
     Quit,
@@ -448,7 +461,7 @@ fn draw_menu(
         let off_str = if ascii_mode() { "( )" } else { "○" };
         format!("{} IPv4   \x1b[2m{} IPv6 {}\x1b[0m", radio_btn(true), off_str, unavail)
     };
-    let ip_cursor = if cursor == 1 { "►" } else { " " };
+    let ip_cursor = if cursor == 2 { "►" } else { " " };
     let ip_lbl = format!("{}:", msg.menu_ip_version.trim_end_matches(':'));
     lines.push(format!("  {} {} {}", ip_cursor, pad_width(&ip_lbl, 16), ip_opts));
 
@@ -460,7 +473,7 @@ fn draw_menu(
         })
         .collect::<Vec<_>>()
         .join("   ");
-    let conc_cursor = if cursor == 2 { "►" } else { " " };
+    let conc_cursor = if cursor == 3 { "►" } else { " " };
     let conc_lbl = format!("{}:", msg.menu_concurrency.trim_end_matches(':'));
     lines.push(format!("  {} {} {}", conc_cursor, pad_width(&conc_lbl, 16), conc_opts));
     // Fingerprint row: only the active profile is drawn. All four names side by
@@ -476,7 +489,7 @@ fn draw_menu(
         fp_index + 1,
         TlsFingerprint::ALL.len()
     );
-    let fp_cursor = if cursor == 3 { "►" } else { " " };
+    let fp_cursor = if cursor == 4 { "►" } else { " " };
     let fp_lbl = format!("{}:", msg.fingerprint_label.trim_end_matches(':'));
     lines.push(format!("  {} {} {}", fp_cursor, pad_width(&fp_lbl, 16), fp_opt));
     lines.push(format!("  {}", "─".repeat(BOX_WIDTH - 8)));
@@ -674,6 +687,43 @@ mod tests {
         assert_eq!(sel.language, Language::Ru);
         assert_eq!(sel.selected_tests, "123");
         assert!(sel.interface.is_none(), "the routing table is the default");
+    }
+
+    /// A selection's interface always reaches the process-wide bind: the call
+    /// was missing from the post-run path, so a second trip through the menu with
+    /// `M` kept testing whatever the first trip picked.
+    #[test]
+    fn a_selection_applies_its_interface() {
+        use dpi_core::net::bind;
+
+        let mut sel = MenuSelection {
+            selected_tests: "1".to_string(),
+            ip_version: "ipv4".to_string(),
+            concurrency: 50,
+            language: Language::Ru,
+            tls_fingerprint: TlsFingerprint::Rustls,
+            interface: None,
+        };
+        bind::set_target(Some(bind::BindTarget {
+            name: "example0".to_string(),
+            v4: Some("192.0.2.9".parse().expect("documentation address")),
+            v6: None,
+            label: "example0 (192.0.2.9)".to_string(),
+        }));
+        apply_interface(&sel);
+        assert!(bind::target().is_none(), "an empty row clears the bind");
+
+        // Whatever this machine has: the name the menu shows is the name that
+        // ends up bound, and a name that resolves to nothing clears it rather
+        // than leaving the previous choice in place.
+        if let Some(iface) = bind::interfaces().iter().find_map(|i| bind::resolve(&i.name)) {
+            sel.interface = Some(iface.name.clone());
+            apply_interface(&sel);
+            assert_eq!(bind::target().map(|t| t.name), Some(iface.name));
+        }
+        sel.interface = Some("no-such-interface-2791".to_string());
+        apply_interface(&sel);
+        assert!(bind::target().is_none(), "a name that resolves to nothing binds nothing");
     }
 
     #[test]

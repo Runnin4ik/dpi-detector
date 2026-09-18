@@ -23,7 +23,7 @@ mod views;
 
 use dpi_core::classify::Detail;
 use menu::{
-    burst_settings_menu, export_report, legend_loop, menu_until_something_to_run,
+    apply_interface, burst_settings_menu, export_report, legend_loop, menu_until_something_to_run,
     read_post_test_action, run_interactive_menu, tui_available, MenuAction,
     MenuResult, PostTestAction, VersionSlot,
 };
@@ -433,19 +433,16 @@ async fn main() {
         }
         match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot).await {
             MenuResult::Run(sel) => {
+                // The row is what the user just chose, so it has the last word
+                // over `--iface`; `None` means the routing table and clears any
+                // target the flag had set. Before the fields move out of `sel`.
+                apply_interface(&sel);
                 tests_str = sel.selected_tests;
                 concurrency = sel.concurrency;
                 ip_version = sel.ip_version;
                 tls_fingerprint = sel.tls_fingerprint;
                 lang = sel.language;
                 msg = get_messages(lang);
-                // The row is what the user just chose, so it has the last word
-                // over `--iface`; `None` means the routing table and clears any
-                // target the flag had set.
-                match &sel.interface {
-                    Some(name) => dpi_core::net::bind::set_target(dpi_core::net::bind::resolve(name)),
-                    None => dpi_core::net::bind::set_target(None),
-                }
             }
             MenuResult::Quit => return,
         }
@@ -484,6 +481,7 @@ async fn main() {
             MenuAction::Menu if is_interactive => {
                 match menu_until_something_to_run(lang, profile, &cfg, &badge, &version_slot).await {
                     Some(chosen) => {
+                        apply_interface(&chosen);
                         tests_str = chosen.selected_tests;
                         concurrency = chosen.concurrency;
                         ip_version = chosen.ip_version;
@@ -648,8 +646,16 @@ async fn main() {
                     }
                     match menu_until_something_to_run(lang, profile, &cfg, &badge, &version_slot).await {
                         Some(chosen) => {
+                            // Everything the first menu applies, in the same shape:
+                            // the run reads the local `ip_version` while the core
+                            // reads `cfg`, so a site that updates one and not the
+                            // other leaves that setting on whatever the first trip
+                            // chose. The interface (process-wide) and the IP version
+                            // were the two that did.
+                            apply_interface(&chosen);
                             selection = chosen.selected_tests;
                             concurrency = chosen.concurrency;
+                            ip_version = chosen.ip_version.clone();
                             cfg.ip_version = chosen.ip_version.clone();
                             cfg.tls_fingerprint = chosen.tls_fingerprint.code().to_string();
                             lang = chosen.language;
