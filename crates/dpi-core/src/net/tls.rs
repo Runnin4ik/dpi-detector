@@ -69,8 +69,10 @@ pub struct TlsProfile {
     /// replaces it — test 6 uses that to ask one protocol per run, which changes
     /// the ClientHello only in the ALPN extension's body and in JA4's ALPN field.
     pub alpn: Option<Vec<Vec<u8>>>,
-    /// Verify the server certificate against the system roots instead of
-    /// accepting any certificate.
+    /// Verify the server certificate against the bundled Mozilla roots
+    /// (`webpki-roots`) instead of accepting any certificate. The OS store is
+    /// never read: the bundle is what ships, so the answer is the same on every
+    /// platform and nothing a machine has installed changes it.
     pub verify: bool,
 }
 
@@ -120,10 +122,15 @@ impl TlsProfile {
         self
     }
 
-    /// Check the server certificate against the system (webpki) roots.
+    /// Check the server certificate against the bundled Mozilla roots.
     ///
     /// The certificate is not the signal here: DoT, DoH and the HTTPS fetches
-    /// have to reach a real server, so their configs verify.
+    /// have to reach a real server, so their configs verify. A chain that does
+    /// not trace to the bundle fails with `UnknownIssuer`, which the classifier
+    /// reports as `no_root_certificates` ("NO CA BUNDLE") — including when a
+    /// root installed on the machine (an antivirus web-shield, a proxy) signed
+    /// the certificate in the middle, because that root is in the OS store and
+    /// not here.
     pub fn verifying() -> Self {
         Self { verify: true, ..Self::default() }
     }
