@@ -658,6 +658,161 @@ def _ints(text, sep):
 
 
 # ---------------------------------------------------------------------------
+# Stage: headers — the request block each client sends over HTTP/1.1
+# ---------------------------------------------------------------------------
+
+def ensure_cert(harness):
+    """A self-signed certificate for the local h1 listener, made once.
+
+    Both clients ignore it (`TlsProfile::insecure`, curl's `-k`): what is being
+    compared is the request block, not the certificate.
+    """
+    cert = os.path.join(harness.work, "tls", "localhost.crt")
+    key = os.path.join(harness.work, "tls", "localhost.key")
+    if os.path.exists(cert) and os.path.exists(key):
+        return cert, key
+    os.makedirs(os.path.dirname(cert), exist_ok=True)
+    done = subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "365",
+         "-keyout", key, "-out", cert, "-subj", "/CN=localhost",
+         "-addext", "subjectAltName=DNS:localhost"],
+        capture_output=True)
+    if done.returncode != 0 or not os.path.exists(cert):
+        raise SystemExit("openssl could not make a test certificate:\n"
+                         + done.stderr.decode("utf-8", "replace"))
+    return cert, key
+
+
+class Http1Listener:
+    """One-shot TLS listener that records the first HTTP/1.1 request block.
+
+    It offers `http/1.1` alone, so the bundle's `--http2` client negotiates h1
+    and both sides put the same kind of request on the wire.
+    """
+
+    def __init__(self, port, cert, key):
+        import ssl
+
+        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.context.load_cert_chain(cert, key)
+        self.context.set_alpn_protocols(["http/1.1"])
+        self.sock = socket.socket()
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("127.0.0.1", port))
+        self.sock.listen(4)
+        self.request = b""
+        self.done = threading.Event()
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+
+    def _serve(self):
+        self.sock.settimeout(20)
+        try:
+            conn, _ = self.sock.accept()
+            tls = self.context.wrap_socket(conn, server_side=True)
+            tls.settimeout(5)
+            data = b""
+            while b"\r\n\r\n" not in data and len(data) < 65536:
+                chunk = tls.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            self.request = data
+            tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            tls.close()
+        except OSError:
+            pass
+        finally:
+            self.done.set()
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.done.wait(8)
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def parse_request(raw):
+    head = raw.split(b"\r\n\r\n")[0].decode("iso-8859-1")
+    lines = head.split("\r\n")
+    headers = []
+    for line in lines[1:]:
+        name, _, value = line.partition(":")
+        headers.append((name, value.strip()))
+    return {"line": lines[0], "headers": headers}
+
+
+def stage_headers(harness, args):
+    section("headers — the HTTP/1.1 request block each client sends")
+    cert, key = ensure_cert(harness)
+    root = os.path.join(harness.work, "headers")
+    os.makedirs(os.path.join(root, "ours"), exist_ok=True)
+    os.makedirs(os.path.join(root, "bundle"), exist_ok=True)
+    for code, wrapper, _ in selected(args):
+        if not wrapper:
+            continue
+        with Http1Listener(PORT, cert, key) as listener:
+            harness.example("headers", code, SNI, timeout=60)
+            listener.done.wait(8)
+        mine = listener.request
+        with Http1Listener(PORT, cert, key) as listener:
+            run_wrapper(harness.bundle, wrapper, f"https://{SNI}/",
+                        extra=("--connect-to", f"{SNI}:{PORT}:127.0.0.1:{PORT}", "--max-time", "10"))
+            listener.done.wait(8)
+        theirs = listener.request
+        open(os.path.join(root, "ours", code + ".txt"), "wb").write(mine)
+        open(os.path.join(root, "bundle", wrapper + ".txt"), "wb").write(theirs)
+        if not mine or not theirs:
+            log(f"  {code:16} capture failed (ours {len(mine)}, bundle {len(theirs)} bytes)")
+            continue
+        log(f"  {code:16} ours {len(mine):5} bytes, bundle {len(theirs):5} bytes")
+
+
+def stage_headers_diff(harness, args):
+    section("headers-diff — the request block, ours against the bundle")
+    root = os.path.join(harness.work, "headers")
+    for code, wrapper, _ in selected(args):
+        if not wrapper:
+            continue
+        ours_path = os.path.join(root, "ours", code + ".txt")
+        theirs_path = os.path.join(root, "bundle", wrapper + ".txt")
+        if not os.path.exists(ours_path) or not os.path.exists(theirs_path):
+            log(f"  {code:16} no capture; run the `headers` stage first")
+            continue
+        mine = parse_request(open(ours_path, "rb").read())
+        theirs = parse_request(open(theirs_path, "rb").read())
+        same_line = mine["line"] == theirs["line"]
+        same_case = mine["headers"] == theirs["headers"]
+        same_lower = ([(n.lower(), v) for n, v in mine["headers"]]
+                      == [(n.lower(), v) for n, v in theirs["headers"]])
+        if args.summary:
+            verdict = "SAME" if same_case else ("case only" if same_lower else "DIFF")
+            log(f"  {code:16} {len(mine['headers'])} headers, "
+                f"{'request line SAME' if same_line else 'request line DIFF'}, {verdict}")
+            continue
+        log(f"\n  {code} <- {wrapper}")
+        log(f"    request line  {'SAME' if same_line else 'DIFF'}  ours {mine['line']!r}"
+            f"  bundle {theirs['line']!r}")
+        if same_case:
+            log(f"    headers       SAME (names, case and order, {len(mine['headers'])} of them)")
+            continue
+        if same_lower:
+            log(f"    headers       DIFF in name case only (order and values match):")
+        else:
+            log(f"    headers       DIFF")
+        for index in range(max(len(mine["headers"]), len(theirs["headers"]))):
+            pair_one = mine["headers"][index] if index < len(mine["headers"]) else None
+            pair_two = theirs["headers"][index] if index < len(theirs["headers"]) else None
+            if pair_one != pair_two:
+                log(f"      [{index}] ours   {pair_one}")
+                log(f"      [{index}] bundle {pair_two}")
+
+
+# ---------------------------------------------------------------------------
 # Stage: echo — both clients against one echo service
 # ---------------------------------------------------------------------------
 
@@ -919,6 +1074,8 @@ STAGES = {
     "captures": stage_captures,
     "echo": stage_echo,
     "echo-diff": stage_echo_diff,
+    "headers": stage_headers,
+    "headers-diff": stage_headers_diff,
     "hello": stage_hello,
     "hello-diff": stage_hello_diff,
     "flags": stage_flags,
@@ -953,8 +1110,8 @@ def main():
     harness.build()
     if args.stage == "build":
         return
-    stages = ["dump", "captures", "echo", "echo-diff", "hello", "hello-diff"] if args.stage == "all" \
-        else [args.stage]
+    stages = ["dump", "captures", "echo", "echo-diff", "headers", "headers-diff",
+              "hello", "hello-diff"] if args.stage == "all" else [args.stage]
     for stage in stages:
         STAGES[stage](harness, args)
 

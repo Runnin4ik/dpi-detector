@@ -10,12 +10,19 @@
 //! cargo run --release --example tls_fingerprint live firefox  # real servers
 //! cargo run --release --example tls_fingerprint liveany firefox # the unpinned offer
 //! cargo run --release --example tls_fingerprint live12 firefox hub.docker.com
+//! cargo run --release --example tls_fingerprint peet firefox   # the h2 shape, echoed
+//! cargo run --release --example tls_fingerprint headers firefox localhost # the h1 request
 //! ```
 //!
 //! Every `live` form takes an optional host list; `live`/`live13` pin TLS 1.3
 //! (test 2's first column), `live12` pins 1.2, and `liveany` sends the browser's
 //! own offer — the shape test 6's TLS 1.3 axis and tests 3/4 put on the wire, and
 //! the one that can be compared with a bundle script run without version flags.
+//! `peet` sends the profile's own h2 request to `tls.peet.ws` and prints what it
+//! saw; `headers` sends the profile's own header set over h1 to the host named on
+//! the command line, which is the only way to see the header *names* — RFC 9113
+//! lowercases every name over h2, so the casing a browser uses over h1 (a
+//! fingerprint of its own) is invisible to every other mode.
 //!
 //! `dump` needs no network: it builds a ClientHello in memory and prints the JA3
 //! (`dump13`/`dump12` do the same on the version-pinned builders the probes use),
@@ -155,8 +162,9 @@ async fn main() {
         "live12" => live(fingerprint, &hosts, TlsVersion::Tls12).await,
         "liveany" => live(fingerprint, &hosts, TlsVersion::Any).await,
         "peet" => peet(fingerprint).await,
+        "headers" => headers(fingerprint, hosts.first().map(String::as_str).unwrap_or("localhost")).await,
         other => panic!(
-            "unknown mode {other}, expected dump|dump13|dump12|live|live13|live12|liveany"
+            "unknown mode {other}, expected dump|dump13|dump12|live|live13|live12|liveany|peet|headers"
         ),
     }
 }
@@ -269,6 +277,45 @@ async fn live(fingerprint: TlsFingerprint, hosts: &[String], version: TlsVersion
                 }
             }
         }
+    }
+}
+
+/// The profile's own header set over HTTP/1.1, to `host:443`.
+///
+/// `live` sends a hand-written request, which is enough for the TLS hashes but
+/// says nothing about the HTTP layer, and `peet` measures the h2 shape, where
+/// RFC 9113 lowercases every header name and hides the casing a browser uses
+/// over h1. This mode sends [`request_headers`] — the same identity the probes
+/// send — down an h1 connection, so a local listener can compare the request
+/// block with the bundle's (`tools/fingerprint/fingerprint.py headers`).
+async fn headers(fingerprint: TlsFingerprint, host: &str) {
+    let config = create_tls_config(&TlsProfile::insecure(fingerprint));
+    let tcp = match TcpStream::connect((host, 443)).await {
+        Ok(stream) => stream,
+        Err(e) => return println!("{host:22} TCP FAILED: {e}"),
+    };
+    let name = rustls::pki_types::ServerName::try_from(host.to_string()).expect("valid host");
+    let tls = match TlsConnector::from(config).connect(name, tcp).await {
+        Ok(stream) => stream,
+        Err(e) => return println!("{host:22} HANDSHAKE FAILED: {e}"),
+    };
+    // h1 whatever ALPN says: this mode exists to see the h1 request block.
+    let mut sender = match HttpSender::handshake(TokioIo::new(tls), false, fingerprint).await {
+        Ok(sender) => sender,
+        Err(e) => return println!("HTTP handshake failed: {e}"),
+    };
+    let identity = http_identity(fingerprint);
+    let user_agent = identity.user_agent.unwrap_or("");
+    let request = HttpRequest {
+        method: Method::GET,
+        host,
+        path: "/",
+        headers: request_headers(&identity, user_agent, Vec::new(), false),
+    };
+    println!("profile   = {} -> {host} over HTTP/1.1", fingerprint.code());
+    match sender.send(request).await {
+        Ok(response) => println!("{host:22} {}", response.status()),
+        Err(e) => println!("{host:22} request failed: {e}"),
     }
 }
 

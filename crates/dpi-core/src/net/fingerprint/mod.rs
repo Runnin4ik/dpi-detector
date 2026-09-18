@@ -73,6 +73,13 @@
 //!   pseudo-header order and the priority its `HEADERS` frame carries — is in
 //!   [`h2_fingerprint`].
 //!
+//! * Over HTTP/1.1 every header name goes out lowercased: hyper's `HeaderName`
+//!   is lowercase by construction, while the impersonated client sends `Host`,
+//!   `User-Agent`, `Accept`, `Accept-Encoding` and `Sec-Fetch-*` in the case its
+//!   `-H` list was written in. Over HTTP/2 this cannot show — RFC 9113
+//!   lowercases every name — and no other part of the request differs
+//!   (`tools/fingerprint/`, stage `headers`).
+//!
 //! Measured against `tls.peet.ws` with `tools/fingerprint/`, the TLS hashes, the
 //! header list and order, the UA, the whole HTTP/2 `SETTINGS`/`WINDOW_UPDATE`
 //! pair, the pseudo-header order and the priority match the bundle exactly on

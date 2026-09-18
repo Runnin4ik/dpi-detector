@@ -10,6 +10,7 @@ python tools/fingerprint/fingerprint.py all                 # every stage, every
 python tools/fingerprint/fingerprint.py all safari18        # one profile
 python tools/fingerprint/fingerprint.py hello-diff --summary
 python tools/fingerprint/fingerprint.py echo-diff chrome131
+python tools/fingerprint/fingerprint.py headers-diff --summary
 python tools/fingerprint/fingerprint.py flags chrome136     # what the wrapper itself names
 ```
 
@@ -25,7 +26,8 @@ when every remaining difference is named below and in `docs/FINGERPRINT_PLAN.md`
 | stage | what it compares | what it can see | what it misses |
 | --- | --- | --- | --- |
 | `captures` | our `dump` against the fork's own recording of the client (`tests/signatures/*.yaml` at the bundle's tag) | ciphers, extension list and order, groups, key shares, JA3, JA4 | what the *bundle* sends today; the capture is a third party's sample |
-| `echo` | both clients against `tls.peet.ws/api/all` | JA3/JA4/peetprint hashes, the akamai h2 fingerprint, every h2 frame the service received (SETTINGS payload and order, WINDOW_UPDATE, HEADERS priority), the pseudo-header order, and every request header | extension bodies (compression list, padding length, key shares), and the service measures the shape it read, not the bytes we sent |
+| `echo` | both clients against `tls.peet.ws/api/all` | JA3/JA4/peetprint hashes, the akamai h2 fingerprint, every h2 frame the service received (SETTINGS payload and order, WINDOW_UPDATE, HEADERS priority), the pseudo-header order, and every request header | extension bodies (compression list, padding length, key shares); header *name case*, which h2 lowercases by rule; and the service measures the shape it read, not the bytes we sent |
+| `headers` | the HTTP/1.1 request block each client sends to a local TLS listener that offers `http/1.1` alone | the request line, and every header name with its **case**, order and value — the surface no h2 comparison can see | nothing about TLS, and nothing about h2 |
 | `hello` | the bytes each client puts on the wire, captured by a local listener with the same SNI on both sides | every extension body, the padding length, the compression list, the key shares, the record version | nothing about what a server does with it |
 
 `hello` is what proves a shape: JA3, JA4 and peetprint all drop what its diff
@@ -48,7 +50,8 @@ the sampled tests that pinned everything else.
    - `echo` must be `SAME` on every hash, the akamai string and the header list;
    - `hello` must be `SAME` except per-connection randomness (GREASE values, the
      client random, the session id, key share bodies, the padding's content) —
-     all of which the diff masks.
+     all of which the diff masks;
+   - `headers` must be `SAME` except for the two h1 items listed below.
 4. Pin the new values in `crates/dpi-core/src/net/fingerprint/tests.rs` **from
    the bundle**, never from our own dump: a constant copied from our output turns
    the test into a lock-in and hides exactly the difference it exists to catch.
@@ -74,11 +77,24 @@ These are deliberate. Anything *else* it reports is a bug.
   (9).** Safari 18 names both and Safari 26 names `9:1`; neither h2 nor hyper
   exposes them, so they are absent from the preface
   (`vendor/h2/README-PATCH.md`).
+* **HTTP/1.1 header-name case.** Our requests put every name on the wire
+  lowercased — hyper's `HeaderName` is lowercase by construction — while the
+  bundle (and the browser the wrapper was written from) sends `Host`,
+  `User-Agent`, `Accept`, `Accept-Encoding`, `Sec-Fetch-*` and friends in their
+  original case over h1. The wrapper is a `-H` list and curl sends the names as
+  written; only the profiles whose wrapper is written in lowercase (`safari18`,
+  `safari184ios`, `safari260`, `safari260ios`, `firefox144`) match us. Over h2
+  this cannot show: RFC 9113 lowercases every name.
+* **`priority` over h1.** `<profile>18`-era records send `priority: u=0, i` over
+  h1 (the wrapper names it, and the fork's h2 capture has it), but curl itself
+  drops it on an h1 connection: the bundle's h1 request is 18 bytes shorter. Over
+  h2 both send it.
 
 ## Requirements
 
-Python 3.8+ with PyYAML (only the `captures` stage needs it), the Rust
-toolchain, and a bundle directory — pass `--bundle DIR`, set
-`$CURL_IMPERSONATE_DIR`, or keep it under `~/Downloads` where the tool finds it.
-The `echo` stage reaches `tls.peet.ws`; `hello` binds `127.0.0.1:443` and drives
-both clients at it, so it needs no network.
+Python 3.8+ with PyYAML (only the `captures` stage needs it), `openssl` (only
+`headers`, for the listener's throwaway certificate), the Rust toolchain, and a
+bundle directory — pass `--bundle DIR`, set `$CURL_IMPERSONATE_DIR`, or keep it
+under `~/Downloads` where the tool finds it. The `echo` stage reaches
+`tls.peet.ws`; `headers` and `hello` bind `127.0.0.1:443` and drive both clients
+at it, so they need no network.
