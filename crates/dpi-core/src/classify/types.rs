@@ -73,7 +73,14 @@ pub enum DpiStatus {
     TlsDropped,
     TlsAlert,
     TlsBlock,
-    TlsMitm,
+    /// The certificate the server presented cannot be the site's: unknown CA,
+    /// expired, wrong hostname, or a self-signed substitute. The `Detail` names
+    /// which one; the badge says only that TLS stopped here. It is deliberately
+    /// not called `MITM`: a substituted certificate is what an intermediary
+    /// leaves behind, but the same verdict comes from a stale certificate on the
+    /// real server (`cert_expired` — UncensoredDNS answered that way for months),
+    /// so the word read as a finding no matter which one it was.
+    TlsErr,
     NoCa,
     TlsSpoof,
     TlsEof,
@@ -116,7 +123,7 @@ impl DpiStatus {
             Self::TlsDropped => "tls_dropped",
             Self::TlsAlert => "tls_alert",
             Self::TlsBlock => "tls_block",
-            Self::TlsMitm => "tls_mitm",
+            Self::TlsErr => "tls_err",
             Self::NoCa => "no_ca_bundle",
             Self::TlsSpoof => "tls_spoof",
             Self::Tcp16Range => "tcp16_20",
@@ -160,7 +167,7 @@ impl DpiStatus {
             Self::TlsAlert => "TLS ALERT",
             Self::Tcp16Range => "TCP16-20",
             Self::TlsBlock => "TLS BLOCK",
-            Self::TlsMitm => "TLS MITM",
+            Self::TlsErr => "TLS ERR",
             Self::NoCa => "NO CA BUNDLE",
             Self::TlsSpoof => "TLS SPOOF",
             Self::TlsEof => "TLS EOF",
@@ -202,7 +209,7 @@ impl DpiStatus {
                 | Self::TlsAbort
                 | Self::TlsAlert
                 | Self::TlsBlock
-                | Self::TlsMitm
+                | Self::TlsErr
                 | Self::TlsSpoof
                 | Self::TlsEof
                 | Self::TcpRst

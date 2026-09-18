@@ -263,7 +263,7 @@ pub(crate) fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'st
     vec![
         ("— TLS / DPI —", vec![
             ("TLS DPI", "DPI 切断或篡改 TLS: EOF、错误记录、握手异常中断"),
-            ("TLS MITM", "中间人攻击: 证书被篡改 (未知 CA、证书过期、域名不匹配)"),
+            ("TLS ERR", "TLS 错误: 证书不属于该站点 (未知 CA、证书过期、域名不匹配)"),
             ("TLS BLOCK", "TLS 版本或整个协议被阻断 (protocol_version alert)"),
             ("TLS RST", "发送 ClientHello 后收到主动 TCP RST (TLS 握手被重置)"),
             ("TLS DROP", "TLS 握手超时 — 数据包被静默丢弃 (未收到 RST)"),

@@ -1150,7 +1150,7 @@ mod tests {
         );
         assert_eq!(
             connect_fail_label(&fault("tls_handshake", "certificate verify failed: self-signed")),
-            "TLS MITM"
+            "TLS ERR"
         );
         assert_eq!(
             connect_fail_label(&fault("tls_handshake", "certificate verify failed: unable to get local issuer certificate")),

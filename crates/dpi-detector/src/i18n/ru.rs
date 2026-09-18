@@ -266,7 +266,7 @@ pub(crate) fn legend_sections() -> Vec<(&'static str, Vec<(&'static str, &'stati
     vec![
         ("— TLS / DPI —", vec![
             ("TLS DPI", "DPI обрывает или манипулирует TLS: EOF, bad record, handshake abort"),
-            ("TLS MITM", "Man-in-the-Middle: подменён сертификат (Unknown CA, Cert expired, Hostname mismatch)"),
+            ("TLS ERR", "Ошибка TLS: сертификат не может принадлежать сайту (неизвестный CA, просрочен, чужое имя хоста)"),
             ("TLS BLOCK", "Блокировка версии TLS или протокола целиком (protocol_version alert)"),
             ("TLS RST", "Активный TCP RST на ClientHello (сброс TLS-хендшейка)"),
             ("TLS DROP", "Таймаут TLS-хендшейка — пакеты молча отброшены (нет RST)"),

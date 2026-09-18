@@ -267,7 +267,7 @@ pub(crate) fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'st
     vec![
         ("— TLS / DPI —", vec![
             ("TLS DPI", "DPI tears down or tampers with TLS: EOF, bad record, handshake abort"),
-            ("TLS MITM", "Man-in-the-Middle: certificate substituted (Unknown CA, Cert expired, Hostname mismatch)"),
+            ("TLS ERR", "TLS error: the certificate cannot be the site's (unknown CA, expired, hostname mismatch)"),
             ("TLS BLOCK", "TLS version or protocol blocked wholesale (protocol_version alert)"),
             ("TLS RST", "Active TCP RST on ClientHello (TLS handshake reset)"),
             ("TLS DROP", "TLS handshake timeout — packets silently dropped (no RST)"),

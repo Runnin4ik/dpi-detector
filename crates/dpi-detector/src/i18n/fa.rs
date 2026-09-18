@@ -263,7 +263,7 @@ pub(crate) fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'st
     vec![
         ("- TLS / DPI -", vec![
             ("TLS DPI", "Tajhizat-e DPI ettesal-e TLS ra dastkari ya ghat mikonand: EOF, record-e kharab, laghv-e mosafhe"),
-            ("TLS MITM", "Hamle-ye mard-e miyani: gavahi-ye ja'li (marja'-e nashenakhte, monghazi, adam-e tatabogh-e name-e mizban)"),
+            ("TLS ERR", "Khata-ye TLS: gavahi nemitavanad male-e in site bashad (marja'-e nashenakhte, monghazi, adam-e tatabogh-e name)"),
             ("TLS BLOCK", "Masdoodsazi-e noskhe ya kole protocol-e TLS (ekhtar-e protocol_version)"),
             ("TLS RST", "Baste-ye fa'al-e TCP RST pas az ersal-e ClientHello (reset-e mosafhe-ye TLS)"),
             ("TLS DROP", "Etmam-e mohlat-e mosafhe-ye TLS - packet ha hazf shodand"),

@@ -125,15 +125,15 @@ pub fn classify_ssl_error(
             return (DpiStatus::NoCa, Detail::NoRootCa);
         }
         if msg.contains("expired") {
-            return (DpiStatus::TlsMitm, Detail::CertExpired);
+            return (DpiStatus::TlsErr, Detail::CertExpired);
         }
         if msg.contains("self-signed") || msg.contains("self signed") {
-            return (DpiStatus::TlsMitm, Detail::SelfSigned);
+            return (DpiStatus::TlsErr, Detail::SelfSigned);
         }
         if msg.contains("hostname") || msg.contains("not valid for") || msg.contains("name mismatch") {
-            return (DpiStatus::TlsMitm, Detail::HostnameMismatch);
+            return (DpiStatus::TlsErr, Detail::HostnameMismatch);
         }
-        return (DpiStatus::TlsMitm, Detail::FakeCert);
+        return (DpiStatus::TlsErr, Detail::FakeCert);
     }
 
     if ["eof", "unexpected eof", "eof occurred", "operation did not complete", "want_read", "want read", "connection closed", "closed connection", "incomplete"]
@@ -518,7 +518,7 @@ mod tests {
             0,
             ConnectionStage::TlsClientHelloSent,
         );
-        assert_eq!(s, DpiStatus::TlsMitm);
+        assert_eq!(s, DpiStatus::TlsErr);
 
         let (s, _) = classify_ssl_error(
             "certificate verify failed: unable to get local issuer certificate",
@@ -590,8 +590,8 @@ mod tests {
         // rustls words its own unimplemented-element errors with "certificate"
         // (`got CompressedCertificate when expecting Certificate`,
         // `UnknownCertificateExtension`). Those must stay unclassified instead of
-        // being reported as a MITM, while real certificate failures keep their
-        // verdict (covered above).
+        // being reported as a certificate error, while real certificate failures
+        // keep their verdict (covered above).
         for msg in [
             "received unexpected handshake message: got CompressedCertificate when expecting Certificate or CertificateRequest",
             "received corrupt message of type UnknownCertificateExtension",
