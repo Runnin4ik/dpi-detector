@@ -1,0 +1,20 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Line endings: LF in the index and in every checkout.
+#
+# The index side is already there — 395 of the 406 tracked files are LF — but
+# nothing pins the checkout side, so the working tree depends on the cloner's
+# `core.autocrlf`: on a Windows box with the Git for Windows default (`true`) 89
+# files land CRLF, 3 more land with both endings inside one file, and the same
+# commit therefore hands two developers differently-shaped sources. Every tool
+# that reads bytes and writes bytes back — rustfmt, a patch fixture, a
+# `\r`-sensitive test — then behaves differently for each of them.
+#
+# This changes no tracked byte: for every file the rule below touches the index
+# already holds LF, so only a fresh checkout sees a difference.
+# ─────────────────────────────────────────────────────────────────────────────
+* text=auto eol=lf
+
+# Not text at all: certificate fixtures and the window icon are opaque bytes,
+# never normalized and never merged line-wise.
+crates/dpi-core/src/net/testdata/*.der -text
+crates/dpi-detector/assets/*.ico -text
