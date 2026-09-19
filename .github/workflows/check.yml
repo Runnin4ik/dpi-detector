@@ -23,14 +23,14 @@ concurrency:
 jobs:
   check:
     name: Test & lint (linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
-      # The crates are pure Rust (no C toolchain is needed), so the default
-      # stable host toolchain builds the whole workspace.
-      - name: Install stable Rust
-        run: rustup toolchain install stable --profile minimal --component clippy
+      # The crates are pure Rust (no C toolchain is needed), so the pinned host
+      # toolchain builds the whole workspace.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -95,7 +95,7 @@ jobs:
   # tag — this job is the same round trip on every push, over one small file.
   artifacts:
     name: Artifact round-trip
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -126,8 +126,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install stable Rust
-        run: rustup toolchain install stable --profile minimal --component clippy
+      # Channel, profile and components come from `rust-toolchain.toml`: a bare
+      # `rustup toolchain install` resolves them from that file, so the version
+      # is pinned in one place and this step cannot drift from it.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -146,12 +149,12 @@ jobs:
 
   policy:
     name: Dependency policy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install stable Rust
-        run: rustup toolchain install stable --profile minimal
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
 
       - name: Cache cargo
         uses: actions/cache@v6

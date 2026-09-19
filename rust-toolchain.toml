@@ -1,0 +1,19 @@
+# The compiler this project is built with, in one place. `cargo` in the
+# repository, `rustup`, and both workflows read this file, so a toolchain bump is
+# a commit that rebuilds everything in CI rather than a silent change of what
+# "stable" meant on the day a runner picked it up.
+#
+# `profile` and `components` are exactly what CI needs: clippy is a required
+# check (AGENTS.md §4). rustfmt is deliberately not here — the sources are
+# formatted by hand (§3.7) — and rust-analyzer, rust-docs and the extra targets
+# are a contributor's own business (`rustup component add`).
+#
+# Three rows of the release matrix cannot use this pin and name their toolchain
+# on the command line instead: win7 and the two MIPS targets build std from
+# source with `-Z build-std`, which is nightly-only — `cargo +nightly …` for
+# win7 and `cross +nightly …` for MIPS, whose Cross.toml enables build-std.
+# `+toolchain` overrides this file, which is why those rows still work.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["clippy"]
