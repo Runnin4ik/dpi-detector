@@ -34,25 +34,72 @@ if (-not (Test-Path $outDir)) {
 $out = Join-Path $outDir "dpi-detector.exe"
 $tmp = Join-Path $outDir "dpi-detector.tmp.$([System.Diagnostics.Process]::GetCurrentProcess().Id).exe"
 
-$urls = [System.Collections.Generic.List[string]]::new()
-if ($env:DPI_MIRRORS) {
-    foreach ($m in $env:DPI_MIRRORS.Split(" ,;`t", [System.StringSplitOptions]::RemoveEmptyEntries)) {
-        $urls.Add("$($m.TrimEnd('/'))/$target")
+# Every release asset this script fetches — the binary and `SHA256SUMS.txt` — is
+# looked for at the same set of sources, so the list is built from the asset name
+# rather than written twice.
+function Get-ReleaseUrlList([string]$fileName) {
+    $list = [System.Collections.Generic.List[string]]::new()
+    if ($env:DPI_MIRRORS) {
+        foreach ($m in $env:DPI_MIRRORS.Split(" ,;`t", [System.StringSplitOptions]::RemoveEmptyEntries)) {
+            $list.Add("$($m.TrimEnd('/'))/$fileName")
+        }
     }
-}
-$ghUrl = if ($version -eq "latest") {
-    "https://github.com/$repo/releases/latest/download/$target"
-} else {
-    "https://github.com/$repo/releases/download/$version/$target"
+    $gh = if ($version -eq "latest") {
+        "https://github.com/$repo/releases/latest/download/$fileName"
+    } else {
+        "https://github.com/$repo/releases/download/$version/$fileName"
+    }
+    $list.Add($gh)
+    $list.Add("https://ghfast.top/$gh")
+    $list.Add("https://ghproxy.net/$gh")
+    $list.Add("https://gh-proxy.com/$gh")
+    $list.Add("https://ghproxy.vip/$gh")
+    $list.Add("https://gh-proxy.org/$gh")
+    $list.Add("https://github.boki.moe/$gh")
+    return $list
 }
 
-$urls.Add($ghUrl)
-$urls.Add("https://ghfast.top/$ghUrl")
-$urls.Add("https://ghproxy.net/$ghUrl")
-$urls.Add("https://gh-proxy.com/$ghUrl")
-$urls.Add("https://ghproxy.vip/$ghUrl")
-$urls.Add("https://gh-proxy.org/$ghUrl")
-$urls.Add("https://github.boki.moe/$ghUrl")
+# A whole small file as text, over the same request settings the binary download
+# below uses. Throws on any HTTP or transport error; the caller decides.
+function Get-UrlText([string]$url) {
+    $req = [System.Net.HttpWebRequest]::Create($url)
+    $req.Timeout = 5000
+    $req.ReadWriteTimeout = 60000
+    $req.UserAgent = "curl/8.0"
+    $resp = $req.GetResponse()
+    $reader = [System.IO.StreamReader]::new($resp.GetResponseStream())
+    $text = $reader.ReadToEnd()
+    $reader.Close()
+    $resp.Close()
+    return $text
+}
+
+# The release publishes `SHA256SUMS.txt` beside the binaries and the download is
+# checked against it before it is installed: that catches a mirror that truncated
+# the file, a proxy that rewrote a byte, a CDN still serving an older build. It
+# cannot catch a mirror serving a manifest of its own — the manifest travels the
+# same channels as the binary, so this is an integrity check, not a signature. A
+# release from before the manifest existed simply has none, and then the check is
+# skipped with a warning instead of failing an install that would otherwise work.
+$expectedHash = $null
+foreach ($u in (Get-ReleaseUrlList "SHA256SUMS.txt")) {
+    try {
+        foreach ($line in ((Get-UrlText $u) -split "`n")) {
+            $fields = $line.Trim() -split '\s+'
+            if ($fields.Count -ge 2 -and $fields[-1].TrimStart('*') -eq $target) {
+                $expectedHash = $fields[0].ToLower()
+                break
+            }
+        }
+        if ($expectedHash) { break }
+    } catch {
+    }
+}
+if (-not $expectedHash) {
+    Write-Host "Warning: no SHA256SUMS.txt entry for $target in this release; installing without a checksum check." -ForegroundColor Yellow
+}
+
+$urls = Get-ReleaseUrlList $target
 Write-Host "Downloading DPI Detector ($version)..." -ForegroundColor Cyan
 
 $downloaded = $false
@@ -70,6 +117,15 @@ foreach ($u in $urls) {
         $fs.Close()
         $resp.Close()
         if ((Get-Item $tmp).Length -gt 100000) {
+            if ($expectedHash) {
+                $actual = (Get-FileHash -Algorithm SHA256 -Path $tmp).Hash.ToLower()
+                if ($actual -ne $expectedHash) {
+                    Write-Host "Warning: checksum mismatch for $target from $u (expected $expectedHash, got $actual); trying the next mirror." -ForegroundColor Yellow
+                    Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+                    continue
+                }
+                Write-Host "Checksum verified: $actual" -ForegroundColor Green
+            }
             $downloaded = $true
             break
         }

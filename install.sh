@@ -139,6 +139,71 @@ OUT_DIR=$(pick_install_dir) || {
 OUT_FILE="${OUT_DIR}/dpi-detector"
 TMP_FILE="${OUT_DIR}/.dpi-detector.tmp.$$"
 
+# The release publishes `SHA256SUMS.txt` beside the binaries and every download
+# is checked against it before it is executed. What that catches is a file that
+# is not what was published: a mirror that truncated it, a proxy that rewrote a
+# byte, a CDN still serving an older build. What it cannot catch is a mirror that
+# serves a manifest of its own — the manifest travels the same channels as the
+# binary, so this is an integrity check and not a signature, and running
+# `--version` stays the check that the file is a working binary. A release from
+# before the manifest existed simply has none, and then the check is skipped with
+# one warning instead of failing an install that would otherwise work.
+MANIFEST_FILE="${OUT_DIR}/.dpi-detector.sums.$$"
+# "" until the manifest has been looked for, then "ok" or "missing".
+MANIFEST_STATE=""
+# Set by the checksum check for the summary line: "verified" or "not checked".
+CHECKSUM_RESULT="not checked"
+
+# Filled in by the race while it runs. The race directory holds one copy per
+# mirror at once — tens of megabytes — which on a router is the whole free space
+# of `/opt`, so an interrupted install must not leave it behind.
+RACE_DIR=""
+# The race's workers while it runs, empty outside it. An interrupt has to stop
+# them before the directory they write into is removed: their own traps are what
+# stop the downloads they started, and those fire only when they are signalled.
+RACE_PIDS=""
+
+# Nothing this script wrote may outlive it: without this an interrupted run
+# leaves the race directory in the install directory (the next run's space check
+# would then refuse the race) or a half-written binary beside the real one.
+# `EXIT` is asked for by name and ignored when the shell does not know it —
+# BusyBox hush has the signal traps but not every build has the pseudo-signal.
+cleanup() {
+  if [ -n "${RACE_DIR:-}" ]; then
+    rm -rf "$RACE_DIR" 2>/dev/null
+    RACE_DIR=""
+  fi
+  if [ -n "${TMP_FILE:-}" ]; then
+    rm -f "$TMP_FILE" 2>/dev/null
+  fi
+  if [ -n "${MANIFEST_FILE:-}" ]; then
+    rm -f "$MANIFEST_FILE" 2>/dev/null
+  fi
+  return 0
+}
+
+stop_workers() {
+  if [ -n "${RACE_PIDS:-}" ]; then
+    for _p in $RACE_PIDS; do
+      kill "$_p" 2>/dev/null || true
+    done
+    RACE_PIDS=""
+  fi
+  return 0
+}
+
+# `cleanup` alone is not enough for the race: a signal sent to this shell does
+# not reach the workers (a Ctrl-C from the terminal does, because it goes to the
+# whole foreground group, but nothing guarantees the caller used one). The
+# download this shell started itself is stopped here for a different reason:
+# `run_downloader` backgrounds it, and a shell without job control sets SIGINT to
+# be ignored in the commands it backgrounds, so the Ctrl-C that reaches this
+# script does not reach that download (`stop_downloader`, below).
+trap 'cleanup' EXIT 2>/dev/null || true
+trap 'stop_workers; stop_downloader; cleanup; exit 130' INT
+trap 'stop_workers; stop_downloader; cleanup; exit 143' TERM
+trap 'stop_workers; stop_downloader; cleanup; exit 129' HUP
+
 # Helper: check if target has a UPX-compressed build available in releases
 target_supports_upx() {
   case "$1" in
@@ -203,6 +268,26 @@ if target_supports_upx "$BASE_TARGET"; then
   esac
 fi
 
+# One downloader invocation, in the background with its PID kept in
+# `DOWNLOAD_PID`. A signal sent to the shell that started a download does not
+# reach the download itself: the shell dies, curl/wget — its child — is
+# reparented and keeps pulling until its own `--max-time`. Whoever stops such a
+# shell has to stop this PID too: a race worker does it in its own trap, and this
+# script does it in the signal traps above (`stop_downloader`).
+DOWNLOAD_PID=""
+run_downloader() {
+  "$@" &
+  DOWNLOAD_PID=$!
+  wait "$DOWNLOAD_PID"
+}
+
+stop_downloader() {
+  if [ -n "${DOWNLOAD_PID:-}" ]; then
+    kill "$DOWNLOAD_PID" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # Every downloader is tried by running it, never by asking `command -v`: BusyBox
 # hush — the shell Padavan and several other stock firmwares give root — has no
 # `command` builtin, so a PATH test reports a working wget as absent and the
@@ -216,15 +301,15 @@ download_file() {
 
   # curl: --connect-timeout/--max-time are understood by every curl; the second
   # attempt drops the certificate check for boxes with no CA bundle.
-  if curl -fsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null ||
-     curl -kfsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null; then
+  if run_downloader curl -fsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null ||
+     run_downloader curl -kfsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null; then
     [ -s "$_dest" ] && return 0
   fi
 
   # wget: BusyBox knows neither --timeout nor --no-check-certificate, so the
   # first form is for GNU wget and the second is what every wget accepts.
-  if wget -q --timeout=4 -O "$_dest" "$_url" 2>/dev/null ||
-     wget -q -O "$_dest" "$_url" 2>/dev/null; then
+  if run_downloader wget -q --timeout=4 -O "$_dest" "$_url" 2>/dev/null ||
+     run_downloader wget -q -O "$_dest" "$_url" 2>/dev/null; then
     [ -s "$_dest" ] && return 0
   fi
 
@@ -235,19 +320,22 @@ download_file() {
   return 1
 }
 
+# Every release asset this script fetches — the binary and `SHA256SUMS.txt` —
+# is looked for at the same set of sources, so the list is built from the asset
+# name rather than written twice.
 build_url_list() {
-  _tgt="$1"
+  _file="$1"
   _list=""
   if [ -n "${DPI_MIRRORS:-}" ]; then
     for _m in $DPI_MIRRORS; do
-      _list="${_list} ${_m%/}/${_tgt}"
+      _list="${_list} ${_m%/}/${_file}"
     done
   fi
 
   if [ "$VERSION" = "latest" ]; then
-    _gh="https://github.com/${REPO}/releases/latest/download/${_tgt}"
+    _gh="https://github.com/${REPO}/releases/latest/download/${_file}"
   else
-    _gh="https://github.com/${REPO}/releases/download/${VERSION}/${_tgt}"
+    _gh="https://github.com/${REPO}/releases/download/${VERSION}/${_file}"
   fi
 
   _list="${_list} ${_gh}"
@@ -260,13 +348,89 @@ build_url_list() {
   echo "$_list"
 }
 
+# The manifest is fetched once, from the first source that has it, and every
+# source is tried because a release from before the manifest existed answers 404
+# on all of them and the install has to go on without it. `curl -f`/wget fail on
+# a 404 immediately, so the sweep costs nothing on such a release.
+fetch_manifest() {
+  [ -z "$MANIFEST_STATE" ] || return 0
+  _urls=$(build_url_list "SHA256SUMS.txt")
+  for _url in $_urls; do
+    if download_file "$_url" "$MANIFEST_FILE" && [ -s "$MANIFEST_FILE" ]; then
+      MANIFEST_STATE="ok"
+      return 0
+    fi
+  done
+  rm -f "$MANIFEST_FILE" 2>/dev/null || true
+  MANIFEST_STATE="missing"
+  return 1
+}
+
+# The hash of a file, from whichever tool the box happens to have. Tried by
+# running them, for the same reason the downloaders are: BusyBox hush has no
+# `command` builtin, so a PATH test reports a tool that works as absent.
+# `openssl dgst` prints `SHA2-256(file)= <hash>` and `sha256sum` prints
+# `<hash>  <file>`, so the hash is the first field in one and the last in the
+# other. No output means neither tool exists.
+file_sha256() {
+  _out=$(sha256sum "$1" 2>/dev/null | awk '{ print $1; exit }')
+  [ -n "$_out" ] && { echo "$_out"; return 0; }
+  _out=$(openssl dgst -sha256 "$1" 2>/dev/null | awk '{ print $NF; exit }')
+  [ -n "$_out" ] && { echo "$_out"; return 0; }
+  return 1
+}
+
+# Said once, not once per mirror: a release without a manifest, or a box without
+# a hashing tool, would otherwise repeat the same warning for all eight sources.
+checksum_note() {
+  [ -z "${CHECKSUM_NOTE_SHOWN:-}" ] || return 0
+  CHECKSUM_NOTE_SHOWN="1"
+  echo "Warning: $1" >&2
+}
+
+# 0 — the candidate matches the manifest, or there is nothing to match it
+#     against (no manifest, no entry, no hashing tool): the install proceeds.
+# 1 — it does not match. The caller drops the file and tries the next source,
+#     exactly as it does for a download that failed.
+verify_checksum() {
+  _name="$1"
+  if [ -z "$MANIFEST_STATE" ]; then
+    fetch_manifest || true
+  fi
+  if [ "$MANIFEST_STATE" != "ok" ]; then
+    checksum_note "this release has no SHA256SUMS.txt; installing without a checksum check."
+    return 0
+  fi
+  # `$NF` covers both `hash  name` and `hash *name`; the name is compared whole,
+  # so a target that is a prefix of another cannot match the wrong line.
+  _want=$(awk -v name="$_name" '{ n = $NF; if (substr(n, 1, 1) == "*") n = substr(n, 2); if (n == name) { print $1; exit } }' "$MANIFEST_FILE" 2>/dev/null)
+  if [ -z "$_want" ]; then
+    checksum_note "$_name is not listed in SHA256SUMS.txt; installing without a checksum check."
+    return 0
+  fi
+  if ! _have=$(file_sha256 "$TMP_FILE"); then
+    checksum_note "neither sha256sum nor openssl is available; installing without a checksum check."
+    return 0
+  fi
+  if [ "$_have" = "$_want" ]; then
+    CHECKSUM_RESULT="verified"
+    echo "Checksum verified: ${_have}"
+    return 0
+  fi
+  echo "Warning: $_name does not match the published checksum (expected ${_want}, got ${_have})." >&2
+  return 1
+}
+
 # Every mirror is started at once and the first download that finishes wins; the
-# others are stopped. This is about the one bad case the sequential loop cannot
-# escape: a mirror that accepts the connection and then trickles, which costs the
-# whole `--max-time` before the next one is tried. The race picks the fast mirror
-# whatever the order, and what it produces is still only a *candidate* — the
-# caller runs it (`--version`) exactly as in the sequential path, and a candidate
-# that fails sends every mirror down that path in turn.
+# others are stopped, download and all — the worker is a subshell and the tool it
+# started is its child, so killing the worker alone would leave the download
+# running to its own `--max-time` (the worker's trap is what stops it). This is
+# about the one bad case the sequential loop cannot escape: a mirror that accepts
+# the connection and then trickles, which costs the whole `--max-time` before the
+# next one is tried. The race picks the fast mirror whatever the order, and what
+# it produces is still only a *candidate* — the caller runs it (`--version`)
+# exactly as in the sequential path, and a candidate that fails sends every
+# mirror down that path in turn.
 #
 # The race costs disk, not just traffic: every mirror writes its own copy into the
 # install directory at the same time, so it only runs when that directory can hold
@@ -299,24 +463,30 @@ race_download() {
     return 1
   fi
 
-  _race_dir="${OUT_DIR}/.dpi-race.$$"
-  rm -rf "$_race_dir" 2>/dev/null
-  mkdir -p "$_race_dir" 2>/dev/null || return 1
+  RACE_DIR="${OUT_DIR}/.dpi-race.$$"
+  rm -rf "$RACE_DIR" 2>/dev/null
+  mkdir -p "$RACE_DIR" 2>/dev/null || {
+    RACE_DIR=""
+    return 1
+  }
 
-  _pids=""
+  RACE_PIDS=""
   _i=0
   for _url in $_urls; do
     _i=$((_i + 1))
-    _part="${_race_dir}/part.${_i}"
-    _flag="${_race_dir}/flag.${_i}"
-    _done="${_race_dir}/done.${_i}"
+    _part="${RACE_DIR}/part.${_i}"
+    _flag="${RACE_DIR}/flag.${_i}"
+    _done="${RACE_DIR}/done.${_i}"
     (
+      # A stopped worker has to stop its own download: the signal reaches this
+      # subshell, not the curl/wget it is waiting for (see `run_downloader`).
+      trap 'stop_downloader; exit 0' INT TERM HUP
       if download_file "$_url" "$_part" && [ -s "$_part" ]; then
         printf '%s\n' "$_url" > "$_flag"
       fi
       : > "$_done"
     ) &
-    _pids="${_pids} $!"
+    RACE_PIDS="${RACE_PIDS} $!"
   done
   echo "Racing ${_n} mirrors for ${_tgt}..."
 
@@ -326,9 +496,9 @@ race_download() {
     _pending=""
     while [ "$_i" -lt "$_n" ]; do
       _i=$((_i + 1))
-      if [ -s "${_race_dir}/flag.${_i}" ]; then
+      if [ -s "${RACE_DIR}/flag.${_i}" ]; then
         [ -n "$_winner" ] || _winner="$_i"
-      elif [ ! -e "${_race_dir}/done.${_i}" ]; then
+      elif [ ! -e "${RACE_DIR}/done.${_i}" ]; then
         _pending="yes"
       fi
     done
@@ -337,22 +507,26 @@ race_download() {
     sleep 1
   done
 
-  for _p in $_pids; do
-    kill "$_p" 2>/dev/null
-  done
+  # `kill` fails on a PID that is already gone, and under `set -e` that would
+  # abort the install *after* the winner was downloaded — `stop_workers` owns the
+  # `|| true`, and the same call is what the interrupt handler makes.
+  stop_workers
 
   if [ -z "$_winner" ]; then
-    rm -rf "$_race_dir" 2>/dev/null
+    rm -rf "$RACE_DIR" 2>/dev/null
+    RACE_DIR=""
     return 1
   fi
 
-  echo "Fetched from: $(cat "${_race_dir}/flag.${_winner}")"
-  if mv -f "${_race_dir}/part.${_winner}" "$TMP_FILE" 2>/dev/null; then
-    rm -rf "$_race_dir" 2>/dev/null
+  echo "Fetched from: $(cat "${RACE_DIR}/flag.${_winner}")"
+  if mv -f "${RACE_DIR}/part.${_winner}" "$TMP_FILE" 2>/dev/null; then
+    rm -rf "$RACE_DIR" 2>/dev/null
+    RACE_DIR=""
     return 0
   fi
   rm -f "$TMP_FILE" 2>/dev/null
-  rm -rf "$_race_dir" 2>/dev/null
+  rm -rf "$RACE_DIR" 2>/dev/null
+  RACE_DIR=""
   return 1
 }
 
@@ -368,12 +542,14 @@ try_download_and_verify() {
   echo "Downloading ${_tgt} (${VERSION}) to ${OUT_FILE}..."
 
   if race_download "$_tgt"; then
-    chmod +x "$TMP_FILE"
-    if _ver=$("$TMP_FILE" --version 2>&1); then
-      echo "Verified: ${_ver}"
-      return 0
+    if verify_checksum "$_tgt"; then
+      chmod +x "$TMP_FILE"
+      if _ver=$("$TMP_FILE" --version 2>&1); then
+        echo "Verified: ${_ver}"
+        return 0
+      fi
+      echo "Warning: the first mirror's binary failed architecture/runtime check, trying the rest one by one..." >&2
     fi
-    echo "Warning: the first mirror's binary failed architecture/runtime check, trying the rest one by one..." >&2
     rm -f "$TMP_FILE" 2>/dev/null || true
   fi
 
@@ -382,6 +558,10 @@ try_download_and_verify() {
     echo "Fetching from: ${_url} ..."
     rm -f "$TMP_FILE" 2>/dev/null || true
     if download_file "$_url" "$TMP_FILE" && [ -s "$TMP_FILE" ]; then
+      if ! verify_checksum "$_tgt"; then
+        rm -f "$TMP_FILE" 2>/dev/null || true
+        continue
+      fi
       chmod +x "$TMP_FILE"
       if _ver=$("$TMP_FILE" --version 2>&1); then
         echo "Verified: ${_ver}"
@@ -463,6 +643,7 @@ case "$CHOSEN_TARGET" in
     echo "  Variant:  Standard (${SIZE_MB} MB)"
     ;;
 esac
+echo "  Checksum: ${CHECKSUM_RESULT}"
 echo "=============================================="
 echo ""
 echo "To start the interactive menu:"
