@@ -1,0 +1,83 @@
+# cargo-deny policy, enforced by `.github/workflows/check.yml` (`policy` job).
+#
+# Three checks run, each answering a question this project has to answer anyway:
+#
+#   licenses    The repository redistributes four patched forks (`vendor/rustls`,
+#               `h2`, `hyper`, `rustls-rustcrypto`, all Apache-2.0/ISC/MIT) and
+#               ships their compiled form in every release artifact, so a new
+#               dependency under an obligation we cannot meet has to fail here —
+#               before it is in a router image — rather than in a release note.
+#   sources     Every crate resolves to crates.io. A git dependency (or a second
+#               registry) would make the ten cross-built release targets depend on
+#               a moving branch, which the MIPS/arm container builds cannot
+#               reproduce later.
+#   advisories  RustSec. This tool parses bytes from a network that is assumed
+#               hostile — TLS records, DNS responses, zstd certificate frames —
+#               so a published vulnerability in a decoder is a defect in it.
+#
+# The pure-Rust rule (AGENTS.md §2) is NOT expressed here: `bans` evaluates the
+# resolved lock, which holds `ring` and `cc` as optional edges of
+# `rustls-webpki` that no build enables, so denying them by name would fail on
+# the first run. `check.yml` asks `cargo tree` instead, which is feature- and
+# target-resolved.
+
+[advisories]
+version = 2
+# A yanked release is not merely old: it was withdrawn, and the lock can pin it
+# for years without anyone noticing.
+yanked = "deny"
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin attack: key recovery through timing on RSA
+    # *private-key* operations. This tool never holds an RSA private key. The
+    # shipped path is a TLS client whose config is built with
+    # `with_no_client_auth()` (`crates/dpi-core/src/net/tls.rs`), so the only RSA
+    # work it does on the wire is verifying chain signatures with a public key.
+    # The one RSA private key in the tree is the local test server's fixture key
+    # (`net/testdata/rsa.key.der`), signing on loopback. Both `rsa` 0.9.10 and
+    # 0.10.0-rc are affected and the advisory carries `patched = []`, so there is
+    # no version to move to — 0.10's constant-time padding is still open
+    # (RustCrypto/RSA#626).
+    { id = "RUSTSEC-2023-0071", reason = "no RSA private-key operation on the shipped path; no patched release exists" },
+    # RUSTSEC-2024-0436 — `paste` no longer maintained. It is a proc macro: it is
+    # expanded during compilation and ships no runtime code, and its only
+    # dependent is the vendored provider (`cargo tree -i paste` →
+    # vendor/rustls-rustcrypto, which uses it to generate its key-type impls).
+    # The advisory's remedy is the maintained fork `pastey`, i.e. an upstream
+    # provider change, not a pin this repository controls. Revisit when the
+    # provider is updated.
+    { id = "RUSTSEC-2024-0436", reason = "compile-time proc macro inside the vendored rustls provider; fix belongs upstream" },
+]
+
+[licenses]
+version = 2
+# Below this, cargo-deny treats a licence as unknown and asks for a clarification
+# instead of guessing from a file name.
+confidence-threshold = 0.8
+# Permissive licences only. A copyleft dependency in a shipped binary is a
+# decision for a human, so it has to arrive as a failed check and be added here
+# deliberately, with its obligation spelled out.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+# Scoped rather than listed above, so the obligation stays visible: webpki-roots
+# is Mozilla's root-store *data* (a generated list of trust anchors this tool
+# verifies certificates against), published under the Community Data License
+# Agreement, which governs data rather than code. A version bump re-opens the
+# question here instead of inheriting the answer.
+exceptions = [
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots@1.0.9" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

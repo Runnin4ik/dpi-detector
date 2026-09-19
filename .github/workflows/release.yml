@@ -7,7 +7,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -23,6 +23,10 @@ jobs:
             name: dpi-detector-windows-x86_64.exe
             use_cross: false
             use_nightly: false
+            smoke: true
+            # Static CRT: the exe has to start on a machine with no VC++
+            # redistributable, which is the point of a single-file tool.
+            rustflags: "-C target-feature=+crt-static"
 
           # 1b. Windows 7 Legacy x86_64
           - os: windows-latest
@@ -30,11 +34,20 @@ jobs:
             name: dpi-detector-windows-7-x86_64.exe
             use_cross: false
             use_nightly: true
+            rustflags: "-C target-feature=+crt-static"
+            # No rust-std is published for this target, so std and panic_abort
+            # are built from source: the nightly toolchain and `rust-src` the
+            # toolchain step installs exist for this row.
+            cargo_args: "+nightly -Z build-std=std,panic_abort"
           # 2. Ubuntu / Linux x86_64 (100% static musl)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             name: dpi-detector-linux-x86_64
             use_cross: false
+            smoke: true
+            # `panic = "abort"` already leaves our own code without unwind
+            # tables; this drops the ones codegen would still emit, for size.
+            rustflags: "-C force-unwind-tables=no"
 
           # 3. ARM64 Routers & SBCs (Keenetic Hopper/Titan 2, Xiaomi AX3000T, Raspberry Pi)
           - os: ubuntu-latest
@@ -65,16 +78,22 @@ jobs:
             use_cross: true
             has_upx: true
             rustflags: "-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-mips-unknown-linux-musl"
-          # 7. macOS Intel
-          - os: macos-14
+          # 7. macOS Intel. `macos-14` and `macos-15` are both the *arm64* image
+          # (the x64 labels are `macos-14-large` / `macos-15-intel`), so this row
+          # has always been a cross-compile; it moves to `macos-15` because the
+          # macOS 14 images are deprecated and unsupported from 2026-11-02. It is
+          # the only row whose artifact cannot be started on the runner that
+          # built it, so it is the only one without `smoke`.
+          - os: macos-15
             target: x86_64-apple-darwin
             name: dpi-detector-macos-intel
             use_cross: false
 
           # 8. macOS Apple Silicon (M1-M4)
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             name: dpi-detector-macos-arm64
+            smoke: true
 
           # 9. Android ARM64 (Termux, ADB, Android 5.0+ phones/tablets)
           - os: ubuntu-latest
@@ -89,7 +108,7 @@ jobs:
             use_cross: true
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain (stable)
         if: "!matrix.use_cross && !matrix.use_nightly"
@@ -104,7 +123,7 @@ jobs:
           components: rust-src
       - name: Install musl-tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
 
       - name: Install cross binary
         if: matrix.use_cross
@@ -132,7 +151,12 @@ jobs:
             sh -c 'for cc in /usr/local/bin/*muslsf-gcc; do cp "$(dirname "$($cc -print-libgcc-file-name)")/libgcc_eh.a" /out/libunwind.a; done'
           ls -l "target/static-unwind-${{ matrix.target }}/"
 
-      - name: Build with cross (MIPS & Cross targets)
+      # Two build steps, one per driver. What differs per target — the RUSTFLAGS
+      # it needs and the cargo arguments it needs — lives in the matrix, not in a
+      # fourth near-copy of the same step: the four these replace differed only
+      # in their `if`, one RUSTFLAGS expression and the cargo arguments, and two
+      # of those `if`s had already drifted away from the matrix they mirrored.
+      - name: Build with cross
         if: matrix.use_cross
         env:
           # Built from one expression only: the flags used to be assembled with a
@@ -143,23 +167,11 @@ jobs:
           RUSTFLAGS: "--cfg rustix_use_libc -C force-unwind-tables=no ${{ matrix.rustflags }}"
         run: cross build --release --target ${{ matrix.target }}
 
-      - name: Build with cargo (Windows 7 legacy)
-        if: "matrix.target == 'x86_64-win7-windows-msvc'"
+      - name: Build with cargo
+        if: "!matrix.use_cross"
         env:
-          RUSTFLAGS: "-C target-feature=+crt-static"
-        run: cargo +nightly build -Z build-std=std,panic_abort --release --target ${{ matrix.target }}
-
-      - name: Build with cargo (Windows 10/11)
-        if: "matrix.target == 'x86_64-pc-windows-msvc'"
-        env:
-          RUSTFLAGS: "-C target-feature=+crt-static"
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build with cargo (Native Unix & macOS)
-        if: "!matrix.use_cross && runner.os != 'Windows'"
-        env:
-          RUSTFLAGS: "${{ matrix.target == 'x86_64-unknown-linux-musl' && '-C force-unwind-tables=no' || '' }}"
-        run: cargo build --release --target ${{ matrix.target }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo ${{ matrix.cargo_args }} build --release --target ${{ matrix.target }}
 
       - name: Prepare binary artifact (Windows)
         if: runner.os == 'Windows'
@@ -173,6 +185,22 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/dpi-detector dist/${{ matrix.name }}
           chmod +x dist/${{ matrix.name }}
+
+      # The artifact that ships is built by the one profile nothing else runs
+      # under — fat LTO, `opt-level = "z"`, `panic = "abort"` — and no job had
+      # ever started one: a binary that links but dies before printing its banner
+      # was first seen by whoever ran the installer. `smoke` marks the rows whose
+      # artifact the runner can actually start — same architecture as the runner,
+      # no container — which excludes the cross targets, the win7 `build-std` row
+      # (a second std, built on nightly) and `x86_64-apple-darwin` (an arm64
+      # runner). `--version` is deliberately the same contract `install.sh`
+      # verifies a download with.
+      - name: Smoke the built artifact
+        if: matrix.smoke
+        shell: bash
+        run: |
+          "./dist/${{ matrix.name }}" --version
+          "./dist/${{ matrix.name }}" --legend > /dev/null
 
       # Pinned to 4.2.4 on purpose, and it is not a stale pin: the UPX 5.x
       # unpacking stub calls `memfd_create` before anything else, and that
@@ -209,41 +237,63 @@ jobs:
         run: |
           cp dist/${{ matrix.name }} dist/${{ matrix.name }}-upx
           upx --best --lzma dist/${{ matrix.name }}-upx
+          # The only check CI can make on these rows: they are the
+          # foreign-architecture ones (arm/mips) and cannot be executed on the
+          # runner. `upx -t` unpacks in memory and compares, so it is
+          # architecture-independent — verified with the pinned 4.2.4 packing a
+          # mipsel ELF here (`testing … [OK]`) — and it catches the truncated or
+          # mis-packed artifact that would otherwise reach a router as a
+          # `Trace/breakpoint trap`.
+          upx -t dist/${{ matrix.name }}-upx
           chmod +x dist/${{ matrix.name }}-upx
           ls -lh dist/
 
       - name: Upload Build Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: dist/*
+          if-no-files-found: error
 
   release:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') && !cancelled()
+    # No status-check function here, and that is the point: `success()` is applied
+    # implicitly *unless* the condition calls one of them (`!cancelled()`,
+    # `success()`, `failure()`, …). With `fail-fast: false`, any of them would let
+    # this job publish a release assembled from whichever matrix legs happened to
+    # build, with the missing architectures invisible on the release page.
+    # Skipping is the failure mode we want: the run names the leg that failed.
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-files
           pattern: dpi-detector-*
           merge-multiple: true
 
-      - name: Copy installation scripts
+      # The manifest both installers verify a download against. It travels the
+      # same channels as the binaries, so it is an integrity check — a truncated
+      # mirror, a proxy that rewrote a byte, a stale CDN copy — and not a
+      # signature: neither installer has a key to trust a manifest with, and both
+      # still run `--version` on what they install.
+      - name: Prepare release files
         run: |
           cp install.sh release-files/
           cp install.ps1 release-files/
+          cd release-files
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
-      - name: List artifacts to publish
-        run: |
-          ls -lh release-files/
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: release-files/*
           draft: false

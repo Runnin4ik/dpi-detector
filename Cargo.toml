@@ -97,3 +97,17 @@ lto = false
 codegen-units = 16
 opt-level = 2
 incremental = true
+
+# `cargo test` and `cargo build` compile 258 locked dependencies before they
+# reach a line of ours, and each of them carried full debuginfo: 1.1 GiB of
+# rlibs in `target/debug` here, none of it a frame this tool's backtraces need.
+# Dependencies drop it; our own crates keep the profile default.
+#
+# `opt-level` stays at the dev default on purpose. The code whose speed a
+# diagnostic run depends on is *ours* — dpi-core and the vendored provider, which
+# is a workspace member and therefore not covered by this table — so optimizing
+# dependencies would cost edit→test time without addressing the false timeouts
+# the dev profile is documented to produce (AGENTS.md §5). Timing runs belong to
+# `release-local`.
+[profile.dev.package."*"]
+debug = false

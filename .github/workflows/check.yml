@@ -11,12 +11,21 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# A branch in this repository fires both events for the same tree — `push` and
+# `pull_request` — so every commit to an open pull request started two full runs
+# that compiled the same 258 dependencies. A newer push cancels the older run
+# instead of queueing behind it. Nothing here is a release path, so cancelling is
+# always safe.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
-    name: Test & lint
+    name: Test & lint (linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The crates are pure Rust (no C toolchain is needed), so the default
       # stable host toolchain builds the whole workspace.
@@ -24,7 +33,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal --component clippy
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -32,8 +41,9 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      # `--locked` keeps CI honest about Cargo.lock; the tree is CRLF, so no
-      # formatting check runs here (rustfmt would rewrite nearly every file).
+      # `--locked` keeps CI honest about Cargo.lock; the tree is LF (see
+      # .gitattributes), but no formatting check runs here — the sources are
+      # formatted by hand, and rustfmt's defaults would rewrite 73 of them.
       - name: Build
         run: cargo build --workspace --locked
 
@@ -42,3 +52,159 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # `install.sh` is the path most users take to this binary, and nothing has
+      # ever executed it: the mirror race, the `--version` verification and the
+      # install itself all ran for the first time on a user's box. The dev build
+      # stands in for the release asset — same file name, same `--version`
+      # contract — so this exercises the mechanics end to end: target detection
+      # from `uname`, URL construction from `DPI_MIRRORS`, the parallel mirror
+      # race, verification of the candidate against the published
+      # `SHA256SUMS.txt`, and the atomic install into `DPI_INSTALL_DIR`. A real
+      # Linux binary is what gets run, not a stub, so a binary that cannot print
+      # `--version` fails the run here too.
+      - name: Install through install.sh into a temp prefix
+        run: |
+          set -eu
+          mkdir -p target/install-smoke target/install-prefix
+          cp target/debug/dpi-detector target/install-smoke/dpi-detector-linux-x86_64
+          (cd target/install-smoke && sha256sum dpi-detector-linux-x86_64 > SHA256SUMS.txt)
+          python3 -m http.server 8931 --directory target/install-smoke \
+            > target/install-smoke/server.log 2>&1 &
+          server=$!
+          sleep 1
+          if ! DPI_MIRRORS=http://127.0.0.1:8931 \
+               DPI_VERSION=latest \
+               DPI_INSTALL_DIR="$PWD/target/install-prefix" \
+                 sh install.sh > "$PWD/target/install.log" 2>&1; then
+            cat "$PWD/target/install.log"
+            exit 1
+          fi
+          kill "$server" 2>/dev/null || true
+          cat "$PWD/target/install.log"
+          # An installer that cannot fetch a manifest degrades to a warning and
+          # installs anyway, so "it installed" is not proof the checksum path ran.
+          # This is: the line is printed only when the file matched the manifest.
+          grep -q 'Checksum verified' "$PWD/target/install.log"
+          "$PWD/target/install-prefix/dpi-detector" --version
+
+  # The artifact actions are bumped in lockstep with `release.yml`, and that pair
+  # is the one thing about them that fails silently: v7 uploads through the
+  # "direct upload" path and v8 verifies, on the download side, a hash that only
+  # a matching pair produces. A mismatch fails the *release* job, which runs on a
+  # tag — this job is the same round trip on every push, over one small file.
+  artifacts:
+    name: Artifact round-trip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: round-trip
+          path: .github/workflows/check.yml
+
+      - name: Download
+        uses: actions/download-artifact@v8
+        with:
+          name: round-trip
+          path: round-trip
+
+      - name: Compare
+        run: cmp round-trip/check.yml .github/workflows/check.yml
+
+  # `cfg(windows)` is inactive in the ubuntu job, so the Win32 console-mode
+  # probe, `write_win32_ansi`, the keyboard layouts and every Windows-specific
+  # `system DNS`/route adapter are compiled for the first time by the release
+  # matrix, on a tag. This job is where a break in them shows up instead — and it
+  # is also the only place the `rust-lld` pin in `.cargo/config.toml` is
+  # exercised against a toolchain CI installs.
+  windows:
+    name: Test & lint (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  policy:
+    name: Dependency policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-policy-${{ hashFiles('**/Cargo.lock') }}
+
+      # Rule 1 (AGENTS.md §2): no C or C++ may enter the build, because the
+      # router targets are cross-compiled with toolchains whose C compilers are
+      # broken or absent, and `ring` does not target MIPS at all. `cargo tree`
+      # answers that against the graph that is actually built — feature- and
+      # target-resolved — which a lock-level ban cannot: `ring` and `cc` ARE in
+      # Cargo.lock as optional edges of `rustls-webpki` that no build enables
+      # (`cargo tree -i ring` prints nothing for every target), so
+      # `cargo deny check bans` with `ring` denied would fail on its first run.
+      # An empty result is the pass condition; a crate name that is not in the
+      # lock at all also prints nothing, which is the right answer for it.
+      - name: Enforce the pure-Rust dependency rule
+        run: |
+          set -eu
+          banned="ring aws-lc-rs aws-lc-sys openssl-sys zstd-sys libz-sys libz-ng-sys curl-sys boring-sys boringssl-src cc"
+          found=""
+          for crate in $banned; do
+            tree=$(cargo tree --workspace --target all -e normal,build -i "$crate" 2>/dev/null || true)
+            if [ -n "$tree" ]; then
+              echo "::error::$crate reached the dependency graph (AGENTS.md Rule 1)"
+              echo "$tree"
+              found="$found $crate"
+            fi
+          done
+          [ -z "$found" ] || exit 1
+
+      - name: Cache cargo-deny
+        id: deny-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ runner.os }}-0.20.2
+
+      - name: Install cargo-deny
+        if: steps.deny-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked --version 0.20.2 cargo-deny
+
+      # `licenses` is what keeps the shipped binary's obligations landed: the
+      # four patched forks in `vendor/` are Apache-2.0/ISC/MIT sources this
+      # repository redistributes, and a new dependency under an incompatible
+      # licence has to stop the build rather than the release notes. `sources`
+      # pins every crate to crates.io — a git dependency would make the router
+      # builds unreproducible. `advisories` is the RustSec database: this tool
+      # parses bytes from a hostile network (TLS records, DNS responses, zstd
+      # certificate frames), so a known vulnerability in a decoder is a defect
+      # here, not a housekeeping item.
+      - name: Check licences, sources and advisories
+        run: cargo deny --locked check licenses sources advisories
