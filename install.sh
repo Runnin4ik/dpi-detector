@@ -149,8 +149,18 @@ TMP_FILE="${OUT_DIR}/.dpi-detector.tmp.$$"
 # before the manifest existed simply has none, and then the check is skipped with
 # one warning instead of failing an install that would otherwise work.
 MANIFEST_FILE="${OUT_DIR}/.dpi-detector.sums.$$"
+# Seconds for one attempt at the manifest. It is a couple of hundred bytes, so the
+# budget only ever decides how long a source that does not answer is waited for:
+# the binary's 120 s would let one stall hold the install for minutes, and the
+# manifest is fetched after the binary is already on disk, so that wait is dead
+# time in front of the user.
+MANIFEST_MAX_TIME=5
 # "" until the manifest has been looked for, then "ok" or "missing".
 MANIFEST_STATE=""
+# The URL that produced the file being checked — the race's winner, or the mirror
+# the sequential loop is on. The manifest is looked for beside it as well as at
+# the release URL itself.
+FETCHED_URL=""
 # Set by the checksum check for the summary line: "verified" or "not checked".
 CHECKSUM_RESULT="not checked"
 
@@ -288,36 +298,86 @@ stop_downloader() {
   return 0
 }
 
+# One attempt with the status kept, because "the server answered with an error"
+# and "the server could not be reached" are different answers and the manifest
+# needs the difference: `curl -f` reports the first as 22 and wget as 8, and a
+# release that publishes no manifest says exactly that. `DOWNLOAD_STATUS` is 0
+# when the attempt worked, 2 for an answer, 1 for anything else.
+DOWNLOAD_STATUS=0
+try_download() {
+  DOWNLOAD_STATUS=0
+  run_downloader "$@" || DOWNLOAD_STATUS=$?
+  if [ "$DOWNLOAD_STATUS" -eq 0 ]; then
+    return 0
+  fi
+  if [ "$DOWNLOAD_STATUS" -eq 22 ] || [ "$DOWNLOAD_STATUS" -eq 8 ]; then
+    DOWNLOAD_STATUS=2
+  else
+    DOWNLOAD_STATUS=1
+  fi
+  return 1
+}
+
 # Every downloader is tried by running it, never by asking `command -v`: BusyBox
 # hush — the shell Padavan and several other stock firmwares give root — has no
 # `command` builtin, so a PATH test reports a working wget as absent and the
 # install stops before it tries a single mirror. Both are attempted because
 # neither is guaranteed to work: a stock firmware may have only a wget, a box
 # with Entware may have only a curl, and either may be built without TLS.
+#
+# 0 — the file is there, 2 — the source answered with an HTTP error, 1 — it did
+# not answer. The binary's callers only ask whether it worked; the manifest's
+# reads the difference (`fetch_manifest`).
 download_file() {
   _url="$1"
   _dest="$2"
+  # Seconds for one attempt, the binary's unless the caller says otherwise.
+  _max="${3:-120}"
   rm -f "$_dest" 2>/dev/null || true
 
   # curl: --connect-timeout/--max-time are understood by every curl; the second
-  # attempt drops the certificate check for boxes with no CA bundle.
-  if run_downloader curl -fsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null ||
-     run_downloader curl -kfsSL --connect-timeout 4 --max-time 120 "$_url" -o "$_dest" 2>/dev/null; then
-    [ -s "$_dest" ] && return 0
-  fi
+  # attempt drops the certificate check for boxes with no CA bundle, and is
+  # skipped when the first one was answered — a server that answered does not
+  # need to be asked again without the certificate check.
+  try_download curl -fsSL --connect-timeout 4 --max-time "$_max" "$_url" -o "$_dest" 2>/dev/null && [ -s "$_dest" ] && return 0
+  [ "$DOWNLOAD_STATUS" -eq 2 ] && return 2
+  try_download curl -kfsSL --connect-timeout 4 --max-time "$_max" "$_url" -o "$_dest" 2>/dev/null && [ -s "$_dest" ] && return 0
+  [ "$DOWNLOAD_STATUS" -eq 2 ] && return 2
 
-  # wget: BusyBox knows neither --timeout nor --no-check-certificate, so the
-  # first form is for GNU wget and the second is what every wget accepts.
-  if run_downloader wget -q --timeout=4 -O "$_dest" "$_url" 2>/dev/null ||
-     run_downloader wget -q -O "$_dest" "$_url" 2>/dev/null; then
-    [ -s "$_dest" ] && return 0
-  fi
+  # wget: BusyBox knows neither `--timeout` nor `--no-check-certificate`, so the
+  # first form is for GNU wget and `-T`, which both understand, is the second.
+  # There is no third, optionless form on purpose: it would be the one attempt
+  # with no timeout at all — BusyBox has none and GNU wget waits 900 s for a
+  # first byte — so a source that accepts the connection and then trickles would
+  # hold the install past the budget every other attempt respects, and it would
+  # be reached exactly when the bounded attempts timed out, i.e. on that source.
+  try_download wget -q --timeout="$_max" -O "$_dest" "$_url" 2>/dev/null && [ -s "$_dest" ] && return 0
+  [ "$DOWNLOAD_STATUS" -eq 2 ] && return 2
+  try_download wget -q -T "$_max" -O "$_dest" "$_url" 2>/dev/null && [ -s "$_dest" ] && return 0
+  [ "$DOWNLOAD_STATUS" -eq 2 ] && return 2
 
   # Say why when the reason is that neither tool is installed at all.
   if ! curl --version >/dev/null 2>&1 && ! wget --help >/dev/null 2>&1; then
     echo "Error: neither curl nor wget found in PATH." >&2
   fi
   return 1
+}
+
+# The asset's URL on GitHub itself: the release the manifest is checked against,
+# and the head of the list below.
+release_url() {
+  if [ "$VERSION" = "latest" ]; then
+    echo "https://github.com/${REPO}/releases/latest/download/$1"
+  else
+    echo "https://github.com/${REPO}/releases/download/${VERSION}/$1"
+  fi
+}
+
+# Where the manifest of a release sits, given the URL of one of its assets: the
+# asset name is the last path segment in every source's URL — the release URL and
+# the proxies that wrap it alike — so the directory is what stays.
+manifest_url() {
+  echo "${1%/*}/SHA256SUMS.txt"
 }
 
 # Every release asset this script fetches — the binary and `SHA256SUMS.txt` —
@@ -332,11 +392,7 @@ build_url_list() {
     done
   fi
 
-  if [ "$VERSION" = "latest" ]; then
-    _gh="https://github.com/${REPO}/releases/latest/download/${_file}"
-  else
-    _gh="https://github.com/${REPO}/releases/download/${VERSION}/${_file}"
-  fi
+  _gh=$(release_url "$_file")
 
   _list="${_list} ${_gh}"
   _list="${_list} https://ghfast.top/${_gh}"
@@ -348,17 +404,43 @@ build_url_list() {
   echo "$_list"
 }
 
-# The manifest is fetched once, from the first source that has it, and every
-# source is tried because a release from before the manifest existed answers 404
-# on all of them and the install has to go on without it. `curl -f`/wget fail on
-# a 404 immediately, so the sweep costs nothing on such a release.
+# The manifest is fetched once: from the release itself, and then from the source
+# the binary came from when the release cannot be reached.
+#
+# The release URL is what the check is against — it is the published build — and
+# its answer settles whether a manifest exists at all: a mirror only has what the
+# release has, so an HTTP error there ends the search instead of sending the
+# install through the other sources. That is what the sweep of every source this
+# used to do got wrong: a release from before the manifest existed answers 404 on
+# all of them, and through the proxies that is seconds per source rather than
+# nothing — measured 31 s of silence *after* the binary was already on disk — and
+# a source that stalls instead of answering costs its whole budget, one at a time.
+# The source the binary came from is asked only when GitHub itself did not answer,
+# which is the case this script exists for on a filtered network.
 fetch_manifest() {
   [ -z "$MANIFEST_STATE" ] || return 0
-  _urls=$(build_url_list "SHA256SUMS.txt")
-  for _url in $_urls; do
-    if download_file "$_url" "$MANIFEST_FILE" && [ -s "$MANIFEST_FILE" ]; then
+  _canonical=$(release_url "SHA256SUMS.txt")
+  _near=""
+  if [ -n "$FETCHED_URL" ]; then
+    _near=$(manifest_url "$FETCHED_URL")
+  fi
+  _seen=""
+  for _url in "$_canonical" "$_near"; do
+    if [ -z "$_url" ]; then
+      continue
+    fi
+    if [ "$_url" = "$_seen" ]; then
+      continue
+    fi
+    _seen="$_url"
+    _rc=0
+    download_file "$_url" "$MANIFEST_FILE" "$MANIFEST_MAX_TIME" || _rc=$?
+    if [ "$_rc" -eq 0 ] && [ -s "$MANIFEST_FILE" ]; then
       MANIFEST_STATE="ok"
       return 0
+    fi
+    if [ "$_rc" -eq 2 ]; then
+      break
     fi
   done
   rm -f "$MANIFEST_FILE" 2>/dev/null || true
@@ -518,7 +600,8 @@ race_download() {
     return 1
   fi
 
-  echo "Fetched from: $(cat "${RACE_DIR}/flag.${_winner}")"
+  FETCHED_URL=$(cat "${RACE_DIR}/flag.${_winner}")
+  echo "Fetched from: ${FETCHED_URL}"
   if mv -f "${RACE_DIR}/part.${_winner}" "$TMP_FILE" 2>/dev/null; then
     rm -rf "$RACE_DIR" 2>/dev/null
     RACE_DIR=""
@@ -556,6 +639,9 @@ try_download_and_verify() {
   _urls=$(build_url_list "$_tgt")
   for _url in $_urls; do
     echo "Fetching from: ${_url} ..."
+    # What `fetch_manifest` looks beside when this candidate is checked: the
+    # manifest is looked for next to the file it describes.
+    FETCHED_URL="$_url"
     rm -f "$TMP_FILE" 2>/dev/null || true
     if download_file "$_url" "$TMP_FILE" && [ -s "$TMP_FILE" ]; then
       if ! verify_checksum "$_tgt"; then
@@ -577,35 +663,71 @@ try_download_and_verify() {
   return 1
 }
 
-DOWNLOADED=0
-CHOSEN_TARGET="$PRIMARY_TARGET"
+# The version an installed binary reports, "" when it cannot be run or says
+# nothing. `VERSION` is written with its `v` (`v5.0.0-alpha.19`) and the binary
+# prints without it (`dpi-detector 5.0.0-alpha.19`), so the `v` is dropped on the
+# way out and what is compared is plain text. The version flag is `--version`
+# (`-V`); `-v` is the detector's `--verbose`.
+binary_version() {
+  _out=$("$1" --version 2>/dev/null) || return 0
+  _last=""
+  for _word in $_out; do
+    _last="$_word"
+  done
+  printf '%s\n' "${_last#v}"
+}
 
-if try_download_and_verify "$PRIMARY_TARGET"; then
-  DOWNLOADED=1
-  CHOSEN_TARGET="$PRIMARY_TARGET"
-elif [ -n "$FALLBACK_TARGET" ]; then
-  echo "Notice: could not download or verify ${PRIMARY_TARGET}."
-  echo "        Attempting fallback to ${FALLBACK_TARGET}..."
-  if try_download_and_verify "$FALLBACK_TARGET"; then
-    DOWNLOADED=1
-    CHOSEN_TARGET="$FALLBACK_TARGET"
+# A destination that already holds this release is not downloaded again: the
+# reason to run the installer a second time is to run the tester, and the file
+# that is there is the one it would have fetched. `-x` comes first — a file that
+# cannot be run is not a version, which is also how a binary built for another
+# architecture is passed over — and a moving `latest` tag is left out, because
+# there is no fixed string to compare the file's own report against.
+LOCAL_VERSION=""
+LOCAL_CURRENT=0
+if [ -x "$OUT_FILE" ]; then
+  LOCAL_VERSION=$(binary_version "$OUT_FILE")
+fi
+if [ -n "$LOCAL_VERSION" ]; then
+  if [ "$VERSION" != "latest" ] && [ "$LOCAL_VERSION" = "${VERSION#v}" ]; then
+    LOCAL_CURRENT=1
+    echo "Already installed: dpi-detector ${LOCAL_VERSION} at ${OUT_FILE} — nothing to download."
+  elif [ "$VERSION" != "latest" ]; then
+    echo "Installed: dpi-detector ${LOCAL_VERSION}, this installer carries ${VERSION#v} — installing that release."
   fi
 fi
 
-if [ "$DOWNLOADED" -ne 1 ]; then
-  echo "Error: failed to download working binary (${PRIMARY_TARGET}${FALLBACK_TARGET:+ / $FALLBACK_TARGET}) from all mirrors." >&2
-  exit 1
+if [ "$LOCAL_CURRENT" -eq 0 ]; then
+  DOWNLOADED=0
+  CHOSEN_TARGET="$PRIMARY_TARGET"
+
+  if try_download_and_verify "$PRIMARY_TARGET"; then
+    DOWNLOADED=1
+    CHOSEN_TARGET="$PRIMARY_TARGET"
+  elif [ -n "$FALLBACK_TARGET" ]; then
+    echo "Notice: could not download or verify ${PRIMARY_TARGET}."
+    echo "        Attempting fallback to ${FALLBACK_TARGET}..."
+    if try_download_and_verify "$FALLBACK_TARGET"; then
+      DOWNLOADED=1
+      CHOSEN_TARGET="$FALLBACK_TARGET"
+    fi
+  fi
+
+  if [ "$DOWNLOADED" -ne 1 ]; then
+    echo "Error: failed to download working binary (${PRIMARY_TARGET}${FALLBACK_TARGET:+ / $FALLBACK_TARGET}) from all mirrors." >&2
+    exit 1
+  fi
+  # Atomic install: replace destination file with verified temp binary
+  mv -f "$TMP_FILE" "$OUT_FILE"
+  chmod +x "$OUT_FILE"
+  # What the file really occupies, measured after it is in place — not the size the
+  # release notes promise. `du` counts allocated blocks (what `df` will report as
+  # used); when it is unavailable, the apparent size rounded up to a block does.
+  SIZE_KB=$(du -k "$OUT_FILE" 2>/dev/null | awk 'NR == 1 { print $1 + 0 }')
+  [ -n "$SIZE_KB" ] && [ "$SIZE_KB" -gt 0 ] || SIZE_KB=$(( ($(wc -c < "$OUT_FILE") + 1023) / 1024 ))
+  SIZE_MB=$(awk -v kb="$SIZE_KB" 'BEGIN { printf "%.1f", kb / 1024 }' 2>/dev/null)
+  [ -n "$SIZE_MB" ] || SIZE_MB=$((SIZE_KB / 1024))
 fi
-# Atomic install: replace destination file with verified temp binary
-mv -f "$TMP_FILE" "$OUT_FILE"
-chmod +x "$OUT_FILE"
-# What the file really occupies, measured after it is in place — not the size the
-# release notes promise. `du` counts allocated blocks (what `df` will report as
-# used); when it is unavailable, the apparent size rounded up to a block does.
-SIZE_KB=$(du -k "$OUT_FILE" 2>/dev/null | awk 'NR == 1 { print $1 + 0 }')
-[ -n "$SIZE_KB" ] && [ "$SIZE_KB" -gt 0 ] || SIZE_KB=$(( ($(wc -c < "$OUT_FILE") + 1023) / 1024 ))
-SIZE_MB=$(awk -v kb="$SIZE_KB" 'BEGIN { printf "%.1f", kb / 1024 }' 2>/dev/null)
-[ -n "$SIZE_MB" ] || SIZE_MB=$((SIZE_KB / 1024))
 RUN_FILE="$OUT_FILE"
 
 # The command to suggest: the bare name when the shell would reach this very file
@@ -633,17 +755,23 @@ fi
 
 echo ""
 echo "=============================================="
-echo "  DPI Detector successfully installed!"
-echo "  Location: ${RUN_FILE}"
-case "$CHOSEN_TARGET" in
-  *-upx)
-    echo "  Variant:  Compact UPX (${SIZE_MB} MB)"
-    ;;
-  *)
-    echo "  Variant:  Standard (${SIZE_MB} MB)"
-    ;;
-esac
-echo "  Checksum: ${CHECKSUM_RESULT}"
+if [ "$LOCAL_CURRENT" -eq 1 ]; then
+  echo "  DPI Detector is already installed!"
+  echo "  Location: ${RUN_FILE}"
+  echo "  Version:  ${LOCAL_VERSION} — the release this installer carries"
+else
+  echo "  DPI Detector successfully installed!"
+  echo "  Location: ${RUN_FILE}"
+  case "$CHOSEN_TARGET" in
+    *-upx)
+      echo "  Variant:  Compact UPX (${SIZE_MB} MB)"
+      ;;
+    *)
+      echo "  Variant:  Standard (${SIZE_MB} MB)"
+      ;;
+  esac
+  echo "  Checksum: ${CHECKSUM_RESULT}"
+fi
 echo "=============================================="
 echo ""
 echo "To start the interactive menu:"
