@@ -17,6 +17,9 @@ env:
   CROSS_VERSION: 0.2.5
 
 jobs:
+  # The two third-party actions below are pinned by commit: a tag can be moved to
+  # another commit, and this is the workflow that publishes a release — the
+  # `actions/*` ones stay on their major tags, as in `check.yml`.
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -300,7 +303,7 @@ jobs:
       # way, which is why the pin is free here.
       - name: Set up UPX
         if: matrix.has_upx
-        uses: crazy-max/ghaction-upx@v4
+        uses: crazy-max/ghaction-upx@c83f378efc804f828e988debb88ed6116feb2368 # v4
         with:
           version: v4.2.4
           install-only: true
@@ -371,7 +374,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           files: release-files/*
           draft: false

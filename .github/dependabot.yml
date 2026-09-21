@@ -1,0 +1,18 @@
+# The two third-party actions are pinned by commit, so this is what moves them:
+# a tag can be moved to another commit, and one of them publishes a release from
+# a job holding `contents: write`. The `actions/*` ones stay on their major tags,
+# which this file also keeps an eye on.
+#
+# Dependabot reads this file from the default branch, so it starts working once
+# this reaches `main`; `target-branch` keeps the pull requests on `rust`, where
+# the work happens.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: rust
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
