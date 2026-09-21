@@ -144,7 +144,38 @@ jobs:
           fi
           cat "$PWD/target/install-stale.log"
           grep -q 'served dpi-detector' "$PWD/target/install-stale.log"
+
+          # A second run of the release that is already installed fetches nothing
+          # and runs what is there. The server is stopped before it, so a download
+          # would fail, and the binary's own line is in the log only because the
+          # installer executed it with the argument it was given — the banner
+          # prints the version without that prefix, the run path prints the path.
+          ver=$(target/debug/dpi-detector --version | awk '{print $NF}')
+          current=target/install-smoke/releases/download/v$ver
+          mkdir -p "$current"
+          cp target/debug/dpi-detector "$current/dpi-detector-linux-x86_64"
+          (cd "$current" && sha256sum dpi-detector-linux-x86_64 > SHA256SUMS.txt)
+          DPI_RELEASE_BASE=http://127.0.0.1:8931/releases \
+            DPI_VERSION="v$ver" \
+            DPI_INSTALL_DIR="$PWD/target/install-prefix-current" \
+              sh install.sh > "$PWD/target/install-current.log" 2>&1
+          grep -q 'Checksum verified' "$PWD/target/install-current.log"
           kill "$server" 2>/dev/null || true
+          sleep 1
+          if ! DPI_RELEASE_BASE=http://127.0.0.1:8931/releases \
+               DPI_VERSION="v$ver" \
+               DPI_INSTALL_DIR="$PWD/target/install-prefix-current" \
+                 sh install.sh --version > "$PWD/target/install-again.log" 2>&1; then
+            cat "$PWD/target/install-again.log"
+            exit 1
+          fi
+          cat "$PWD/target/install-again.log"
+          grep -q 'already installed' "$PWD/target/install-again.log"
+          if grep -q 'Downloading' "$PWD/target/install-again.log"; then
+            echo "an installed release was downloaded again"
+            exit 1
+          fi
+          grep -q "dpi-detector $ver" "$PWD/target/install-again.log"
 
       # The same fixture under BusyBox, which is the userland the router targets
       # actually have: the installer's comments are written for it (`command -v`
