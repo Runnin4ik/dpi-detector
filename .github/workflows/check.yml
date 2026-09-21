@@ -167,6 +167,24 @@ jobs:
             koalaman/shellcheck@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d \
             -s sh --severity=warning /mnt/install.sh
 
+      # Both installers write the same six proxy hosts out by hand, in two
+      # languages, and nothing else keeps them in step: a mirror added to one file
+      # and forgotten in the other is a source that platform silently cannot
+      # reach. Only the lines that build a URL are read, and the hosts are
+      # compared as sets — their order is not a contract.
+      - name: The two installers agree on their mirror list
+        run: |
+          set -eu
+          hosts() {
+            grep -F "$2" "$1" | grep -oE 'https://[^/"]+' | sed 's|https://||' | sort -u
+          }
+          # shellcheck disable=SC2016
+          hosts install.sh '${_gh}' > target/mirrors-sh.txt
+          # shellcheck disable=SC2016
+          hosts install.ps1 '$gh"' > target/mirrors-ps.txt
+          diff -u target/mirrors-sh.txt target/mirrors-ps.txt
+          echo "both installers carry $(wc -l < target/mirrors-sh.txt) proxies"
+
   # The artifact actions are bumped in lockstep with `release.yml`, and that pair
   # is the one thing about them that fails silently: v7 uploads through the
   # "direct upload" path and v8 verifies, on the download side, a hash that only
@@ -241,10 +259,13 @@ jobs:
       # `install.ps1` is the other half of the installer pair and nothing here has
       # ever run it: its mirror list, its manifest lookup and its atomic install
       # were executed by hand once. The fixture is the linux job's shape — the
-      # release directory as a source — and this installer asks every source for
-      # the manifest, so `DPI_MIRRORS` alone reaches it. The installed file is
-      # compared with the fixture's own hash: an installer that quietly fell back
-      # to the real release would otherwise pass this.
+      # release directory as a source — and `DPI_RELEASE_BASE` points the
+      # canonical URL at it, because the installer asks the release for
+      # `SHA256SUMS.txt` first and treats an HTTP answer there as final: without
+      # that seam it would ask the real GitHub release and check the fixture
+      # binary against a published hash. The installed file is compared with the
+      # fixture's own hash: an installer that quietly fell back to the real
+      # release would otherwise pass this.
       - name: Install through install.ps1 into a temp prefix
         shell: pwsh
         run: |
@@ -255,6 +276,7 @@ jobs:
           Copy-Item target/debug/dpi-detector.exe $asset -Force
           $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLower()
           "$hash  dpi-detector-windows-x86_64.exe" | Set-Content -Encoding ascii (Join-Path $fixture 'SHA256SUMS.txt')
+          $version = ((& $asset --version) -split '\s+')[-1]
 
           $server = Start-Process -PassThru -WindowStyle Hidden python -ArgumentList @(
             '-m', 'http.server', '8931', '--directory', (Join-Path $PWD 'target/install-smoke'))
@@ -267,9 +289,10 @@ jobs:
             if (-not $up) { throw 'the fixture server never accepted a connection' }
 
             $env:DPI_MIRRORS = 'http://127.0.0.1:8931/releases/latest/download'
+            $env:DPI_RELEASE_BASE = 'http://127.0.0.1:8931/releases'
             $env:DPI_VERSION = 'latest'
             $env:DPI_INSTALL_DIR = $prefix
-            & pwsh -NoProfile -File install.ps1 *> install.log
+            & pwsh -NoProfile -File install.ps1 --version *> install.log
             $rc = $LASTEXITCODE
             Get-Content install.log
             if ($rc -ne 0) { throw "install.ps1 exited with $rc" }
@@ -281,6 +304,54 @@ jobs:
             $installed = (Get-FileHash -Algorithm SHA256 (Join-Path $prefix 'dpi-detector.exe')).Hash.ToLower()
             if ($installed -ne $hash) { throw 'the installed file is not the fixture binary' }
             & (Join-Path $prefix 'dpi-detector.exe') --version
+
+            # A 32-bit Windows has no build to run, and is told so before the
+            # download rather than after it.
+            $savedArch = $env:PROCESSOR_ARCHITECTURE
+            $env:PROCESSOR_ARCHITECTURE = 'x86'
+            $env:DPI_INSTALL_DIR = Join-Path $PWD 'target/install-prefix-x86'
+            & pwsh -NoProfile -File install.ps1 --version *> install-x86.log
+            $rc = $LASTEXITCODE
+            $env:PROCESSOR_ARCHITECTURE = $savedArch
+            Get-Content install-x86.log
+            if ($rc -eq 0) { throw 'a 32-bit host was not refused' }
+            if (-not (Select-String -Quiet -Path install-x86.log -Pattern 'needs 64-bit Windows')) {
+              throw 'a 32-bit host was refused without a reason'
+            }
+
+            # The release answers 404 for the manifest while the mirror has one:
+            # the answer is final, so the install goes ahead on a warning. This
+            # is what pins the lookup to two sources — a sweep of all thirteen
+            # would have found the mirror's copy and verified against it.
+            $prefixNoManifest = Join-Path $PWD 'target/install-prefix-nomanifest'
+            New-Item -ItemType Directory -Force -Path $prefixNoManifest | Out-Null
+            $env:DPI_RELEASE_BASE = 'http://127.0.0.1:8931/nothing-here'
+            $env:DPI_INSTALL_DIR = $prefixNoManifest
+            & pwsh -NoProfile -File install.ps1 --version *> install-nomanifest.log
+            $rc = $LASTEXITCODE
+            Get-Content install-nomanifest.log
+            if ($rc -ne 0) { throw "install.ps1 exited with $rc on a release with no manifest" }
+            if (-not (Select-String -Quiet -Path install-nomanifest.log -Pattern 'no SHA256SUMS\.txt')) {
+              throw 'a release with no manifest was not reported'
+            }
+            if (Select-String -Quiet -Path install-nomanifest.log -Pattern 'Checksum verified') {
+              throw 'a checksum was claimed for a release with no manifest'
+            }
+
+            # A second run of a release that is already installed fetches
+            # nothing: the server is stopped first, so a download would fail.
+            Stop-Process -Id $server.Id -Force
+            $server = $null
+            $env:DPI_RELEASE_BASE = 'http://127.0.0.1:8931/releases'
+            $env:DPI_VERSION = "v$version"
+            $env:DPI_INSTALL_DIR = $prefix
+            & pwsh -NoProfile -File install.ps1 --version *> install-current.log
+            $rc = $LASTEXITCODE
+            Get-Content install-current.log
+            if ($rc -ne 0) { throw "install.ps1 exited with $rc on an up-to-date install" }
+            if (-not (Select-String -Quiet -Path install-current.log -Pattern 'Already installed')) {
+              throw 'an up-to-date install was downloaded again'
+            }
           } finally {
             if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force }
           }
