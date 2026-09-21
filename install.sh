@@ -40,7 +40,17 @@ case "$OS" in
         aarch64|arm64)
           TARGET="dpi-detector-linux-arm64"
           ;;
-        armv7*|armv6*|armhf)
+        armv6*)
+          # The release ships armv7-unknown-linux-musleabihf, and an ARMv6 core
+          # (Raspberry Pi 1, Zero, Zero W) has neither Thumb-2 nor VFPv3-D16, so
+          # the binary dies on its first instruction. The run check below would
+          # catch that as "failed architecture/runtime check" and the install
+          # would end up blaming the mirrors, so the reason is said here.
+          echo "Error: ${ARCH} cannot run the ARMv7 build this release ships." >&2
+          echo "       Raspberry Pi 1 / Zero / Zero W are not supported targets." >&2
+          exit 1
+          ;;
+        armv7*|armhf)
           TARGET="dpi-detector-linux-armv7"
           ;;
         mipsel*|mips*el*)
@@ -104,9 +114,17 @@ esac
 # 2. /usr/local/bin (Standard Linux with root/sudo)
 # 3. $TMPDIR, /tmp, $HOME, or current directory
 pick_install_dir() {
-  if [ -n "${DPI_INSTALL_DIR:-}" ] && [ -d "$DPI_INSTALL_DIR" ] && [ -w "$DPI_INSTALL_DIR" ]; then
-    echo "$DPI_INSTALL_DIR"
-    return 0
+  if [ -n "${DPI_INSTALL_DIR:-}" ]; then
+    # A named directory wins, and is created when it is not there yet: the user
+    # said where to install, so passing it over because a parent did not exist
+    # would install somewhere they did not ask for. One that still cannot be
+    # used is named out loud rather than skipped in silence.
+    mkdir -p "$DPI_INSTALL_DIR" 2>/dev/null || true
+    if [ -d "$DPI_INSTALL_DIR" ] && [ -w "$DPI_INSTALL_DIR" ]; then
+      echo "$DPI_INSTALL_DIR"
+      return 0
+    fi
+    echo "Warning: DPI_INSTALL_DIR=${DPI_INSTALL_DIR} is not a writable directory; looking for another one." >&2
   fi
   if [ -n "${PREFIX:-}" ] && [ -d "${PREFIX}/bin" ] && [ -w "${PREFIX}/bin" ]; then
     echo "${PREFIX}/bin"
@@ -284,16 +302,45 @@ fi
 # reparented and keeps pulling until its own `--max-time`. Whoever stops such a
 # shell has to stop this PID too: a race worker does it in its own trap, and this
 # script does it in the signal traps above (`stop_downloader`).
+#
+# The budget is enforced here as well as in the tools' own flags, because their
+# flags are not a bound. Measured against an address the kernel drops: GNU wget
+# with `--timeout=120` was still running after 442 s (it retries on its own,
+# twenty times, each retry paying the full timeout again), and BusyBox wget's
+# `-T` is a read timeout — its connect phase is the applet's own business, and
+# it took 132 s there. `wait` cannot be given a deadline in POSIX sh, so a
+# watchdog subshell sleeps the budget and kills the download if it is still
+# there. It kills only while this shell lives — `$$` is the main shell, not the
+# subshell — because a watchdog orphaned by an interrupted install must not fire
+# at a PID that has been recycled since.
 DOWNLOAD_PID=""
+WATCHDOG_PID=""
+# Seconds for one attempt, watchdog included; `download_file` sets it from the
+# caller's budget, and this default only covers a call that forgets to.
+DOWNLOAD_BUDGET=123
 run_downloader() {
   "$@" &
   DOWNLOAD_PID=$!
-  wait "$DOWNLOAD_PID"
+  (
+    sleep "$DOWNLOAD_BUDGET"
+    kill -0 "$$" 2>/dev/null || exit 0
+    kill "$DOWNLOAD_PID" 2>/dev/null
+  ) &
+  WATCHDOG_PID=$!
+  _rc=0
+  wait "$DOWNLOAD_PID" || _rc=$?
+  kill "$WATCHDOG_PID" 2>/dev/null || true
+  WATCHDOG_PID=""
+  return "$_rc"
 }
 
 stop_downloader() {
   if [ -n "${DOWNLOAD_PID:-}" ]; then
     kill "$DOWNLOAD_PID" 2>/dev/null || true
+  fi
+  if [ -n "${WATCHDOG_PID:-}" ]; then
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+    WATCHDOG_PID=""
   fi
   return 0
 }
@@ -304,9 +351,13 @@ stop_downloader() {
 # release that publishes no manifest says exactly that. `DOWNLOAD_STATUS` is 0
 # when the attempt worked, 2 for an answer, 1 for anything else.
 DOWNLOAD_STATUS=0
+# The tool's own exit code, before it is folded into the three answers below.
+DOWNLOAD_EXIT=0
 try_download() {
   DOWNLOAD_STATUS=0
-  run_downloader "$@" || DOWNLOAD_STATUS=$?
+  DOWNLOAD_EXIT=0
+  run_downloader "$@" || DOWNLOAD_EXIT=$?
+  DOWNLOAD_STATUS="$DOWNLOAD_EXIT"
   if [ "$DOWNLOAD_STATUS" -eq 0 ]; then
     return 0
   fi
@@ -333,6 +384,9 @@ download_file() {
   _dest="$2"
   # Seconds for one attempt, the binary's unless the caller says otherwise.
   _max="${3:-120}"
+  # The watchdog's budget for this attempt: the tool's own flags are expected to
+  # end it sooner, and the slack is for starting the tool and closing the file.
+  DOWNLOAD_BUDGET=$((_max + 3))
   rm -f "$_dest" 2>/dev/null || true
 
   # curl: --connect-timeout/--max-time are understood by every curl; the second
@@ -341,18 +395,50 @@ download_file() {
   # need to be asked again without the certificate check.
   try_download curl -fsSL --connect-timeout 4 --max-time "$_max" "$_url" -o "$_dest" 2>/dev/null && [ -s "$_dest" ] && return 0
   [ "$DOWNLOAD_STATUS" -eq 2 ] && return 2
-  try_download curl -kfsSL --connect-timeout 4 --max-time "$_max" "$_url" -o "$_dest" 2>/dev/null && [ -s "$_dest" ] && return 0
-  [ "$DOWNLOAD_STATUS" -eq 2 ] && return 2
+  # curl's own status says which failure this was, and one of them makes the
+  # attempts left pointless. 6 is a name that does not resolve and 7 is a
+  # connection that is refused or goes nowhere: the same address through the same
+  # network, one tool later, gives the same answer — and on a network that
+  # filters GitHub that is the answer every source gives, so paying it four times
+  # per source is the difference between a failure in seconds and one in minutes.
+  # 28 is the budget running out, the one case where the next tool can still
+  # differ: curl -k has the same 4 s to connect and the same TLS stack, so it is
+  # skipped as well, while wget has its own budget and gets its turn.
+  case "$DOWNLOAD_EXIT" in
+    6|7) return 1 ;;
+  esac
+  if [ "$DOWNLOAD_EXIT" != "28" ]; then
+    try_download curl -kfsSL --connect-timeout 4 --max-time "$_max" "$_url" -o "$_dest" 2>/dev/null && [ -s "$_dest" ] && return 0
+    [ "$DOWNLOAD_STATUS" -eq 2 ] && return 2
+  fi
 
   # wget: BusyBox knows neither `--timeout` nor `--no-check-certificate`, so the
   # first form is for GNU wget and `-T`, which both understand, is the second.
+  # GNU wget's `--timeout` is every phase at once; the two flags are that split
+  # in two, so a source that drops the packets costs the 4 s curl already paid
+  # rather than the whole download budget again, while the read budget stays
+  # `$_max` for a slow line. `--tries=1` is what makes it one attempt: GNU wget
+  # retries twenty times by default, and against a dropped address that measured
+  # 442 s and counting rather than the 120 s the flag promises. BusyBox wget has
+  # none of these options — its `-T` is the read timeout, and on that same
+  # address its connect phase took 132 s whatever the flag said, which is what
+  # the watchdog in `run_downloader` is there to cut short.
   # There is no third, optionless form on purpose: it would be the one attempt
   # with no timeout at all — BusyBox has none and GNU wget waits 900 s for a
   # first byte — so a source that accepts the connection and then trickles would
   # hold the install past the budget every other attempt respects, and it would
   # be reached exactly when the bounded attempts timed out, i.e. on that source.
-  try_download wget -q --timeout="$_max" -O "$_dest" "$_url" 2>/dev/null && [ -s "$_dest" ] && return 0
+  try_download wget -q --connect-timeout=4 --read-timeout="$_max" --tries=1 -O "$_dest" "$_url" 2>/dev/null && [ -s "$_dest" ] && return 0
   [ "$DOWNLOAD_STATUS" -eq 2 ] && return 2
+  # GNU wget's own status says whether the second form deserves its turn: 4 is a
+  # network failure and 5 an SSL verification failure, and the second form is the
+  # same tool at the same address with a wider timeout and no certificate flag
+  # between them, so it can only repeat the answer — at up to 120 s per retry.
+  # BusyBox wget exits 1 for everything, unknown options included, and that is
+  # the case this form exists for: it gets its turn.
+  case "$DOWNLOAD_EXIT" in
+    4|5) return 1 ;;
+  esac
   try_download wget -q -T "$_max" -O "$_dest" "$_url" 2>/dev/null && [ -s "$_dest" ] && return 0
   [ "$DOWNLOAD_STATUS" -eq 2 ] && return 2
 
