@@ -2,6 +2,7 @@
 /// what a user reads in the file's properties: `5.0.0-alpha.19` becomes
 /// `5.0.0.0`. Taken from `CARGO_PKG_VERSION` so a version bump moves it too —
 /// it used to be a literal, which would have kept saying `5.0.0.0` at `5.1.0`.
+#[cfg(windows)]
 fn numeric_version() -> String {
     let mut parts: Vec<String> = std::env::var("CARGO_PKG_VERSION")
         .unwrap_or_default()
