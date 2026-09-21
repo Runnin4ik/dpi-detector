@@ -364,12 +364,19 @@ download_file() {
 }
 
 # The asset's URL on GitHub itself: the release the manifest is checked against,
-# and the head of the list below.
+# and the head of the list below. `DPI_RELEASE_BASE` replaces the
+# `https://github.com/<repo>/releases` prefix for a source that mirrors the same
+# layout — CI points it at a local fixture, which is the only way the manifest
+# lookup below can be exercised: it asks the canonical release first and treats
+# its answer as final, so a fixture reachable only through `DPI_MIRRORS` is never
+# asked for the manifest.
 release_url() {
+  _base="${DPI_RELEASE_BASE:-https://github.com/${REPO}/releases}"
+  _base="${_base%/}"
   if [ "$VERSION" = "latest" ]; then
-    echo "https://github.com/${REPO}/releases/latest/download/$1"
+    echo "${_base}/latest/download/$1"
   else
-    echo "https://github.com/${REPO}/releases/download/${VERSION}/$1"
+    echo "${_base}/download/${VERSION}/$1"
   fi
 }
 

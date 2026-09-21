@@ -76,17 +76,24 @@ jobs:
       # `SHA256SUMS.txt`, and the atomic install into `DPI_INSTALL_DIR`. A real
       # Linux binary is what gets run, not a stub, so a binary that cannot print
       # `--version` fails the run here too.
+      #
+      # `DPI_RELEASE_BASE` points the canonical release URL at the fixture, and
+      # that is what puts the manifest lookup under test: the installer asks the
+      # release for `SHA256SUMS.txt` first and treats an HTTP error there as
+      # final, so a fixture reachable only through `DPI_MIRRORS` is never asked
+      # for it — which is how this step passed a release with no manifest at all.
       - name: Install through install.sh into a temp prefix
         run: |
           set -eu
-          mkdir -p target/install-smoke target/install-prefix
-          cp target/debug/dpi-detector target/install-smoke/dpi-detector-linux-x86_64
-          (cd target/install-smoke && sha256sum dpi-detector-linux-x86_64 > SHA256SUMS.txt)
+          fixture=target/install-smoke/releases/latest/download
+          mkdir -p "$fixture" target/install-prefix
+          cp target/debug/dpi-detector "$fixture/dpi-detector-linux-x86_64"
+          (cd "$fixture" && sha256sum dpi-detector-linux-x86_64 > SHA256SUMS.txt)
           python3 -m http.server 8931 --directory target/install-smoke \
             > target/install-smoke/server.log 2>&1 &
           server=$!
           sleep 1
-          if ! DPI_MIRRORS=http://127.0.0.1:8931 \
+          if ! DPI_RELEASE_BASE=http://127.0.0.1:8931/releases \
                DPI_VERSION=latest \
                DPI_INSTALL_DIR="$PWD/target/install-prefix" \
                  sh install.sh > "$PWD/target/install.log" 2>&1; then
