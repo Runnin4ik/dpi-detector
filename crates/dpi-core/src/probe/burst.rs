@@ -773,6 +773,13 @@ mod tests {
     /// drop it silently, so the assertion is on the invariant: every attempt
     /// comes back as a connect verdict with a reason, nothing is counted as an
     /// answer, and the round stays inside its budget.
+    ///
+    /// The attempts are separate sockets and are deliberately not required to
+    /// agree: the kernel's answer to a closed loopback port can land right on the
+    /// dial budget, so one attempt can time out while the next is refused —
+    /// measured on a Windows runner, `syn_dropped` at 2001 ms beside `refused` at
+    /// 2006 ms. That is the platform answering late, not a verdict leaking from
+    /// one attempt into the other.
     #[tokio::test]
     async fn a_dead_dial_is_reported_as_a_connect_verdict() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -785,7 +792,6 @@ mod tests {
 
         assert_eq!(report.attempts.len(), 2);
         assert_eq!(report.answered(), 0);
-        let first = report.attempts[0].status;
         for attempt in &report.attempts {
             assert!(
                 matches!(attempt.status, DpiStatus::Refused | DpiStatus::TcpRst | DpiStatus::SynDropped),
@@ -793,8 +799,6 @@ mod tests {
                 attempt
             );
             assert!(!attempt.detail.is_none());
-            // One local condition, one verdict: the attempts do not disagree.
-            assert_eq!(attempt.status, first, "{:?}", report.attempts);
         }
         // Dead dials come back at once, so the round's budget is the slowest of
         // the two plus the 20 ms between them — the assertion is that it ends, not
