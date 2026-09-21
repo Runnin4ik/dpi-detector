@@ -85,13 +85,18 @@ jobs:
             use_nightly: true
             cross_args: "+nightly"
             rustflags: "-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-mips-unknown-linux-musl"
-          # 7. macOS Intel. Built on the arm64 image (`macos-26`), whose SDK
-          # cross-compiles to x86_64: measured 118–141 s there against 244–439 s
-          # on the `-intel` runner, which made this leg the longest in the matrix
-          # and the workflow's critical path. What the arrangement has to answer
-          # is the smoke step — the artifact starts on an arm64 runner only
-          # through Rosetta.
-          - os: macos-26
+          # 7. macOS Intel. `macos-26-intel` is the x64 image, and building here
+          # rather than on the arm64 one is a deliberate trade: measured, the
+          # cross-compiled x86_64 build on `macos-26` takes 118–141 s against
+          # 244–439 s here, but the matrix runs its legs in parallel, so what the
+          # swap buys the workflow is the 22 s between this leg (244 s) and the
+          # slowest one left (`windows-7`, 222 s) — while giving up the only
+          # native start of the artifact. The arm64 arrangement was run once to
+          # check it still works: `macos-26` built it in 137 s and the smoke step
+          # passed, so the swap is one line if wall time ever outweighs a native
+          # smoke. It is also a dead end: the artifact starts on an arm64 runner
+          # only through Rosetta, whose general support ends with macOS 27.
+          - os: macos-26-intel
             target: x86_64-apple-darwin
             name: dpi-detector-macos-intel
             use_cross: false
