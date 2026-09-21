@@ -30,6 +30,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Third-party actions are pinned by commit — a tag can be moved to another
+  # commit, and `softprops/action-gh-release` in the release workflow runs in a
+  # job holding `contents: write`. The `actions/*` ones stay on their major tags:
+  # they come from the platform the workflow already runs on, and a stale pin is
+  # a real cost, since `.github/dependabot.yml` — the thing that moves pins — only
+  # takes effect once this file reaches the default branch.
   check:
     name: Test & lint (linux)
     runs-on: ubuntu-26.04
@@ -123,17 +129,24 @@ jobs:
 
       # The same fixture under BusyBox, which is the userland the router targets
       # actually have: the installer's comments are written for it (`command -v`
-      # is absent from hush, `wget` there has no `--timeout`), and it has been
-      # exercised under nothing but dash. Green on the first run, against the
-      # released shape of the release directory.
+      # is absent from hush, `wget` there has no `--timeout`). The asset this run
+      # serves is a stub, not the dev binary: that binary is linked against the
+      # runner's glibc, which the BusyBox image does not carry at that version —
+      # the first run of this step failed at the installer's runtime check for
+      # exactly that reason, after the checksum had already matched. What it
+      # covers is the shell and the applets: `uname`-based target detection, the
+      # mirror race, BusyBox `wget`, `sha256sum`, `od`, `du`, and the atomic
+      # install. A real binary is what the run above installs.
       - name: Install through install.sh under BusyBox
         run: |
           set -eu
-          mkdir -p target/install-smoke/releases/latest/download target/install-busybox
-          cp target/debug/dpi-detector target/install-smoke/releases/latest/download/dpi-detector-linux-x86_64
-          (cd target/install-smoke/releases/latest/download && sha256sum dpi-detector-linux-x86_64 > SHA256SUMS.txt)
-          python3 -m http.server 8931 --directory target/install-smoke \
-            > target/install-smoke/busybox-server.log 2>&1 &
+          fixture=target/install-busybox/releases/latest/download
+          mkdir -p "$fixture"
+          printf '#!/bin/sh\necho "dpi-detector 5.0.0-alpha.19"\n' > "$fixture/dpi-detector-linux-x86_64"
+          chmod +x "$fixture/dpi-detector-linux-x86_64"
+          (cd "$fixture" && sha256sum dpi-detector-linux-x86_64 > SHA256SUMS.txt)
+          python3 -m http.server 8931 --directory target/install-busybox \
+            > target/install-busybox/server.log 2>&1 &
           server=$!
           trap 'kill $server 2>/dev/null || true' EXIT
           until curl -sf -o /dev/null "http://127.0.0.1:8931/releases/latest/download/SHA256SUMS.txt"; do
