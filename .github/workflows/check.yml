@@ -97,10 +97,9 @@ jobs:
       # `--version` fails the run here too.
       #
       # `DPI_RELEASE_BASE` points the canonical release URL at the fixture, and
-      # that is what puts the manifest lookup under test: the installer asks the
-      # release for `SHA256SUMS.txt` first and treats an HTTP error there as
-      # final, so a fixture reachable only through `DPI_MIRRORS` is never asked
-      # for it — which is how this step passed a release with no manifest at all.
+      # that is what puts the manifest lookup under test: the manifest is asked
+      # of the release and of nothing else, so a fixture that has one and a
+      # mirror that does not are not interchangeable.
       - name: Install through install.sh into a temp prefix
         run: |
           set -eu
@@ -119,13 +118,33 @@ jobs:
             cat "$PWD/target/install.log"
             exit 1
           fi
-          kill "$server" 2>/dev/null || true
           cat "$PWD/target/install.log"
           # An installer that cannot fetch a manifest degrades to a warning and
           # installs anyway, so "it installed" is not proof the checksum path ran.
           # This is: the line is printed only when the file matched the manifest.
           grep -q 'Checksum verified' "$PWD/target/install.log"
           "$PWD/target/install-prefix/dpi-detector" --version
+
+          # A source that answers with another version is refused. The manifest
+          # here matches the file it is served with — same binary, copied — so
+          # what rejects it is the version comparison alone, which is the check
+          # that holds when the release itself cannot be reached and there is no
+          # manifest to compare against at all.
+          stale=target/install-smoke/releases/download/v0.0.1-stale
+          mkdir -p "$stale"
+          cp target/debug/dpi-detector "$stale/dpi-detector-linux-x86_64"
+          (cd "$stale" && sha256sum dpi-detector-linux-x86_64 > SHA256SUMS.txt)
+          if DPI_RELEASE_BASE=http://127.0.0.1:8931/releases \
+               DPI_VERSION=v0.0.1-stale \
+               DPI_INSTALL_DIR="$PWD/target/install-prefix-stale" \
+                 sh install.sh > "$PWD/target/install-stale.log" 2>&1; then
+            echo "a source serving another version was accepted"
+            cat "$PWD/target/install-stale.log"
+            exit 1
+          fi
+          cat "$PWD/target/install-stale.log"
+          grep -q 'served dpi-detector' "$PWD/target/install-stale.log"
+          kill "$server" 2>/dev/null || true
 
       # The same fixture under BusyBox, which is the userland the router targets
       # actually have: the installer's comments are written for it (`command -v`
@@ -320,9 +339,10 @@ jobs:
             }
 
             # The release answers 404 for the manifest while the mirror has one:
-            # the answer is final, so the install goes ahead on a warning. This
-            # is what pins the lookup to two sources — a sweep of all thirteen
-            # would have found the mirror's copy and verified against it.
+            # the manifest is asked of the release and of nothing else, so the
+            # install goes ahead on a warning rather than verifying against a
+            # mirror's own copy — which is what the check would be worth if it
+            # read one.
             $prefixNoManifest = Join-Path $PWD 'target/install-prefix-nomanifest'
             New-Item -ItemType Directory -Force -Path $prefixNoManifest | Out-Null
             $env:DPI_RELEASE_BASE = 'http://127.0.0.1:8931/nothing-here'
@@ -337,6 +357,28 @@ jobs:
             if (Select-String -Quiet -Path install-nomanifest.log -Pattern 'Checksum verified') {
               throw 'a checksum was claimed for a release with no manifest'
             }
+
+            # A source that answers with another version is refused. The manifest
+            # here matches the file it is served with — the same binary, copied —
+            # so what rejects it is the version comparison alone: the check that
+            # holds when the release cannot be reached and there is no manifest
+            # to compare against at all.
+            $stale = Join-Path $PWD 'target/install-smoke/releases/download/v0.0.1-stale'
+            New-Item -ItemType Directory -Force -Path $stale | Out-Null
+            Copy-Item $asset (Join-Path $stale 'dpi-detector-windows-x86_64.exe') -Force
+            Copy-Item (Join-Path $fixture 'SHA256SUMS.txt') (Join-Path $stale 'SHA256SUMS.txt') -Force
+            $prefixStale = Join-Path $PWD 'target/install-prefix-stale'
+            $env:DPI_RELEASE_BASE = 'http://127.0.0.1:8931/releases'
+            $env:DPI_VERSION = 'v0.0.1-stale'
+            $env:DPI_INSTALL_DIR = $prefixStale
+            & pwsh -NoProfile -File install.ps1 --version *> install-stale.log
+            $rc = $LASTEXITCODE
+            Get-Content install-stale.log
+            if ($rc -eq 0) { throw 'a source serving another version was accepted' }
+            if (-not (Select-String -Quiet -Path install-stale.log -Pattern 'served dpi-detector')) {
+              throw 'a version mismatch was not reported'
+            }
+            $env:DPI_VERSION = 'latest'
 
             # A second run of a release that is already installed fetches
             # nothing: the server is stopped first, so a download would fail.

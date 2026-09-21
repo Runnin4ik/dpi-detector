@@ -157,15 +157,17 @@ OUT_DIR=$(pick_install_dir) || {
 OUT_FILE="${OUT_DIR}/dpi-detector"
 TMP_FILE="${OUT_DIR}/.dpi-detector.tmp.$$"
 
-# The release publishes `SHA256SUMS.txt` beside the binaries and every download
-# is checked against it before it is executed. What that catches is a file that
-# is not what was published: a mirror that truncated it, a proxy that rewrote a
-# byte, a CDN still serving an older build. What it cannot catch is a mirror that
-# serves a manifest of its own — the manifest travels the same channels as the
-# binary, so this is an integrity check and not a signature, and running
-# `--version` stays the check that the file is a working binary. A release from
-# before the manifest existed simply has none, and then the check is skipped with
-# one warning instead of failing an install that would otherwise work.
+# The release publishes `SHA256SUMS.txt` beside the binaries and every download is
+# checked against it before it is executed. What that catches is a file that is
+# not what was published: a mirror that truncated it, a proxy that rewrote a
+# byte, a CDN still serving an older build. The manifest is asked of the release
+# itself and of nothing else. A mirror's copy of it travels the same channel as
+# the binary that mirror serves, so it can only agree with whatever that mirror
+# chose to send — reading it would replace a real check with the appearance of
+# one. When the release cannot be reached, which is the network this script
+# exists for, the check is skipped with a single warning instead of faked, and
+# what the file must still be is a working binary of the version that was asked
+# for (`run_candidate`).
 MANIFEST_FILE="${OUT_DIR}/.dpi-detector.sums.$$"
 # Seconds for one attempt at the manifest. It is a couple of hundred bytes, so the
 # budget only ever decides how long a source that does not answer is waited for:
@@ -175,9 +177,8 @@ MANIFEST_FILE="${OUT_DIR}/.dpi-detector.sums.$$"
 MANIFEST_MAX_TIME=5
 # "" until the manifest has been looked for, then "ok" or "missing".
 MANIFEST_STATE=""
-# The URL that produced the file being checked — the race's winner, or the mirror
-# the sequential loop is on. The manifest is looked for beside it as well as at
-# the release URL itself.
+# The URL the race's winner came from, for the "Fetched from:" line alone: the
+# manifest is not looked for beside it (see above).
 FETCHED_URL=""
 # Set by the checksum check for the summary line: "verified" or "not checked".
 CHECKSUM_RESULT="not checked"
@@ -466,13 +467,6 @@ release_url() {
   fi
 }
 
-# Where the manifest of a release sits, given the URL of one of its assets: the
-# asset name is the last path segment in every source's URL — the release URL and
-# the proxies that wrap it alike — so the directory is what stays.
-manifest_url() {
-  echo "${1%/*}/SHA256SUMS.txt"
-}
-
 # Every release asset this script fetches — the binary and `SHA256SUMS.txt` —
 # is looked for at the same set of sources, so the list is built from the asset
 # name rather than written twice.
@@ -497,45 +491,27 @@ build_url_list() {
   echo "$_list"
 }
 
-# The manifest is fetched once: from the release itself, and then from the source
-# the binary came from when the release cannot be reached.
+# The manifest is fetched once, from the release itself, and nowhere else.
 #
 # The release URL is what the check is against — it is the published build — and
-# its answer settles whether a manifest exists at all: a mirror only has what the
-# release has, so an HTTP error there ends the search instead of sending the
-# install through the other sources. That is what the sweep of every source this
-# used to do got wrong: a release from before the manifest existed answers 404 on
-# all of them, and through the proxies that is seconds per source rather than
-# nothing — measured 31 s of silence *after* the binary was already on disk — and
-# a source that stalls instead of answering costs its whole budget, one at a time.
-# The source the binary came from is asked only when GitHub itself did not answer,
-# which is the case this script exists for on a filtered network.
+# its answer settles whether there is a manifest at all. A mirror is not asked
+# for it even when the release cannot be reached: a mirror serves the manifest it
+# has, which is the one belonging to the binary it served, so the comparison can
+# only ever confirm that a file matches itself. The sources that would be swept
+# are also seconds each, one at a time, *after* the binary is already on disk:
+# the sweep this replaced measured 31 s of silence on a release that publishes no
+# manifest at all. On a filtered network the check is skipped with one warning
+# instead, and `run_candidate` — the file has to run, and to be the version that
+# was asked for — is what still holds.
 fetch_manifest() {
   [ -z "$MANIFEST_STATE" ] || return 0
-  _canonical=$(release_url "SHA256SUMS.txt")
-  _near=""
-  if [ -n "$FETCHED_URL" ]; then
-    _near=$(manifest_url "$FETCHED_URL")
+  _url=$(release_url "SHA256SUMS.txt")
+  _rc=0
+  download_file "$_url" "$MANIFEST_FILE" "$MANIFEST_MAX_TIME" || _rc=$?
+  if [ "$_rc" -eq 0 ] && [ -s "$MANIFEST_FILE" ]; then
+    MANIFEST_STATE="ok"
+    return 0
   fi
-  _seen=""
-  for _url in "$_canonical" "$_near"; do
-    if [ -z "$_url" ]; then
-      continue
-    fi
-    if [ "$_url" = "$_seen" ]; then
-      continue
-    fi
-    _seen="$_url"
-    _rc=0
-    download_file "$_url" "$MANIFEST_FILE" "$MANIFEST_MAX_TIME" || _rc=$?
-    if [ "$_rc" -eq 0 ] && [ -s "$MANIFEST_FILE" ]; then
-      MANIFEST_STATE="ok"
-      return 0
-    fi
-    if [ "$_rc" -eq 2 ]; then
-      break
-    fi
-  done
   rm -f "$MANIFEST_FILE" 2>/dev/null || true
   MANIFEST_STATE="missing"
   return 1
@@ -706,49 +682,61 @@ race_download() {
   return 1
 }
 
-# A mirror is accepted only when the file it served both downloaded and ran:
-# `--version` is executed, not stat'ed. The compact builds are UPX-packed, and a
-# packer's unpacking stub can be unusable on a given kernel even though the file
-# is intact — UPX 5.x needs `memfd_create`, i.e. Linux >= 3.17, and dies with
-# `Trace/breakpoint trap` on the 3.4 kernels several router firmwares ship (see
-# the UPX pin in `.github/workflows/release.yml`). Such a file counts as a failed
-# mirror, and the standard build gets its turn.
+# A mirror is accepted only when the file it served both runs and is the release
+# that was asked for: `--version` is executed, not stat'ed.
+#
+# The run is what catches a file that cannot start here. The compact builds are
+# UPX-packed, and a packer's unpacking stub can be unusable on a given kernel
+# even though the file is intact — UPX 5.x needs `memfd_create`, i.e.
+# Linux >= 3.17, and dies with `Trace/breakpoint trap` on the 3.4 kernels several
+# router firmwares ship (see the UPX pin in `.github/workflows/release.yml`) — and
+# it is also what catches a binary built for another architecture.
+#
+# The version is compared because that is the one thing a checksum cannot cover
+# on the network this script exists for: with the release itself out of reach
+# there is no manifest to check against, and a mirror that answers a `latest` URL
+# from its cache, or from a release of its own choosing, would otherwise install
+# whatever it has. A source that serves another version counts as a failed mirror
+# and the next one gets its turn; `latest` is left out, because there is no fixed
+# string to compare against.
+run_candidate() {
+  chmod +x "$TMP_FILE" 2>/dev/null || true
+  if ! _ver=$("$TMP_FILE" --version 2>&1); then
+    echo "Warning: the binary failed the architecture/runtime check, trying the next source..." >&2
+    return 1
+  fi
+  if [ "$VERSION" != "latest" ]; then
+    _got=$(version_word "$_ver")
+    if [ "$_got" != "${VERSION#v}" ]; then
+      echo "Warning: the source served dpi-detector ${_got:-with no version}, not ${VERSION#v}, trying the next source..." >&2
+      return 1
+    fi
+  fi
+  echo "Verified: ${_ver}"
+  return 0
+}
+
 try_download_and_verify() {
   _tgt="$1"
   echo "Downloading ${_tgt} (${VERSION}) to ${OUT_FILE}..."
 
   if race_download "$_tgt"; then
-    if verify_checksum "$_tgt"; then
-      chmod +x "$TMP_FILE"
-      if _ver=$("$TMP_FILE" --version 2>&1); then
-        echo "Verified: ${_ver}"
-        return 0
-      fi
-      echo "Warning: the first mirror's binary failed architecture/runtime check, trying the rest one by one..." >&2
+    if verify_checksum "$_tgt" && run_candidate; then
+      return 0
     fi
+    echo "Notice: the first source's binary was not accepted, trying the rest one by one."
     rm -f "$TMP_FILE" 2>/dev/null || true
   fi
 
   _urls=$(build_url_list "$_tgt")
   for _url in $_urls; do
     echo "Fetching from: ${_url} ..."
-    # What `fetch_manifest` looks beside when this candidate is checked: the
-    # manifest is looked for next to the file it describes.
-    FETCHED_URL="$_url"
     rm -f "$TMP_FILE" 2>/dev/null || true
     if download_file "$_url" "$TMP_FILE" && [ -s "$TMP_FILE" ]; then
-      if ! verify_checksum "$_tgt"; then
-        rm -f "$TMP_FILE" 2>/dev/null || true
-        continue
-      fi
-      chmod +x "$TMP_FILE"
-      if _ver=$("$TMP_FILE" --version 2>&1); then
-        echo "Verified: ${_ver}"
+      if verify_checksum "$_tgt" && run_candidate; then
         return 0
-      else
-        echo "Warning: binary failed architecture/runtime check, trying next mirror..." >&2
-        rm -f "$TMP_FILE" 2>/dev/null || true
       fi
+      rm -f "$TMP_FILE" 2>/dev/null || true
     else
       rm -f "$TMP_FILE" 2>/dev/null || true
     fi
@@ -756,18 +744,24 @@ try_download_and_verify() {
   return 1
 }
 
-# The version an installed binary reports, "" when it cannot be run or says
-# nothing. `VERSION` is written with its `v` (`v5.0.0-alpha.19`) and the binary
-# prints without it (`dpi-detector 5.0.0-alpha.19`), so the `v` is dropped on the
-# way out and what is compared is plain text. The version flag is `--version`
-# (`-V`); `-v` is the detector's `--verbose`.
-binary_version() {
-  _out=$("$1" --version 2>/dev/null) || return 0
+# The version in the last word of a `--version` line. `VERSION` is written with
+# its `v` (`v5.0.0-alpha.19`) and the binary prints without it
+# (`dpi-detector 5.0.0-alpha.19`), so the `v` is dropped and what is compared is
+# plain text. The version flag is `--version` (`-V`); `-v` is the detector's
+# `--verbose`.
+version_word() {
   _last=""
-  for _word in $_out; do
+  for _word in $1; do
     _last="$_word"
   done
   printf '%s\n' "${_last#v}"
+}
+
+# The version an installed binary reports, "" when it cannot be run or says
+# nothing.
+binary_version() {
+  _out=$("$1" --version 2>/dev/null) || return 0
+  version_word "$_out"
 }
 
 # A destination that already holds this release is not downloaded again: the

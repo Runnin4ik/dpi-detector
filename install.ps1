@@ -91,22 +91,9 @@ function Get-ReleaseUrlList([string]$fileName) {
     return $list
 }
 
-# Whether the failure was an answer from a server or a host that could not be
-# reached. PowerShell wraps a failing .NET call in its own exception (both hosts
-# measured do: `MethodInvocationException` around a `WebException`), and only the
-# inner one carries the response, so the chain is walked for it.
-function Test-Answered($err) {
-    $e = $err.Exception
-    while ($e) {
-        if ($e -is [System.Net.WebException] -and $e.Response) { return $true }
-        $e = $e.InnerException
-    }
-    return $false
-}
-
 # A whole small file as text, over the same request settings the binary download
-# below uses. Throws on any HTTP or transport error; `Test-Answered` tells the
-# two apart for the caller.
+# below uses. Throws on any HTTP or transport error; the caller treats every
+# failure the same way, as "no manifest here".
 function Get-UrlText([string]$url) {
     $req = [System.Net.HttpWebRequest]::Create($url)
     $req.Timeout = 5000
@@ -139,21 +126,48 @@ function Get-FileSha256([string]$path) {
     }
 }
 
+# The version an executable reports, "" when it cannot be run or says nothing.
+# `VERSION` is written with its `v` (`v5.0.0-alpha.19`) and the binary prints
+# without it (`dpi-detector 5.0.0-alpha.19`), so the `v` is dropped and what is
+# compared is plain text.
+function Get-ReportedVersion([string]$path) {
+    $reported = ""
+    try { $reported = (& $path --version 2>$null | Out-String).Trim() } catch { return "" }
+    if (-not $reported) { return "" }
+    return ($reported -split '\s+')[-1].TrimStart('v')
+}
+
+# A source is accepted only when the file it served both runs and is the release
+# that was asked for. The run catches a file that cannot start here — another
+# architecture, a truncated image — and the version is compared because that is
+# the one thing a checksum cannot cover when the release is out of reach: a
+# mirror answering a `latest` URL from a cache of its own would otherwise install
+# whatever it has. `latest` is left out of the comparison, there being no fixed
+# string to check against.
+function Test-Candidate([string]$path) {
+    $got = Get-ReportedVersion $path
+    if (-not $got) {
+        Write-Host "Warning: the binary from this source did not run; trying the next mirror." -ForegroundColor Yellow
+        return $false
+    }
+    if ($version -ne "latest" -and $got -ne $version.TrimStart('v')) {
+        Write-Host "Warning: the source served dpi-detector $got, not $($version.TrimStart('v')); trying the next mirror." -ForegroundColor Yellow
+        return $false
+    }
+    Write-Host "Verified: dpi-detector $got" -ForegroundColor Green
+    return $true
+}
+
 # The release publishes `SHA256SUMS.txt` beside the binaries and the download is
 # checked against it before it is installed: that catches a mirror that truncated
-# the file, a proxy that rewrote a byte, a CDN still serving an older build. It
-# cannot catch a mirror serving a manifest of its own — the manifest travels the
-# same channels as the binary, so this is an integrity check, not a signature. A
-# release from before the manifest existed simply has none, and then the check is
-# skipped with a warning instead of failing an install that would otherwise work.
-#
-# It is looked for in two places and not in every source: the release itself,
-# whose answer settles whether the release has a manifest at all — a mirror only
-# has what the release has, so an HTTP error there ends the search — and then the
-# source the binary actually came from, which is the case this script exists for
-# on a filtered network. Asking all thirteen sources costs five seconds each, and
-# the sweep would run after the binary is already on disk, which is why
-# `install.sh` does not do it either.
+# the file, a proxy that rewrote a byte, a CDN still serving an older build. The
+# manifest is asked of the release itself and of nothing else. A mirror's copy of
+# it travels the same channel as the binary that mirror serves, so it can only
+# agree with whatever that mirror chose to send — reading it would replace a real
+# check with the appearance of one. When the release cannot be reached, which is
+# the network this script exists for, the check is skipped with a single warning
+# instead of faked, and `Test-Candidate` below is what still holds: the file has
+# to run, and to be the version that was asked for.
 $script:manifestText = $null
 # "" until the manifest has been looked for, then "ok" or "missing".
 $script:manifestState = ""
@@ -161,23 +175,13 @@ $script:manifestState = ""
 # per source and would otherwise repeat the same warning for every mirror.
 $script:manifestNoteShown = $false
 
-function Get-Manifest([string]$nearUrl) {
+function Get-Manifest {
     if ($script:manifestState) { return }
-    $near = ""
-    if ($nearUrl) { $near = $nearUrl.Substring(0, $nearUrl.LastIndexOf('/') + 1) + "SHA256SUMS.txt" }
-    $seen = ""
-    foreach ($u in @((Get-ReleaseUrl "SHA256SUMS.txt"), $near)) {
-        if (-not $u -or $u -eq $seen) { continue }
-        $seen = $u
-        try {
-            $script:manifestText = Get-UrlText $u
-            $script:manifestState = "ok"
-            return
-        } catch {
-            # An answer from the release is final: a release that publishes no
-            # manifest does not gain one by being asked through a mirror.
-            if (Test-Answered $_) { break }
-        }
+    try {
+        $script:manifestText = Get-UrlText (Get-ReleaseUrl "SHA256SUMS.txt")
+        $script:manifestState = "ok"
+        return
+    } catch {
     }
     $script:manifestText = $null
     $script:manifestState = "missing"
@@ -209,14 +213,7 @@ function Write-ManifestNote([string]$text) {
 # that is there is the one it would have fetched. `latest` is left out — there is
 # no fixed string to compare the file's own report against.
 $installedVersion = ""
-if (Test-Path $out) {
-    try {
-        $reported = (& $out --version 2>$null | Out-String).Trim()
-        if ($reported) { $installedVersion = ($reported -split '\s+')[-1].TrimStart('v') }
-    } catch {
-        $installedVersion = ""
-    }
-}
+if (Test-Path $out) { $installedVersion = Get-ReportedVersion $out }
 $alreadyCurrent = $false
 if ($installedVersion -and $version -ne "latest") {
     if ($installedVersion -eq $version.TrimStart('v')) {
@@ -263,9 +260,9 @@ if (-not $alreadyCurrent) {
             continue
         }
 
-        # The manifest is looked for beside the file it describes, so it is asked
-        # once the first candidate is on disk — the order `install.sh` uses.
-        Get-Manifest $u
+        # The manifest is asked of the release once, on the first candidate that
+        # got this far, which is the order `install.sh` uses.
+        Get-Manifest
         if ($script:manifestState -eq "ok") {
             $expectedHash = Get-ExpectedHash $target
             if (-not $expectedHash) {
@@ -283,6 +280,10 @@ if (-not $alreadyCurrent) {
                 continue
             }
             Write-Host "Checksum verified: $actual" -ForegroundColor Green
+        }
+        if (-not (Test-Candidate $tmp)) {
+            Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+            continue
         }
         $downloaded = $true
         break
