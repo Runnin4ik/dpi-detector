@@ -362,7 +362,7 @@ fn kb_token(kb: f64) -> String {
     }
 }
 
-/// Same rule as [`kb_token`], for display text: the unit is a protocol unit and
+/// Same rule as `kb_token`, for display text: the unit is a protocol unit and
 /// stays `KB` in every language (Rule 4).
 pub fn kb_display(kb: f64) -> String {
     if kb.fract() == 0.0 {

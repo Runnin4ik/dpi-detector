@@ -94,7 +94,7 @@ pub const BURST_DEFAULT_TIMEOUT_SECS: u64 = 8;
 /// `Tls13And12` is the browser's own offer: Chrome, Safari and Firefox all offer
 /// 1.2 and 1.3 together, so this axis sends the profile's real hello — the same
 /// one tests 3 and 4 send — and then requires the answer to be 1.3
-/// ([`answered`]). It is the default because it is the shape a browser puts on
+/// (`answered`). It is the default because it is the shape a browser puts on
 /// the wire.
 ///
 /// `Tls13Only` and `Tls12Only` are deliberately clients that offer one version
@@ -102,7 +102,7 @@ pub const BURST_DEFAULT_TIMEOUT_SECS: u64 = 8;
 /// ask whether a 1.2 handshake survives on this network — and a middlebox that
 /// treats a one-version hello differently from a browser's is exactly what the
 /// 1.3-only axis looks for. Same trade as test 2's two columns, whose builders
-/// these are. See [`offer_for`].
+/// these are. See `offer_for`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BurstTlsVersion {
     #[default]

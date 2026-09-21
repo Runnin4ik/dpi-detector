@@ -316,7 +316,7 @@ pub struct AppConfig {
     pub telegram_dcs: Vec<Vec<String>>,
     #[serde(default = "d_concurrency_presets")]
     pub concurrency_presets: Vec<usize>,
-    /// Raw rows: [name, [patterns]]. Parsed via `bypass_tools()`.
+    /// Raw rows: `[name, [patterns]]`. Parsed via `bypass_tools()`.
     #[serde(default = "d_bypass_tools")]
     pub bypass_tools_raw: Vec<Vec<serde_yaml::Value>>,
     #[serde(default = "d_dns_known_resolver_names")]
@@ -628,7 +628,7 @@ impl AppConfig {
     /// The ClientHello profile the probes must present.
     ///
     /// Parsed here rather than at every call site; an unknown value has already
-    /// been reset with a warning in [`Self::clamp`].
+    /// been reset with a warning in `Self::clamp`.
     pub fn fingerprint(&self) -> crate::net::fingerprint::TlsFingerprint {
         crate::net::fingerprint::TlsFingerprint::parse(&self.tls_fingerprint).unwrap_or_default()
     }

@@ -27,7 +27,7 @@ pub fn box_chars() -> (
     }
 }
 /// Replaces font-risky glyphs when ASCII mode is on; passthrough otherwise.
-/// Apply to content BEFORE width measurement ([OK]/-> widen the text).
+/// Apply to content BEFORE width measurement (`[OK]`/`->` widen the text).
 pub fn asc_with(s: &str, ascii: bool) -> String {
     if !ascii {
         return s.to_string();

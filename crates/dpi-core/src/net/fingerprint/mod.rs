@@ -10,10 +10,10 @@
 //!
 //! # How a profile is written
 //!
-//! A profile is **data**, not code: one record in [`shapes::SHAPES`] holds its
+//! A profile is **data**, not code: one record in `shapes::SHAPES` holds its
 //! names, its provenance and its TLS lists, and one entry in
 //! [`TlsFingerprint::ALL`] makes it selectable. The HTTP identity
-//! ([`identity`]) and the HTTP/2 preface ([`h2`]) are the same kind of record,
+//! (`identity`) and the HTTP/2 preface (`h2`) are the same kind of record,
 //! referenced from the row. Nothing else enumerates the variants — the parsers,
 //! the builder, `--legend` and the profile-subset-of-provider gate all read the
 //! table.

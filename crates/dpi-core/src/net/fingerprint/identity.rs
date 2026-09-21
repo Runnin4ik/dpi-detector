@@ -34,7 +34,7 @@ pub struct HttpIdentity {
     /// (`Connection`, `X-Pad`) after these.
     pub headers: &'static [(&'static str, &'static str)],
     /// Whether this client's `priority` header goes out over HTTP/1.1 too; see
-    /// [`TlsShape::priority_on_h1`]. The h2 request always carries it.
+    /// `TlsShape::priority_on_h1`. The h2 request always carries it.
     pub priority_on_h1: bool,
 }
 

@@ -14,7 +14,7 @@
 //! The request itself comes from the call site: which headers a test sends is a
 //! property of the test, the profile only decides what the client looks like.
 //!
-//! [`check_http`] is the whole HTTP phase — the request, the status and redirect
+//! `check_http` is the whole HTTP phase — the request, the status and redirect
 //! judgement, the body read and the verdicts they produce — so tests 2 and 6 send
 //! the same thing and mean the same status when they report one.
 

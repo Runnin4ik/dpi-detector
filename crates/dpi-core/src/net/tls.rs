@@ -202,7 +202,7 @@ impl ServerCertVerifier for InsecureDpiCertVerifier {
 ///
 /// The profile carries the whole shape: the ClientHello fingerprint, the
 /// protocol versions, the ALPN offer, and whether the certificate is verified.
-/// Verifying profiles are built once per shape and shared ([`verifying_config`]);
+/// Verifying profiles are built once per shape and shared (`verifying_config`);
 /// insecure ones are built per call, because they cost no root store and a
 /// private resumption store per config is what keeps one probe's session ticket
 /// out of the next probe's ClientHello.
