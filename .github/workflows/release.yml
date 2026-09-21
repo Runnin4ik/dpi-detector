@@ -251,9 +251,14 @@ jobs:
         if: matrix.qemu
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-user-static
-          "qemu-${{ matrix.qemu }}-static" "dist/${{ matrix.name }}" --version
-          "qemu-${{ matrix.qemu }}-static" "dist/${{ matrix.name }}" --legend > /dev/null
+          # `qemu-user-static` is a virtual package on Ubuntu 26.04 and installs
+          # nothing (`E: Package 'qemu-user-static' has no installation
+          # candidate`); `qemu-user` carries `/usr/bin/qemu-<arch>`, which runs a
+          # static guest binary just as well. All four arches were checked in this
+          # image against the released alpha.19 binaries.
+          sudo apt-get install -y --no-install-recommends qemu-user
+          "qemu-${{ matrix.qemu }}" "dist/${{ matrix.name }}" --version
+          "qemu-${{ matrix.qemu }}" "dist/${{ matrix.name }}" --legend > /dev/null
 
       # The artifact that ships is built by the one profile nothing else runs
       # under — fat LTO, `opt-level = "z"`, `panic = "abort"` — and no job had
