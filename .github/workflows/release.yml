@@ -85,11 +85,13 @@ jobs:
             use_nightly: true
             cross_args: "+nightly"
             rustflags: "-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-mips-unknown-linux-musl"
-          # 7. macOS Intel. `macos-26-intel` is the x64 image. Until now this row
-          # ran on an arm64 one (`macos-26`/`macos-15` are arm64; the x64 labels
-          # are `-intel`/`-large`), so the artifact was cross-compiled and the
-          # runner that built it could not start it — hence the smoke step.
-          - os: macos-26-intel
+          # 7. macOS Intel. Built on the arm64 image (`macos-26`), whose SDK
+          # cross-compiles to x86_64: measured 118–141 s there against 244–439 s
+          # on the `-intel` runner, which made this leg the longest in the matrix
+          # and the workflow's critical path. What the arrangement has to answer
+          # is the smoke step — the artifact starts on an arm64 runner only
+          # through Rosetta.
+          - os: macos-26
             target: x86_64-apple-darwin
             name: dpi-detector-macos-intel
             use_cross: false
