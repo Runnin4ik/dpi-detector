@@ -18,7 +18,7 @@ jobs:
       matrix:
         include:
           # 1. Windows x86_64 (Windows 10, 11, Server)
-          - os: windows-latest
+          - os: windows-2025
             target: x86_64-pc-windows-msvc
             name: dpi-detector-windows-x86_64.exe
             use_cross: false
@@ -29,7 +29,7 @@ jobs:
             rustflags: "-C target-feature=+crt-static"
 
           # 1b. Windows 7 Legacy x86_64
-          - os: windows-latest
+          - os: windows-2025
             target: x86_64-win7-windows-msvc
             name: dpi-detector-windows-7-x86_64.exe
             use_cross: false
@@ -85,18 +85,18 @@ jobs:
             use_nightly: true
             cross_args: "+nightly"
             rustflags: "-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-mips-unknown-linux-musl"
-          # 7. macOS Intel. `macos-15-intel` is the x64 image. Until now this row
-          # ran on an arm64 one (`macos-14`/`macos-15` are arm64; the x64 labels
+          # 7. macOS Intel. `macos-26-intel` is the x64 image. Until now this row
+          # ran on an arm64 one (`macos-26`/`macos-15` are arm64; the x64 labels
           # are `-intel`/`-large`), so the artifact was cross-compiled and the
           # runner that built it could not start it — hence the smoke step.
-          - os: macos-15-intel
+          - os: macos-26-intel
             target: x86_64-apple-darwin
             name: dpi-detector-macos-intel
             use_cross: false
             smoke: true
 
           # 8. macOS Apple Silicon (M1-M4)
-          - os: macos-15
+          - os: macos-26
             target: aarch64-apple-darwin
             name: dpi-detector-macos-arm64
             smoke: true

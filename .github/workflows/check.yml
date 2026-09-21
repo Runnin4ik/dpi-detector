@@ -12,12 +12,18 @@ env:
   CARGO_TERM_COLOR: always
 
 # A branch in this repository fires both events for the same tree — `push` and
-# `pull_request` — so every commit to an open pull request started two full runs
-# that compiled the same 258 dependencies. A newer push cancels the older run
-# instead of queueing behind it. Nothing here is a release path, so cancelling is
-# always safe.
+# `pull_request` — and the two report different refs: a push arrives as
+# `refs/heads/rust` and a pull request as `refs/pull/<n>/merge`. Keying the group
+# on `github.ref` therefore filed them apart and neither cancelled the other:
+# every commit to an open pull request started two full runs that compiled the
+# same 258 dependencies. `github.head_ref` (the source branch of a pull request)
+# and `github.ref_name` (the short name of a pushed ref) are both `rust` for that
+# branch, so one group covers both events for it — which also means a push
+# supersedes the run of its own pull request, and a newer push cancels the older
+# run instead of queueing behind it. Nothing here is a release path, so
+# cancelling is always safe.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -40,6 +46,13 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # A miss on the exact key — one dependency bumped, so a new
+          # `Cargo.lock` — otherwise throws away every artifact the previous key
+          # built: measured on the Windows job, where a cold run spends 131 s in
+          # `Test` against 12 s when the cache matches. The prefix restores the
+          # newest cache of any lockfile instead, and cargo decides what the
+          # change invalidated — that is what its fingerprints are for.
+          restore-keys: ${{ runner.os }}-cargo-
 
       # `--locked` keeps CI honest about Cargo.lock; the tree is LF (see
       # .gitattributes), but no formatting check runs here — the sources are
@@ -122,7 +135,7 @@ jobs:
   # exercised against a toolchain CI installs.
   windows:
     name: Test & lint (windows)
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
 
@@ -140,6 +153,8 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # This is the job the prefix in the linux one was measured on.
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Test
         run: cargo test --workspace --locked
@@ -162,7 +177,12 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-policy-${{ hashFiles('**/Cargo.lock') }}
+          # `policy-cargo`, not `cargo-policy`: the linux job's fallback is
+          # `${{ runner.os }}-cargo-`, which would prefix-match a
+          # `…-cargo-policy-…` key and restore this cache — one without
+          # `target/`, the half that matters there.
+          key: ${{ runner.os }}-policy-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-policy-cargo-
 
       # Rule 1 (AGENTS.md §2): no C or C++ may enter the build, because the
       # router targets are cross-compiled with toolchains whose C compilers are
