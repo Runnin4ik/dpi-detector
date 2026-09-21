@@ -10,6 +10,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Incremental data is ~5 GB of a dev tree here and a runner throws its `target`
+  # away at the end of the job, so it is only weight in the cache blob.
+  CARGO_INCREMENTAL: 0
 
 # A branch in this repository fires both events for the same tree — `push` and
 # `pull_request` — and the two report different refs: a push arrives as
@@ -30,6 +33,7 @@ jobs:
   check:
     name: Test & lint (linux)
     runs-on: ubuntu-26.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -45,13 +49,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
           # A miss on the exact key — one dependency bumped, so a new
           # `Cargo.lock` — otherwise throws away every artifact the previous key
           # built: measured on the Windows job, where a cold run spends 131 s in
           # `Test` against 12 s when the cache matches. The prefix restores the
           # newest cache of any lockfile instead, and cargo decides what the
-          # change invalidated — that is what its fingerprints are for.
+          # change invalidated — that is what its fingerprints are for. The
+          # toolchain and the linker config are in the key because artifacts built
+          # by another rustc cannot be reused at all: cargo recompiles them, so
+          # restoring that cache only costs the download.
           restore-keys: ${{ runner.os }}-cargo-
 
       # `--locked` keeps CI honest about Cargo.lock; the tree is LF (see
@@ -65,6 +72,12 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # Intra-doc links are user-visible on docs.rs and nothing checked them:
+      # twelve were broken when this step went in, all of them links from public
+      # docs to private items. `--no-deps` keeps it to this workspace.
+      - name: Doc links
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --no-deps
 
       # `install.sh` is the path most users take to this binary, and nothing has
       # ever executed it: the mirror race, the `--version` verification and the
@@ -108,6 +121,39 @@ jobs:
           grep -q 'Checksum verified' "$PWD/target/install.log"
           "$PWD/target/install-prefix/dpi-detector" --version
 
+      # The same fixture under BusyBox, which is the userland the router targets
+      # actually have: the installer's comments are written for it (`command -v`
+      # is absent from hush, `wget` there has no `--timeout`), and it has been
+      # exercised under nothing but dash. Green on the first run, against the
+      # released shape of the release directory.
+      - name: Install through install.sh under BusyBox
+        run: |
+          set -eu
+          mkdir -p target/install-smoke/releases/latest/download target/install-busybox
+          cp target/debug/dpi-detector target/install-smoke/releases/latest/download/dpi-detector-linux-x86_64
+          (cd target/install-smoke/releases/latest/download && sha256sum dpi-detector-linux-x86_64 > SHA256SUMS.txt)
+          python3 -m http.server 8931 --directory target/install-smoke \
+            > target/install-smoke/busybox-server.log 2>&1 &
+          server=$!
+          trap 'kill $server 2>/dev/null || true' EXIT
+          until curl -sf -o /dev/null "http://127.0.0.1:8931/releases/latest/download/SHA256SUMS.txt"; do
+            sleep 0.3
+          done
+          docker run --rm --network host -v "$PWD:/src:ro" \
+            -e DPI_RELEASE_BASE=http://127.0.0.1:8931/releases \
+            -e DPI_VERSION=latest \
+            -e DPI_INSTALL_DIR=/tmp/prefix \
+            busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662 \
+            sh -c 'mkdir -p /tmp/prefix; sh /src/install.sh'
+
+      # One finding in the installer, and it is informational: `set -- $_last_line`
+      # splits on purpose, which is what SC2086 asks about.
+      - name: Lint the installer
+        run: |
+          docker run --rm -v "$PWD:/mnt:ro" \
+            koalaman/shellcheck@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d \
+            -s sh --severity=warning /mnt/install.sh
+
   # The artifact actions are bumped in lockstep with `release.yml`, and that pair
   # is the one thing about them that fails silently: v7 uploads through the
   # "direct upload" path and v8 verifies, on the download side, a hash that only
@@ -116,6 +162,7 @@ jobs:
   artifacts:
     name: Artifact round-trip
     runs-on: ubuntu-26.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -124,6 +171,8 @@ jobs:
         with:
           name: round-trip
           path: .github/workflows/check.yml
+          # One file, checked in the next step and never read again.
+          retention-days: 1
 
       - name: Download
         uses: actions/download-artifact@v8
@@ -143,6 +192,7 @@ jobs:
   windows:
     name: Test & lint (windows)
     runs-on: windows-2025
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -159,9 +209,15 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
           # This is the job the prefix in the linux one was measured on.
           restore-keys: ${{ runner.os }}-cargo-
+
+      # The installer smoke below copies `target/debug/dpi-detector.exe`, and
+      # `cargo test` does not produce it — it builds the binary crate's *test
+      # harness*, not the executable. The linux job builds for the same reason.
+      - name: Build
+        run: cargo build --workspace --locked
 
       - name: Test
         run: cargo test --workspace --locked
@@ -169,9 +225,57 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # `install.ps1` is the other half of the installer pair and nothing here has
+      # ever run it: its mirror list, its manifest lookup and its atomic install
+      # were executed by hand once. The fixture is the linux job's shape — the
+      # release directory as a source — and this installer asks every source for
+      # the manifest, so `DPI_MIRRORS` alone reaches it. The installed file is
+      # compared with the fixture's own hash: an installer that quietly fell back
+      # to the real release would otherwise pass this.
+      - name: Install through install.ps1 into a temp prefix
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $PWD 'target/install-smoke/releases/latest/download'
+          $prefix = Join-Path $PWD 'target/install-prefix'
+          New-Item -ItemType Directory -Force -Path $fixture, $prefix | Out-Null
+          $asset = Join-Path $fixture 'dpi-detector-windows-x86_64.exe'
+          Copy-Item target/debug/dpi-detector.exe $asset -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLower()
+          "$hash  dpi-detector-windows-x86_64.exe" | Set-Content -Encoding ascii (Join-Path $fixture 'SHA256SUMS.txt')
+
+          $server = Start-Process -PassThru -WindowStyle Hidden python -ArgumentList @(
+            '-m', 'http.server', '8931', '--directory', (Join-Path $PWD 'target/install-smoke'))
+          try {
+            $up = $false
+            for ($i = 0; $i -lt 60 -and -not $up; $i++) {
+              try { (New-Object System.Net.Sockets.TcpClient('127.0.0.1', 8931)).Close(); $up = $true }
+              catch { Start-Sleep -Milliseconds 300 }
+            }
+            if (-not $up) { throw 'the fixture server never accepted a connection' }
+
+            $env:DPI_MIRRORS = 'http://127.0.0.1:8931/releases/latest/download'
+            $env:DPI_VERSION = 'latest'
+            $env:DPI_INSTALL_DIR = $prefix
+            & pwsh -NoProfile -File install.ps1 *> install.log
+            $rc = $LASTEXITCODE
+            Get-Content install.log
+            if ($rc -ne 0) { throw "install.ps1 exited with $rc" }
+            # A missing manifest is a warning and an install anyway, so the line
+            # below is what proves the checksum path ran at all.
+            if (-not (Select-String -Quiet -Path install.log -Pattern 'Checksum verified')) {
+              throw 'the checksum path did not run'
+            }
+            $installed = (Get-FileHash -Algorithm SHA256 (Join-Path $prefix 'dpi-detector.exe')).Hash.ToLower()
+            if ($installed -ne $hash) { throw 'the installed file is not the fixture binary' }
+            & (Join-Path $prefix 'dpi-detector.exe') --version
+          } finally {
+            if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force }
+          }
+
   policy:
     name: Dependency policy
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -188,7 +292,7 @@ jobs:
           # `${{ runner.os }}-cargo-`, which would prefix-match a
           # `…-cargo-policy-…` key and restore this cache — one without
           # `target/`, the half that matters there.
-          key: ${{ runner.os }}-policy-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-policy-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: ${{ runner.os }}-policy-cargo-
 
       # Rule 1 (AGENTS.md §2): no C or C++ may enter the build, because the

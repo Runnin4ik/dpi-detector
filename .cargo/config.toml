@@ -5,3 +5,10 @@
 # a fat-LTO relink: 112 s -> 56 s per edit→build cycle on this workspace.
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"
+
+# The Windows 7 row is the same link under another target name, and it is the
+# longest leg of the matrix (216-224 s against 191 s for the row above), so the
+# pin applies to it too — verified in a dispatch run: the leg builds, and the
+# artifact still starts (`--version` and `--legend` both exit 0 on the runner).
+[target.x86_64-win7-windows-msvc]
+linker = "rust-lld"

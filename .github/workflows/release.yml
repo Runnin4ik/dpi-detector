@@ -2,6 +2,12 @@ name: Release Multiplatform Binaries
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Artifact name of one matrix leg to build, or "all"'
+        required: false
+        default: all
+        type: string
   push:
     tags:
       - 'v*'
@@ -9,10 +15,22 @@ on:
 permissions:
   contents: read
 
+# `cross` is installed from a release tarball and every leg pulls a container, so
+# a stall is a real way to lose a runner for six hours. The colour is for the log.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CROSS_VERSION: 0.2.5
+
 jobs:
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    # A dispatch can build one leg — debugging a target should not cost the other
+    # ten. The release job refuses a filtered dispatch for the same reason a
+    # failed leg does: a release assembled from a subset is worse than none.
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == '' || inputs.target == matrix.name }}
     strategy:
       fail-fast: false
       matrix:
@@ -34,11 +52,20 @@ jobs:
             name: dpi-detector-windows-7-x86_64.exe
             use_cross: false
             use_nightly: true
+            # The artifact starts on the runner (checked against the released
+            # alpha.19 build: `--version` and `--legend` both exit 0 on Windows
+            # 11), so this row gets the smoke too — and it is the row with the
+            # most moving parts: a nightly toolchain, a std built from source and
+            # a static CRT.
+            smoke: true
             rustflags: "-C target-feature=+crt-static"
-            # No rust-std is published for this target, so std and panic_abort
-            # are built from source: the nightly toolchain and `rust-src` the
-            # toolchain step installs exist for this row.
-            cargo_args: "+nightly -Z build-std=std,panic_abort"
+            # No rust-std is published for this target, so std and panic_abort are
+            # built from source: the nightly toolchain and `rust-src` the
+            # toolchain step installs exist for this row. The nightly is pinned to
+            # a date — `-Z build-std` is a nightly feature, and a floating
+            # toolchain means this row can break without a commit behind it. Move
+            # the pin deliberately, and check the three build-std rows together.
+            cargo_args: "+nightly-2026-09-17 -Z build-std=std,panic_abort"
           # 2. Ubuntu / Linux x86_64 (100% static musl)
           - os: ubuntu-26.04
             target: x86_64-unknown-linux-musl
@@ -54,12 +81,14 @@ jobs:
             target: aarch64-unknown-linux-musl
             name: dpi-detector-linux-arm64
             use_cross: true
+            qemu: aarch64
           # 4. ARM32 Routers (Keenetic Titan 1, Hero, ASUS RT-AX58U, MikroTik ac)
           - os: ubuntu-26.04
             target: armv7-unknown-linux-musleabihf
             name: dpi-detector-linux-armv7
             use_cross: true
             has_upx: true
+            qemu: arm
 
           # 5. MIPS Little-Endian Routers (Keenetic Giga KN-1011, Viva, Xiaomi 3G/4A, MikroTik hEX)
           - os: ubuntu-26.04
@@ -67,11 +96,12 @@ jobs:
             name: dpi-detector-linux-mipsel
             use_cross: true
             has_upx: true
+            qemu: mipsel
             # `-Z build-std` (set in Cross.toml for this target) is nightly-only,
             # so this row names the toolchain on the command line instead of
             # using the pinned one.
             use_nightly: true
-            cross_args: "+nightly"
+            cross_args: "+nightly-2026-09-17"
             # `-L` names the alias step's directory as the cross container sees
             # it (the host's `target/` is the container's `/target/`).
             rustflags: "-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-mipsel-unknown-linux-musl"
@@ -82,8 +112,9 @@ jobs:
             name: dpi-detector-linux-mips
             use_cross: true
             has_upx: true
+            qemu: mips
             use_nightly: true
-            cross_args: "+nightly"
+            cross_args: "+nightly-2026-09-17"
             rustflags: "-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-mips-unknown-linux-musl"
           # 7. macOS Intel. `macos-26-intel` is the x64 image, and building here
           # rather than on the arm64 one is a deliberate trade: measured, the
@@ -139,19 +170,27 @@ jobs:
 
       # Three rows cannot use the pin: win7 and the two MIPS targets build std
       # from source with `-Z build-std`, which is nightly-only. They name the
-      # toolchain on the command line instead — `cargo +nightly …` and
-      # `cross +nightly …` — and `+toolchain` overrides the pinned file.
+      # toolchain on the command line instead — `cargo +nightly-2026-09-17 …` and
+      # `cross +nightly-2026-09-17 …` — and `+toolchain` overrides the pinned
+      # file. The date is in four places (here and the three rows): a floating
+      # nightly could break them without a commit behind it.
       - name: Install nightly for the build-std rows
         if: matrix.use_nightly
-        run: rustup toolchain install nightly --profile minimal --component rust-src
+        run: rustup toolchain install nightly-2026-09-17 --profile minimal --component rust-src
       - name: Install musl-tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
 
+      # The one executable the pipeline downloads with no manifest beside it —
+      # cross publishes none — so it is pinned by hash as well as by version, and
+      # `CROSS_VERSION` keeps this tarball and the container images below in step.
       - name: Install cross binary
         if: matrix.use_cross
         run: |
-          curl -fsSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz | tar -xz -C ~/.cargo/bin
+          _tarball="/tmp/cross-${CROSS_VERSION}.tar.gz"
+          curl -fsSL -o "$_tarball" "https://github.com/cross-rs/cross/releases/download/v${CROSS_VERSION}/cross-x86_64-unknown-linux-musl.tar.gz"
+          echo "a486cefa6cb486971b97be321ea9dfc2e90c1979550295314a368f53fab6d588  $_tarball" | sha256sum -c -
+          tar -xzf "$_tarball" -C ~/.cargo/bin
           chmod +x ~/.cargo/bin/cross
       # The MIPS musl targets are dynamic by default — rust-std ships no
       # self-contained libc for them, so Cross.toml builds their std from
@@ -170,7 +209,7 @@ jobs:
         if: matrix.target == 'mipsel-unknown-linux-musl' || matrix.target == 'mips-unknown-linux-musl'
         run: |
           mkdir -p "target/static-unwind-${{ matrix.target }}"
-          docker run --rm -v "$PWD/target/static-unwind-${{ matrix.target }}:/out" "ghcr.io/cross-rs/${{ matrix.target }}:0.2.5" \
+          docker run --rm -v "$PWD/target/static-unwind-${{ matrix.target }}:/out" "ghcr.io/cross-rs/${{ matrix.target }}:${CROSS_VERSION}" \
             sh -c 'for cc in /usr/local/bin/*muslsf-gcc; do cp "$(dirname "$($cc -print-libgcc-file-name)")/libgcc_eh.a" /out/libunwind.a; done'
           ls -l "target/static-unwind-${{ matrix.target }}/"
 
@@ -188,13 +227,16 @@ jobs:
           # and the MIPS build never started. What differs per target lives in
           # the matrix; the two flags every cross build wants stay here.
           RUSTFLAGS: "--cfg rustix_use_libc -C force-unwind-tables=no ${{ matrix.rustflags }}"
-        run: cross ${{ matrix.cross_args }} build --release --target ${{ matrix.target }}
+        # `--locked` is what the tag is cut from: without it cargo is free to
+        # resolve a `Cargo.toml` that disagrees with `Cargo.lock` and ship a
+        # dependency set no commit ever built.
+        run: cross ${{ matrix.cross_args }} build --release --target ${{ matrix.target }} --locked
 
       - name: Build with cargo
         if: "!matrix.use_cross"
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo ${{ matrix.cargo_args }} build --release --target ${{ matrix.target }}
+        run: cargo ${{ matrix.cargo_args }} build --release --target ${{ matrix.target }} --locked
 
       - name: Prepare binary artifact (Windows)
         if: runner.os == 'Windows'
@@ -208,6 +250,20 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/dpi-detector dist/${{ matrix.name }}
           chmod +x dist/${{ matrix.name }}
+
+      # The foreign-architecture musl binaries are the artifacts nothing has ever
+      # started: `upx -t` unpacks the packed one, and that is all. They are
+      # static, so qemu-user runs them as they are — all four arches were checked
+      # against the released alpha.19 binaries before this step went in. The
+      # Android rows are left out on purpose: their binaries are linked against
+      # bionic, which the runner has no sysroot for.
+      - name: Smoke the built artifact under qemu
+        if: matrix.qemu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user-static
+          "qemu-${{ matrix.qemu }}-static" "dist/${{ matrix.name }}" --version
+          "qemu-${{ matrix.qemu }}-static" "dist/${{ matrix.name }}" --legend > /dev/null
 
       # The artifact that ships is built by the one profile nothing else runs
       # under — fat LTO, `opt-level = "z"`, `panic = "abort"` — and no job had
@@ -276,18 +332,26 @@ jobs:
           name: ${{ matrix.name }}
           path: dist/*
           if-no-files-found: error
+          # The release job takes them in the same run; a week leaves room for a
+          # re-run without keeping every release's binaries for the default 90
+          # days.
+          retention-days: 7
 
   release:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     # No status-check function here, and that is the point: `success()` is applied
     # implicitly *unless* the condition calls one of them (`!cancelled()`,
     # `success()`, `failure()`, …). With `fail-fast: false`, any of them would let
     # this job publish a release assembled from whichever matrix legs happened to
     # build, with the missing architectures invisible on the release page.
     # Skipping is the failure mode we want: the run names the leg that failed.
-    if: startsWith(github.ref, 'refs/tags/')
+    #
+    # A dispatch filtered to one leg is the same failure by hand, so it is refused
+    # here as well.
+    if: startsWith(github.ref, 'refs/tags/') && (github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == '')
     permissions:
       contents: write
     steps:
@@ -319,6 +383,13 @@ jobs:
         with:
           files: release-files/*
           draft: false
-          prerelease: true
-          generate_release_notes: false
-          body: ""
+          # The tag says which line this is: `v5.0.0-alpha.19` is a prerelease,
+          # `v5.0.0` is not. A hardcoded `true` would publish the stable line as
+          # one.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          # An asset that never made it is a failed release, not a release with
+          # fewer files in it.
+          fail_on_unmatched_files: true
+          # The release page had no text at all: these are the commits and pull
+          # requests between the previous tag and this one.
+          generate_release_notes: true

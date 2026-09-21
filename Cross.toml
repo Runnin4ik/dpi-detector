@@ -8,4 +8,8 @@ build-std = true
 build-std = true
 
 [target.aarch64-linux-android]
-image = "ghcr.io/cross-rs/aarch64-linux-android:edge"
+# `edge` is a moving tag, and the only floating reference in this file: the 0.2.5
+# image of this target predates the NDK the aarch64 build needs. It is pinned by
+# digest instead, which is the exact image that was tested — bump it deliberately,
+# with the android-arm64 leg in a dispatch run.
+image = "ghcr.io/cross-rs/aarch64-linux-android@sha256:70aadcaff67a1e25235248fa8a5312cb5c1735d7def8c5ade78f0d817be0aeda"
