@@ -5,7 +5,12 @@
 //! One table per impersonated client, taken from the same
 //! `curl-impersonate v2.2.2` wrapper the ClientHello is pinned to, so a probe
 //! that looks like `curl_chrome107` at the TLS layer also looks like it at the
-//! HTTP layer. The **spelling** of each name is part of that: HTTP/2 lowercases
+//! HTTP layer. The nine newest profiles — the uTLS v1.8.2 ones, `chrome87` to
+//! `go127` — are the exception: their reference has no HTTP layer at all, so
+//! each identity is the minimum it can back, the client's own `User-Agent` and
+//! its encoding, and every one of them says so where it is defined.
+//!
+//! The **spelling** of each name is part of that: HTTP/2 lowercases
 //! field names by rule (RFC 9113 §8.2.1), but over HTTP/1.1 the client writes
 //! `Sec-Fetch-Site`, `TE` and `Accept-Encoding` in the case its `-H` list was
 //! written in — which the bundles of Safari 18 and later write lowercase
@@ -357,6 +362,66 @@ pub(crate) const CHROME146_HEADERS: &[(&str, &str)] = &[
     ("priority", "u=0, i"),
 ];
 
+/// Chrome 115 PQ headers.
+///
+/// A minimum identity, not a measurement: its reference, uTLS v1.8.2's
+/// `HelloChrome_115_PQ`, has no HTTP layer, so all this record claims above TLS
+/// is the version's own `User-Agent`,
+/// `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36`,
+/// and `accept-encoding` as that release sent it.
+pub(crate) const CHROME115_PQ_HEADERS: &[(&str, &str)] = &[
+    (
+        "user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    ),
+    ("accept-encoding", "gzip, deflate, br"),
+];
+
+/// Chrome 87 headers.
+///
+/// A minimum identity, not a measurement: its reference, uTLS v1.8.2's
+/// `HelloChrome_87`, has no HTTP layer, so all this record claims above TLS
+/// is the version's own `User-Agent`,
+/// `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.0.0 Safari/537.36`,
+/// and `accept-encoding` as that release sent it.
+pub(crate) const CHROME87_HEADERS: &[(&str, &str)] = &[
+    (
+        "user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.0.0 Safari/537.36",
+    ),
+    ("accept-encoding", "gzip, deflate, br"),
+];
+
+/// Chrome 72 headers.
+///
+/// A minimum identity, not a measurement: its reference, uTLS v1.8.2's
+/// `HelloChrome_72`, has no HTTP layer, so all this record claims above TLS
+/// is the version's own `User-Agent`,
+/// `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.0.0 Safari/537.36`,
+/// and `accept-encoding` as that release sent it.
+pub(crate) const CHROME72_HEADERS: &[(&str, &str)] = &[
+    (
+        "user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.0.0 Safari/537.36",
+    ),
+    ("accept-encoding", "gzip, deflate, br"),
+];
+
+/// Chrome 70 headers.
+///
+/// A minimum identity, not a measurement: its reference, uTLS v1.8.2's
+/// `HelloChrome_70`, has no HTTP layer, so all this record claims above TLS
+/// is the version's own `User-Agent`,
+/// `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.0.0 Safari/537.36`,
+/// and `accept-encoding` as that release sent it.
+pub(crate) const CHROME70_HEADERS: &[(&str, &str)] = &[
+    (
+        "user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.0.0 Safari/537.36",
+    ),
+    ("accept-encoding", "gzip, deflate, br"),
+];
+
 /// Firefox 147 headers. `curl_firefox147.bat` is `--impersonate firefox147`, so
 /// the list comes from the bundle's own `firefox_144.0.0_linux` capture — the
 /// same set the 135 and 144 wrappers send — with the version this release names
@@ -378,6 +443,77 @@ pub(crate) const FIREFOX147_HEADERS: &[(&str, &str)] = &[
     ("Sec-Fetch-User", "?1"),
     ("Priority", "u=0, i"),
     ("Te", "trailers"),
+];
+
+/// Firefox 120 headers.
+///
+/// A minimum identity, not a measurement: its reference, uTLS v1.8.2's
+/// `HelloFirefox_120`, has no HTTP layer, so all this record claims above TLS
+/// is the version's own `User-Agent`,
+/// `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0`,
+/// and `Accept-Encoding` as that release sent it.
+pub(crate) const FIREFOX120_HEADERS: &[(&str, &str)] = &[
+    (
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+    ),
+    ("Accept-Encoding", "gzip, deflate, br"),
+];
+
+/// Firefox 105 headers.
+///
+/// A minimum identity, not a measurement: its reference, uTLS v1.8.2's
+/// `HelloFirefox_105`, has no HTTP layer, so all this record claims above TLS
+/// is the version's own `User-Agent`,
+/// `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:105.0) Gecko/20100101 Firefox/105.0`,
+/// and `Accept-Encoding` as that release sent it.
+pub(crate) const FIREFOX105_HEADERS: &[(&str, &str)] = &[
+    (
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:105.0) Gecko/20100101 Firefox/105.0",
+    ),
+    ("Accept-Encoding", "gzip, deflate, br"),
+];
+
+/// Firefox 99 headers.
+///
+/// A minimum identity, not a measurement: its reference, uTLS v1.8.2's
+/// `HelloFirefox_99`, has no HTTP layer, so all this record claims above TLS
+/// is the version's own `User-Agent`,
+/// `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:99.0) Gecko/20100101 Firefox/99.0`,
+/// and `Accept-Encoding` as that release sent it.
+pub(crate) const FIREFOX99_HEADERS: &[(&str, &str)] = &[
+    (
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:99.0) Gecko/20100101 Firefox/99.0",
+    ),
+    ("Accept-Encoding", "gzip, deflate, br"),
+];
+
+/// Firefox 65 headers.
+///
+/// A minimum identity, not a measurement: its reference, uTLS v1.8.2's
+/// `HelloFirefox_65`, has no HTTP layer, so all this record claims above TLS
+/// is the version's own `User-Agent`,
+/// `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:65.0) Gecko/20100101 Firefox/65.0`,
+/// and `Accept-Encoding` as that release sent it.
+pub(crate) const FIREFOX65_HEADERS: &[(&str, &str)] = &[
+    (
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:65.0) Gecko/20100101 Firefox/65.0",
+    ),
+    ("Accept-Encoding", "gzip, deflate, br"),
+];
+
+/// Go 1.27 headers.
+///
+/// A minimum identity, not a measurement: its reference is Go 1.27's own
+/// `crypto/tls` as uTLS v1.8.2's `HelloGolang` drives it, and uTLS has no HTTP
+/// layer, so all this record claims above TLS is the Go HTTP client's own
+/// `User-Agent` and the single encoding it asks for.
+pub(crate) const GO127_HEADERS: &[(&str, &str)] = &[
+    ("User-Agent", "Go-http-client/1.1"),
+    ("Accept-Encoding", "gzip"),
 ];
 
 /// Safari 18.4 on iOS headers, in `curl_safari184_ios.bat` order.

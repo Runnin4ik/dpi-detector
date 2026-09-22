@@ -62,9 +62,11 @@
 //!
 //! It is **not** a byte-for-byte browser. What is left, and why:
 //!
-//! * The seven shapes whose client sends `encrypted_client_hello` send it as
-//!   GREASE, because that is what their own wrappers send: curl needs DoH or an
-//!   explicit `--ecl:` for a real ECHConfigList and no wrapper passes either
+//! * The eight shapes whose client sends `encrypted_client_hello` send it as
+//!   GREASE, because that is what their own references send: curl needs DoH or
+//!   an explicit `--ecl:` for a real ECHConfigList and no wrapper passes
+//!   either, and the eighth — `firefox120`, whose reference is the uTLS ladder
+//!   rather than a wrapper — sends it as GREASE in its own spec
 //!   (`net::tls` installs `EchMode::Grease`, `net::hpke` is the HPKE suite
 //!   behind it). A real config would have to come from the target's own HTTPS
 //!   record, which is per *host* where every other field of a record is per
@@ -146,6 +148,12 @@ pub enum TlsFingerprint {
     Firefox133,
     /// Chrome 107's (`curl_chrome107`): the reported TSPU trigger.
     Chrome107,
+    /// Chrome 87's own ClientHello (uTLS `HelloChrome_87`), also Chrome 83's.
+    Chrome87,
+    /// Chrome 72's own ClientHello (uTLS `HelloChrome_72`).
+    Chrome72,
+    /// Chrome 70's own ClientHello (uTLS `HelloChrome_70`), also 360Browser 11.0's.
+    Chrome70,
     /// Safari 15.5's (`curl_safari155`), 20 ciphers and no `zstd`.
     Safari155,
     /// Safari 18.0's (`curl_safari180`): Safari 15.5's hello with the 18.x
@@ -156,6 +164,8 @@ pub enum TlsFingerprint {
     /// Chrome 99's on Android (`curl_chrome99_android`): Chrome 107's hello
     /// behind a Pixel 6's identity.
     Chrome99Android,
+    /// Chrome 115's post-quantum ClientHello (uTLS `HelloChrome_115_PQ`).
+    Chrome115Pq,
     /// Chrome 116's (`curl_chrome116`): Chrome 107's hello with the extension
     /// order shuffled, which Chromium turned on at 110 and has kept since.
     Chrome116,
@@ -178,6 +188,16 @@ pub enum TlsFingerprint {
     /// timestamp extension. Firefox 135, 144 and 147 send this one hello, so the
     /// record carries the newest identity.
     Firefox147,
+    /// Firefox 120's own ClientHello (uTLS `HelloFirefox_120`).
+    Firefox120,
+    /// Firefox 105's own ClientHello (uTLS `HelloFirefox_105`).
+    Firefox105,
+    /// Firefox 99's own ClientHello (uTLS `HelloFirefox_99`).
+    Firefox99,
+    /// Firefox 65's own ClientHello (uTLS `HelloFirefox_65`).
+    Firefox65,
+    /// Go 1.27's `crypto/tls` ClientHello, through uTLS `HelloGolang`.
+    Go127,
     /// Safari 15.3's (`curl_safari153`): 15.5's hello with six more suites and
     /// no `compress_certificate`.
     Safari153,
@@ -263,18 +283,27 @@ impl TlsFingerprint {
     /// default; the rest are older and newer releases of the same clients plus
     /// the mobile, Tor and missing-version shapes, selectable one at a time
     /// (`--fingerprint`) or as a burst list (`--burst-profiles all`).
-    pub const ALL: [TlsFingerprint; 20] = [
+    pub const ALL: [TlsFingerprint; 29] = [
         Self::Rustls,
         Self::Chrome146,
         Self::Chrome131,
         Self::Chrome131Android,
         Self::Chrome123,
         Self::Chrome116,
+        Self::Chrome115Pq,
         Self::Chrome107,
         Self::Chrome99Android,
+        Self::Chrome87,
+        Self::Chrome72,
+        Self::Chrome70,
         Self::Edge101,
         Self::Firefox147,
         Self::Firefox133,
+        Self::Firefox120,
+        Self::Firefox105,
+        Self::Firefox99,
+        Self::Firefox65,
+        Self::Go127,
         Self::Safari260,
         Self::Safari260Ios,
         Self::Safari184Ios,
@@ -393,11 +422,14 @@ pub fn needs_pq(fingerprint: TlsFingerprint) -> bool {
 
 /// True when this shape carries `encrypted_client_hello` (65037) as GREASE.
 ///
-/// Seven shapes do: every wrapper that names `--ech true` — `curl_chrome123`,
-/// `curl_chrome131`, `curl_chrome131_android`, `curl_chrome146`,
-/// `curl_firefox133`, `curl_firefox147` and `curl_tor145` — and each sends it as
-/// grease, because curl needs DoH or an explicit `--ecl:` to have a real config
-/// at all. The wrapper's own flags are the source; the captures agree
+/// Eight shapes do: the seven wrappers that name `--ech true` —
+/// `curl_chrome123`, `curl_chrome131`, `curl_chrome131_android`,
+/// `curl_chrome146`, `curl_firefox133`, `curl_firefox147` and `curl_tor145` —
+/// plus `firefox120`, whose reference is the uTLS ladder rather than a wrapper
+/// and whose own spec pins GREASE ECH. The first seven send it as grease because
+/// curl needs DoH or an explicit `--ecl:` to have a real config at all; the
+/// wrappers' own flags, and `firefox120`'s spec, are the source, and the
+/// captures agree
 /// (`encrypted_client_hello` in `firefox_133.0.3_linux.yaml`,
 /// `chrome_136.0.7103.93.yaml` and the rest).
 pub fn sends_ech(fingerprint: TlsFingerprint) -> bool {

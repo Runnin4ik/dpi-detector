@@ -1,9 +1,22 @@
 # tools/fingerprint — checking a profile against the client it copies
 
 `crates/dpi-core/examples/tls_fingerprint.rs` dumps what *we* send. This tool is
-the other half: it drives the `curl-impersonate` bundle each profile is
-transcribed from and diffs the two clients, so a profile can be re-checked
-whenever its data changes.
+the other half: it drives the client each profile is transcribed from and diffs
+the two of us, so a profile can be re-checked whenever its data changes. For
+every profile but nine that client is the `curl-impersonate` bundle's wrapper.
+
+`PROFILES` in `fingerprint.py` is the one place a code name maps to its
+reference, and the reference is not always a wrapper: the nine shapes the bundle
+ships no wrapper for (`chrome87`, `chrome72`, `chrome70`, `chrome115pq`,
+`firefox120`, `firefox105`, `firefox99`, `firefox65`, `go127`) name the uTLS
+library's own spec instead — `utls:HelloChrome_87`, `utls:HelloGolang` — which
+the dumper in `utls/` captures. Only `hello` and `hello-diff` apply to those:
+our bytes against the spec's capture. `captures`, `echo`, `echo-diff`,
+`headers`, `headers-diff` and `flags` skip them, because the library has no HTTP
+layer to compare and no wrapper flags for the verdict to read — which is also
+why their identity is a minimum and their h2 preface is hyper's default. The
+`utls` stage's pair table is where those nine are compared spec-to-record, its
+`ours:<code>` rows.
 
 ```
 python tools/fingerprint/fingerprint.py all                 # every stage, every profile
@@ -137,6 +150,15 @@ client that draws two hashes is listed under both, so a single-hash block drops
 only the connections that draw it — which is the case where "that version is
 blocked" and "half of its connections are blocked" look the same from outside.
 
+Dumping the library is also how a client the bundle does not wrap becomes a
+profile of ours at all: nine of the records are transcribed from these specs
+rather than from a wrapper, and the pair table carries them as `ours:<code>`
+rows — `HelloChrome_87` against `ours:chrome87`, `HelloFirefox_120` against
+`ours:firefox120` — so the transcription is re-checked by the same
+bytes-against-bytes diff the rest of the table gets. Those nine have no `echo`
+or `headers` comparison to run, because the library has no HTTP layer; a
+difference that survives the byte diff is the one their own comment names.
+
 ## The three comparisons
 
 Weakest to strongest. A profile is done when it is `SAME` in `hello-diff`, or
@@ -164,8 +186,12 @@ extension *set* that moves marks the padding floor's coin flip (the bundle names
 mark every Chromium from 110 up, so a flag alone would miss `chrome116`), and a
 wrapper that names `--tls-key-shares-limit` explains its own key-share count.
 Everything else is printed as `to look at`, because only the named differences
-below can say whether it is expected: a run of all nineteen profiles should read
-`13 clean, 6 explained by their own client, 0 to look at`.
+below can say whether it is expected: a full run covers twenty-eight profiles,
+and its nineteen bundle rows still come out `13 clean, 6 explained by their own
+client, 0 to look at`. The nine uTLS-backed rows are judged by `hello` alone —
+there are no wrapper flags to explain anything with — and the differences named
+below are the ones that list excuses for them: a length the spec pins and a
+share the provider cannot serve.
 
 ## Adding or re-checking a profile
 
@@ -173,8 +199,11 @@ below can say whether it is expected: a run of all nineteen profiles should read
 what has to be pinned, what the tests gate and what is out of scope. This is the
 part of it that the tool itself drives.
 
-1. Add the wrapper, the capture and the code name to `PROFILES` in
-   `fingerprint.py` (one line).
+1. Add the code name and its reference to `PROFILES` in `fingerprint.py` (one
+   line): a bundle wrapper plus the fork's capture of it, or `utls:HelloX` for a
+   client the bundle does not wrap — then step 2 and the
+   `captures`/`echo`/`headers` half of step 3 do not apply, the `hello` diff is
+   the whole check, and the pair table in `utls/` gets an `ours:<code>` row.
 2. `python tools/fingerprint/fingerprint.py flags <code>` — the wrapper's own
    flags are the source of truth for the h2 preface, the header list and the TLS
    lists. `--http2-settings`, `--http2-window-update`,
@@ -205,6 +234,14 @@ These are deliberate. Anything *else* it reports is a bug.
   tag, `setup_ech_grease()` in its `ssl/encrypted_client_hello.cc`). A body of
   any other size — the 400 bytes an inner-hello encoding produced here before —
   is reported as a difference.
+* **One ECH body length, on one shape.** `firefox120` is the eighth shape that
+  sends `encrypted_client_hello` and the only one whose reference is a spec
+  literal: uTLS writes a single length into it (`CandidatePayloadLens = {223}`, a
+  239-byte payload and a 281-byte extension body on the wire), while our record
+  draws from BoringSSL's four values like every other shape — bodies of 186, 218,
+  250 or 282 bytes. The byte diff therefore reports the declared length and the
+  record size on every draw. No hash reads either, and the length is not a
+  property of the shape, which is why the record's comment names it.
 * **Padding under the 512-byte floor, on two shapes.** `chrome123` and
   `chrome131android` reach 497 bytes with the shortest GREASE ECH body, and
   `curl_chrome123`/`curl_chrome131_android` pad there — to 517 — as this build
@@ -217,17 +254,28 @@ These are deliberate. Anything *else* it reports is a bug.
   the other shufflers, since the padding extension is part of JA3 and JA4.
 * **Extension order, in the byte diff only.** The five Chrome 110+ records
   shuffle their extension order per connection because their wrapper names
-  `--tls-permute-extensions`, and the bundle's own captures do too. `hello-diff`
-  compares the two lists in the order they went out, so it reports `extensions
-  DIFF` on every run even when the sets are identical; `captures` compares the
-  set and reports a differing order as `ext order`. JA3 is a fresh sample on both
-  sides for the same reason (`echo-diff` reports it), while JA4, which hashes the
-  sorted set, is stable and matches.
+  `--tls-permute-extensions`, and the bundle's own captures do too; `chrome115pq`
+  shuffles for the same reason without a wrapper, since its spec calls
+  `ShuffleChromeTLSExtensions`. `hello-diff` compares the two lists in the order
+  they went out, so it reports `extensions DIFF` on every run even when the sets
+  are identical; `captures` compares the set and reports a differing order as
+  `ext order`. JA3 is a fresh sample on both sides for the same reason
+  (`echo-diff` reports it), while JA4, which hashes the sorted set, is stable and
+  matches.
 * **Tor's third key share, against the capture only.** `curl_tor145` passes
   `--tls-key-shares-limit 3`, so the bundle and our record send X25519, P-256 and
   P-521; the fork's capture of Tor 14.5 itself stops after P-256. The `captures`
   stage reports that difference — the record follows its wrapper, which is what
   it names.
+* **`chrome115pq`'s second key share, against its spec.** The library's spec
+  shares `X25519Kyber768Draft00` (25497) and X25519; this provider carries no
+  group for the draft code point, so the record advertises 25497 for the JA3 list
+  and shares X25519 alone. The byte diff reports one share where the capture has
+  two, and a shorter hello: dropping the hybrid share takes the record under the
+  512-byte floor, and a real Chrome 115 never goes there, so the record sends no
+  padding slot either. What a provider gap leaves, not a transcription choice —
+  JA3 and JA4 read the group list and the extension set, not the shares, and stay
+  the capture's.
 
 ## Requirements
 

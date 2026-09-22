@@ -21,11 +21,13 @@ use super::h2::{
     SAFARI170_H2, SAFARI172_IOS_H2, SAFARI18_H2, SAFARI184_IOS_H2, SAFARI260_H2, SAFARI_H2,
 };
 use super::identity::{
-    CHROME116_HEADERS, CHROME123_HEADERS, CHROME131_ANDROID_HEADERS, CHROME131_HEADERS,
-    CHROME146_HEADERS, CHROME99_ANDROID_HEADERS, CHROME_HEADERS, EDGE101_HEADERS,
-    FIREFOX147_HEADERS, FIREFOX_HEADERS, SAFARI153_HEADERS, SAFARI170_HEADERS,
-    SAFARI172_IOS_HEADERS, SAFARI184_IOS_HEADERS, SAFARI18_HEADERS, SAFARI260_HEADERS,
-    SAFARI260_IOS_HEADERS, SAFARI_HEADERS, TOR_HEADERS,
+    CHROME115_PQ_HEADERS, CHROME116_HEADERS, CHROME123_HEADERS, CHROME131_ANDROID_HEADERS,
+    CHROME131_HEADERS, CHROME146_HEADERS, CHROME70_HEADERS, CHROME72_HEADERS, CHROME87_HEADERS,
+    CHROME99_ANDROID_HEADERS, CHROME_HEADERS, EDGE101_HEADERS, FIREFOX105_HEADERS,
+    FIREFOX120_HEADERS, FIREFOX147_HEADERS, FIREFOX65_HEADERS, FIREFOX99_HEADERS,
+    FIREFOX_HEADERS, GO127_HEADERS, SAFARI153_HEADERS, SAFARI170_HEADERS, SAFARI172_IOS_HEADERS,
+    SAFARI184_IOS_HEADERS, SAFARI18_HEADERS, SAFARI260_HEADERS, SAFARI260_IOS_HEADERS,
+    SAFARI_HEADERS, TOR_HEADERS,
 };
 use super::TlsFingerprint;
 
@@ -463,6 +465,37 @@ const CHROME_ALPS_NEW_RAW_EXTS: &[(u16, &[u8])] = &[
     (EXT_APPLICATION_SETTINGS_NEW, &[0x00, 0x03, 0x02, b'h', b'2']),
 ];
 
+/// Chrome 115 PQ's extension order: Chrome 99–107's list with ALPS at 17513 and
+/// **no padding slot**, which is the one difference from [`CHROME_TLS_EXT_ORDER`]
+/// and the capture's own set — the measured hello is 1524 bytes, so BoringSSL's
+/// 512-byte floor never fires on it and the release never sends extension 21.
+///
+/// This build cannot share the hybrid group that makes the spec hello that large
+/// ([`CHROME115_PQ_KEY_SHARE_GROUPS`]), so its own hello falls under the floor,
+/// where the padding *rule* would add a slot a real Chrome 115 never has. The
+/// slot is therefore left out of the order: what the record reproduces is the
+/// measured extension set, 15 types including ALPS and without padding, which is
+/// what `t13d1515h2_8daaf6152771_f37e75b10bcc` hashes.
+const CHROME115_PQ_TLS_EXT_ORDER: &[u16] = &[
+    GREASE_EXTENSION_MARKER,
+    EXT_SERVER_NAME,
+    EXT_EXTENDED_MASTER_SECRET,
+    EXT_RENEGOTIATION_INFO,
+    EXT_SUPPORTED_GROUPS,
+    EXT_EC_POINT_FORMATS,
+    EXT_SESSION_TICKET,
+    EXT_ALPN,
+    EXT_STATUS_REQUEST,
+    EXT_SIGNATURE_ALGORITHMS,
+    EXT_SCT,
+    EXT_KEY_SHARE,
+    EXT_PSK_KEY_EXCHANGE_MODES,
+    EXT_SUPPORTED_VERSIONS,
+    EXT_COMPRESS_CERTIFICATE,
+    EXT_APPLICATION_SETTINGS,
+    GREASE_EXTENSION_MARKER,
+];
+
 /// The groups Chrome 120 and 131's Android wrapper lead with: X25519, P-256,
 /// P-384, no hybrid — the one thing `curl_chrome131_android` drops from its
 /// desktop sibling (`--curves X25519:P-256:P-384`).
@@ -472,6 +505,148 @@ const CHROME_TLS_PQ_GROUPS: &[u16] = &[
     23,   // secp256r1
     24,   // secp384r1
 ];
+
+/// Chrome 70 and 72's cipher list: Chrome 87's fifteen suites with
+/// `RSA_3DES_EDE_CBC_SHA` appended — the one suite 87 dropped. uTLS
+/// `HelloChrome_70`/`HelloChrome_72` write the same seventeen entries, and the
+/// captures read `…-156-157-47-53-10` where Chrome 87's JA3 stops at `-53`.
+const CHROME70_TLS_CIPHERS: &[u16] = &[
+    0x1301, // TLS_AES_128_GCM_SHA256
+    0x1302, // TLS_AES_256_GCM_SHA384
+    0x1303, // TLS_CHACHA20_POLY1305_SHA256
+    0xc02b, // ECDHE_ECDSA_AES128_GCM_SHA256
+    0xc02f, // ECDHE_RSA_AES128_GCM_SHA256
+    0xc02c, // ECDHE_ECDSA_AES256_GCM_SHA384
+    0xc030, // ECDHE_RSA_AES256_GCM_SHA384
+    0xcca9, // ECDHE_ECDSA_CHACHA20_POLY1305
+    0xcca8, // ECDHE_RSA_CHACHA20_POLY1305
+    0xc013, // ECDHE_RSA_AES128_CBC_SHA
+    0xc014, // ECDHE_RSA_AES256_CBC_SHA
+    0x009c, // RSA_AES128_GCM_SHA256
+    0x009d, // RSA_AES256_GCM_SHA384
+    0x002f, // RSA_AES128_CBC_SHA
+    0x0035, // RSA_AES256_CBC_SHA
+    0x000a, // RSA_3DES_EDE_CBC_SHA
+];
+
+/// Chrome 70 and 72's signature schemes: Chrome 87's eight with
+/// `rsa_pkcs1_sha1` appended, the ninth entry both uTLS literals list and the
+/// reason their JA4 extension hash (`4551aecd7b38` for 70, `45f260be83e2` for
+/// 72) differs from Chrome 87's `de4a06bb82e3` — the two hellos carry the same
+/// extension types, so this list is the only thing that moves the hash.
+const CHROME70_TLS_SIG_ALGS: &[u16] = &[
+    0x0403, // ECDSA P-256 SHA-256
+    0x0804, // RSA-PSS SHA-256
+    0x0401, // RSA-PKCS1 SHA-256
+    0x0503, // ECDSA P-384 SHA-384
+    0x0805, // RSA-PSS SHA-384
+    0x0501, // RSA-PKCS1 SHA-384
+    0x0806, // RSA-PSS SHA-512
+    0x0601, // RSA-PKCS1 SHA-512
+    0x0201, // RSA-PKCS1 SHA-1
+];
+
+/// Chrome 72 and 87's extension order: Chrome 99–107's list — GREASE at both
+/// ends, padding last — without `application_settings` (17513), which neither
+/// release sent.
+///
+/// That one missing extension is the whole difference from Chrome 107's
+/// extension hash (`e5627efa2ab1` against `45f260be83e2`/`de4a06bb82e3`); the
+/// signature-scheme list is not part of it, since Chrome 87 sends
+/// [`CHROME_TLS_SIG_ALGS`] unchanged.
+const CHROME72_TLS_EXT_ORDER: &[u16] = &[
+    GREASE_EXTENSION_MARKER,
+    EXT_SERVER_NAME,
+    EXT_EXTENDED_MASTER_SECRET,
+    EXT_RENEGOTIATION_INFO,
+    EXT_SUPPORTED_GROUPS,
+    EXT_EC_POINT_FORMATS,
+    EXT_SESSION_TICKET,
+    EXT_ALPN,
+    EXT_STATUS_REQUEST,
+    EXT_SIGNATURE_ALGORITHMS,
+    EXT_SCT,
+    EXT_KEY_SHARE,
+    EXT_PSK_KEY_EXCHANGE_MODES,
+    EXT_SUPPORTED_VERSIONS,
+    EXT_COMPRESS_CERTIFICATE,
+    GREASE_EXTENSION_MARKER,
+    EXT_PADDING,
+];
+
+/// Chrome 70's extension order: the same fifteen entries as Chrome 72's, in the
+/// order that release sent them — `renegotiation_info` first, and the
+/// `channel_id` placeholder in the middle, where Chrome 72 has none.
+///
+/// 360Browser 11.0 sends the same bodies in a third order (`Hello360_11_0`), so
+/// it shares this record's JA4 (`46e7e9700bed_…`) and not its JA3; the uTLS
+/// `HelloChrome_70` literal is the transcription source because its order is the
+/// one the capture carries.
+const CHROME70_TLS_EXT_ORDER: &[u16] = &[
+    GREASE_EXTENSION_MARKER,
+    EXT_RENEGOTIATION_INFO,
+    EXT_SERVER_NAME,
+    EXT_EXTENDED_MASTER_SECRET,
+    EXT_SESSION_TICKET,
+    EXT_SIGNATURE_ALGORITHMS,
+    EXT_STATUS_REQUEST,
+    EXT_SCT,
+    EXT_ALPN,
+    EXT_FAKE_CHANNEL_ID,
+    EXT_EC_POINT_FORMATS,
+    EXT_KEY_SHARE,
+    EXT_PSK_KEY_EXCHANGE_MODES,
+    EXT_SUPPORTED_VERSIONS,
+    EXT_SUPPORTED_GROUPS,
+    EXT_COMPRESS_CERTIFICATE,
+    GREASE_EXTENSION_MARKER,
+    EXT_PADDING,
+];
+
+/// The bodies Chrome 70 emits verbatim: Chrome 99–107's set plus the empty
+/// `channel_id` body, and without the ALPS entry this order names no slot for.
+const CHROME70_TLS_RAW_EXTS: &[(u16, &[u8])] = &[
+    // Empty renegotiated_connection vector.
+    (EXT_RENEGOTIATION_INFO, &[0x00]),
+    // ec_point_formats: uncompressed only.
+    (EXT_EC_POINT_FORMATS, &[0x01, 0x00]),
+    // signed_certificate_timestamp in the ClientHello is empty.
+    (EXT_SCT, &[]),
+    // session_ticket: empty in a fresh session, supplied for the reason in
+    // [`CHROME_TLS_RAW_EXTS`].
+    (EXT_SESSION_TICKET, &[]),
+    // channel_id, as the placeholder Chrome 70 sent instead of the real
+    // extension: present, zero-length.
+    (EXT_FAKE_CHANNEL_ID, &[]),
+    // Padding: rustls computes the body so the hello reaches 512 bytes.
+    (EXT_PADDING, &[]),
+];
+
+/// Chrome 115 PQ's groups: the draft hybrid group that release offered, then the
+/// three Chrome 87–107 lists. `X25519Kyber768Draft00` (25497) is what Chrome 115
+/// put in front of X25519; Chrome 120 replaced it with the final
+/// `X25519MLKEM768` (4588), which is [`CHROME_TLS_PQ_GROUPS`].
+///
+/// The draft group is advertised without ever being shared: this build serves no
+/// `0x6399` (named in `tests::UNIMPLEMENTED`), and the record's key share is the
+/// X25519 entry below it.
+const CHROME115_PQ_TLS_GROUPS: &[u16] = &[
+    25497, // X25519Kyber768Draft00
+    29,    // X25519
+    23,    // secp256r1
+    24,    // secp384r1
+];
+
+/// The one key share `chrome115pq` sends: X25519, the second of the two the uTLS
+/// spec puts on the wire.
+///
+/// The spec shares `X25519Kyber768Draft00` first and X25519 after it; this build
+/// has no draft-00 group to share it with — the PQ provider carries
+/// `X25519MLKEM768`, a different group at a different code point — and a share
+/// for a group the handshake cannot complete fails rather than degrades. So the
+/// record names the one exchange it can run, which is also a group the advertised
+/// list carries, where the spec's hybrid share is not one this build has.
+const CHROME115_PQ_KEY_SHARE_GROUPS: &[u16] = &[29]; // X25519
 
 /// Safari 15.3's cipher list: 15.5's twenty plus six CBC/SHA-256 suites that
 /// 15.5 dropped — `curl_safari153` lists 26 and `curl_safari155` lists 20, and
@@ -639,6 +814,57 @@ const TOR_TLS_CIPHERS: &[u16] = &[
     0x0035, // RSA_AES256_CBC_SHA
 ];
 
+/// Firefox 99 and 102's cipher list: Firefox 133's seventeen with
+/// `RSA_3DES_EDE_CBC_SHA` appended — the one suite Firefox dropped between 102
+/// and 105, and the reason 99's JA4 cipher hash (`e8a523a41297`) differs from
+/// 105's (`5b57614c22b0`) although their hellos are otherwise the same size.
+const FIREFOX99_TLS_CIPHERS: &[u16] = &[
+    0x1301, // TLS_AES_128_GCM_SHA256
+    0x1303, // TLS_CHACHA20_POLY1305_SHA256
+    0x1302, // TLS_AES_256_GCM_SHA384
+    0xc02b, // ECDHE_ECDSA_AES128_GCM_SHA256
+    0xc02f, // ECDHE_RSA_AES128_GCM_SHA256
+    0xcca9, // ECDHE_ECDSA_CHACHA20_POLY1305
+    0xcca8, // ECDHE_RSA_CHACHA20_POLY1305
+    0xc02c, // ECDHE_ECDSA_AES256_GCM_SHA384
+    0xc030, // ECDHE_RSA_AES256_GCM_SHA384
+    0xc00a, // ECDHE_ECDSA_AES256_CBC_SHA
+    0xc009, // ECDHE_ECDSA_AES128_CBC_SHA
+    0xc013, // ECDHE_RSA_AES128_CBC_SHA
+    0xc014, // ECDHE_RSA_AES256_CBC_SHA
+    0x009c, // RSA_AES128_GCM_SHA256
+    0x009d, // RSA_AES256_GCM_SHA384
+    0x002f, // RSA_AES128_CBC_SHA
+    0x0035, // RSA_AES256_CBC_SHA
+    0x000a, // RSA_3DES_EDE_CBC_SHA
+];
+
+/// Firefox 63/65's cipher list: Firefox 99's with the two static-RSA AES-GCM
+/// suites replaced by the DHE_RSA CBC suites uTLS writes as
+/// `FAKE_TLS_DHE_RSA_WITH_AES_128/256_CBC_SHA` — the real code points (0x0033,
+/// 0x0039), listed by a client that offers no DHE key exchange and no SHA-1 CBC
+/// shape, which is why they are in `tests::UNIMPLEMENTED` twice over.
+const FIREFOX65_TLS_CIPHERS: &[u16] = &[
+    0x1301, // TLS_AES_128_GCM_SHA256
+    0x1303, // TLS_CHACHA20_POLY1305_SHA256
+    0x1302, // TLS_AES_256_GCM_SHA384
+    0xc02b, // ECDHE_ECDSA_AES128_GCM_SHA256
+    0xc02f, // ECDHE_RSA_AES128_GCM_SHA256
+    0xcca9, // ECDHE_ECDSA_CHACHA20_POLY1305
+    0xcca8, // ECDHE_RSA_CHACHA20_POLY1305
+    0xc02c, // ECDHE_ECDSA_AES256_GCM_SHA384
+    0xc030, // ECDHE_RSA_AES256_GCM_SHA384
+    0xc00a, // ECDHE_ECDSA_AES256_CBC_SHA
+    0xc009, // ECDHE_ECDSA_AES128_CBC_SHA
+    0xc013, // ECDHE_RSA_AES128_CBC_SHA
+    0xc014, // ECDHE_RSA_AES256_CBC_SHA
+    0x0033, // DHE_RSA_AES128_CBC_SHA, as uTLS lists it
+    0x0039, // DHE_RSA_AES256_CBC_SHA, as uTLS lists it
+    0x002f, // RSA_AES128_CBC_SHA
+    0x0035, // RSA_AES256_CBC_SHA
+    0x000a, // RSA_3DES_EDE_CBC_SHA
+];
+
 /// Firefox 133–144's groups: the hybrid group first, then X25519, the two NIST
 /// curves and the two finite-field groups Firefox lists without ever sharing a
 /// key with them.
@@ -671,6 +897,15 @@ const TOR_TLS_GROUPS: &[u16] = &[
 const FIREFOX_KEY_SHARE_GROUPS: &[u16] = &[
     4588, // X25519MLKEM768, with its X25519 component
     23,   // secp256r1
+];
+
+/// The groups Firefox 65–120 send a key share for: the two the uTLS specs name
+/// in their `KeyShareExtension`, in that order — measured as `key_share = 29,23`
+/// on all four captures. Firefox 133 puts the hybrid group in front
+/// ([`FIREFOX_KEY_SHARE_GROUPS`]); these four releases predate it.
+const FIREFOX_PRE_HYBRID_KEY_SHARE_GROUPS: &[u16] = &[
+    29, // X25519
+    23, // secp256r1
 ];
 
 /// The groups `curl_tor145` sends a share for: its curve list's first three,
@@ -742,6 +977,75 @@ const FIREFOX147_TLS_EXT_ORDER: &[u16] = &[
     EXT_ENCRYPTED_CLIENT_HELLO,
 ];
 
+/// Firefox 120's extension order: Firefox 133's without `compress_certificate`
+/// (27), which Firefox added after 120 — the spec lists no such extension and
+/// the capture carries none, which is why this record's JA4 extension hash
+/// (`5c2c66f702b0`) differs from 133's (`eeeea6562960`) in that one type.
+/// GREASE-free, and ECH last, as in 133.
+const FIREFOX120_TLS_EXT_ORDER: &[u16] = &[
+    EXT_SERVER_NAME,
+    EXT_EXTENDED_MASTER_SECRET,
+    EXT_RENEGOTIATION_INFO,
+    EXT_SUPPORTED_GROUPS,
+    EXT_EC_POINT_FORMATS,
+    EXT_SESSION_TICKET,
+    EXT_ALPN,
+    EXT_STATUS_REQUEST,
+    EXT_DELEGATED_CREDENTIALS,
+    EXT_KEY_SHARE,
+    EXT_SUPPORTED_VERSIONS,
+    EXT_SIGNATURE_ALGORITHMS,
+    EXT_PSK_KEY_EXCHANGE_MODES,
+    EXT_RECORD_SIZE_LIMIT,
+    EXT_ENCRYPTED_CLIENT_HELLO,
+];
+
+/// Firefox 99 and 105's extension order: [`FIREFOX120_TLS_EXT_ORDER`] with the
+/// padding slot where 120 has ECH — the two releases pad their hello to the
+/// 512-byte floor BoringSSL uses and predate `encrypted_client_hello`.
+///
+/// The two send one extension *set*, which is why their JA4 extension hash is
+/// the same string (`3d5424432f57`) while their cipher hashes differ: 99's list
+/// carries one suite more ([`FIREFOX99_TLS_CIPHERS`]), and the padding body
+/// compensates for it so both hellos measure 512 bytes.
+const FIREFOX99_TLS_EXT_ORDER: &[u16] = &[
+    EXT_SERVER_NAME,
+    EXT_EXTENDED_MASTER_SECRET,
+    EXT_RENEGOTIATION_INFO,
+    EXT_SUPPORTED_GROUPS,
+    EXT_EC_POINT_FORMATS,
+    EXT_SESSION_TICKET,
+    EXT_ALPN,
+    EXT_STATUS_REQUEST,
+    EXT_DELEGATED_CREDENTIALS,
+    EXT_KEY_SHARE,
+    EXT_SUPPORTED_VERSIONS,
+    EXT_SIGNATURE_ALGORITHMS,
+    EXT_PSK_KEY_EXCHANGE_MODES,
+    EXT_RECORD_SIZE_LIMIT,
+    EXT_PADDING,
+];
+
+/// Firefox 63/65's extension order: [`FIREFOX99_TLS_EXT_ORDER`] without
+/// `delegated_credentials` (34), which Firefox 65 does not send yet — the single
+/// difference, and the reason its extension count is 14 where 99's is 15.
+const FIREFOX65_TLS_EXT_ORDER: &[u16] = &[
+    EXT_SERVER_NAME,
+    EXT_EXTENDED_MASTER_SECRET,
+    EXT_RENEGOTIATION_INFO,
+    EXT_SUPPORTED_GROUPS,
+    EXT_EC_POINT_FORMATS,
+    EXT_SESSION_TICKET,
+    EXT_ALPN,
+    EXT_STATUS_REQUEST,
+    EXT_KEY_SHARE,
+    EXT_SUPPORTED_VERSIONS,
+    EXT_SIGNATURE_ALGORITHMS,
+    EXT_PSK_KEY_EXCHANGE_MODES,
+    EXT_RECORD_SIZE_LIMIT,
+    EXT_PADDING,
+];
+
 /// Tor Browser 14.5's extension order, exactly the wrapper's
 /// `--tls-extension-order`: no GREASE (Tor does not grease), no
 /// `compress_certificate`, no SCT, and ECH last — which this build omits, so
@@ -763,7 +1067,9 @@ const TOR_TLS_EXT_ORDER: &[u16] = &[
 ];
 
 /// The bodies Firefox 133–144 emit verbatim. The SCT entry is inert in 133's
-/// hello (the extension is not in its order) and live in 135's.
+/// hello (the extension is not in its order) and live in 135's. The padding entry
+/// is inert where the order does not name it — 120 and 133–147 — and is what puts
+/// Firefox 65, 99 and 105 on the 512-byte floor.
 const FIREFOX_TLS_RAW_EXTS: &[(u16, &[u8])] = &[
     // Empty renegotiated_connection vector.
     (EXT_RENEGOTIATION_INFO, &[0x00]),
@@ -780,6 +1086,8 @@ const FIREFOX_TLS_RAW_EXTS: &[(u16, &[u8])] = &[
     (EXT_SESSION_TICKET, &[]),
     // signed_certificate_timestamp is empty in a ClientHello.
     (EXT_SCT, &[]),
+    // The 512-byte floor's slot, sized by the builder from `padding_to`.
+    (EXT_PADDING, &[]),
 ];
 
 /// The bodies Safari 26.x emit verbatim: the 18.x set with the session ticket
@@ -793,10 +1101,99 @@ const SAFARI260_TLS_RAW_EXTS: &[(u16, &[u8])] = &[
     (EXT_PADDING, &[]),
 ];
 
+/// The Go client's hello, as uTLS `HelloGolang` writes it — the one uTLS shape
+/// with no spec literal: `buildHandshakeState` hands the handshake to the
+/// `crypto/tls` fork uTLS vendors, so `makeClientHello`/`marshalMsg` are the
+/// authority and the capture is the whole measurement.
+///
+/// Every list below is read from `HelloGolang-0.hex` (1466 bytes): Go's
+/// `cipherSuitesPreferenceOrder` selection, its `defaultCurvePreferences`, its
+/// `defaultSupportedSignatureAlgorithms`, and the fixed extension order
+/// `marshalMsg` writes. Nothing greases, nothing pads, and there is no ALPN,
+/// ALPS, ECH, `compress_certificate`, `record_size_limit` or
+/// `delegated_credentials` — a Go client sends none of them.
+///
+/// The capture is the fork's hello, not the installed Go toolchain's: a newer
+/// Go adds ML-DSA signature schemes and a `signature_algorithms_cert`
+/// extension, and none of them is on this wire.
+const GO_TLS_CIPHERS: &[u16] = &[
+    0xc02b, // ECDHE_ECDSA_AES128_GCM_SHA256
+    0xc02f, // ECDHE_RSA_AES128_GCM_SHA256
+    0xc02c, // ECDHE_ECDSA_AES256_GCM_SHA384
+    0xc030, // ECDHE_RSA_AES256_GCM_SHA384
+    0xcca9, // ECDHE_ECDSA_CHACHA20_POLY1305
+    0xcca8, // ECDHE_RSA_CHACHA20_POLY1305
+    0xc009, // ECDHE_ECDSA_AES128_CBC_SHA
+    0xc013, // ECDHE_RSA_AES128_CBC_SHA
+    0xc00a, // ECDHE_ECDSA_AES256_CBC_SHA
+    0xc014, // ECDHE_RSA_AES256_CBC_SHA
+    0x1301, // TLS_AES_128_GCM_SHA256
+    0x1302, // TLS_AES_256_GCM_SHA384
+    0x1303, // TLS_CHACHA20_POLY1305_SHA256
+];
+
+/// Go's curves: the hybrid group Go 1.24 added in front of Go's classical four,
+/// all of them shared-classical in this build's provider. The key share follows
+/// from them (see the record).
+const GO_TLS_GROUPS: &[u16] = &[
+    4588, // X25519MLKEM768
+    29,   // X25519
+    23,   // secp256r1
+    24,   // secp384r1
+    25,   // secp521r1
+];
+
+/// Go's signature schemes, in the order `defaultSupportedSignatureAlgorithms`
+/// lists them: RSA-PSS first, Ed25519 between the P-256 and the P-384 ECDSA
+/// scheme, and the two SHA-1 schemes last.
+const GO_TLS_SIG_ALGS: &[u16] = &[
+    0x0804, // RSA-PSS SHA-256
+    0x0403, // ECDSA P-256 SHA-256
+    0x0807, // Ed25519
+    0x0805, // RSA-PSS SHA-384
+    0x0806, // RSA-PSS SHA-512
+    0x0401, // RSA-PKCS1 SHA-256
+    0x0501, // RSA-PKCS1 SHA-384
+    0x0601, // RSA-PKCS1 SHA-512
+    0x0503, // ECDSA P-384 SHA-384
+    0x0603, // ECDSA P-521 SHA-512
+    0x0201, // RSA-PKCS1 SHA-1
+    0x0203, // ECDSA SHA-1
+];
+
+/// Go's extension order: the ten `marshalMsg` writes, in the order the capture
+/// carries. `server_name` is first and there is no ALPN slot — a Go client with
+/// no `NextProtos` sends none, and this record offers none.
+const GO_TLS_EXT_ORDER: &[u16] = &[
+    EXT_SERVER_NAME,
+    EXT_EC_POINT_FORMATS,
+    EXT_RENEGOTIATION_INFO,
+    EXT_EXTENDED_MASTER_SECRET,
+    EXT_SCT,
+    EXT_STATUS_REQUEST,
+    EXT_SUPPORTED_GROUPS,
+    EXT_SIGNATURE_ALGORITHMS,
+    EXT_SUPPORTED_VERSIONS,
+    EXT_KEY_SHARE,
+];
+
+/// The bodies Go emits verbatim: secure renegotiation, the point formats, and
+/// the empty `signed_certificate_timestamp`. `extended_master_secret` and
+/// `status_request` are rustls's own and need no body.
+const GO_TLS_RAW_EXTS: &[(u16, &[u8])] = &[
+    // Empty renegotiated_connection vector.
+    (EXT_RENEGOTIATION_INFO, &[0x00]),
+    // ec_point_formats: uncompressed only.
+    (EXT_EC_POINT_FORMATS, &[0x01, 0x00]),
+    // signed_certificate_timestamp in the ClientHello is empty.
+    (EXT_SCT, &[]),
+];
+
 /// Every selectable shape, in report order: the baseline first, then one browser
 /// at a time alphabetically with the newest version of each first, and the phone
-/// shape of a version right after its desktop sibling (`chrome146` … `chrome99android`,
-/// `edge101`, `firefox147`, `firefox133`, `safari260` … `safari153`, `tor145`).
+/// shape of a version right after its desktop sibling (`chrome146` … `chrome70`,
+/// `edge101`, `firefox147` … `firefox65`, `go127`, `safari260` … `safari153`,
+/// `tor145`).
 /// `tests::fingerprint_table_is_total` pins the table against
 /// [`TlsFingerprint::ALL`] in both directions, so a variant without a record
 /// fails the suite instead of silently falling back to the baseline, and a
@@ -1071,6 +1468,75 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         headers: Some(CHROME116_HEADERS),
         h2: Some(&CHROME_H2),
     },
+    // Chrome 115 with the draft hybrid group, as uTLS `HelloChrome_115_PQ`
+    // sends it (`target/fingerprint/utls-ladder/HelloChrome_115_PQ-0.hex`).
+    //
+    // What it reproduces: Chrome 115's own hello — Chrome 107's fifteen ciphers,
+    // its eight signature schemes and its extension order with ALPS still at
+    // 17513 — plus the one thing 107 does not offer, the draft hybrid group
+    // `X25519Kyber768Draft00` (25497) in front of X25519, and Chromium's
+    // per-connection shuffle, which the spec applies in uTLS
+    // (`ShuffleChromeTLSExtensions`) and the browser in BoringSSL. JA3 is
+    // therefore one draw out of the distribution and JA4 is the stable reading,
+    // exactly as for Chrome 116.
+    //
+    // What separates it from the neighbours: 116 shuffles Chrome 107's order too
+    // but offers no hybrid group, and 120 replaces this draft group with the
+    // final `X25519MLKEM768` (4588, see [`CHROME_TLS_PQ_GROUPS`]) — so the group
+    // list is the whole of what this row adds, and the extension set the whole of
+    // what it takes away from 116 (no `encrypted_client_hello`, no `zstd`).
+    //
+    // One deviation, and it is the provider's: this build serves no `0x6399`
+    // (named in `tests::UNIMPLEMENTED` and in `docs/ADDING_A_PROFILE.md`), so
+    // the record advertises 25497 and shares X25519 alone where the spec shares
+    // both ([`CHROME115_PQ_KEY_SHARE_GROUPS`]). JA3 and JA4 read the group
+    // *list*, not the shares, so both stay the capture's; what the missing share
+    // does change is the hello's length, which is why the record leaves out the
+    // padding slot as well — a real Chrome 115 is always above BoringSSL's
+    // 512-byte floor and never sends one. See [`CHROME115_PQ_TLS_EXT_ORDER`].
+    //
+    // The identity is the source's minimum and no more: uTLS has no HTTP layer,
+    // so the record carries the version's own `user-agent` and its encoding, and
+    // `h2: None` leaves the preface at hyper's default — nothing here claims an
+    // h2 shape that was never measured.
+    TlsShape {
+        variant: TlsFingerprint::Chrome115Pq,
+        code: "chrome115pq",
+        token: "CHROME",
+        label: "CHROME 115 PQ",
+        source: "uTLS v1.8.2 HelloChrome_115_PQ",
+        baseline: false,
+        ciphers: CHROME_TLS_CIPHERS,
+        groups: CHROME115_PQ_TLS_GROUPS,
+        sig_algs: CHROME_TLS_SIG_ALGS,
+        ext_order: CHROME115_PQ_TLS_EXT_ORDER,
+        raw_exts: CHROME_TLS_RAW_EXTS,
+        suppress: &[],
+        drop13: &[
+            EXT_EXTENDED_MASTER_SECRET,
+            EXT_RENEGOTIATION_INFO,
+            EXT_EC_POINT_FORMATS,
+            EXT_SESSION_TICKET,
+        ],
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS],
+        alpn: H2_AND_HTTP11,
+        // No padding: the spec's 1524-byte hello never takes extension 21, and
+        // this build's shorter one must not either (see
+        // [`CHROME115_PQ_TLS_EXT_ORDER`]).
+        padding_to: None,
+        grease: true,
+        permute_extensions: true,
+        ech: false,
+        priority_on_h1: false,
+        cert_compression: BROTLI,
+        key_share_groups: Some(CHROME115_PQ_KEY_SHARE_GROUPS),
+        pq: false,
+        // The spec's `supported_versions` is GREASE, 1.3, 1.2 — Chrome 115 no
+        // longer lists 1.1 and 1.0 behind them.
+        legacy_versions: &[],
+        headers: Some(CHROME115_PQ_HEADERS),
+        h2: None,
+    },
     // The `curl_chrome107` shape — Chrome 107, and the same TLS shape as Edge
     // 99–101.
     //
@@ -1081,7 +1547,11 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     // whole generation — the phone-shaped hello of `chrome99android`, the
     // identity-swapped one of `edge101` and the shuffled one of `chrome116` all
     // answer with that string, which is why those four rows of the burst table
-    // move together. The forum report's "chrome 99-116 / edge 99-101" is that
+    // move together. Chrome 115 PQ is the one shape in this version range that
+    // does not: it sends fifteen extensions where these four send sixteen and
+    // answers with a key of its own (see that record).
+    //
+    // The forum report's "chrome 99-116 / edge 99-101" is that
     // generation; it also reported `chrome110+` as blocked only part of the time,
     // and on the path where this was measured the whole generation was refused on
     // every attempt while the ECH one (119+, a different key) answered every one.
@@ -1174,6 +1644,160 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         legacy_versions: &[],
         headers: Some(CHROME99_ANDROID_HEADERS),
         h2: Some(&CHROME99_ANDROID_H2),
+    },
+    // Chrome 87, as uTLS `HelloChrome_87` sends it — and Chrome 83, whose spec
+    // literal is byte-for-byte the same text under another label
+    // (`u_parrots.go` 231-301 against 303-373), so one record covers both
+    // releases, as the Firefox 135–147 rows cover theirs.
+    //
+    // What it reproduces: the 512-byte padded hello of Chrome 83–99, which is
+    // Chrome 107's cipher, group and signature-scheme lists with one extension
+    // fewer — no ALPS. 17513 is what separates the two JA4 extension hashes
+    // (`de4a06bb82e3` here, `e5627efa2ab1` for 107) even though both hellos carry
+    // [`CHROME_TLS_SIG_ALGS`] unchanged; a middlebox matching the 107 generation
+    // is matching the ALPS slot and the `zstd` codec of its HTTP layer, not this
+    // record.
+    //
+    // Chrome 87 differs from Chrome 72 in the other direction and by less than a
+    // release: 72's cipher list carries RSA 3DES and its signature schemes
+    // `rsa_pkcs1_sha1` ([`CHROME70_TLS_CIPHERS`], [`CHROME70_TLS_SIG_ALGS`]),
+    // which 87 dropped. Both still offer TLS 1.1 and 1.0 behind 1.2 and pad their
+    // hello to the same floor.
+    //
+    // The identity is the source's minimum and no more: uTLS has no HTTP layer,
+    // so the record carries the version's own `user-agent` and its encoding, and
+    // `h2: None` leaves the preface at hyper's default.
+    TlsShape {
+        variant: TlsFingerprint::Chrome87,
+        code: "chrome87",
+        token: "CHROME",
+        label: "CHROME 87",
+        source: "uTLS v1.8.2 HelloChrome_87",
+        baseline: false,
+        ciphers: CHROME_TLS_CIPHERS,
+        groups: CHROME_TLS_GROUPS,
+        sig_algs: CHROME_TLS_SIG_ALGS,
+        ext_order: CHROME72_TLS_EXT_ORDER,
+        raw_exts: CHROME_TLS_RAW_EXTS,
+        suppress: &[],
+        drop13: &[
+            EXT_EXTENDED_MASTER_SECRET,
+            EXT_RENEGOTIATION_INFO,
+            EXT_EC_POINT_FORMATS,
+            EXT_SESSION_TICKET,
+        ],
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+        alpn: H2_AND_HTTP11,
+        padding_to: Some(512),
+        grease: true,
+        permute_extensions: false,
+        ech: false,
+        priority_on_h1: false,
+        cert_compression: BROTLI,
+        key_share_groups: None,
+        pq: false,
+        // The spec's `supported_versions` is GREASE, 1.3, 1.2, 1.1, 1.0 — the
+        // shape of a client that still had the old versions on offer.
+        legacy_versions: &[0x0302, 0x0301],
+        headers: Some(CHROME87_HEADERS),
+        h2: None,
+    },
+    // Chrome 72, as uTLS `HelloChrome_72` sends it — Chrome 70's bodies behind a
+    // reordered extension list, and Chrome 87's shape with the two suites and the
+    // one signature scheme that 87 dropped.
+    //
+    // What it reproduces, and what separates it from 70: `server_name`,
+    // `extended_master_secret` and the curve list have moved to the front, the
+    // cipher list still ends at RSA 3DES, and the `channel_id` placeholder is
+    // gone — 72 sends fifteen extensions where 70 sends sixteen, which is the
+    // whole of the JA3 difference (`…-16-…-21` against `…-30032-11-…`). The two
+    // share one JA4 cipher hash (`46e7e9700bed`) and one 512-byte padded hello.
+    //
+    // The identity is the source's minimum and no more: uTLS has no HTTP layer,
+    // so the record carries the version's own `user-agent` and its encoding, and
+    // `h2: None` leaves the preface at hyper's default.
+    TlsShape {
+        variant: TlsFingerprint::Chrome72,
+        code: "chrome72",
+        token: "CHROME",
+        label: "CHROME 72",
+        source: "uTLS v1.8.2 HelloChrome_72",
+        baseline: false,
+        ciphers: CHROME70_TLS_CIPHERS,
+        groups: CHROME_TLS_GROUPS,
+        sig_algs: CHROME70_TLS_SIG_ALGS,
+        ext_order: CHROME72_TLS_EXT_ORDER,
+        raw_exts: CHROME_TLS_RAW_EXTS,
+        suppress: &[],
+        drop13: &[
+            EXT_EXTENDED_MASTER_SECRET,
+            EXT_RENEGOTIATION_INFO,
+            EXT_EC_POINT_FORMATS,
+            EXT_SESSION_TICKET,
+        ],
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+        alpn: H2_AND_HTTP11,
+        padding_to: Some(512),
+        grease: true,
+        permute_extensions: false,
+        ech: false,
+        priority_on_h1: false,
+        cert_compression: BROTLI,
+        key_share_groups: None,
+        pq: false,
+        legacy_versions: &[0x0302, 0x0301],
+        headers: Some(CHROME72_HEADERS),
+        h2: None,
+    },
+    // Chrome 70, as uTLS `HelloChrome_70` sends it, and the same TLS bodies 72
+    // sends.
+    //
+    // What it reproduces, and what separates it from 72: `renegotiation_info`
+    // first, the older curve/point/version placement, and `channel_id` (30032) —
+    // the zero-length placeholder the last Chrome of this generation still sent
+    // in the middle of its list ([`CHROME70_TLS_EXT_ORDER`]). It is also the
+    // record that covers 360Browser 11.0: `Hello360_11_0` carries the same
+    // ciphers, groups, signature schemes and bodies in a third order, so the two
+    // are one JA4 (`46e7e9700bed_…`) and two JA3s, and this row is the uTLS
+    // literal whose order the capture carries.
+    //
+    // The identity is the source's minimum and no more: uTLS has no HTTP layer,
+    // so the record carries the version's own `user-agent` and its encoding, and
+    // `h2: None` leaves the preface at hyper's default.
+    TlsShape {
+        variant: TlsFingerprint::Chrome70,
+        code: "chrome70",
+        token: "CHROME",
+        label: "CHROME 70",
+        source: "uTLS v1.8.2 HelloChrome_70",
+        baseline: false,
+        ciphers: CHROME70_TLS_CIPHERS,
+        groups: CHROME_TLS_GROUPS,
+        sig_algs: CHROME70_TLS_SIG_ALGS,
+        ext_order: CHROME70_TLS_EXT_ORDER,
+        raw_exts: CHROME70_TLS_RAW_EXTS,
+        suppress: &[],
+        drop13: &[
+            EXT_EXTENDED_MASTER_SECRET,
+            EXT_RENEGOTIATION_INFO,
+            EXT_EC_POINT_FORMATS,
+            EXT_SESSION_TICKET,
+        ],
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+        alpn: H2_AND_HTTP11,
+        padding_to: Some(512),
+        grease: true,
+        permute_extensions: false,
+        ech: false,
+        priority_on_h1: false,
+        cert_compression: BROTLI,
+        key_share_groups: None,
+        pq: false,
+        // Chrome 70's own literal sets `TLSVersMin = 1.0`, and its
+        // `supported_versions` lists 1.3, 1.2, 1.1 and 1.0.
+        legacy_versions: &[0x0302, 0x0301],
+        headers: Some(CHROME70_HEADERS),
+        h2: None,
     },
     // Edge 101, as `curl_edge101` of curl-impersonate v2.2.3 sends it, with
     // uTLS `HelloEdge_106` as the second reading of the same shape.
@@ -1325,6 +1949,255 @@ pub(crate) static SHAPES: &[TlsShape] = &[
         legacy_versions: &[],
         headers: Some(FIREFOX_HEADERS),
         h2: Some(&FIREFOX_H2),
+    },
+    // Firefox 120, as uTLS `HelloFirefox_120` sends it — the shape
+    // `HelloFirefox_Auto` resolves to, and Firefox 133's minus two things.
+    //
+    // What it reproduces: Firefox 120's hello is Firefox 133's without
+    // `compress_certificate` (27) and without the hybrid group — fifteen
+    // extensions instead of sixteen, six curves instead of seven, and
+    // `encrypted_client_hello` still closing the list as GREASE. Everything else
+    // is 133's: the seventeen ciphers, the eleven signature schemes, the two key
+    // shares and an unpadded hello (120 sends no padding).
+    //
+    // One deviation, and it is ours: the spec pins the GREASE-ECH payload to a
+    // single length (223 encoded bytes, 239 on the wire), where this build draws
+    // it from BoringSSL's four values as every other ECH record does. The hash
+    // is unaffected — ECH length is in no fingerprint — but the record size
+    // differs on three draws in four. Named in `docs/ADDING_A_PROFILE.md`.
+    //
+    // The identity is the source's minimum and no more: uTLS has no HTTP layer,
+    // so the record carries the version's own `user-agent` and its encoding, and
+    // `h2: None` leaves the preface at hyper's default.
+    TlsShape {
+        variant: TlsFingerprint::Firefox120,
+        code: "firefox120",
+        token: "FIREFOX",
+        label: "FIREFOX 120",
+        source: "uTLS v1.8.2 HelloFirefox_120",
+        baseline: false,
+        ciphers: FIREFOX_TLS_CIPHERS,
+        // Firefox's pre-hybrid curve list, which Tor 14.5 also sends — the six
+        // groups [`TOR_TLS_GROUPS`] already spells out.
+        groups: TOR_TLS_GROUPS,
+        sig_algs: FIREFOX_TLS_SIG_ALGS,
+        ext_order: FIREFOX120_TLS_EXT_ORDER,
+        raw_exts: FIREFOX_TLS_RAW_EXTS,
+        suppress: &[],
+        drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
+        drop12: &[EXT_SUPPORTED_VERSIONS],
+        alpn: H2_AND_HTTP11,
+        padding_to: None,
+        grease: false,
+        permute_extensions: false,
+        ech: true,
+        priority_on_h1: false,
+        // No `compress_certificate`: 120 predates it, and advertising the
+        // algorithms without the extension would be a shape neither client
+        // sends.
+        cert_compression: &[],
+        key_share_groups: Some(FIREFOX_PRE_HYBRID_KEY_SHARE_GROUPS),
+        pq: false,
+        // The spec offers 1.3 and 1.2 only.
+        legacy_versions: &[],
+        headers: Some(FIREFOX120_HEADERS),
+        h2: None,
+    },
+    // Firefox 105, as uTLS `HelloFirefox_105` sends it.
+    //
+    // What it reproduces: Firefox 105's hello is 133's without
+    // `compress_certificate` (27), without the SCT slot (18) and without ECH,
+    // with the padding slot Firefox still used and the same seventeen ciphers,
+    // six curves, eleven signature schemes and two key shares. Firefox 102 sends
+    // the same JA3 and the same JA4 under this shape — its `TLSVersMin`, its ALPN
+    // *list* (one protocol against two, which JA4 reads through the first alone)
+    // and the compensating padding body are the differences, and none of them
+    // reaches either hash — so the record covers both releases.
+    //
+    // What separates it from Firefox 99: 105 dropped `RSA_3DES_EDE_CBC_SHA`, and
+    // its `supported_versions` no longer offers 1.1 and 1.0. The two share one
+    // extension hash (`3d5424432f57`) and differ in the cipher hash, which is
+    // exactly the extra suite.
+    //
+    // The identity is the source's minimum and no more: uTLS has no HTTP layer,
+    // so the record carries the version's own `user-agent` and its encoding, and
+    // `h2: None` leaves the preface at hyper's default.
+    TlsShape {
+        variant: TlsFingerprint::Firefox105,
+        code: "firefox105",
+        token: "FIREFOX",
+        label: "FIREFOX 105",
+        source: "uTLS v1.8.2 HelloFirefox_105",
+        baseline: false,
+        ciphers: FIREFOX_TLS_CIPHERS,
+        // The same six groups as [`TOR_TLS_GROUPS`], Firefox's pre-hybrid list.
+        groups: TOR_TLS_GROUPS,
+        sig_algs: FIREFOX_TLS_SIG_ALGS,
+        ext_order: FIREFOX99_TLS_EXT_ORDER,
+        raw_exts: FIREFOX_TLS_RAW_EXTS,
+        suppress: &[],
+        drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+        alpn: H2_AND_HTTP11,
+        padding_to: Some(512),
+        grease: false,
+        permute_extensions: false,
+        ech: false,
+        priority_on_h1: false,
+        cert_compression: &[],
+        key_share_groups: Some(FIREFOX_PRE_HYBRID_KEY_SHARE_GROUPS),
+        pq: false,
+        legacy_versions: &[],
+        headers: Some(FIREFOX105_HEADERS),
+        h2: None,
+    },
+    // Firefox 99, as uTLS `HelloFirefox_99` sends it.
+    //
+    // What it reproduces: Firefox 105's shape with one cipher more —
+    // `RSA_3DES_EDE_CBC_SHA` (0x000a), the last entry of its eighteen — and the
+    // old versions still on offer behind 1.2. The two hellos carry the same
+    // fifteen extensions in the same order and hash to the same extension hash;
+    // only the cipher hash moves (`e8a523a41297` against `5b57614c22b0`), which
+    // is why this is a record of its own rather than a 105 alias with a comment:
+    // a censor reading JA4's cipher hash reads the two as different clients.
+    //
+    // The identity is the source's minimum and no more: uTLS has no HTTP layer,
+    // so the record carries the version's own `user-agent` and its encoding, and
+    // `h2: None` leaves the preface at hyper's default.
+    TlsShape {
+        variant: TlsFingerprint::Firefox99,
+        code: "firefox99",
+        token: "FIREFOX",
+        label: "FIREFOX 99",
+        source: "uTLS v1.8.2 HelloFirefox_99",
+        baseline: false,
+        ciphers: FIREFOX99_TLS_CIPHERS,
+        groups: TOR_TLS_GROUPS,
+        sig_algs: FIREFOX_TLS_SIG_ALGS,
+        ext_order: FIREFOX99_TLS_EXT_ORDER,
+        raw_exts: FIREFOX_TLS_RAW_EXTS,
+        suppress: &[],
+        drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+        alpn: H2_AND_HTTP11,
+        padding_to: Some(512),
+        grease: false,
+        permute_extensions: false,
+        ech: false,
+        priority_on_h1: false,
+        cert_compression: &[],
+        key_share_groups: Some(FIREFOX_PRE_HYBRID_KEY_SHARE_GROUPS),
+        pq: false,
+        legacy_versions: &[0x0302, 0x0301],
+        headers: Some(FIREFOX99_HEADERS),
+        h2: None,
+    },
+    // Firefox 65, as uTLS `HelloFirefox_65` sends it — and Firefox 63, which one
+    // spec literal serves (`case HelloFirefox_63, HelloFirefox_65`), so one
+    // record covers both.
+    //
+    // What it reproduces: the oldest Firefox here, and the only one without
+    // `delegated_credentials` (34) — fourteen extensions where every later
+    // Firefox sends fifteen — and the only one whose cipher list carries the
+    // DHE_RSA CBC pair uTLS writes as `FAKE_TLS_DHE_RSA_WITH_AES_128/256_CBC_SHA`
+    // (0x0033/0x0039) in place of the static-RSA AES-GCM two. The curve list, the
+    // signature schemes, the two key shares, the `record_size_limit` body and the
+    // 512-byte padding are Firefox 99's.
+    //
+    // The identity is the source's minimum and no more: uTLS has no HTTP layer,
+    // so the record carries the version's own `user-agent` and its encoding, and
+    // `h2: None` leaves the preface at hyper's default.
+    TlsShape {
+        variant: TlsFingerprint::Firefox65,
+        code: "firefox65",
+        token: "FIREFOX",
+        label: "FIREFOX 65",
+        source: "uTLS v1.8.2 HelloFirefox_65",
+        baseline: false,
+        ciphers: FIREFOX65_TLS_CIPHERS,
+        groups: TOR_TLS_GROUPS,
+        sig_algs: FIREFOX_TLS_SIG_ALGS,
+        ext_order: FIREFOX65_TLS_EXT_ORDER,
+        raw_exts: FIREFOX_TLS_RAW_EXTS,
+        suppress: &[],
+        drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
+        drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+        alpn: H2_AND_HTTP11,
+        padding_to: Some(512),
+        grease: false,
+        permute_extensions: false,
+        ech: false,
+        priority_on_h1: false,
+        cert_compression: &[],
+        key_share_groups: Some(FIREFOX_PRE_HYBRID_KEY_SHARE_GROUPS),
+        pq: false,
+        legacy_versions: &[0x0302, 0x0301],
+        headers: Some(FIREFOX65_HEADERS),
+        h2: None,
+    },
+    // Go 1.27's `crypto/tls`, through uTLS `HelloGolang`: the client the
+    // `Go-http-client/1.1` identity belongs to, and the one record here that is
+    // not a browser.
+    //
+    // What it reproduces: thirteen ciphers (Go's own preference order, which puts
+    // the CBC suites above the TLS 1.3 ones), five curves with the hybrid group
+    // Go added in front, twelve signature schemes with Ed25519 among them, and
+    // ten extensions in the fixed order `crypto/tls` writes. Nothing greases and
+    // nothing pads, and the hybrid key share is most of the 1466-byte hello the
+    // capture measures.
+    //
+    // Three things distinguish it from every other record: it sends no ALPN at
+    // all (a Go client with no `NextProtos` offers none, so the probes speak
+    // HTTP/1.1 to it), it advertises no `compress_certificate`, and it names no
+    // key share of its own — its two shares are rustls's default choice for the
+    // group list, the hybrid group and its X25519 component.
+    //
+    // The identity is the source's minimum and no more: `crypto/tls` has no HTTP
+    // layer beyond its own default `User-Agent`, so the record carries that and
+    // the one encoding Go advertises, and `h2: None` leaves the preface at
+    // hyper's default.
+    //
+    // The capture behind these numbers is uTLS v1.8.2's vendored `crypto/tls`
+    // fork, which is the hello a peer of this profile reads; a local Go 1.27
+    // adds ML-DSA schemes and a `signature_algorithms_cert` extension on top of
+    // it, and none of them is in this shape.
+    TlsShape {
+        variant: TlsFingerprint::Go127,
+        code: "go127",
+        token: "GO",
+        label: "GO 1.27",
+        source: "Go 1.27 crypto/tls, through uTLS HelloGolang",
+        baseline: false,
+        ciphers: GO_TLS_CIPHERS,
+        groups: GO_TLS_GROUPS,
+        sig_algs: GO_TLS_SIG_ALGS,
+        ext_order: GO_TLS_EXT_ORDER,
+        raw_exts: GO_TLS_RAW_EXTS,
+        // None of these three is in the order above: Go sends no ALPN, no
+        // session ticket and no PSK modes, and rustls would send all three.
+        suppress: &[
+            EXT_ALPN,
+            EXT_SESSION_TICKET,
+            EXT_PSK_KEY_EXCHANGE_MODES,
+        ],
+        drop13: &[EXT_EXTENDED_MASTER_SECRET, EXT_RENEGOTIATION_INFO, EXT_EC_POINT_FORMATS],
+        drop12: &[EXT_SUPPORTED_VERSIONS],
+        // No ALPN: the record offers none, and `suppress` keeps rustls from
+        // writing an extension Go does not send.
+        alpn: &[],
+        padding_to: None,
+        grease: false,
+        permute_extensions: false,
+        ech: false,
+        priority_on_h1: false,
+        cert_compression: &[],
+        // rustls's own choice: the hybrid group first and its X25519 component
+        // after it, which is the capture's `key_share = 4588,29`.
+        key_share_groups: None,
+        pq: true,
+        legacy_versions: &[],
+        headers: Some(GO127_HEADERS),
+        h2: None,
     },
     // Safari 26.0 on macOS, as `curl_safari260` sends it: the first Safari in
     // the bundle that offers the hybrid group, and the first client of any
@@ -1756,3 +2629,7 @@ pub(crate) const EXT_APPLICATION_SETTINGS: u16 = 17513;
 /// The same extension at the code point Chrome 133 moved it to
 /// (`--tls-use-new-alps-codepoint`, and `utlsExtensionApplicationSettingsNew`).
 pub(crate) const EXT_APPLICATION_SETTINGS_NEW: u16 = 17613;
+/// `channel_id`, as the placeholder Chrome 70 sent it: uTLS's
+/// `FakeChannelIDExtension{}` writes a zero-length body at the new code point
+/// (30032; 30031 was the old one, which no shape here sends).
+pub(crate) const EXT_FAKE_CHANNEL_ID: u16 = 30032;

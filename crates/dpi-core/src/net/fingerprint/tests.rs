@@ -26,6 +26,28 @@ const FIREFOX_133_JA4: &str = "t13d1716h2_5b57614c22b0_eeeea6562960";
 /// and 282 bytes, which is this list plus the 42-byte header.
 const GREASE_PAYLOAD_LENGTHS: [usize; 4] = [144, 176, 208, 240];
 
+/// The nine records transcribed from uTLS v1.8.2's own `ClientHelloSpec`
+/// literals — the four Chromium specs, Firefox 120 down to 65, and Go 1.27's
+/// `crypto/tls` through the library's `HelloGolang` (see
+/// [`tests::utls_shapes_match_their_ja3`]).
+///
+/// The reference library is TLS only: it has no HTTP layer and no h2 settings.
+/// These are therefore the records whose identity is a documented minimum (the
+/// client's own UA and encoding, nothing invented), whose hello pins no h2
+/// preface, and one of which (`go127`) offers no ALPN at all — so the gates in
+/// this file name them rather than relaxing their rule for every record.
+const UTLS_REFERENCED: [TlsFingerprint; 9] = [
+    TlsFingerprint::Chrome87,
+    TlsFingerprint::Chrome72,
+    TlsFingerprint::Chrome70,
+    TlsFingerprint::Chrome115Pq,
+    TlsFingerprint::Firefox120,
+    TlsFingerprint::Firefox105,
+    TlsFingerprint::Firefox99,
+    TlsFingerprint::Firefox65,
+    TlsFingerprint::Go127,
+];
+
 /// Every identity is spelled the way its own client writes it, and the two
 /// protocols differ in what that costs.
 ///
@@ -38,7 +60,7 @@ const GREASE_PAYLOAD_LENGTHS: [usize; 4] = [144, 176, 208, 240];
 /// for the clients that send it there, which the second column pins.
 #[test]
 fn every_identity_is_spelled_the_way_its_client_writes_it() {
-    let expected: [(TlsFingerprint, &str, bool); 20] = [
+    let expected: [(TlsFingerprint, &str, bool); 29] = [
         (TlsFingerprint::Rustls, "accept-encoding", false),
         (TlsFingerprint::Firefox133, "Accept-Encoding", true),
         (TlsFingerprint::Chrome107, "Accept-Encoding", false),
@@ -59,6 +81,21 @@ fn every_identity_is_spelled_the_way_its_client_writes_it() {
         (TlsFingerprint::Safari260, "accept-encoding", false),
         (TlsFingerprint::Safari260Ios, "accept-encoding", false),
         (TlsFingerprint::Tor145, "Accept-Encoding", true),
+        // The nine uTLS-referenced records: the four Chromium ones spell the
+        // name lowercase, the Firefox ones and Go capitalize it, and none of
+        // the nine sends a `priority` header on h1. uTLS is a TLS library with
+        // no HTTP layer, so each of these records carries the documented
+        // minimum identity (its client's own UA and encoding) rather than a
+        // measured header list — see the records.
+        (TlsFingerprint::Chrome87, "accept-encoding", false),
+        (TlsFingerprint::Chrome72, "accept-encoding", false),
+        (TlsFingerprint::Chrome70, "accept-encoding", false),
+        (TlsFingerprint::Chrome115Pq, "accept-encoding", false),
+        (TlsFingerprint::Firefox120, "Accept-Encoding", false),
+        (TlsFingerprint::Firefox105, "Accept-Encoding", false),
+        (TlsFingerprint::Firefox99, "Accept-Encoding", false),
+        (TlsFingerprint::Firefox65, "Accept-Encoding", false),
+        (TlsFingerprint::Go127, "Accept-Encoding", false),
     ];
 
     for (fingerprint, spelling, priority_on_h1) in expected {
@@ -84,6 +121,13 @@ fn every_identity_is_spelled_the_way_its_client_writes_it() {
 /// hybrid group's component included, and Tor three without one. The bundle puts
 /// the same lists on the wire, so this is the count a censor matching a
 /// `curl_firefox133` handshake reads.
+///
+/// The nine uTLS-referenced records name their groups for the same reason: uTLS
+/// sends one share per `keyShareCurveID` entry, so `firefox120` and its three
+/// older siblings send X25519 and P-256 and nothing else. `chrome115pq` is the
+/// one that cannot reproduce its source here — uTLS shares over
+/// X25519Kyber768Draft00 (25497), the draft hybrid this provider has no group
+/// for (see `UNIMPLEMENTED`) — so it sends the single share it can complete.
 #[test]
 fn every_profile_sends_the_key_shares_its_wrapper_asks_for() {
     let shares = |fingerprint: TlsFingerprint| {
@@ -117,6 +161,20 @@ fn every_profile_sends_the_key_shares_its_wrapper_asks_for() {
         (TlsFingerprint::Safari260, "4588,29"),
         (TlsFingerprint::Safari260Ios, "29"),
         (TlsFingerprint::Tor145, "29,23,24"),
+        // The nine uTLS-referenced records. `chrome115pq` is the one row that
+        // cannot repeat its source: uTLS shares over X25519Kyber768Draft00
+        // (measured `25497,29`), and this provider carries no group for it — so
+        // the record advertises the draft hybrid for the JA3 list, names X25519
+        // as its share, and the share a censor reads is the one below.
+        (TlsFingerprint::Chrome87, "29"),
+        (TlsFingerprint::Chrome72, "29"),
+        (TlsFingerprint::Chrome70, "29"),
+        (TlsFingerprint::Chrome115Pq, "29"),
+        (TlsFingerprint::Firefox120, "29,23"),
+        (TlsFingerprint::Firefox105, "29,23"),
+        (TlsFingerprint::Firefox99, "29,23"),
+        (TlsFingerprint::Firefox65, "29,23"),
+        (TlsFingerprint::Go127, "4588,29"),
     ];
 
     for (fingerprint, groups) in expected {
@@ -237,24 +295,29 @@ fn the_shuffling_shapes_are_the_chromium_ones_from_110_on() {
     permuting.sort_unstable();
     assert_eq!(
         permuting,
-        ["chrome116", "chrome123", "chrome131", "chrome131android", "chrome146"]
+        ["chrome115pq", "chrome116", "chrome123", "chrome131", "chrome131android", "chrome146"]
     );
 }
 
-/// The seven shapes whose client carries `encrypted_client_hello`, and the body
+/// The eight shapes whose client carries `encrypted_client_hello`, and the body
 /// they carry.
 ///
-/// The list is the wrappers that name `--ech true` — `curl_chrome123`,
+/// Seven of the list are the wrappers that name `--ech true` — `curl_chrome123`,
 /// `curl_chrome131`, `curl_chrome131_android`, `curl_chrome146`,
 /// `curl_firefox133`, `curl_firefox147` and `curl_tor145` — and every one of
 /// them is GREASE: curl needs DoH or an explicit `--ecl:` to have a real
-/// config, and no wrapper passes either.
+/// config, and no wrapper passes either. The eighth is `firefox120`, whose uTLS
+/// spec carries the library's own `GREASEEncryptedClientHelloExtension`: the
+/// extension is in the shape its JA3 and JA4 were read from, and both hashes
+/// see only its presence.
 ///
 /// The body is the GREASE form of draft-ietf-tls-esni §6.2 — outer, a cipher
 /// suite, a random `config_id`, an `enc` of the KEM's public-key length, and a
 /// payload the size of an encoded inner hello plus the AEAD tag — and a fresh
 /// one per connection, which is why the extension's bytes can never be compared
-/// between two handshakes, not even two of a real browser's.
+/// between two handshakes, not even two of a real browser's. Its *length* is not
+/// fresh: this build draws it from the four values in `GREASE_PAYLOAD_LENGTHS`,
+/// where `firefox120`'s source pins one (the record names the deviation).
 #[test]
 fn the_ech_shapes_carry_the_grease_extension_and_the_others_do_not() {
     let hello = |fingerprint: TlsFingerprint| {
@@ -347,6 +410,7 @@ fn the_ech_shapes_carry_the_grease_extension_and_the_others_do_not() {
             "chrome131",
             "chrome131android",
             "chrome146",
+            "firefox120",
             "firefox133",
             "firefox147",
             "tor145",
@@ -380,6 +444,20 @@ fn http_identity_names_the_version_the_hello_imitates() {
         (TlsFingerprint::Safari260, "Version/26.0"),
         (TlsFingerprint::Safari260Ios, "Version/26.0 Mobile"),
         (TlsFingerprint::Tor145, "Firefox/128.0"),
+        // uTLS carries no HTTP layer, so what these nine rows pin is the
+        // documented minimum identity: the version the hello imitates, spelled
+        // by the client that version belongs to. `go127` has no version in its
+        // UA — `Go-http-client/1.1` is what Go 1.27 sends — which is why its
+        // row is the identity itself.
+        (TlsFingerprint::Chrome87, "Chrome/87.0.0.0"),
+        (TlsFingerprint::Chrome72, "Chrome/72.0.0.0"),
+        (TlsFingerprint::Chrome70, "Chrome/70.0.0.0"),
+        (TlsFingerprint::Chrome115Pq, "Chrome/115.0.0.0"),
+        (TlsFingerprint::Firefox120, "Firefox/120.0"),
+        (TlsFingerprint::Firefox105, "Firefox/105.0"),
+        (TlsFingerprint::Firefox99, "Firefox/99.0"),
+        (TlsFingerprint::Firefox65, "Firefox/65.0"),
+        (TlsFingerprint::Go127, "Go-http-client/1.1"),
     ] {
         let identity = http_identity(fingerprint);
         let ua = identity.user_agent.expect("a browser profile carries a UA");
@@ -424,7 +502,17 @@ fn http_identity_names_the_version_the_hello_imitates() {
             | TlsFingerprint::Safari153
             | TlsFingerprint::Safari170
             | TlsFingerprint::Safari172Ios
-            | TlsFingerprint::Safari184Ios => "gzip, deflate, br",
+            | TlsFingerprint::Safari184Ios
+            | TlsFingerprint::Chrome87
+            | TlsFingerprint::Chrome72
+            | TlsFingerprint::Chrome70
+            | TlsFingerprint::Chrome115Pq
+            | TlsFingerprint::Firefox120
+            | TlsFingerprint::Firefox105
+            | TlsFingerprint::Firefox99
+            | TlsFingerprint::Firefox65 => "gzip, deflate, br",
+            // Go 1.27's `net/http` sends one encoding and names it in caps.
+            TlsFingerprint::Go127 => "gzip",
             TlsFingerprint::Rustls => "identity",
         };
         assert_eq!(*encoding, expected, "{}: {}", fingerprint.code(), *encoding);
@@ -597,6 +685,15 @@ fn fingerprint_parses_known_values_and_rejects_others() {
         ("safari260ios", TlsFingerprint::Safari260Ios),
         ("edge101", TlsFingerprint::Edge101),
         ("tor145", TlsFingerprint::Tor145),
+        ("chrome87", TlsFingerprint::Chrome87),
+        ("chrome72", TlsFingerprint::Chrome72),
+        ("chrome70", TlsFingerprint::Chrome70),
+        ("chrome115pq", TlsFingerprint::Chrome115Pq),
+        ("firefox120", TlsFingerprint::Firefox120),
+        ("firefox105", TlsFingerprint::Firefox105),
+        ("firefox99", TlsFingerprint::Firefox99),
+        ("firefox65", TlsFingerprint::Firefox65),
+        ("go127", TlsFingerprint::Go127),
     ] {
         assert_eq!(TlsFingerprint::parse(name), Some(fingerprint), "{name}");
         assert_eq!(
@@ -629,6 +726,15 @@ fn fingerprint_parses_known_values_and_rejects_others() {
         "safari184_ios",
         "safari172_ios",
         "chrome131_android",
+        // Near misses of the nine uTLS-referenced records: `chrome87` and
+        // `firefox65` stand for a Chrome 83 and a Firefox 63 whose specs are
+        // identical, and `chrome115pq` says the PQ variant — a name that is
+        // neither must not silently measure one of them.
+        "chrome83",
+        "firefox63",
+        "chrome115",
+        "golang",
+        "go",
         "chrome",
     ] {
         assert_eq!(TlsFingerprint::parse(name), None, "{name} must not resolve");
@@ -739,15 +845,41 @@ fn the_baseline_is_the_only_shape_that_impersonates_nobody() {
         } else {
             assert!(!shape.ciphers.is_empty(), "{}: a profile states its cipher list", shape.code);
             assert!(shape.headers.is_some(), "{}: a profile presents a header set", shape.code);
-            assert!(shape.h2.is_some(), "{}: a profile pins its h2 preface", shape.code);
-            assert!(!shape.alpn.is_empty(), "{}: a profile offers an ALPN list", shape.code);
+            // The nine uTLS-referenced records have no h2 layer to copy: uTLS is
+            // a TLS-only library, so those records pin no preface and the HTTP/2
+            // layer keeps hyper's defaults (each record's comment says so).
+            assert!(
+                shape.h2.is_some() || UTLS_REFERENCED.contains(&shape.variant),
+                "{}: a profile pins its h2 preface",
+                shape.code
+            );
+            // Go 1.27 offers no ALPN at all: `HelloGolang`'s measured extension
+            // list carries no 16, so the record suppresses the extension rustls
+            // would otherwise send.
+            assert!(
+                !shape.alpn.is_empty() || shape.variant == TlsFingerprint::Go127,
+                "{}: a profile offers an ALPN list",
+                shape.code
+            );
             // A profile that advertises no certificate compression has to say
             // so: the empty list is what keeps extension 27 off the wire, and a
             // shape that lists the extension but no algorithm would be one no
-            // client sends. Safari 15.3 and Tor 14.5 send none.
+            // client sends. Safari 15.3 and Tor 14.5 send none, and so do the
+            // four Firefox records — uTLS's own Firefox 65–120 specs carry no
+            // `compress_certificate`, which is where those extension lists come
+            // from — and Go 1.27, whose crypto/tls never offers one.
             if shape.cert_compression.is_empty() {
                 assert!(
-                    matches!(shape.variant, TlsFingerprint::Safari153 | TlsFingerprint::Tor145),
+                    matches!(
+                        shape.variant,
+                        TlsFingerprint::Safari153
+                            | TlsFingerprint::Tor145
+                            | TlsFingerprint::Firefox120
+                            | TlsFingerprint::Firefox105
+                            | TlsFingerprint::Firefox99
+                            | TlsFingerprint::Firefox65
+                            | TlsFingerprint::Go127
+                    ),
                     "{}: a profile with no compress_certificate must name the client that sends none",
                     shape.code
                 );
@@ -968,6 +1100,85 @@ fn bundle_versions_match_their_ja3() {
         }
         let (_, length) = client_hello_of(fingerprint, TlsVersion::Tls12);
         assert!(length < 256, "{fingerprint} 1.2 hello is padded: {length}");
+    }
+}
+
+/// The nine shapes uTLS v1.8.2 defines, pinned against the ladder whose captures
+/// live under `target/fingerprint/utls-ladder/` — one hello per spec, measured
+/// with `tls_fingerprint hello`.
+///
+/// The reference is the uTLS library's own `ClientHelloSpec`: uTLS is a TLS-only
+/// library, so its literals are the whole shape, and
+/// `chrome_146_matches_the_utls_list_it_is_derived_from` reads the newer Chrome
+/// the same way. `chrome115pq` permutes its extension order per connection
+/// (`ShuffleChromeTLSExtensions` in its spec, Chromium 110+ in the browser), so
+/// its JA3 is compared with the extension list *sorted* — the set is the shape,
+/// the order is per connection — which is the treatment Chrome 133 gets there
+/// for the same reason. JA4 needs none of that: it sorts before hashing.
+///
+/// Two deviations the records state are visible here and neither moves a pinned
+/// value: the draft hybrid `chrome115pq` advertises but cannot share changes the
+/// key share only (`every_profile_sends_the_key_shares_its_wrapper_asks_for`),
+/// and `firefox120`'s GREASE ECH payload is drawn from the four lengths this
+/// build sends rather than the one its source pins, which moves the hello size
+/// and nothing the two hashes read.
+#[test]
+fn utls_shapes_match_their_ja3() {
+    const CHROME_87_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-\
+         49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-21,29-23-24,0";
+    const CHROME_72_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-\
+         49172-156-157-47-53-10,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-21,29-23-24,0";
+    const CHROME_70_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-\
+         49172-156-157-47-53-10,\
+         65281-0-23-35-13-5-18-16-30032-11-51-45-43-10-27-21,29-23-24,0";
+    const CHROME_115_PQ_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-\
+         49171-49172-156-157-47-53,0-16-51-27-43-17513-35-65281-10-45-5-18-11-13-23,\
+         25497-29-23-24,0";
+    const FIREFOX_120_JA3: &str = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-\
+         49162-49161-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-34-51-43-13-45-28-65037,\
+         29-23-24-25-256-257,0";
+    const FIREFOX_105_JA3: &str = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-\
+         49162-49161-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-34-51-43-13-45-28-21,\
+         29-23-24-25-256-257,0";
+    const FIREFOX_99_JA3: &str = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-\
+         49162-49161-49171-49172-156-157-47-53-10,\
+         0-23-65281-10-11-35-16-5-34-51-43-13-45-28-21,29-23-24-25-256-257,0";
+    const FIREFOX_65_JA3: &str = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-\
+         49162-49161-49171-49172-51-57-47-53-10,0-23-65281-10-11-35-16-5-51-43-13-45-28-21,\
+         29-23-24-25-256-257,0";
+    const GO_127_JA3: &str = "771,49195-49199-49196-49200-52393-52392-49161-49171-49162-\
+         49172-4865-4866-4867,0-11-65281-23-18-5-10-13-43-51,4588-29-23-24-25,0";
+
+    for (fingerprint, ja3, ja4) in [
+        (TlsFingerprint::Chrome87, CHROME_87_JA3, "t13d1515h2_8daaf6152771_de4a06bb82e3"),
+        (TlsFingerprint::Chrome72, CHROME_72_JA3, "t13d1615h2_46e7e9700bed_45f260be83e2"),
+        (TlsFingerprint::Chrome70, CHROME_70_JA3, "t13d1616h2_46e7e9700bed_4551aecd7b38"),
+        (
+            TlsFingerprint::Chrome115Pq,
+            CHROME_115_PQ_JA3,
+            "t13d1515h2_8daaf6152771_f37e75b10bcc",
+        ),
+        (TlsFingerprint::Firefox120, FIREFOX_120_JA3, "t13d1715h2_5b57614c22b0_5c2c66f702b0"),
+        (TlsFingerprint::Firefox105, FIREFOX_105_JA3, "t13d1715h2_5b57614c22b0_3d5424432f57"),
+        (TlsFingerprint::Firefox99, FIREFOX_99_JA3, "t13d1815h2_e8a523a41297_3d5424432f57"),
+        (TlsFingerprint::Firefox65, FIREFOX_65_JA3, "t13d1814h2_29a2cd9e9f10_d267a5f792d4"),
+        (TlsFingerprint::Go127, GO_127_JA3, "t13d131000_f57a46bbacb6_e7c285222651"),
+    ] {
+        let (ja3_got, _, ja4_got) = client_hello_full(fingerprint, TlsVersion::Any);
+        let sorted = fingerprint.spec().permute_extensions;
+        let (ja3_got, ja3_expected) = if sorted {
+            (order_independent_ja3(&ja3_got), order_independent_ja3(ja3))
+        } else {
+            (ja3_got, ja3.to_string())
+        };
+        assert_eq!(
+            ja3_got,
+            ja3_expected,
+            "{}: the source's lists, extension order{}",
+            fingerprint.code(),
+            if sorted { " sorted" } else { "" }
+        );
+        assert_eq!(ja4_got, ja4, "{}", fingerprint.code());
     }
 }
 
@@ -1397,6 +1608,12 @@ fn the_legacy_profiles_do_not_use_the_pq_provider() {
     assert!(advertises_cert_compression(TlsFingerprint::Chrome107));
     assert!(advertises_cert_compression(TlsFingerprint::Safari155));
     assert!(!advertises_cert_compression(TlsFingerprint::Rustls));
+    // Go 1.27 offers X25519MLKEM768 as its first group and shares over it, so it
+    // needs the hybrid provider — the share a censor reads is `4588,29`. The
+    // uTLS Chrome 115 PQ record offers the draft hybrid instead, which no
+    // provider here runs, so it stays on the classical one and shares X25519.
+    assert!(needs_pq(TlsFingerprint::Go127));
+    assert!(!needs_pq(TlsFingerprint::Chrome115Pq));
 }
 
 /// The decompressor list is what rustls reads to decide whether to offer
@@ -1416,6 +1633,18 @@ fn the_decompressor_list_follows_the_profile() {
         ("chrome146", TlsFingerprint::Chrome146, true),
         ("safari180", TlsFingerprint::Safari180, true),
         ("edge101", TlsFingerprint::Edge101, true),
+        // The nine uTLS-referenced records: the four Chromium ones advertise
+        // brotli, and the four Firefox ones and Go send no extension 27 at all,
+        // so their decompressor list stays rustls's empty default.
+        ("chrome87", TlsFingerprint::Chrome87, true),
+        ("chrome72", TlsFingerprint::Chrome72, true),
+        ("chrome70", TlsFingerprint::Chrome70, true),
+        ("chrome115pq", TlsFingerprint::Chrome115Pq, true),
+        ("firefox120", TlsFingerprint::Firefox120, false),
+        ("firefox105", TlsFingerprint::Firefox105, false),
+        ("firefox99", TlsFingerprint::Firefox99, false),
+        ("firefox65", TlsFingerprint::Firefox65, false),
+        ("go127", TlsFingerprint::Go127, false),
     ] {
         let config = create_tls_config(&TlsProfile::insecure(fingerprint).tls13());
         assert_eq!(
@@ -1495,12 +1724,25 @@ const UNIMPLEMENTED: &[(Unimplemented, u16, &str)] = &[
     (Unimplemented::Cipher, 0x000a, "RSA-3DES-EDE-CBC-SHA: no 3DES in the provider"),
     (Unimplemented::Cipher, 0xc008, "ECDHE-ECDSA-3DES-EDE-CBC-SHA: no 3DES in the provider"),
     (Unimplemented::Cipher, 0xc012, "ECDHE-RSA-3DES-EDE-CBC-SHA: no 3DES in the provider"),
+    // --- DHE key transport: rustls has no finite-field Diffie-Hellman and the
+    // provider no CBC suite, so the two `TLS_DHE_RSA_WITH_AES_*_CBC_SHA` suites
+    // are out of reach. Firefox 65 is the one shape that offers them — uTLS
+    // spells them `FAKE_TLS_DHE_RSA_WITH_AES_*_CBC_SHA`, right down to the
+    // literal `0x0033`/`0x0039` bytes they carry on the wire.
+    (Unimplemented::Cipher, 0x0033, "DHE-RSA-AES128-CBC-SHA: no finite-field key exchange, and no CBC suite"),
+    (Unimplemented::Cipher, 0x0039, "DHE-RSA-AES256-CBC-SHA: no finite-field key exchange, and no CBC suite"),
     // --- Groups the provider does not implement: `kx::ALL_KX_GROUPS` is
     // X25519, P-256 and P-384. A browser lists more than it shares a key with,
     // which is why these are advertised without ever being a key share.
     (Unimplemented::Group, 0x0019, "secp521r1: the provider has no P-521 group"),
     (Unimplemented::Group, 0x0100, "ffdhe2048: the provider has no finite-field group"),
     (Unimplemented::Group, 0x0101, "ffdhe3072: the provider has no finite-field group"),
+    // --- The draft hybrid uTLS's Chrome 115 PQ shares its key over. rustls and
+    // the provider carry the final X25519MLKEM768 (0x11ec) instead, so the
+    // record advertises this group for the JA3 group list, which is what a
+    // middlebox reads, and shares X25519 — see its record and
+    // `the_advertised_group_list_opens_with_the_group_we_share`.
+    (Unimplemented::Group, 0x6399, "X25519Kyber768Draft00: the provider has no draft-Kyber hybrid group"),
     // --- Signature schemes: the provider verifies ECDSA P-256/P-384, Ed25519
     // and RSA PSS/PKCS1 with SHA-256 and above. SHA-1 is gone from both rustls
     // and the provider, and a P-521 verifier is missing with its group.
@@ -1582,11 +1824,32 @@ fn named(kind: Unimplemented, code: u16) -> bool {
 /// `supported_groups` is written from the record — so a record that lists a
 /// different group first would advertise one thing and share another, a shape
 /// no browser sends.
+///
+/// The one way out is the exemption list itself: a list may open with a group
+/// the provider does not run when `UNIMPLEMENTED` already names that group —
+/// the same rule `every_advertised_code_point_is_served_or_named` applies — and
+/// then what the hello *shares* has to be a group it also advertises.
+/// `chrome115pq` is that record: uTLS's spec opens with X25519Kyber768Draft00
+/// (0x6399), which JA3 hashes, and no provider here carries a group for the
+/// draft hybrid.
 #[test]
 fn the_advertised_group_list_opens_with_the_group_we_share() {
     for shape in SHAPES.iter().filter(|shape| !shape.baseline) {
         let provider = if shape.pq { crypto_provider_with_pq() } else { crypto_provider() };
         let first = provider.kx_groups.first().expect("a provider offers a group");
+        if shape.groups.first().copied().is_some_and(|group| named(Unimplemented::Group, group)) {
+            let shared = shape
+                .key_share_groups
+                .and_then(|groups| groups.first().copied())
+                .unwrap_or_else(|| u16::from(first.name()));
+            assert!(
+                shape.groups.contains(&shared)
+                    && provider.kx_groups.iter().any(|group| u16::from(group.name()) == shared),
+                "{}: the group it shares must be one it advertises and the provider serves",
+                shape.code
+            );
+            continue;
+        }
         assert_eq!(
             shape.groups.first().copied(),
             Some(u16::from(first.name())),

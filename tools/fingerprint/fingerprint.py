@@ -32,11 +32,19 @@ shape differs from any single capture in the extension order on every run) —
 everything else is printed as `to look at`, because only that named list can say
 whether it is expected.
 
-`utls` is the one stage that judges no profile of ours: it dumps each of the
-uTLS library's own profiles (through the Go dumper in `tools/fingerprint/utls`)
-and diffs it against the bundle's nearest wrapper, which is the question a tool
-that ships uTLS asks of the browsers we copy. It is not part of `all` for that
-reason.
+`utls` compares the two libraries directly: each of the uTLS library's own
+profiles (dumped through the Go dumper in `tools/fingerprint/utls`) against the
+bundle's nearest wrapper, or against one of our own records where the record was
+transcribed from that spec (`ours:<code>`). It is not part of `all`, because the
+profile stages are the ones that judge a record against the client it copies.
+
+Nine profiles are transcribed from the library's own specs rather than from a
+bundle wrapper — the bundle has no wrapper for Chrome 87, 72, 70 and 115 PQ, for
+Firefox 120, 105, 99 and 65, or for Go's own client — and `PROFILES` marks those
+`utls:HelloX`. For them `hello` and `hello-diff` compare our bytes against the
+spec's capture, and the stages that need an HTTP layer (`captures`, `echo`,
+`headers`, `flags`) skip them: the library has no HTTP layer to compare, which is
+also why their identity is a minimum and their h2 preface is hyper's default.
 
 Usage
 -----
@@ -118,6 +126,20 @@ PROFILES = [
     ("safari260", "curl_safari260", "safari_26.0_macOS.yaml"),
     ("safari260ios", "curl_safari260_ios", "safari_26.0_iOS.yaml"),
     ("tor145", "curl_tor145", "tor_14.5_macOS.yaml"),
+    # Nine shapes the bundle has no wrapper for: the reference is the uTLS
+    # library's own spec, captured through the dumper (`utls:HelloX`). Only
+    # `hello` applies to these — bytes against bytes — because the library has no
+    # HTTP layer, so there is nothing for `echo`, `headers` or `captures` to
+    # compare against, and no wrapper flags for the verdict to read.
+    ("chrome87", "utls:HelloChrome_87", None),
+    ("chrome72", "utls:HelloChrome_72", None),
+    ("chrome70", "utls:HelloChrome_70", None),
+    ("chrome115pq", "utls:HelloChrome_115_PQ", None),
+    ("firefox120", "utls:HelloFirefox_120", None),
+    ("firefox105", "utls:HelloFirefox_105", None),
+    ("firefox99", "utls:HelloFirefox_99", None),
+    ("firefox65", "utls:HelloFirefox_65", None),
+    ("go127", "utls:HelloGolang", None),
 ]
 
 # uTLS's own identifiers against the wrapper that copies the *nearest* client —
@@ -170,7 +192,18 @@ UTLS_PAIRS = [
     ("Hello360_11_0", "curl_chrome99", False),
     ("HelloQQ_11_1", "curl_chrome99", False),
     # No browser counterpart at all: the library's own Go client against ours.
-    ("HelloGolang", "ours:rustls", True),
+    ("HelloGolang", "ours:go127", True),
+    # The nine shapes the bundle has no wrapper for. The library's spec is what
+    # the record was transcribed from, so this comparison *is* the transcription
+    # check: SAME, or a difference the record's own comment names.
+    ("HelloChrome_87", "ours:chrome87", False),
+    ("HelloChrome_72", "ours:chrome72", False),
+    ("HelloChrome_70", "ours:chrome70", False),
+    ("HelloChrome_115_PQ", "ours:chrome115pq", False),
+    ("HelloFirefox_120", "ours:firefox120", False),
+    ("HelloFirefox_105", "ours:firefox105", False),
+    ("HelloFirefox_99", "ours:firefox99", False),
+    ("HelloFirefox_65", "ours:firefox65", False),
 ]
 
 CAPTURE_REPO = "https://github.com/lexiforest/curl-impersonate.git"
@@ -907,7 +940,7 @@ def stage_headers(harness, args):
     os.makedirs(os.path.join(root, "ours"), exist_ok=True)
     os.makedirs(os.path.join(root, "bundle"), exist_ok=True)
     for code, wrapper, _ in selected(args):
-        if not wrapper:
+        if not wrapper or is_utls(wrapper):
             continue
         with Http1Listener(PORT, cert, key) as listener:
             harness.example("headers", code, SNI, timeout=60)
@@ -930,7 +963,7 @@ def stage_headers_diff(harness, args):
     section("headers-diff — the request block, ours against the bundle")
     root = os.path.join(harness.work, "headers")
     for code, wrapper, _ in selected(args):
-        if not wrapper:
+        if not wrapper or is_utls(wrapper):
             continue
         ours_path = os.path.join(root, "ours", code + ".txt")
         theirs_path = os.path.join(root, "bundle", wrapper + ".txt")
@@ -984,7 +1017,7 @@ def stage_echo(harness, args):
         text = harness.example("peet", code)
         open(os.path.join(harness.work, "echo", "ours", code + ".txt"), "w", encoding="utf-8").write(text)
         log(f"  ours   {code:16} {len(text)} bytes")
-        if not wrapper:
+        if not wrapper or is_utls(wrapper):
             continue
         stdout, _ = run_wrapper(harness.bundle, wrapper, args.echo_url)
         open(os.path.join(harness.work, "echo", "bundle", wrapper + ".json"), "w",
@@ -1045,7 +1078,7 @@ def parse_bundle_echo(path):
 def stage_echo_diff(harness, args):
     section("echo-diff — what the service saw, ours against the bundle")
     for code, wrapper, _ in selected(args):
-        if not wrapper:
+        if not wrapper or is_utls(wrapper):
             continue
         ours_path = os.path.join(harness.work, "echo", "ours", code + ".txt")
         theirs_path = os.path.join(harness.work, "echo", "bundle", wrapper + ".json")
@@ -1154,13 +1187,14 @@ def stage_hello(harness, args):
             harness.example("liveany", code, SNI, timeout=60)
             listener.done.wait(8)
         mine = listener.data
-        with Listener(PORT) as listener:
-            run_wrapper(harness.bundle, wrapper, f"https://{SNI}/",
-                        extra=("--connect-to", f"{SNI}:{PORT}:127.0.0.1:{PORT}", "--max-time", "10"))
-            listener.done.wait(8)
-        theirs = listener.data
+        # A `utls:` reference is a spec the dumper captures; a bundle wrapper is
+        # run against the same listener. Either way the comparison is bytes
+        # against bytes — the only one the library's profiles support, because it
+        # has no HTTP layer for `echo` or `headers` to compare.
+        theirs_path = counterpart_capture(harness, wrapper, args)
+        theirs = read_hex(theirs_path) if theirs_path else b""
         open(os.path.join(root, "ours", code + ".hex"), "w").write(mine.hex())
-        open(os.path.join(root, "bundle", wrapper + ".hex"), "w").write(theirs.hex())
+        open(os.path.join(root, "bundle", reference_name(wrapper) + ".hex"), "w").write(theirs.hex())
         if not mine or not theirs:
             log(f"  {code:16} capture failed (ours {len(mine)}, bundle {len(theirs)} bytes)")
             continue
@@ -1168,13 +1202,13 @@ def stage_hello(harness, args):
 
 
 def stage_hello_diff(harness, args):
-    section("hello-diff — captured bytes, ours against the bundle")
+    section("hello-diff — captured bytes, ours against the reference client")
     root = os.path.join(harness.work, "bytes")
     for code, wrapper, _ in selected(args):
         if not wrapper:
             continue
         mine_path = os.path.join(root, "ours", code + ".hex")
-        theirs_path = os.path.join(root, "bundle", wrapper + ".hex")
+        theirs_path = os.path.join(root, "bundle", reference_name(wrapper) + ".hex")
         if not os.path.exists(mine_path) or not os.path.exists(theirs_path):
             log(f"  {code:16} no capture; run the `hello` stage first")
             continue
@@ -1200,7 +1234,7 @@ def stage_hello_diff(harness, args):
 def stage_flags(harness, args):
     section(f"flags — what each wrapper names (bundle: {harness.bundle})")
     for code, wrapper, _ in selected(args):
-        if not wrapper:
+        if not wrapper or is_utls(wrapper):
             continue
         parsed = wrapper_flags(harness.bundle, wrapper)
         if parsed is None:
@@ -1255,22 +1289,57 @@ def utls_version():
     return "uTLS"
 
 
-def counterpart_capture(harness, counterpart):
-    """The other client's hello through the local listener, cached under `work/utls`."""
+def is_utls(wrapper):
+    """True when a profile's reference is a uTLS spec rather than a bundle wrapper."""
+    return bool(wrapper) and wrapper.startswith("utls:")
+
+
+def read_hex(path):
+    """The bytes in a capture file: pure hex, or hex with `#` comments and row breaks.
+
+    Our own captures are written by the listener as one hex string; a uTLS
+    capture comes from the dumper, which prints a `#` header line and 32-byte
+    rows. Both are the same record, so one reader takes both.
+    """
+    text = open(path).read()
+    digits = "".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    return bytes.fromhex(re.sub(r"[^0-9a-fA-F]", "", digits))
+
+
+def reference_name(wrapper):
+    """The reference's name as a file stem: `utls:HelloX` has no colon on disk."""
+    return wrapper.replace(":", "_")
+
+
+def counterpart_capture(harness, counterpart, args):
+    """The reference client's hello, fresh each run.
+
+    `counterpart` is a bundle wrapper name, `ours:<code>` for one of our own
+    profiles, or `utls:<HelloX>` for a spec the dumper captures — the last needs
+    the Go toolchain, which `utls_dumper` builds once per run. Nothing here is
+    cached: a stale capture is worse than none, and every one of these is cheap.
+    """
     root = os.path.join(harness.work, "utls")
     os.makedirs(root, exist_ok=True)
+    if counterpart.startswith("utls:"):
+        spec = counterpart.split(":", 1)[1]
+        path = os.path.join(root, spec + ".hex")
+        argv = [utls_dumper(harness, args), "dump", spec, "-sni", SNI, "-o", path]
+        if spec in HANDSHAKE_SPECS:
+            argv.append("-handshake")
+        done = subprocess.run(argv, capture_output=True)
+        if done.returncode != 0 or not os.path.exists(path):
+            log(f"  {spec}: {done.stderr.decode('utf-8', 'replace').strip()}")
+            return None
+        return path
     if counterpart.startswith("ours:"):
         code = counterpart.split(":", 1)[1]
         path = os.path.join(root, "ours_" + code + ".hex")
-        if os.path.exists(path):
-            return path
         with Listener(PORT) as listener:
             harness.example("liveany", code, SNI, timeout=60)
             listener.done.wait(8)
     else:
         path = os.path.join(root, "bundle_" + counterpart + ".hex")
-        if os.path.exists(path):
-            return path
         with Listener(PORT) as listener:
             run_wrapper(harness.bundle, counterpart, f"https://{SNI}/",
                         extra=("--connect-to", f"{SNI}:{PORT}:127.0.0.1:{PORT}", "--max-time", "10"))
@@ -1318,7 +1387,7 @@ def stage_utls(harness, args):
                 log(f"  {spec:32} {done.stderr.decode('utf-8', 'replace').strip()}")
                 missing.append(spec)
                 continue
-        theirs = counterpart_capture(harness, counterpart)
+        theirs = counterpart_capture(harness, counterpart, args)
         if theirs is None:
             log(f"  {spec:32} no capture for {counterpart}")
             missing.append(spec)
@@ -1560,17 +1629,40 @@ def hello_variation(harness, code):
     return set(), []
 
 
+# Differences a record's own comment names as deliberate, so a run does not report
+# a documented deviation as something to look at. The authority stays the record's
+# comment and `docs/ADDING_A_PROFILE.md`; this is the machine's copy of the same
+# fact, and the reason is printed beside the row. The two vocabularies differ —
+# the Rust `diff` prints `body 51 (key_share)` and
+# `body 65037 (encrypted_client_hello)`, the Python `hello_diff` prints
+# `body key_share` and `body ech` — so both spellings are listed.
+EXCUSED = {
+    "chrome115pq": (
+        {"body key_share", "body 51 (key_share)", "key shares"},
+        "the draft hybrid group is advertised but not shared: no provider carries it",
+    ),
+    "firefox120": (
+        {"body ech", "body 65037 (encrypted_client_hello)"},
+        "the reference pins the ECH payload length, we draw it",
+    ),
+}
+
+
 def expectations(harness, code, wrapper):
     """The differences this profile's own client explains, and why.
 
-    Two sources, both about the client rather than about the record: a measured
-    pair of its own hellos (`hello_variation`) and its wrapper's flags (a
-    key-share limit belongs to the wrapper, not to the browser). Nothing else is
-    judged here — the named differences in `tools/fingerprint/README.md` are the
-    list a reader checks the rest against, and copying them into code would be a
-    second list to keep in step.
+    Three sources, all about the client or the record rather than about the
+    measurement: a measured pair of its own hellos (`hello_variation`), its
+    wrapper's flags (a key-share limit belongs to the wrapper, not to the
+    browser), and the deviations its own comment names ([`EXCUSED`]). The named
+    differences in `tools/fingerprint/README.md` remain the list a reader checks
+    everything else against.
     """
     explained, why = hello_variation(harness, code)
+    if code in EXCUSED:
+        labels, reason = EXCUSED[code]
+        explained |= labels
+        why.append(reason)
     # A `padding` label anywhere is the same coin flip seen once: eight draws can
     # miss a one-in-four slot, while the comparison against the fork's single
     # capture cannot. The reason is printed, so a reader can tell what was
