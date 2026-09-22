@@ -214,6 +214,64 @@ pub fn create_tls_config(profile: &TlsProfile) -> Arc<ClientConfig> {
     }
 }
 
+/// The ClientHello `profile` puts on the wire, record header included.
+///
+/// The same factory the probes use, so a caller hashes what goes out rather than
+/// a re-derivation of it: the profile's lists, the version trim, the GREASE ECH
+/// body drawn for this hello, the padding the floor asks for. It is what
+/// `examples/tls_fingerprint` prints and what [`hello_ja4_variants`] hashes.
+///
+/// The SNI is a fixed name (`example.com`), the same one the harness uses when
+/// it captures bytes: it is the only field a profile takes from the domain, and
+/// its length moves the padding.
+pub fn hello_record(profile: &TlsProfile) -> Vec<u8> {
+    let config = create_tls_config(profile);
+    let name = ServerName::try_from("example.com").expect("a static name");
+    let mut conn = rustls::ClientConnection::new(config, name).expect("a client connection");
+    let mut buf = Vec::new();
+    conn.write_tls(&mut buf).expect("a ClientHello is the first flight");
+    buf
+}
+
+/// The JA4 strings `fingerprint` can send on its own offer.
+///
+/// JA4 sorts the cipher and extension sets before hashing, so it is the stable
+/// key a matcher can carry: every shape answers with one string, and the two
+/// whose hello can fall under the 512-byte floor BoringSSL pads to answer with
+/// two. `chrome123` and `chrome131android` are those two — their GREASE ECH body
+/// is drawn from four lengths per connection and only the shortest leaves the
+/// hello below the floor, so the padding extension is there on some connections
+/// and not on others (measured: `t13d1517h2_…b1ff8ab2d16f` padded,
+/// `t13d1516h2_…02713d6af862` not). The draw is per connection, so the list is
+/// collected by building the hello until both appear or [`JA4_BUILDS`] samples
+/// have run; for every other shape the first build is the whole answer.
+///
+/// JA3 is deliberately not reported: a shape that shuffles its extension order
+/// has no single JA3 by construction (see `TlsShape::permute_extensions`).
+pub fn hello_ja4_variants(fingerprint: TlsFingerprint) -> Vec<String> {
+    let profile = TlsProfile::insecure(fingerprint);
+    let mut seen: Vec<String> = Vec::new();
+    for _ in 0..JA4_BUILDS {
+        let ja4 = crate::net::ja4::client_hello_ja4(&hello_record(&profile));
+        if !seen.contains(&ja4) {
+            seen.push(ja4);
+        }
+        if seen.len() > 1 {
+            break;
+        }
+    }
+    seen.sort();
+    seen
+}
+
+/// How many hellos [`hello_ja4_variants`] may build before it settles for what it
+/// has seen. A varied shape needs both of its strings, and the rarer one is the
+/// padded hello — one connection in four — so 32 samples miss it with
+/// probability below 2·10⁻⁴; no shape has more than two (only the padding
+/// extension can appear and disappear, and JA4 ignores everything else that
+/// moves).
+const JA4_BUILDS: usize = 32;
+
 /// Providers for a fingerprint: the hybrid group is offered only where the
 /// profile advertises it, so an ordinary probe keeps byte-identical behaviour.
 fn provider_for(fingerprint: TlsFingerprint) -> Arc<rustls::crypto::CryptoProvider> {
@@ -620,5 +678,81 @@ mod tests {
             ),
             "unexpected error: {err:?}"
         );
+    }
+
+    /// A shape's JA4 is what a matcher that carries a list of keys reads, so the
+    /// two shapes measured as blocked and as passed must answer with the strings
+    /// the measurements named. `chrome107`, `chrome116`, `chrome99android` and
+    /// `edge101` are four different hellos — one of them reshuffles its
+    /// extensions every connection — and one key: that is what makes the four
+    /// rows of the burst table one entry for a censor.
+    #[test]
+    fn the_chrome_generation_without_ech_is_one_ja4() {
+        const PRE_ECH: &str = "t13d1516h2_8daaf6152771_e5627efa2ab1";
+        for fingerprint in [
+            TlsFingerprint::Chrome107,
+            TlsFingerprint::Chrome116,
+            TlsFingerprint::Chrome99Android,
+            TlsFingerprint::Edge101,
+        ] {
+            assert_eq!(
+                hello_ja4_variants(fingerprint),
+                vec![PRE_ECH.to_string()],
+                "{}",
+                fingerprint.code()
+            );
+        }
+    }
+
+    /// Only the padding floor can add a second string, and only two shapes can
+    /// reach it: the ones that carry a GREASE ECH body whose length decides
+    /// whether the hello lands under 512 bytes. Every other profile answers with
+    /// exactly one, and every string is a well-formed JA4 — the shape of the key
+    /// the legend prints and a matcher would carry.
+    #[test]
+    fn only_the_padding_floor_adds_a_second_ja4() {
+        const PADDED: &str = "t13d1517h2_8daaf6152771_b1ff8ab2d16f";
+        const SIBLING: &str = "t13d1516h2_8daaf6152771_02713d6af862";
+
+        for fingerprint in TlsFingerprint::ALL {
+            let variants = hello_ja4_variants(fingerprint);
+            assert!(!variants.is_empty(), "{}", fingerprint.code());
+            for ja4 in &variants {
+                assert!(ja4_shaped(ja4), "{}: {ja4}", fingerprint.code());
+            }
+            let expected_two = matches!(
+                fingerprint,
+                TlsFingerprint::Chrome123 | TlsFingerprint::Chrome131Android
+            );
+            assert_eq!(
+                variants.len(),
+                if expected_two { 2 } else { 1 },
+                "{}: {variants:?}",
+                fingerprint.code()
+            );
+            if expected_two {
+                assert_eq!(variants, vec![SIBLING.to_string(), PADDED.to_string()]);
+            }
+        }
+    }
+
+    /// `t13d1516h2_8daaf6152771_e5627efa2ab1`: protocol and version, the SNI and
+    /// the counts, ALPN, then the two 12-hex hashes. Asserted by shape rather than
+    /// by regex so the check needs no dependency.
+    fn ja4_shaped(value: &str) -> bool {
+        let fields: Vec<&str> = value.split('_').collect();
+        let [prefix, ciphers, extensions] = fields.as_slice() else {
+            return false;
+        };
+        let bytes = prefix.as_bytes();
+        bytes.len() == 10
+            && bytes[0] == b't'
+            && matches!(&prefix[1..3], "13" | "12")
+            && matches!(bytes[3], b'd' | b'i')
+            && prefix[4..8].bytes().all(|c| c.is_ascii_digit())
+            && prefix[8..10].bytes().all(|c| c.is_ascii_alphanumeric())
+            && ciphers.len() == 12
+            && extensions.len() == 12
+            && ciphers.bytes().chain(extensions.bytes()).all(|c| c.is_ascii_hexdigit())
     }
 }
