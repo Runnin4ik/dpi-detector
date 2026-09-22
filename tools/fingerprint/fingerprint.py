@@ -32,6 +32,12 @@ shape differs from any single capture in the extension order on every run) —
 everything else is printed as `to look at`, because only that named list can say
 whether it is expected.
 
+`utls` is the one stage that judges no profile of ours: it dumps each of the
+uTLS library's own profiles (through the Go dumper in `tools/fingerprint/utls`)
+and diffs it against the bundle's nearest wrapper, which is the question a tool
+that ships uTLS asks of the browsers we copy. It is not part of `all` for that
+reason.
+
 Usage
 -----
 
@@ -39,6 +45,7 @@ Usage
     python tools/fingerprint/fingerprint.py hello [code ...]
     python tools/fingerprint/fingerprint.py echo-diff safari18
     python tools/fingerprint/fingerprint.py flags chrome131
+    python tools/fingerprint/fingerprint.py utls
     python tools/fingerprint/fingerprint.py captures-fetch
 
 `all` runs every stage for every profile; naming codes limits it to those.
@@ -70,6 +77,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -109,6 +117,59 @@ PROFILES = [
     ("safari260", "curl_safari260", "safari_26.0_macOS.yaml"),
     ("safari260ios", "curl_safari260_ios", "safari_26.0_iOS.yaml"),
     ("tor145", "curl_tor145", "tor_14.5_macOS.yaml"),
+]
+
+# uTLS's own identifiers against the wrapper that copies the *nearest* client —
+# nearest, not equal: the bundle's oldest wrapper stands in for the specs from
+# before it, and `HelloFirefox_120` has no wrapper newer than 133 to sit beside.
+# A row that differs is not a bug; the table is what says which clients the two
+# libraries can express at all, which is the question a tool shipping uTLS has to
+# ask of the browsers we copy.
+#
+# Left out on purpose: the `*_PSK*` specs (the library refuses to build a
+# pre-shared-key hello with no session — "empty psk detected"), the
+# `HelloRandomized*` specs (the spec itself is drawn from a PRNG, so there is no
+# one shape to compare against) and the `*_Auto` aliases (each is the library's
+# own newest profile of its family, and `utlsdump list` prints what it resolves
+# to). The third field asks the dumper for a real handshake instead of marshalling
+# the spec: `HelloGolang` is built by `crypto/tls`, so it needs one.
+UTLS_PAIRS = [
+    ("HelloChrome_58", "curl_chrome99", False),
+    ("HelloChrome_62", "curl_chrome99", False),
+    ("HelloChrome_70", "curl_chrome99", False),
+    ("HelloChrome_72", "curl_chrome99", False),
+    ("HelloChrome_83", "curl_chrome99", False),
+    ("HelloChrome_87", "curl_chrome99", False),
+    ("HelloChrome_96", "curl_chrome99", False),
+    ("HelloChrome_100", "curl_chrome100", False),
+    ("HelloChrome_102", "curl_chrome104", False),
+    ("HelloChrome_106_Shuffle", "curl_chrome107", False),
+    ("HelloChrome_115_PQ", "curl_chrome116", False),
+    ("HelloChrome_120", "curl_chrome120", False),
+    ("HelloChrome_120_PQ", "curl_chrome120", False),
+    ("HelloChrome_131", "curl_chrome131", False),
+    ("HelloChrome_133", "curl_chrome133a", False),
+    ("HelloEdge_85", "curl_edge99", False),
+    ("HelloEdge_106", "curl_edge101", False),
+    ("HelloFirefox_55", "curl_firefox133", False),
+    ("HelloFirefox_56", "curl_firefox133", False),
+    ("HelloFirefox_63", "curl_firefox133", False),
+    ("HelloFirefox_65", "curl_firefox133", False),
+    ("HelloFirefox_99", "curl_firefox133", False),
+    ("HelloFirefox_102", "curl_firefox133", False),
+    ("HelloFirefox_105", "curl_firefox133", False),
+    ("HelloFirefox_120", "curl_firefox133", False),
+    ("HelloSafari_16_0", "curl_safari155", False),
+    ("HelloIOS_11_1", "curl_safari172_ios", False),
+    ("HelloIOS_12_1", "curl_safari172_ios", False),
+    ("HelloIOS_13", "curl_safari172_ios", False),
+    ("HelloIOS_14", "curl_safari172_ios", False),
+    ("HelloAndroid_11_OkHttp", "curl_chrome99_android", False),
+    ("Hello360_7_5", "curl_chrome99", False),
+    ("Hello360_11_0", "curl_chrome99", False),
+    ("HelloQQ_11_1", "curl_chrome99", False),
+    # No browser counterpart at all: the library's own Go client against ours.
+    ("HelloGolang", "ours:rustls", True),
 ]
 
 CAPTURE_REPO = "https://github.com/lexiforest/curl-impersonate.git"
@@ -1161,6 +1222,117 @@ def stage_flags(harness, args):
 
 
 # ---------------------------------------------------------------------------
+# Stage: utls — the library's own profiles against the wrapper beside them
+# ---------------------------------------------------------------------------
+
+def utls_dumper(harness, args):
+    """The Go dumper from `tools/fingerprint/utls`, built into the work directory."""
+    root = os.path.join(harness.work, "utls")
+    os.makedirs(root, exist_ok=True)
+    exe = os.path.join(root, "utlsdump" + (".exe" if os.name == "nt" else ""))
+    if args.no_build and os.path.exists(exe):
+        return exe
+    go = shutil.which("go")
+    if go is None:
+        raise SystemExit("the `utls` stage builds tools/fingerprint/utls, so it needs the Go "
+                         "toolchain on PATH")
+    done = subprocess.run([go, "build", "-o", exe, "."], cwd=os.path.join(HERE, "utls"),
+                          capture_output=True)
+    if done.returncode != 0 or not os.path.exists(exe):
+        raise SystemExit("go build failed:\n" + done.stderr.decode("utf-8", "replace"))
+    return exe
+
+
+def counterpart_capture(harness, counterpart):
+    """The other client's hello through the local listener, cached under `work/utls`."""
+    root = os.path.join(harness.work, "utls")
+    os.makedirs(root, exist_ok=True)
+    if counterpart.startswith("ours:"):
+        code = counterpart.split(":", 1)[1]
+        path = os.path.join(root, "ours_" + code + ".hex")
+        if os.path.exists(path):
+            return path
+        with Listener(PORT) as listener:
+            harness.example("liveany", code, SNI, timeout=60)
+            listener.done.wait(8)
+    else:
+        path = os.path.join(root, "bundle_" + counterpart + ".hex")
+        if os.path.exists(path):
+            return path
+        with Listener(PORT) as listener:
+            run_wrapper(harness.bundle, counterpart, f"https://{SNI}/",
+                        extra=("--connect-to", f"{SNI}:{PORT}:127.0.0.1:{PORT}", "--max-time", "10"))
+            listener.done.wait(8)
+    if len(listener.data) < 6:
+        return None
+    open(path, "w").write(listener.data.hex())
+    return path
+
+
+# The labels a difference between two clients can carry and still be the same
+# shape: an order the client shuffles per connection, and the two slots it draws
+# per connection (the 512-byte padding floor, the GREASE ECH payload length).
+DRAW_LABELS = {
+    "ext order",
+    "extensions",
+    "body 21 (padding)",
+    "body 65037 (encrypted_client_hello)",
+}
+
+
+def pair_kind(labels):
+    """What a difference between two clients is, judged by the labels `diff` printed."""
+    if labels == "SAME":
+        return "identical"
+    parts = set(labels.split(", "))
+    if parts == {"ext order"}:
+        return "the extension order"
+    if parts <= DRAW_LABELS and parts & {"body 21 (padding)", "body 65037 (encrypted_client_hello)"}:
+        return "a per-connection draw"
+    return "shape"
+
+
+def stage_utls(harness, args):
+    section("utls — the library's own profiles against the wrapper that copies the same client")
+    dumper = utls_dumper(harness, args)
+    root = os.path.join(harness.work, "utls")
+    counts, missing = {}, []
+    for spec, counterpart, handshake in UTLS_PAIRS:
+        mine = os.path.join(root, spec + (".handshake" if handshake else "") + ".hex")
+        if not os.path.exists(mine):
+            argv = [dumper, "dump", spec, "-sni", SNI, "-o", mine]
+            done = subprocess.run(argv + (["-handshake"] if handshake else []), capture_output=True)
+            if done.returncode != 0:
+                log(f"  {spec:32} {done.stderr.decode('utf-8', 'replace').strip()}")
+                missing.append(spec)
+                continue
+        theirs = counterpart_capture(harness, counterpart)
+        if theirs is None:
+            log(f"  {spec:32} no capture for {counterpart}")
+            missing.append(spec)
+            continue
+        text = harness.example("diff", mine, theirs)
+        labels = "?"
+        for line in text.splitlines():
+            if line.startswith("result"):
+                labels = line.split("=", 1)[1].strip()
+        # `3 difference(s): a, b` and `SAME` — the labels are what follows the colon.
+        if ": " in labels:
+            labels = labels.split(": ", 1)[1]
+        kind = pair_kind(labels)
+        counts[kind] = counts.get(kind, 0) + 1
+        log(f"  {spec:32} vs {counterpart:20} {labels:44} {kind}")
+        if not args.summary and labels != "SAME":
+            for line in text.splitlines():
+                if line.startswith("  ") and "DIFF" in line:
+                    log("    " + line.strip())
+    total = ", ".join(f"{n} {kind}" for kind, n in sorted(counts.items()))
+    log(f"\n  {len(UTLS_PAIRS)} pairs: {total}")
+    if missing:
+        log(f"  not captured: {', '.join(missing)}")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1288,6 +1460,7 @@ STAGES = {
     "hello": stage_hello,
     "hello-diff": stage_hello_diff,
     "flags": stage_flags,
+    "utls": stage_utls,
 }
 
 
