@@ -1024,13 +1024,15 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     //
     // Chromium 110 turned on `ssl_setup_extension_permutation`, so from 110 on
     // the extension order is drawn per connection (see
-    // `TlsShape::permute_extensions`) and JA3 stops identifying the client — the
-    // reason the forum report's Chromium rows read as partial blocks. The set,
-    // the ciphers, the groups, the signature schemes and the h2 preface are
-    // Chrome 107's, so the two records differ in exactly that one behaviour, and
-    // both are worth a column: a censor that matches a specific extension order
-    // catches 107 and cannot catch this, and one that matches the sorted set
-    // catches both.
+    // `TlsShape::permute_extensions`) and JA3 stops identifying the client. The
+    // set, the ciphers, the groups, the signature schemes and the h2 preface are
+    // Chrome 107's, so the two records differ in exactly that one behaviour —
+    // which is what makes this row the control for the question the whole table
+    // exists to answer. Measured, 116 is refused exactly like 107, and its JA4 is
+    // the same string (`t13d1516h2_8daaf6152771_e5627efa2ab1`) while its JA3 is a
+    // fresh sample every connection: a censor that matched an extension *order*
+    // could not catch it, and the one that was measured carries the key
+    // `--legend` prints for both rows.
     //
     // What it does *not* carry that Chrome 123 does: `encrypted_client_hello`,
     // `zstd` in `accept-encoding` and the rebuilt ALPS position — which is why
@@ -1073,11 +1075,15 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     //
     // Taken from the `curl-impersonate v2.2.2` bundle this repository measures
     // against (`.bat` wrapper `curl_chrome107`), and identical to what
-    // `curl_chrome99..104` send: those emit the *same* JA3, so one profile
-    // reproduces the whole deterministic half of the fingerprint list the forum
-    // report attributes to TSPU. `chrome110` and later permute the extension
-    // order (`--tls-permute-extensions`), and `chrome119+` add ECH, which is why
-    // those are reported as blocking only ~8–30% of the time.
+    // `curl_chrome99..104` send: one key,
+    // `t13d1516h2_8daaf6152771_e5627efa2ab1` (`--legend` prints it), covers this
+    // whole generation — the phone-shaped hello of `chrome99android`, the
+    // identity-swapped one of `edge101` and the shuffled one of `chrome116` all
+    // answer with that string, which is why those four rows of the burst table
+    // move together. The forum report's "chrome 99-116 / edge 99-101" is that
+    // generation; it also reported `chrome110+` as blocked only part of the time,
+    // and on the path where this was measured the whole generation was refused on
+    // every attempt while the ECH one (119+, a different key) answered every one.
     //
     // Deliberate deviations: no GREASE *version* entry (rustls builds
     // `supported_versions` from the config, and versions are not hashed) and no
@@ -1635,6 +1641,14 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     },
     // Tor Browser 14.5, as `curl_tor145` sends it: Firefox 128 ESR's hello
     // wearing the browser's own identity.
+    //
+    // What this row measures is the *wrapper's* hello, not a live Tor Browser's.
+    // The shape carries neither `psk_key_exchange_modes` (45) nor
+    // `session_ticket` (35) nor `compress_certificate` (27), and every live
+    // Firefox sends all three — both Firefox rows here do. So a block this row
+    // meets is a block of *this string*: whether Tor Browser itself answers with
+    // it is an open question, and the way to settle it is a capture of a live
+    // client measured with `hello <capture.hex>`.
     //
     // Nothing in this profile greases, and that is the shape, not an omission:
     // the wrapper passes no `--tls-grease`, the capture carries no GREASE

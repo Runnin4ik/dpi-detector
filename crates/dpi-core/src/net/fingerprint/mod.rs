@@ -3,10 +3,17 @@
 //! # Why this exists
 //!
 //! Russian censorship (see the "сибирское ограничение" scheme) classifies TLS
-//! clients by their ClientHello: Chrome/Safari/iOS-shaped fingerprints are
-//! treated as suspicious, Firefox-shaped ones usually are not. A detector that
-//! only ever presents one shape — rustls' own — cannot tell whether a block it
-//! observes is caused by the destination or by its own fingerprint.
+//! clients by their ClientHello. What a censor on the path carries is a *table of
+//! keys*, one per shape it refuses: a shape is answered with a reset when the JA4
+//! it sends — `--legend` prints every one of them — is in that table, and the
+//! entries measured so far are the generations a live client no longer sends:
+//! Chrome before ECH, Safari 15.3–18.4, and the Firefox-ESR shape the Tor wrapper
+//! reproduces. Two things follow, and both shape this module: a shape that
+//! shuffles its extension order is caught all the same, because the key is
+//! order-insensitive, and the way out of the table is another *generation*, not
+//! another order or one more extension. A detector that only ever presents one
+//! shape — rustls' own — cannot tell whether a block it observes is caused by the
+//! destination or by its own fingerprint.
 //!
 //! # How a profile is written
 //!
@@ -20,17 +27,21 @@
 //!
 //! * [`TlsFingerprint::Rustls`] — the untouched default. Every measurement the
 //!   tool has ever taken was taken with this, so it stays the baseline.
-//! * [`TlsFingerprint::Firefox133`], [`TlsFingerprint::Chrome107`],
-//!   [`TlsFingerprint::Safari155`] — the shapes the Russian TSPU has been
-//!   *reported* to block, and the Firefox-shaped client reportedly not to: the
-//!   JA3s of the `curl-impersonate` bundles the forum report names. They exist
+//! * [`TlsFingerprint::Chrome107`], [`TlsFingerprint::Safari155`],
+//!   [`TlsFingerprint::Tor145`] — the shapes the Russian TSPU has been
+//!   *reported* to block: the JA3s of the `curl-impersonate` bundles the forum
+//!   report names. Measured, the report's family list holds — Chrome 99–107 and
+//!   116, Edge 99–101 and Safari 15.3–18.4 were refused on every attempt, and so
+//!   was the Tor row — while the clients it expected to pass did pass
+//!   (`firefox133`, `firefox147`, and the newest Safari and Chrome). They exist
 //!   to answer "is this site blocked for me, or only for clients that look like
 //!   `curl_chrome107`?".
-//! * [`TlsFingerprint::Chrome146`], [`TlsFingerprint::Safari180`],
-//!   [`TlsFingerprint::Edge101`] — current releases of the same clients: Chrome
-//!   133's hello is a different shape (hybrid post-quantum group, ALPS at its
-//!   new code point), while Safari 18 and Edge send the TLS shape their older
-//!   rows already reproduce behind a current identity.
+//! * [`TlsFingerprint::Chrome146`] — current releases of the same client: Chrome
+//!   133's hello is a different shape (hybrid post-quantum group, ALPS at its new
+//!   code point), which is why the newest generation answers with a key the table
+//!   does not carry. [`TlsFingerprint::Safari180`] and
+//!   [`TlsFingerprint::Edge101`] send the TLS shape their older rows already
+//!   reproduce, behind a current identity.
 //!
 //! # What "shape" means here
 //!
@@ -278,6 +289,18 @@ impl TlsFingerprint {
     /// The profiles a run presents when nothing asked for a specific set: test
     /// 6 with no `--burst-profiles`, and the same default behind the menu.
     ///
+    /// Chosen for what each shape *answers*, not for version coverage: the
+    /// baseline, the newest release of each family, the one pair that isolates a
+    /// generation boundary (`chrome116` without `encrypted_client_hello` against
+    /// `chrome123` with it — the two differ by one extension), and one refused
+    /// shape per key family, so a run says both whether a site is reachable and
+    /// whether the censor on the path is carrying a table at all. The other
+    /// fourteen shapes are a flag away (`--burst-profiles`), and the rows the
+    /// measurements named as duplicates of these — `edge101` and
+    /// `chrome99android` answer with `chrome107`'s key, `safari170`,
+    /// `safari172ios` and `safari184ios` with another Safari row's — are not in
+    /// the default set for exactly that reason.
+    ///
     /// Kept apart from [`Self::ALL`] because the network budget of test 6 is
     /// `profiles × hosts × 2 version axes`: every shape added here is paid for
     /// on every run, so a profile joins the default set deliberately and `all`
@@ -288,11 +311,11 @@ impl TlsFingerprint {
     pub const DEFAULT_SET: [TlsFingerprint; 7] = [
         Self::Rustls,
         Self::Chrome146,
-        Self::Chrome107,
-        Self::Edge101,
-        Self::Firefox133,
-        Self::Safari180,
-        Self::Safari155,
+        Self::Chrome123,
+        Self::Chrome116,
+        Self::Firefox147,
+        Self::Safari260,
+        Self::Tor145,
     ];
 
     /// Parses a profile list for test 6: `all`, or comma/space separated names.
