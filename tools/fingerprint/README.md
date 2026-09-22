@@ -97,6 +97,23 @@ differ in the extension order, the GREASE draw and the
 size plus 42 bytes of ECH framing). None of those three is visible to any hash,
 which is what a capture is for.
 
+`probe` is the one mode that dials a real host rather than a local listener: it
+opens `-n` connections with one profile — a fresh spec per attempt for the
+randomized ones — and prints how each ended, in the vocabulary the burst table
+uses (`ok`, `timeout` for a peer that went quiet after the ClientHello, `eof`,
+`reset`, `tcp-failed`). It exists because "does this network let this shape
+through" is not a question about bytes, and a block that only shows up on a
+connection cannot be read out of a capture:
+
+```
+go run . probe HelloRandomizedALPN ezgame.su:443 -n 10 -gap 400ms -timeout 3s
+go run . probe HelloGolang ezgame.su:443 -n 10      # the control, a shape that answers
+```
+
+Attempts are spaced by `-gap` on purpose: the burst test measures a rate, while
+`probe` measures a shape, and firing ten connections into one window answers the
+rate question instead.
+
 `-seed` fixes the PRNG the `HelloRandomized*` profiles draw their spec from (32
 bytes of hex, echoed in the capture's header line, so a shape can be rebuilt);
 the client random, the session id and the GREASE values stay per-connection, so

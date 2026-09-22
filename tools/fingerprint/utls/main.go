@@ -1,15 +1,18 @@
 // Command utlsdump writes the ClientHello a uTLS client profile puts on the
 // wire, as hex, so the Rust harness can read it.
 //
-// It is a capture source and nothing else: it prints bytes, the library's own
-// label for the profile and the byte count. Every measurement — JA3, JA4, the
-// extension list, the padding length — happens in
+// It is a capture source and a probe: `dump` prints the bytes a profile sends,
+// and `probe` dials a real host with the same profile and names how the
+// connection ended, because "does this network let this shape through" cannot be
+// answered from the bytes alone. Every measurement of the bytes themselves —
+// JA3, JA4, the extension list, the padding length — happens in
 // `cargo run --release --example tls_fingerprint -- hello <file>`, so a uTLS
 // capture and a live browser capture are read by one implementation instead of
 // two that can drift apart.
 //
 //	utlsdump list
 //	utlsdump dump HelloChrome_133 [-sni example.com] [-seed <64 hex>] [-o capture.hex] [-handshake]
+//	utlsdump probe HelloRandomizedALPN ezgame.su:443 [-n 10] [-gap 500ms]
 //
 // The names are uTLS's own identifiers, not our profile names. `HelloChrome_133`
 // is the library's spec and `chrome133` would be ours: the two are not the same
@@ -27,6 +30,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -36,6 +40,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -121,6 +126,8 @@ func main() {
 		list(os.Stdout)
 	case "dump":
 		err = dump(os.Args[2:], os.Stdout)
+	case "probe":
+		err = probe(os.Args[2:], os.Stdout)
 	default:
 		usage()
 		os.Exit(2)
@@ -135,13 +142,20 @@ func usage() {
 	fmt.Fprint(os.Stderr, `utlsdump writes the ClientHello of a uTLS client profile as hex.
 
 	utlsdump list
-	utlsdump dump <profile> [-sni example.com] [-seed <64 hex>] [-o capture.hex]
+	utlsdump dump <profile> [-sni example.com] [-seed <64 hex>] [-o capture.hex] [-handshake]
+	utlsdump probe <profile> <host:port> [-sni name] [-n 10] [-gap 500ms] [-timeout 3s]
 
 The hex is read back by
 	cargo run --release --example tls_fingerprint -- hello capture.hex
 which prints its JA3, JA4 and extension list. A bare handshake message is
 accepted there too, but this tool emits the whole TLS record — what a listener
 would capture — so the file can be diffed against a real one.
+
+probe dials the host itself, one connection per attempt, and prints how each
+ended: ok (the handshake finished), timeout (the peer went quiet after the
+ClientHello — a silent drop), eof (the peer closed), reset (the peer reset),
+tcp-failed (no connection at all). The randomized profiles draw a fresh spec per
+attempt, so a run of ten is ten different hellos.
 `)
 }
 
@@ -371,4 +385,146 @@ func writeHex(w io.Writer, name string, id *utls.ClientHelloID, sni, seed string
 		}
 	}
 	return nil
+}
+
+// probe dials a real host with one profile and names how each connection ended.
+//
+// The question `dump` cannot answer: a network in between may refuse a shape
+// whatever the client does with it, and the only way to see that is to connect.
+// Every attempt is a fresh connection and a fresh spec for the randomized
+// profiles, and attempts are separated by `-gap` so the run measures a shape
+// rather than a rate.
+func probe(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("probe", flag.ExitOnError)
+	sni := fs.String("sni", "", "server name to send; empty uses the host's name")
+	attempts := fs.Int("n", 10, "connections to make")
+	timeout := fs.Duration("timeout", 3*time.Second, "how long one handshake may take")
+	gap := fs.Duration("gap", 500*time.Millisecond, "pause between attempts")
+	// Go's flag package stops at the first non-flag argument, and a profile
+	// reads better before the flags, so the flags are collected from wherever
+	// they sit and the two positionals from what is left.
+	flags, positional := splitFlags(args, map[string]bool{"sni": true, "n": true, "timeout": true, "gap": true})
+	if err := fs.Parse(flags); err != nil {
+		return err
+	}
+	if len(positional) != 2 {
+		return errors.New("probe needs a profile and a host:port")
+	}
+	name, addr := positional[0], positional[1]
+	id, known := profiles[name]
+	if !known {
+		return fmt.Errorf("unknown profile %q: run `utlsdump list`", name)
+	}
+	server := *sni
+	if server == "" {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			return fmt.Errorf("host:port expected, got %q: %w", addr, err)
+		}
+		server = host
+	}
+	fmt.Fprintf(stdout, "profile   = %s (%s)\n", name, id.Str())
+	fmt.Fprintf(stdout, "target    = %s, sni %s, %d attempts, gap %s, timeout %s\n",
+		addr, server, *attempts, *gap, *timeout)
+
+	tally := map[string]int{}
+	for attempt := 1; attempt <= *attempts; attempt++ {
+		if attempt > 1 {
+			time.Sleep(*gap)
+		}
+		outcome, detail := oneProbe(id, addr, server, *timeout)
+		tally[outcome]++
+		fmt.Fprintf(stdout, "  %2d/%-2d %-10s %s\n", attempt, *attempts, outcome, detail)
+	}
+	order := []string{"ok", "timeout", "eof", "reset", "tcp-failed", "error"}
+	parts := make([]string, 0, len(tally))
+	for _, outcome := range order {
+		if count := tally[outcome]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", outcome, count))
+		}
+	}
+	fmt.Fprintf(stdout, "  %d/%d ok: %s\n", tally["ok"], *attempts, strings.Join(parts, ", "))
+	return nil
+}
+
+// splitFlags separates flags from positionals so a caller may write them in
+// either order. `takesValue` names the flags whose value is a separate argument
+// — without it, `-n 10` would leave `10` looking positional. The index is
+// stepped by hand because taking a flag's value skips a token.
+func splitFlags(args []string, takesValue map[string]bool) (flags, positional []string) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "-") {
+			positional = append(positional, arg)
+			continue
+		}
+		flags = append(flags, arg)
+		name := strings.TrimLeft(arg, "-")
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name = name[:eq]
+		}
+		if takesValue[name] && !strings.Contains(arg, "=") && i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+	return flags, positional
+}
+
+// oneProbe makes one connection and names how it ended. The vocabulary is the
+// one the burst table uses: `ok` finished the handshake, `timeout` is a peer
+// that went quiet after the ClientHello (the silent drop), `eof` a peer that
+// closed, `reset` a peer that reset, `tcp-failed` no connection at all.
+func oneProbe(id utls.ClientHelloID, addr, sni string, timeout time.Duration) (string, string) {
+	conn, err := (&net.Dialer{Timeout: timeout}).Dial("tcp", addr)
+	if err != nil {
+		return "tcp-failed", err.Error()
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+	// A fresh draw per connection: the randomized specs write their seed back
+	// into the id they were handed, and `id` is this call's copy, so clearing it
+	// is what keeps the next attempt from repeating this one's hello.
+	id.Seed = nil
+	uconn := utls.UClient(conn, &utls.Config{ServerName: sni}, id)
+	if err := uconn.Handshake(); err != nil {
+		return probeOutcome(err), err.Error()
+	}
+	state := uconn.ConnectionState()
+	return "ok", fmt.Sprintf("%s %s", tlsVersionName(state.Version),
+		tls.CipherSuiteName(state.CipherSuite))
+}
+
+// probeOutcome names the way a failed handshake failed. The order matters:
+// a reset can arrive wrapped in a timeout-shaped error on some platforms, and a
+// deadline is what a silent drop looks like from here.
+func probeOutcome(err error) string {
+	var netErr net.Error
+	switch {
+	case errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE):
+		return "reset"
+	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
+		return "eof"
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return "timeout"
+	case errors.As(err, &netErr) && netErr.Timeout():
+		return "timeout"
+	default:
+		return "error"
+	}
+}
+
+func tlsVersionName(version uint16) string {
+	switch version {
+	case tls.VersionTLS13:
+		return "tls1.3"
+	case tls.VersionTLS12:
+		return "tls1.2"
+	case tls.VersionTLS11:
+		return "tls1.1"
+	case tls.VersionTLS10:
+		return "tls1.0"
+	default:
+		return fmt.Sprintf("0x%04x", version)
+	}
 }
