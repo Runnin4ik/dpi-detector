@@ -268,9 +268,14 @@ pub(crate) fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'st
         ("— TLS / DPI —", vec![
             ("TLS DPI", "DPI 切断或篡改 TLS: EOF、错误记录、握手异常中断"),
             ("TLS ERR", "TLS 错误: 证书不属于该站点 (未知 CA、证书过期、域名不匹配)"),
+            ("NO CA BUNDLE", "证书链未到达工具内置的 Mozilla 根证书: TLS 被拦截 (杀毒软件、代理) 或 CA 过旧"),
             ("TLS BLOCK", "TLS 版本或整个协议被阻断 (protocol_version alert)"),
             ("TLS RST", "发送 ClientHello 后收到主动 TCP RST (TLS 握手被重置)"),
             ("TLS DROP", "TLS 握手超时 — 数据包被静默丢弃 (未收到 RST)"),
+            ("TLS ALERT", "对端发来 TLS alert (握手失败、访问被拒等); 详情中会指明具体 alert"),
+            ("TLS EOF", "握手或传输中途连接关闭, 未发送 close_notify"),
+            ("TLS ABORT", "TLS 阶段连接异常中断 (ConnectionAborted / BrokenPipe)"),
+            ("TLS SPOOF", "响应根本不是 TLS: 协议版本错误、乱码或记录过大"),
             ("UNKNOWN", "未知错误 (括号内为异常类型)"),
             ("NO TLS1.3", "服务器不支持 TLS 1.3 (对于老旧服务器属于正常现象)"),
         ]),
@@ -278,6 +283,8 @@ pub(crate) fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("TCP RST", "连接被重置 (收到来自审查设备或服务器的 TCP RST 报文)"),
             ("SYN DROP", "TCP 连接超时 — SYN 已发送但未收到回复"),
             ("ABORT", "连接异常中断 (ConnectionAborted / BrokenPipe)"),
+            ("TCP ABORT", "TLS 之前连接即异常中断 (ConnectionAborted / BrokenPipe)"),
+            ("SEND TIMEOUT", "发送数据时超时 — 写入方向停滞, 而非连接或读取超时"),
             ("REFUSED", "TCP 连接被拒绝 (ECONNREFUSED)"),
             ("TIMEOUT", "超时: SYN 丢弃、读取超时或系统网络超时"),
             ("NET UNREACH", "网络不可达 (ICMP unreachable)"),
@@ -287,6 +294,7 @@ pub(crate) fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'st
         ("— DNS —", vec![
             ("DNS FAIL", "域名无法通过系统解析器成功解析"),
             ("DNS FAKE", "域名解析 IP 命中已知的运营商拦截页面"),
+            ("LOCAL IP", "域名解析到本机或私有地址: 路由器自身页面或局域网内的运营商拦截页"),
             ("TIMEOUT", "DNS 服务器在规定时间内未响应"),
             ("BLOCKED", "DoH 服务器被运营商阻断 (HTTP 请求失败)"),
             ("NXDOMAIN", "该 DNS 服务器确认该域名不存在"),
@@ -306,6 +314,7 @@ pub(crate) fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("UNKNOWN", "未知异常 (括号内为具体异常类型)"),
             ("TIMEOUT", "服务器接受了连接但未及时返回数据: DPI 切断/限速、丢包或服务器过载"),
             ("POOL TIMEOUT", "套接字连接池耗尽 — 请降低并发连接数"),
+            ("ERR", "检查未能执行 (SNI 或 IP 无效、任务失败) — 这不是对网络的判定"),
         ]),
     ]
 }

@@ -244,4 +244,26 @@ mod tests {
         assert_eq!(dpi_core::ProgressBlock::Egress.token(), "EGRESS");
     }
 
+    /// Every badge a report can show has a row in `--legend`, in every
+    /// language: the term column is written as `{: <14}` between colour codes,
+    /// so the row is asserted as that exact cell. The vocabulary is walked
+    /// through `DpiStatus::ALL`, which after the removal of the four variants
+    /// that had no producer is exactly the set of badges a report can carry.
+    #[test]
+    fn legend_explains_every_badge() {
+        for lang in Language::ALL {
+            let msg = get_messages(lang);
+            let text = legend_text(lang, &msg);
+            for status in dpi_core::classify::DpiStatus::ALL {
+                let cell = format!("\x1b[36m{:<14}\x1b[0m", status.display_label());
+                assert!(
+                    text.contains(&cell),
+                    "{} has no legend row for {}",
+                    lang.label(),
+                    status.display_label()
+                );
+            }
+        }
+    }
+
 }

@@ -268,9 +268,14 @@ pub(crate) fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'st
         ("- TLS / DPI -", vec![
             ("TLS DPI", "Tajhizat-e DPI ettesal-e TLS ra dastkari ya ghat mikonand: EOF, record-e kharab, laghv-e mosafhe"),
             ("TLS ERR", "Khata-ye TLS: gavahi nemitavanad male-e in site bashad (marja'-e nashenakhte, monghazi, adam-e tatabogh-e name)"),
+            ("NO CA BUNDLE", "Zanjire-ye gavahi be rishe-ye Mozilla dar abzar nemiresad: dastkari-e TLS (antivirus, proxy) ya CA-ye ghadimi"),
             ("TLS BLOCK", "Masdoodsazi-e noskhe ya kole protocol-e TLS (ekhtar-e protocol_version)"),
             ("TLS RST", "Baste-ye fa'al-e TCP RST pas az ersal-e ClientHello (reset-e mosafhe-ye TLS)"),
             ("TLS DROP", "Etmam-e mohlat-e mosafhe-ye TLS - packet ha hazf shodand"),
+            ("TLS ALERT", "Taraf-e moghabel ekhtar-e TLS ferestad (handshake failure, access denied, ...); no'-e ekhtar dar tafsilat ast"),
+            ("TLS EOF", "Ettesal dar miane-ye mosafhe ya enteghal bedun-e close_notify baste shod"),
+            ("TLS ABORT", "Ettesal dar marhale-ye TLS laghv shod (ConnectionAborted / BrokenPipe)"),
+            ("TLS SPOOF", "Pasokh aslan TLS nist: noskhe-ye eshtebah, data-ye kharab ya record-e besyar bozorg"),
             ("UNKNOWN", "Khatay-e nashenakhte (no'-e khata dar parantez)"),
             ("NO TLS1.3", "Kargozar az TLS 1.3 poshtibani nemikonad (tabi'i baraye kargozar-haye ghadimi)"),
         ]),
@@ -278,6 +283,8 @@ pub(crate) fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("TCP RST", "Ettesal reset shod (baste-ye TCP RST tavasot-e filtering ya kargozar)"),
             ("SYN DROP", "Etmam-e mohlat-e ettesal-e TCP - baste-ye SYN ersal shod vali pasokhi nayamad"),
             ("ABORT", "Ettesal laghv shod (ConnectionAborted / BrokenPipe)"),
+            ("TCP ABORT", "Ettesal pish az TLS laghv shod (ConnectionAborted / BrokenPipe)"),
+            ("SEND TIMEOUT", "Etmam-e mohlat dar ersal-e data - samte neveshtan motevaghef shod, na connect ya khanesh"),
             ("REFUSED", "Ettesal-e TCP rad shod (ECONNREFUSED)"),
             ("TIMEOUT", "Etmam-e mohlat: dur andakhtan-e SYN, mohlat-e khandan ya khatay-e system"),
             ("NET UNREACH", "Masir-e shabake dar dastras nist (ICMP unreachable)"),
@@ -287,6 +294,7 @@ pub(crate) fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'st
         ("- DNS -", vec![
             ("DNS FAIL", "Domain az tarigh-e kargozar-e system hal nashod"),
             ("DNS FAKE", "Adres-e IP ba blockpage-e era'e-dahande motabeghat darad"),
+            ("LOCAL IP", "Name be yek adres-e mahali ya private hal shod: safhe-ye khode router ya blockpage-e era'e-dahande dar shabake-ye mahali"),
             ("TIMEOUT", "Kargozar-e DNS dar zaman-e mogharrar pasokh nadad"),
             ("BLOCKED", "Kargozar-e DoH tavasot-e era'e-dahande masdood shode ast"),
             ("NXDOMAIN", "Be gofte-ye in kargozar, domain vojud nadarad"),
@@ -306,6 +314,7 @@ pub(crate) fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("UNKNOWN", "Khatay-e nashenakhte (no'-e khata dar parantez)"),
             ("TIMEOUT", "Pasokhi az kargozar dar zaman-e mogharrar naresid: ekhtelal/kondi-ye DPI, oft-e packet ya bar-e kargozar"),
             ("POOL TIMEOUT", "Takmil-e zarfiyat-e socket ha - lotfan teedade worker ha ra kahesh dahid"),
+            ("ERR", "Barresi aslan ejra nashod (SNI ya IP-e eshtebah, khata-ye karmand) - in yek verdict darbare-ye shabake nist"),
         ]),
     ]
 }

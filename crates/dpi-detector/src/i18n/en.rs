@@ -272,9 +272,14 @@ pub(crate) fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'st
         ("— TLS / DPI —", vec![
             ("TLS DPI", "DPI tears down or tampers with TLS: EOF, bad record, handshake abort"),
             ("TLS ERR", "TLS error: the certificate cannot be the site's (unknown CA, expired, hostname mismatch)"),
+            ("NO CA BUNDLE", "The chain does not reach a Mozilla root the tool ships: TLS interception (antivirus, proxy) or a legacy CA"),
             ("TLS BLOCK", "TLS version or protocol blocked wholesale (protocol_version alert)"),
             ("TLS RST", "Active TCP RST on ClientHello (TLS handshake reset)"),
             ("TLS DROP", "TLS handshake timeout — packets silently dropped (no RST)"),
+            ("TLS ALERT", "The peer sent a TLS alert (handshake failure, access denied, …); the detail names the alert"),
+            ("TLS EOF", "Connection closed mid-handshake or mid-transfer without a close_notify"),
+            ("TLS ABORT", "Connection aborted during the TLS stage (ConnectionAborted / BrokenPipe)"),
+            ("TLS SPOOF", "The reply is not TLS at all: wrong version number, garbage or an oversized record"),
             ("UNKNOWN", "Unknown error (exception type in parentheses)"),
             ("NO TLS1.3", "Server does not support TLS 1.3 (normal for old servers)"),
         ]),
@@ -282,6 +287,8 @@ pub(crate) fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("TCP RST", "Connection reset (TCP RST from DPI or server)"),
             ("SYN DROP", "TCP connection timeout — SYN sent, no reply"),
             ("ABORT", "Connection aborted (ConnectionAborted / BrokenPipe)"),
+            ("TCP ABORT", "Connection aborted before TLS (ConnectionAborted / BrokenPipe)"),
+            ("SEND TIMEOUT", "Timeout while sending data — the write side stalled, not connect or read"),
             ("REFUSED", "TCP connection refused (ECONNREFUSED)"),
             ("TIMEOUT", "Timeout: SYN drop, read timeout or OS timeout"),
             ("NET UNREACH", "No route to network (ICMP unreachable)"),
@@ -291,6 +298,7 @@ pub(crate) fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'st
         ("— DNS —", vec![
             ("DNS FAIL", "Domain did not resolve via the system resolver"),
             ("DNS FAKE", "Domain IP matches a known provider stub"),
+            ("LOCAL IP", "The name resolved to a local or private address: the router's own page or an ISP stub on the LAN"),
             ("TIMEOUT", "DNS server did not answer in time"),
             ("BLOCKED", "DoH server blocked by provider (HTTP failed)"),
             ("NXDOMAIN", "Domain does not exist according to this server"),
@@ -310,6 +318,7 @@ pub(crate) fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("UNKNOWN", "Unknown error (exception type in parentheses)"),
             ("TIMEOUT", "Server accepted the request but the reply never arrived: DPI break/throttling, packet loss or server overload"),
             ("POOL TIMEOUT", "Socket pool exhausted — lower MAX_CONCURRENT"),
+            ("ERR", "The check could not run at all (bad SNI or IP, worker failure) — not a network verdict"),
         ]),
     ]
 }

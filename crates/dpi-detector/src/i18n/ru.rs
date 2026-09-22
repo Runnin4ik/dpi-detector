@@ -271,9 +271,14 @@ pub(crate) fn legend_sections() -> Vec<(&'static str, Vec<(&'static str, &'stati
         ("— TLS / DPI —", vec![
             ("TLS DPI", "DPI обрывает или манипулирует TLS: EOF, bad record, handshake abort"),
             ("TLS ERR", "Ошибка TLS: сертификат не может принадлежать сайту (неизвестный CA, просрочен, чужое имя хоста)"),
+            ("NO CA BUNDLE", "Цепочка не дошла до корня из вшитого списка Mozilla: перехват TLS (антивирус, прокси) или устаревший CA"),
             ("TLS BLOCK", "Блокировка версии TLS или протокола целиком (protocol_version alert)"),
             ("TLS RST", "Активный TCP RST на ClientHello (сброс TLS-хендшейка)"),
             ("TLS DROP", "Таймаут TLS-хендшейка — пакеты молча отброшены (нет RST)"),
+            ("TLS ALERT", "Пир прислал TLS alert (handshake failure, access denied, …) — в деталях назван сам alert"),
+            ("TLS EOF", "Соединение закрыто в середине хендшейка или передачи без close_notify"),
+            ("TLS ABORT", "Соединение прервано на этапе TLS (ConnectionAborted / BrokenPipe)"),
+            ("TLS SPOOF", "Ответ вообще не TLS: чужая версия протокола, мусор или слишком большая запись"),
             ("UNKNOWN", "Неизвестная ошибка (в скобках — тип исключения)"),
             ("NO TLS1.3", "Сервер не поддерживает TLS 1.3 (норма для старых серверов)"),
         ]),
@@ -281,6 +286,8 @@ pub(crate) fn legend_sections() -> Vec<(&'static str, Vec<(&'static str, &'stati
             ("TCP RST", "Соединение сброшено (TCP RST пакет от DPI или сервера)"),
             ("SYN DROP", "Таймаут TCP-соединения — SYN отправлен, ответа нет"),
             ("ABORT", "Соединение прервано (ConnectionAborted / BrokenPipe)"),
+            ("TCP ABORT", "Соединение прервано до TLS (ConnectionAborted / BrokenPipe)"),
+            ("SEND TIMEOUT", "Таймаут при отправке данных — встала запись, а не connect или чтение"),
             ("REFUSED", "TCP соединение отклонено (ECONNREFUSED)"),
             ("TIMEOUT", "Таймаут: SYN Drop, Read timeout или OS timeout"),
             ("NET UNREACH", "Нет маршрута до сети (ICMP unreachable)"),
@@ -290,6 +297,7 @@ pub(crate) fn legend_sections() -> Vec<(&'static str, Vec<(&'static str, &'stati
         ("— DNS —", vec![
             ("DNS FAIL", "Домен не разрешился через системный резолвер"),
             ("DNS FAKE", "IP домена совпадает с известной заглушкой провайдера"),
+            ("LOCAL IP", "Имя разрешилось в локальный или приватный адрес: страница самого роутера или заглушка провайдера в локальной сети"),
             ("TIMEOUT", "DNS-сервер не ответил в отведённое время"),
             ("BLOCKED", "DoH-сервер заблокирован провайдером (HTTP не прошёл)"),
             ("NXDOMAIN", "Домен не существует по мнению этого сервера"),
@@ -309,6 +317,7 @@ pub(crate) fn legend_sections() -> Vec<(&'static str, Vec<(&'static str, &'stati
             ("UNKNOWN", "Неизвестная ошибка (в скобках — тип исключения)"),
             ("TIMEOUT", "Сервер принял запрос, но ответ не пришёл вовремя: DPI-обрыв/замедление, потеря пакетов или перегрузка сервера"),
             ("POOL TIMEOUT", "Исчерпан пул сокетов — снизьте MAX_CONCURRENT"),
+            ("ERR", "Проверка вообще не запустилась (плохой SNI или IP, сбой задачи) — это не вердикт о сети"),
         ]),
     ]
 }
