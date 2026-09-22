@@ -25,8 +25,12 @@
 //! `padding:<n>`, `no-padding`, `alpn-reverse`) so a difference in a verdict can
 //! only come from that one change, and `hello` reads a ClientHello captured
 //! anywhere else — a live browser, a uTLS build, a bundle `.hex` — and prints
-//! its JA3/JA4 without needing a profile of ours or a network. `variant` needs a
-//! profile: the baseline (`rustls`) presents none, so there is nothing to edit.
+//! its JA3/JA4 without needing a profile of ours or a network.
+//! `tools/fingerprint/utls` produces such a capture from a named uTLS profile
+//! (`go run . dump HelloChrome_133 -o capture.hex`), which is what a
+//! circumvention tool puts on the wire — a different question from what a
+//! browser sends. `variant` needs a profile: the baseline (`rustls`) presents
+//! none, so there is nothing to edit.
 //!
 //! Every `live` form takes an optional host list; `live`/`live13` pin TLS 1.3
 //! (test 2's first column), `live12` pins 1.2, and `liveany` sends the browser's

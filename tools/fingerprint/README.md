@@ -38,6 +38,39 @@ whose JA4 does not move (`+grease`, `padding:<n>`, `sigalg-swap` for JA3) are
 the controls: a verdict that changes on one of them says the matcher reads more
 than the hash.
 
+## uTLS captures (`utls/`)
+
+The Python tool above compares us against the browser we copy. This one answers
+the other question — what a *circumvention tool* sends — by dumping the
+ClientHello of a named uTLS profile, which is what the tools that ship uTLS put
+on the wire:
+
+```
+cd tools/fingerprint/utls
+go run . list                                         # the library's own identifiers
+go run . dump HelloChrome_133 -o ../../../target/fingerprint/utls-chrome133.hex
+go run . dump HelloRandomized -seed 0001…1f -o ../../../target/fingerprint/utls-random.hex
+cargo run --release --example tls_fingerprint -- hello target/fingerprint/utls-chrome133.hex
+```
+
+It prints hex and nothing else — no JA3, no JA4, no verdict — so a uTLS capture
+and a live-browser capture are read by the one implementation in
+`tls_fingerprint.rs` instead of two that can drift apart. The names are uTLS's
+(`HelloChrome_133`), not ours (`chrome146`), because the two are not the same
+hello: measured, uTLS `HelloChrome_133` and our `chrome146` answer with the same
+JA4 (`t13d1516h2_8daaf6152771_d8a2da3f94cd`) and the same extension set, and
+differ in the extension order, the GREASE draw and the
+`encrypted_client_hello` body (218 bytes against 282 — both a BoringSSL payload
+size plus 42 bytes of ECH framing). None of those three is visible to any hash,
+which is what a capture is for.
+
+`-seed` fixes the PRNG the `HelloRandomized*` profiles draw their spec from (32
+bytes of hex, echoed in the capture's header line, so a shape can be rebuilt);
+the client random, the session id and the GREASE values stay per-connection, so
+compare a seeded pair by JA3/JA4 and not by bytes. The module pins uTLS v1.8.2 —
+the release `docs/FINGERPRINT_PLAN.md` lists as the source of our extension
+lists — so a capture and a transcription cannot come from two different ones.
+
 ## The three comparisons
 
 Weakest to strongest. A profile is done when it is `SAME` in `hello-diff`, or
@@ -122,3 +155,6 @@ bundle directory — pass `--bundle DIR`, set `$CURL_IMPERSONATE_DIR`, or keep i
 under `~/Downloads` where the tool finds it. The `echo` stage reaches
 `tls.peet.ws`; `headers` and `hello` bind `127.0.0.1:443` and drive both clients
 at it, so they need no network.
+
+Go 1.27+ is needed only by `utls/`, which is a module of its own: it is outside
+the workspace, is not part of `cargo test`, and builds a binary only when asked.
