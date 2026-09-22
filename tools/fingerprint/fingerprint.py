@@ -1387,6 +1387,53 @@ def report_version(name, draws, args):
         first = draws[0]
         log(f"  {'':26} ciphers {len(first['ja3'].split(',')[1].split('-'))}, "
             f"exts {len(first['exts'].split('-'))}, key shares {first['key_share']}")
+    return {
+        "ja4": ja4,
+        "ja3_variants": len(ja3),
+        "ext_sets": len(sets),
+        "sizes": sizes,
+        "key_share": draws[0]["key_share"],
+        "ciphers": len(draws[0]["ja3"].split(",")[1].split("-")),
+        "exts": len(draws[0]["exts"].split("-")),
+    }
+
+
+def print_ja4_groups(collected):
+    """Which clients share a JA4 — and a block on one hash takes all of them.
+
+    This is the note a matcher needs: JA4 is what a middlebox can pin when JA3 is
+    permuted per connection, so the members of one group fall together, whatever
+    their version, their PQ key share or their extension order. A client that
+    draws two hashes is listed under both, and that is the padding coin — a block
+    on one of them drops only the connections that draw it.
+
+    The `HelloRandomized*` specs are left out: their hash is new on every
+    connection, so they are in no group by construction.
+    """
+    groups = {}
+    for name, summary in collected.items():
+        if name.startswith("HelloRandomized"):
+            continue
+        for ja4 in summary["ja4"]:
+            groups.setdefault(ja4, []).append(name)
+    log(f"\n  --- by JA4: {len(groups)} hashes over "
+        f"{sum(1 for name in collected if not name.startswith('HelloRandomized'))} clients")
+    for ja4, members in sorted(groups.items(), key=lambda item: (-len(item[1]), item[0])):
+        members.sort()
+        log(f"  {ja4:44} {len(members):2}  {', '.join(members)}")
+        shares = sorted({collected[name]["key_share"] for name in members})
+        shuffling = sum(1 for name in members if collected[name]["ja3_variants"] > 1)
+        extra = []
+        if len(shares) > 1:
+            extra.append("key shares " + " / ".join(shares))
+        if shuffling:
+            extra.append(f"{shuffling} permute the order")
+        if len({collected[name]["exts"] for name in members}) > 1:
+            extra.append("extension counts " +
+                         "/".join(str(n) for n in sorted({collected[name]["exts"]
+                                                          for name in members})))
+        if extra:
+            log(f"  {'':44}     {'; '.join(extra)}")
 
 
 def stage_versions(harness, args):
@@ -1406,6 +1453,7 @@ def stage_versions(harness, args):
     section("versions — every client the two sources ship, by what it sends and what moves")
     root = os.path.join(harness.work, "versions")
     os.makedirs(root, exist_ok=True)
+    collected = {}
     for wrapper in wrapper_names(harness.bundle):
         draws = []
         for index in range(VERSION_DRAWS):
@@ -1421,13 +1469,14 @@ def stage_versions(harness, args):
             if "ja4" in fields:
                 draws.append(fields)
         if draws:
-            report_version(wrapper, draws, args)
+            collected[wrapper] = report_version(wrapper, draws, args)
         else:
             log(f"  {wrapper:26} no capture")
 
     dumper = utls_dumper(harness, args, required=False)
     if dumper is None:
         log("\n  uTLS ladder skipped: no Go toolchain on PATH")
+        print_ja4_groups(collected)
         return
     specs = [line.split()[0] for line in
              subprocess.run([dumper, "list"], capture_output=True).stdout.decode().splitlines()
@@ -1452,12 +1501,13 @@ def stage_versions(harness, args):
             if "ja4" in fields:
                 draws.append(fields)
         if draws:
-            report_version(spec, draws, args)
+            collected[spec] = report_version(spec, draws, args)
         elif spec not in refused:
             log(f"  {spec:26} no capture")
     if refused:
         log(f"\n  not captured ({len(refused)}): {', '.join(refused)}")
         log("  the library builds a pre-shared-key hello only with a session (\"empty psk detected\")")
+    print_ja4_groups(collected)
 
 
 # ---------------------------------------------------------------------------

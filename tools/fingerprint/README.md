@@ -127,6 +127,16 @@ does not hash the group list at all (JA3 does). The four `*_PSK*` specs are name
 at the end as not captured: the library builds a pre-shared-key hello only with a
 session.
 
+The stage ends with the same data inverted — which clients share a JA4 — and that
+is the list a matcher needs, because a block on one hash takes every member:
+seventeen clients share `t13d1516h2_8daaf6152771_e5627efa2ab1` (Chrome 96 to 116,
+Edge 99/101, QQ), seven share the `d8a2da3f94cd` of Chrome 133 to 146, and nine
+share `02713d6af862` across two key-share generations (MLKEM768, the Kyber draft,
+and none) with both extension counts. The one exception is the padding coin: a
+client that draws two hashes is listed under both, so a single-hash block drops
+only the connections that draw it — which is the case where "that version is
+blocked" and "half of its connections are blocked" look the same from outside.
+
 ## The three comparisons
 
 Weakest to strongest. A profile is done when it is `SAME` in `hello-diff`, or
