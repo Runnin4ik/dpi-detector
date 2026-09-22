@@ -7,12 +7,26 @@
 //! cargo run --release --example tls_fingerprint dump rustls   # wire bytes only
 //! cargo run --release --example tls_fingerprint dump13 chrome  # pinned to TLS 1.3
 //! cargo run --release --example tls_fingerprint dump12 chrome  # pinned to TLS 1.2
+//! cargo run --release --example tls_fingerprint dump-alpn chrome107 h1  # ALPN pinned
+//! cargo run --release --example tls_fingerprint dump-hex chrome107 > capture.hex
+//! cargo run --release --example tls_fingerprint variant chrome107 sigalg-swap  # one delta
+//! cargo run --release --example tls_fingerprint hello capture.hex  # bytes from elsewhere
 //! cargo run --release --example tls_fingerprint live firefox  # real servers
 //! cargo run --release --example tls_fingerprint liveany firefox # the unpinned offer
 //! cargo run --release --example tls_fingerprint live12 firefox hub.docker.com
 //! cargo run --release --example tls_fingerprint peet firefox   # the h2 shape, echoed
 //! cargo run --release --example tls_fingerprint headers firefox localhost # the h1 request
 //! ```
+//!
+//! `dump-alpn`, `variant` and `hello` are the shape-probing half of the same
+//! instrument. `dump-alpn` pins the ALPN offer (it moves JA4's ALPN field and
+//! nothing else), `variant` applies one delta to the profile's own hello
+//! (`sigalg-swap`, `+grease`, `+ext:<id>`, `-ext:<id>`, `+group:<id>`,
+//! `padding:<n>`, `no-padding`, `alpn-reverse`) so a difference in a verdict can
+//! only come from that one change, and `hello` reads a ClientHello captured
+//! anywhere else — a live browser, a uTLS build, a bundle `.hex` — and prints
+//! its JA3/JA4 without needing a profile of ours or a network. `variant` needs a
+//! profile: the baseline (`rustls`) presents none, so there is nothing to edit.
 //!
 //! Every `live` form takes an optional host list; `live`/`live13` pin TLS 1.3
 //! (test 2's first column), `live12` pins 1.2, and `liveany` sends the browser's
@@ -116,18 +130,24 @@
 //!    service reports, and the profile is then blamed for the network. When an
 //!    echo result disagrees with a captured-byte comparison, trust the bytes.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use dpi_core::net::fingerprint::{http_identity, TlsFingerprint};
+use dpi_core::net::tls::{create_tls_config, hello_record, TlsProfile, TlsVersion};
 use dpi_core::net::{ja3, ja4};
-use dpi_core::net::tls::{create_tls_config, TlsProfile, TlsVersion};
 use dpi_core::probe::http::{request_headers, HttpRequest, HttpSender};
 use http_body_util::BodyExt;
 use hyper::Method;
 use hyper_util::rt::TokioIo;
+use rustls::client::hello_profile::{ClientHelloProfile, GREASE_EXTENSION_MARKER};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
+
+/// `padding` (RFC 7685): the extension a profile's `padding_to` floor writes, and
+/// the one delta that can add a second JA4 to a shape.
+const EXT_PADDING: u16 = 21;
 
 /// Hosts that must accept a browser-shaped hello, chosen because they exercise
 /// different stacks: a fingerprint echo service, two ECH-aware frontends, and
@@ -146,17 +166,29 @@ async fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "dump".into());
     let which = std::env::args().nth(2).unwrap_or_else(|| "firefox".into());
     let extra: Vec<String> = std::env::args().skip(3).collect();
+
+    // `hello` takes a path where every other mode takes a profile code, and it
+    // needs no config of ours at all: the bytes are the whole input.
+    if mode == "hello" {
+        hello_file(&which);
+        return;
+    }
+
     let hosts: Vec<String> = if extra.is_empty() {
         HOSTS.iter().map(|h| (*h).to_string()).collect()
     } else {
-        extra
+        extra.clone()
     };
-    let fingerprint = TlsFingerprint::parse(&which).expect("profile must be rustls|firefox|chrome|safari");
+    let fingerprint =
+        TlsFingerprint::parse(&which).expect("profile must be one of the codes --legend prints");
 
     match mode.as_str() {
         "dump" => dump(fingerprint, TlsVersion::Any),
         "dump13" => dump(fingerprint, TlsVersion::Tls13),
         "dump12" => dump(fingerprint, TlsVersion::Tls12),
+        "dump-alpn" => dump_alpn(fingerprint, extra.first().map(String::as_str).unwrap_or("h1")),
+        "dump-hex" => println!("{}", hex(&client_hello(fingerprint, TlsVersion::Any))),
+        "variant" => variant(fingerprint, extra.first().map(String::as_str).unwrap_or("sigalg-swap")),
         "live" => live(fingerprint, &hosts, TlsVersion::Tls13).await,
         "live13" => live(fingerprint, &hosts, TlsVersion::Tls13).await,
         "live12" => live(fingerprint, &hosts, TlsVersion::Tls12).await,
@@ -164,22 +196,31 @@ async fn main() {
         "peet" => peet(fingerprint).await,
         "headers" => headers(fingerprint, hosts.first().map(String::as_str).unwrap_or("localhost")).await,
         other => panic!(
-            "unknown mode {other}, expected dump|dump13|dump12|live|live13|live12|liveany|peet|headers"
+            "unknown mode {other}, expected dump|dump13|dump12|dump-alpn|variant|hello|live|live13|live12|liveany|peet|headers"
         ),
     }
 }
 
-fn client_hello(fingerprint: TlsFingerprint, version: TlsVersion) -> Vec<u8> {
-    // Same factory the probes use, so the dump reflects the real wire shape
-    // (including the baseline compression policy and the version trim) rather
-    // than a hand-built config.
-    let profile = match version {
+/// The profile a mode presents: `version` pins the offer where the mode pins one
+/// (test 2's two columns, test 6's TLS axis), `Any` is the browser's own offer.
+fn profile_for(fingerprint: TlsFingerprint, version: TlsVersion) -> TlsProfile {
+    match version {
         TlsVersion::Tls12 => TlsProfile::insecure(fingerprint).tls12(),
         TlsVersion::Tls13 => TlsProfile::insecure(fingerprint).tls13(),
         TlsVersion::Any => TlsProfile::insecure(fingerprint),
-    };
-    let config = create_tls_config(&profile);
+    }
+}
 
+fn client_hello(fingerprint: TlsFingerprint, version: TlsVersion) -> Vec<u8> {
+    // The crate's own builder, so the dump reflects the real wire shape
+    // (the baseline compression policy, the version trim, the GREASE ECH body and
+    // the padding floor drawn for this hello) rather than a hand-built config —
+    // and so the hashes printed here are the ones `--legend` prints.
+    hello_record(&profile_for(fingerprint, version))
+}
+
+/// Writes the first flight of `config` into a buffer.
+fn write_hello(config: Arc<rustls::ClientConfig>) -> Vec<u8> {
     let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
     let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
     let mut buf = Vec::new();
@@ -187,30 +228,247 @@ fn client_hello(fingerprint: TlsFingerprint, version: TlsVersion) -> Vec<u8> {
     buf
 }
 
-fn dump(fingerprint: TlsFingerprint, version: TlsVersion) {
-    let buf = client_hello(fingerprint, version);
-    println!("profile   = {}", fingerprint.code());
-    println!("record    = {} bytes", buf.len() - 5);
-    println!("ja3       = {}", ja3::client_hello_ja3(&buf));
-    println!("ja4       = {}", ja4::client_hello_ja4(&buf));
+/// The record as lowercase hex, one line — what `hello` reads back, so a shape
+/// can be saved, diffed and re-measured without a network:
+/// `dump-hex chrome107 > capture.hex && hello capture.hex`.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The dump every shape-printing mode shares: the record size, both hashes, and
+/// the two lists neither hash names.
+fn print_dump(title: &str, record: &[u8]) {
+    println!("{title}");
+    println!("record    = {} bytes", record.len() - 5);
+    println!("ja3       = {}", ja3::client_hello_ja3(record));
+    println!("ja4       = {}", ja4::client_hello_ja4(record));
     println!(
         "exts      = {}",
-        ja3::extension_types(&buf)
+        ja3::extension_types(record)
             .iter()
             .map(|t| t.to_string())
             .collect::<Vec<_>>()
             .join("-")
     );
-    println!("key_share = {}", ja3::key_share_groups(&buf));
+    println!("key_share = {}", ja3::key_share_groups(record));
+}
+
+fn dump(fingerprint: TlsFingerprint, version: TlsVersion) {
+    let record = client_hello(fingerprint, version);
+    print_dump(&format!("profile   = {}", fingerprint.code()), &record);
+}
+
+/// `dump-alpn <profile> <h2|h1|h1h2>`: the same hello with the ALPN offer pinned.
+///
+/// The pin moves the ALPN extension's body and JA4's two-character ALPN field and
+/// nothing else, which is the point: `h1` turns `chrome107`'s
+/// `t13d1516h2_8daaf6152771_e5627efa2ab1` into `t13d1516h1_8daaf6152771_e5627efa2ab1`
+/// with the same cipher hash, the same extension hash, the same counts and the
+/// same record size. `h1h2` keeps both protocols and reverses them, which moves
+/// JA4's field to `h1` while the ALPN *list* still names h2.
+fn dump_alpn(fingerprint: TlsFingerprint, alpn: &str) {
+    let offered: Vec<Vec<u8>> = match alpn {
+        "h2" | "http2" | "http/2" => vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+        "h1" | "http1.1" | "http/1.1" => vec![b"http/1.1".to_vec()],
+        "h1h2" | "reverse" => vec![b"http/1.1".to_vec(), b"h2".to_vec()],
+        other => panic!("unknown alpn {other}, expected h2|h1|h1h2"),
+    };
+    let record = hello_record(&profile_for(fingerprint, TlsVersion::Any).alpn(offered));
+    print_dump(&format!("profile   = {} (alpn {alpn})", fingerprint.code()), &record);
+}
+
+/// `variant <profile> <delta>`: one delta off the profile's own hello.
+///
+/// The probes ask what a middlebox does with a shape; a variant asks what it
+/// reads *in* one. Each delta changes exactly one thing, so a verdict or a hash
+/// that moves can only have moved because of it:
+///
+/// * `sigalg-swap` — swaps the first two signature schemes. JA3 hashes extension
+///   *types* and cannot see it; JA4 appends the schemes in wire order and changes.
+/// * `+grease` — one more GREASE extension slot. Both hashes filter GREASE, so a
+///   verdict that moves here means the matcher reads raw bytes rather than a hash.
+/// * `+ext:<id>` / `-ext:<id>` — an unassigned extension added with an empty body,
+///   or one dropped (and suppressed, so rustls does not re-add it later).
+/// * `+group:<id>` — one more `supported_groups` entry, key share unchanged.
+/// * `padding:<n>` / `no-padding` — the floor the 512-byte pad is computed from.
+///   The JA4s cannot see the padding *length*, only the extension's presence.
+/// * `alpn-reverse` — which protocol JA4 names, with the list untouched.
+fn variant(fingerprint: TlsFingerprint, delta: &str) {
+    let delta = Delta::parse(delta);
+    let profile = profile_for(fingerprint, TlsVersion::Any);
+    // The factory hands out an `Arc` (a verifying shape is cached and shared),
+    // and this edit is private to the run: unwrap it into an owned config.
+    let mut config = Arc::try_unwrap(create_tls_config(&profile))
+        .unwrap_or_else(|shared| (*shared).clone());
+
+    // A variant is a real hello: the edit lands on the same `ClientHelloProfile`
+    // the builder filled, through the fields the patch reads, so what is printed
+    // is what an encoder does with the change rather than a second implementation
+    // of the encoder. The baseline presents no profile — nothing to edit.
+    let shared = config
+        .hello_profile
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} presents no profile, so there is nothing to edit", fingerprint.code()));
+    let mut edited = (**shared).clone();
+    delta.apply(&mut edited, &mut config.alpn_protocols);
+    config.hello_profile = Some(Arc::new(edited));
+
+    let record = write_hello(Arc::new(config));
+    print_dump(&format!("profile   = {} ({})", fingerprint.code(), delta.name()), &record);
+}
+
+/// One edit to the installed ClientHello.
+enum Delta {
+    SigalgSwap,
+    GreaseExtra,
+    AddExtension(u16),
+    DropExtension(u16),
+    AddGroup(u16),
+    Padding(u16),
+    NoPadding,
+    AlpnReverse,
+}
+
+impl Delta {
+    fn parse(text: &str) -> Self {
+        let (name, argument) = text.split_once(':').unwrap_or((text, ""));
+        let id = || {
+            argument
+                .parse::<u16>()
+                .unwrap_or_else(|_| panic!("{text} wants a numeric code point"))
+        };
+        match name {
+            "sigalg-swap" => Self::SigalgSwap,
+            "+grease" => Self::GreaseExtra,
+            "+ext" => Self::AddExtension(id()),
+            "-ext" => Self::DropExtension(id()),
+            "+group" => Self::AddGroup(id()),
+            "padding" => Self::Padding(id()),
+            "no-padding" => Self::NoPadding,
+            "alpn-reverse" => Self::AlpnReverse,
+            other => panic!("unknown delta {other}"),
+        }
+    }
+
+    fn name(&self) -> String {
+        match self {
+            Self::SigalgSwap => "sigalg-swap".into(),
+            Self::GreaseExtra => "+grease".into(),
+            Self::AddExtension(id) => format!("+ext:{id}"),
+            Self::DropExtension(id) => format!("-ext:{id}"),
+            Self::AddGroup(id) => format!("+group:{id}"),
+            Self::Padding(n) => format!("padding:{n}"),
+            Self::NoPadding => "no-padding".into(),
+            Self::AlpnReverse => "alpn-reverse".into(),
+        }
+    }
+
+    /// Applies the edit. `alpn_protocols` is the config's own copy of the list
+    /// rustls validates the server's choice against; it is kept in step because a
+    /// hello that offers what the config does not makes every server answer
+    /// `SelectedUnofferedApplicationProtocol`.
+    fn apply(&self, hello: &mut ClientHelloProfile, alpn_protocols: &mut Vec<Vec<u8>>) {
+        match self {
+            Self::SigalgSwap => {
+                if let Some(schemes) = hello.signature_schemes.as_mut() {
+                    if schemes.len() > 1 {
+                        schemes.swap(0, 1);
+                    }
+                }
+            }
+            Self::GreaseExtra => {
+                if let Some(order) = hello.extension_order.as_mut() {
+                    order.insert(0, GREASE_EXTENSION_MARKER);
+                }
+                hello.grease = true;
+            }
+            Self::AddExtension(id) => {
+                if let Some(order) = hello.extension_order.as_mut() {
+                    order.push(*id);
+                }
+                // A body the profile supplies verbatim is written before rustls
+                // looks for a typed value, so an id rustls has no encoder for is
+                // emitted as an empty extension rather than refused.
+                hello.raw_extensions.push((*id, Vec::new()));
+            }
+            Self::DropExtension(id) => {
+                if let Some(order) = hello.extension_order.as_mut() {
+                    order.retain(|ext| ext != id);
+                }
+                hello.raw_extensions.retain(|(ext, _)| ext != id);
+                // An extension missing from the order is still sent, only later.
+                hello.suppress_extensions.push(*id);
+            }
+            Self::AddGroup(id) => {
+                if let Some(groups) = hello.groups.as_mut() {
+                    groups.push(*id);
+                }
+            }
+            Self::Padding(floor) => {
+                hello.padding_to = Some(*floor);
+                if let Some(order) = hello.extension_order.as_mut() {
+                    if !order.contains(&EXT_PADDING) {
+                        order.push(EXT_PADDING);
+                    }
+                }
+            }
+            Self::NoPadding => hello.padding_to = None,
+            Self::AlpnReverse => {
+                if let Some(alpn) = hello.alpn.as_mut() {
+                    alpn.reverse();
+                    *alpn_protocols = alpn.clone();
+                }
+            }
+        }
+    }
+}
+
+/// `hello <file>`: the hashes of a ClientHello captured elsewhere.
+///
+/// The input is hex — a `tcpdump`/Wireshark dump of the first flight, one of the
+/// bundle's own `.hex` captures, a uTLS or live-browser recording — with
+/// whitespace, `0x` prefixes and `#` comments ignored. A file that starts with
+/// the handshake record type (`0x16`) is used as it is; anything else is a bare
+/// handshake message and gets a record header, since both JA3 and JA4 read the
+/// record as it would go on the wire.
+///
+/// This is the offline half of every comparison in the header above: it needs no
+/// network, no profile of ours, and no echo service's opinion.
+fn hello_file(path: &str) {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|err| panic!("{path}: {err}"));
+    let bytes = decode_hex(&text);
+    let record = if bytes.first() == Some(&0x16) {
+        bytes
+    } else {
+        let mut record = vec![0x16, 0x03, 0x01, (bytes.len() >> 8) as u8, bytes.len() as u8];
+        record.extend_from_slice(&bytes);
+        record
+    };
+    print_dump(&format!("profile   = {path} (captured bytes)"), &record);
+}
+
+/// The hex in `text`, ignoring whitespace, `0x` prefixes and `#` comments.
+fn decode_hex(text: &str) -> Vec<u8> {
+    let digits: Vec<u8> = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .flat_map(|line| line.chars())
+        .filter(|c| c.is_ascii_hexdigit())
+        .map(|c| c as u8)
+        .collect();
+    let (pairs, remainder) = digits.as_chunks::<2>();
+    assert!(remainder.is_empty(), "hex input has an odd number of digits");
+    pairs
+        .iter()
+        .map(|pair| {
+            let pair = std::str::from_utf8(pair).expect("hex digits are ASCII");
+            u8::from_str_radix(pair, 16).expect("filtered to hex digits")
+        })
+        .collect()
 }
 
 async fn live(fingerprint: TlsFingerprint, hosts: &[String], version: TlsVersion) {
-    let profile = match version {
-        TlsVersion::Tls12 => TlsProfile::insecure(fingerprint).tls12(),
-        TlsVersion::Tls13 => TlsProfile::insecure(fingerprint).tls13(),
-        TlsVersion::Any => TlsProfile::insecure(fingerprint),
-    };
-    let config = create_tls_config(&profile);
+    let config = create_tls_config(&profile_for(fingerprint, version));
     println!(
         "profile   = {} ({})",
         fingerprint.code(),

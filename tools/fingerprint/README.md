@@ -18,6 +18,26 @@ Outputs land in `target/fingerprint/` (dumps, captured bytes, echo reports, the
 fork's captures) and are never committed: re-running is cheap, and a stale
 capture is worse than none.
 
+The example also measures a *changed* shape rather than one of the profiles,
+which is how a blocked shape is asked what a matcher actually reads:
+
+```
+cargo run --release --example tls_fingerprint dump-alpn chrome107 h1
+cargo run --release --example tls_fingerprint variant chrome107 sigalg-swap
+cargo run --release --example tls_fingerprint dump-hex chrome107 > capture.hex
+cargo run --release --example tls_fingerprint hello capture.hex
+```
+
+`dump-alpn` pins the ALPN offer (which moves JA4's ALPN field and nothing
+else), `variant` applies one delta to the profile's own hello (`sigalg-swap`,
+`+grease`, `+ext:<id>`, `-ext:<id>`, `+group:<id>`, `padding:<n>`,
+`no-padding`, `alpn-reverse`), and `dump-hex`/`hello` move one shape out of the
+process and back so a capture from anywhere — a live browser, a uTLS build —
+can be measured without a profile of ours and without a network. The deltas
+whose JA4 does not move (`+grease`, `padding:<n>`, `sigalg-swap` for JA3) are
+the controls: a verdict that changes on one of them says the matcher reads more
+than the hash.
+
 ## The three comparisons
 
 Weakest to strongest. A profile is done when it is `SAME` in `hello-diff`, or
