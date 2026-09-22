@@ -1226,7 +1226,7 @@ def stage_flags(harness, args):
 # Stage: utls — the library's own profiles against the wrapper beside them
 # ---------------------------------------------------------------------------
 
-def utls_dumper(harness, args):
+def utls_dumper(harness, args, required=True):
     """The Go dumper from `tools/fingerprint/utls`, built into the work directory."""
     root = os.path.join(harness.work, "utls")
     os.makedirs(root, exist_ok=True)
@@ -1235,6 +1235,8 @@ def utls_dumper(harness, args):
         return exe
     go = shutil.which("go")
     if go is None:
+        if not required:
+            return None
         raise SystemExit("the `utls` stage builds tools/fingerprint/utls, so it needs the Go "
                          "toolchain on PATH")
     done = subprocess.run([go, "build", "-o", exe, "."], cwd=os.path.join(HERE, "utls"),
@@ -1242,6 +1244,15 @@ def utls_dumper(harness, args):
     if done.returncode != 0 or not os.path.exists(exe):
         raise SystemExit("go build failed:\n" + done.stderr.decode("utf-8", "replace"))
     return exe
+
+
+def utls_version():
+    """The uTLS release the dumper pins, out of its own `go.mod`."""
+    path = os.path.join(HERE, "utls", "go.mod")
+    for line in open(path, encoding="utf-8"):
+        if "refraction-networking/utls" in line:
+            return line.split()[-1]
+    return "uTLS"
 
 
 def counterpart_capture(harness, counterpart):
@@ -1349,16 +1360,50 @@ def wrapper_names(bundle):
                   for path in glob.glob(os.path.join(bundle, "curl_*")))
 
 
+# The specs whose hello `crypto/tls` builds, so the dumper has to take them off a
+# real handshake instead of marshalling the spec. Shared with the pair table.
+HANDSHAKE_SPECS = {spec for spec, _, handshake in UTLS_PAIRS if handshake}
+
+
+def report_version(name, draws, args):
+    """One client's line: its JA4 (both, when it draws two) and what moves."""
+    ja4 = sorted({draw["ja4"] for draw in draws})
+    ja3 = {draw["ja3"] for draw in draws}
+    sizes = sorted({int(draw["record"].split()[0]) for draw in draws})
+    sets = {tuple(sorted(draw["exts"].split("-"))) for draw in draws}
+    moves = []
+    if len(ja3) > 1:
+        moves.append(f"JA3 x{len(ja3)}")
+    if len(ja4) > 1:
+        moves.append(f"JA4 x{len(ja4)}")
+    if len(sizes) > 1:
+        moves.append("size " + "/".join(str(size) for size in sizes))
+    if len(sets) > 1:
+        moves.append("padding coin")
+    log(f"  {name:26} {ja4[0]:44} {'; '.join(moves) if moves else 'stable'}")
+    for extra in ja4[1:]:
+        log(f"  {'':26} {extra}")
+    if not args.summary:
+        first = draws[0]
+        log(f"  {'':26} ciphers {len(first['ja3'].split(',')[1].split('-'))}, "
+            f"exts {len(first['exts'].split('-'))}, key shares {first['key_share']}")
+
+
 def stage_versions(harness, args):
-    """What each version in the bundle sends, and which of its hashes move.
+    """What each version sends, and which of its hashes move.
 
     Not "is our profile right" but "what can a middlebox pin at all": a Chromium
     from 110 on permutes its extension order on every connection, so its JA3 is
     never twice the same and only JA4 can be pinned — while Firefox and Safari do
     not permute, and the ones whose hello falls near the 512-byte floor take a
     second JA4 whenever the GREASE ECH payload draw leaves them room to pad.
+
+    Two ladders, because neither source covers the other: the bundle goes back to
+    Chrome 99, Firefox 133 and Safari 15.3, and the uTLS library back to Chrome 58,
+    Firefox 55 and iOS 11 — and stops at Chrome 133, Firefox 120, Safari 16.0.
+    Where they overlap the behaviour agrees, which is the point of printing both.
     """
-    section("versions — every wrapper in the bundle, by what it sends and what moves")
+    section("versions — every client the two sources ship, by what it sends and what moves")
     root = os.path.join(harness.work, "versions")
     os.makedirs(root, exist_ok=True)
     for wrapper in wrapper_names(harness.bundle):
@@ -1375,29 +1420,44 @@ def stage_versions(harness, args):
             fields = dict(re.findall(r"^(\w+)\s+= (.*)$", harness.example("hello", path), re.M))
             if "ja4" in fields:
                 draws.append(fields)
-        if not draws:
-            log(f"  {wrapper:22} no capture")
-            continue
-        ja4 = sorted({draw["ja4"] for draw in draws})
-        ja3 = {draw["ja3"] for draw in draws}
-        sizes = sorted({int(draw["record"].split()[0]) for draw in draws})
-        sets = {tuple(sorted(draw["exts"].split("-"))) for draw in draws}
-        moves = []
-        if len(ja3) > 1:
-            moves.append(f"JA3 x{len(ja3)}")
-        if len(ja4) > 1:
-            moves.append(f"JA4 x{len(ja4)}")
-        if len(sizes) > 1:
-            moves.append("size " + "/".join(str(size) for size in sizes))
-        if len(sets) > 1:
-            moves.append("padding coin")
-        log(f"  {wrapper:22} {ja4[0]:44} {'; '.join(moves) if moves else 'stable'}")
-        for extra in ja4[1:]:
-            log(f"  {'':22} {extra}")
-        if not args.summary:
-            first = draws[0]
-            log(f"  {'':22} ciphers {len(first['ja3'].split(',')[1].split('-'))}, "
-                f"exts {len(first['exts'].split('-'))}, key shares {first['key_share']}")
+        if draws:
+            report_version(wrapper, draws, args)
+        else:
+            log(f"  {wrapper:26} no capture")
+
+    dumper = utls_dumper(harness, args, required=False)
+    if dumper is None:
+        log("\n  uTLS ladder skipped: no Go toolchain on PATH")
+        return
+    specs = [line.split()[0] for line in
+             subprocess.run([dumper, "list"], capture_output=True).stdout.decode().splitlines()
+             if line.strip()]
+    root = os.path.join(harness.work, "utls-ladder")
+    os.makedirs(root, exist_ok=True)
+    refused = []
+    log(f"\n  --- uTLS {utls_version()} ({len(specs)} profiles)")
+    for spec in specs:
+        draws = []
+        for index in range(VERSION_DRAWS):
+            path = os.path.join(root, f"{spec}-{index}.hex")
+            if not os.path.exists(path) or os.path.getsize(path) < 100:
+                argv = [dumper, "dump", spec, "-sni", SNI, "-o", path]
+                if spec in HANDSHAKE_SPECS:
+                    argv.append("-handshake")
+                done = subprocess.run(argv, capture_output=True)
+                if done.returncode != 0:
+                    refused.append(spec)
+                    break
+            fields = dict(re.findall(r"^(\w+)\s+= (.*)$", harness.example("hello", path), re.M))
+            if "ja4" in fields:
+                draws.append(fields)
+        if draws:
+            report_version(spec, draws, args)
+        elif spec not in refused:
+            log(f"  {spec:26} no capture")
+    if refused:
+        log(f"\n  not captured ({len(refused)}): {', '.join(refused)}")
+        log("  the library builds a pre-shared-key hello only with a session (\"empty psk detected\")")
 
 
 # ---------------------------------------------------------------------------

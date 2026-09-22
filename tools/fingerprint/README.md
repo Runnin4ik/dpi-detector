@@ -92,16 +92,23 @@ the release `docs/ADDING_A_PROFILE.md` lists as the source of our extension
 lists — so a capture and a transcription cannot come from two different ones.
 
 `fingerprint.py versions` answers a third question — what a *middlebox* can pin —
-by running every wrapper in the bundle ten times and printing the JA4 each version
-produces next to what moves between draws:
+by running every client the two sources ship ten times and printing the JA4 each
+version produces next to what moves between draws. Both ladders, because neither
+covers the other: the bundle goes back to Chrome 99, Firefox 133 and Safari 15.3,
+the uTLS library to Chrome 58, Firefox 55 and iOS 11 — and stops at Chrome 133,
+Firefox 120, Safari 16.0.
 
 ```
-curl_chrome116  t13d1516h2_8daaf6152771_e5627efa2ab1  JA3 x10
-curl_chrome123  t13d1516h2_8daaf6152771_02713d6af862  JA3 x10; JA4 x2; size 512/524/556/588; padding coin
-                t13d1517h2_8daaf6152771_b1ff8ab2d16f
-curl_chrome146  t13d1516h2_8daaf6152771_d8a2da3f94cd  JA3 x10; size 1714/1746/1778/1810
-curl_firefox147 t13d1717h2_5b57614c22b0_3cbfd9057e0d  size 1826/1858/1890
-curl_safari260  t13d2014h2_a09f3c656075_d0a99439f9b1  stable
+curl_chrome116    t13d1516h2_8daaf6152771_e5627efa2ab1  JA3 x10
+curl_chrome123    t13d1516h2_8daaf6152771_02713d6af862  JA3 x10; JA4 x2; size 512/524/556/588; padding coin
+                  t13d1517h2_8daaf6152771_b1ff8ab2d16f
+curl_chrome146    t13d1516h2_8daaf6152771_d8a2da3f94cd  JA3 x10; size 1714/1746/1778/1810
+curl_firefox147   t13d1717h2_5b57614c22b0_3cbfd9057e0d  size 1826/1858/1890
+curl_safari260    t13d2014h2_a09f3c656075_d0a99439f9b1  stable
+HelloChrome_58    t12d1311h2_8b80da21ef18_eb7c9aabf852  stable (TLS 1.2, no supported_versions)
+HelloChrome_120   t13d1516h2_8daaf6152771_02713d6af862  JA3 x10; JA4 x2; size 512/524/556/588; padding coin
+HelloRandomized   t13d1813h2_0d379e04645c_c49c9940a4be  JA3 x10; JA4 x10; size 184/193/201/202
+HelloGolang       t13d131000_f57a46bbacb6_e7c285222651  stable (no ALPN)
 ```
 
 A Chromium from 110 on permutes its extension order on every connection, so no
@@ -110,7 +117,15 @@ two connections share a JA3 and only JA4 can be pinned; 119 to 123 and
 leaves the hello under the 512-byte floor, which is the one case where a
 single-hash whitelist drops half of a browser's connections. Firefox, Safari and
 Tor do not permute, and their size still moves 32 bytes at a time — the ECH
-payload draw, which no hash sees.
+payload draw, which no hash sees. `HelloRandomized*` is the extreme: a different
+shape on every dump, protocol version included, reproducible only with `-seed`.
+
+Where the two ladders overlap they agree — `HelloChrome_120` draws the same two
+JA4s as `curl_chrome120`, `HelloSafari_16_0` the same one as `curl_safari155` —
+and a PQ spec shares its JA4 with the classical version beside it, because JA4
+does not hash the group list at all (JA3 does). The four `*_PSK*` specs are named
+at the end as not captured: the library builds a pre-shared-key hello only with a
+session.
 
 ## The three comparisons
 
