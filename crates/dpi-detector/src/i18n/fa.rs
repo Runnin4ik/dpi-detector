@@ -49,6 +49,7 @@ pub(crate) fn messages() -> Messages {
         fingerprint_note: "Har profile yek shape-e pin-shode-ye curl-impersonate ra bazsazi mikonad: ClientHello, User-Agent va header ha, va moqaddame-e HTTP/2 yek version-e client. --legend list-e profile ha ra ba version-e har yek chap mikonad. Hich yek copy-e byte-be-byte-e yek browser-e vaghe-i nist - fingerprinting-e amigh-tar (HTTP/2 settings, record timing) hanuz mitavanad anha ra tafzil konad.",
         legend_profiles_heading: "- PROFILE HAYE FINGERPRINT -",
         legend_profiles_default: "pishfarz",
+        legend_profiles_ja4: "JA4 hash-e ClientHello-e khode profile ast va be tartib-e extension ha bastegi nadarad: hamin kelid-i ast ke yek matcher-e fingerprint mitavanad negah darad. Shape-i ke hello-ash mitavanad zir-e hadd-e 512 byte-ye padding biyayad, do JA4 midahad (ba padding va bedun-e an); JA3 chap nemishavad, chon shape-i ke tartib-e extension ha ra permute mikonad JA3-e yekta nadarad.",
         lang: Language::Fa,
         replies_label: "pasokh ha",
         blocked_short: "masdood",

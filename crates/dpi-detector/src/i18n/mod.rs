@@ -165,6 +165,14 @@ pub fn fingerprint_label(fp: dpi_core::net::fingerprint::TlsFingerprint, lang: L
 /// reproduces and the bundle it came from stay Latin (rule 4), so only the
 /// heading and the "default" marker are translated. A profile added to the
 /// table appears here with no new text anywhere.
+///
+/// Every row carries the JA4 the shape answers with — the key a fingerprint
+/// matcher can carry, and the one piece of a profile that a user comparing two
+/// runs of test 6 needs on screen. The strings come from the same builder the
+/// probes use ([`dpi_core::net::tls::hello_ja4_variants`]), so a row cannot
+/// describe a hello the binary does not send; building twenty hellos, plus a
+/// few more for the two shapes whose padding is a coin flip, is the price of
+/// that, paid once per legend.
 fn profile_section(msg: &Messages, lang: Language) -> String {
     use dpi_core::net::fingerprint::TlsFingerprint;
     let mut out = format!("  {}\n", format_bidi(msg.legend_profiles_heading, lang));
@@ -181,8 +189,15 @@ fn profile_section(msg: &Messages, lang: Language) -> String {
             fingerprint.source(),
             marker
         ));
+        for ja4 in dpi_core::net::tls::hello_ja4_variants(fingerprint) {
+            out.push_str(&format!("    \x1b[2m{:16} JA4 {ja4}\x1b[0m\n", ""));
+        }
     }
     out.push('\n');
+    out.push_str(&format!(
+        "    \x1b[2m{}\x1b[0m\n\n",
+        format_bidi(msg.legend_profiles_ja4, lang)
+    ));
     out
 }
 
@@ -266,4 +281,28 @@ mod tests {
         }
     }
 
+    /// Every profile row carries the JA4 its shape answers with, so two runs a
+    /// user compares — one blocked, one not — can be read against the key a
+    /// matcher carries rather than against the shape's name. The values
+    /// themselves are pinned in the core
+    /// (`net::fingerprint::tests::bundle_versions_match_their_ja4`); what this
+    /// asserts is that the legend prints every one of them, under its row.
+    #[test]
+    fn every_profile_row_prints_its_ja4() {
+        let lang = Language::En;
+        let text = legend_text(lang, &get_messages(lang));
+        for fingerprint in dpi_core::net::fingerprint::TlsFingerprint::ALL {
+            let ja4s = dpi_core::net::tls::hello_ja4_variants(fingerprint);
+            assert!(!ja4s.is_empty(), "{}", fingerprint.code());
+            for ja4 in ja4s {
+                assert!(text.contains(&ja4), "{} prints no {ja4}", fingerprint.code());
+            }
+        }
+        // The note that explains what the key is, in every language: it is the
+        // only place a reader learns why one row can carry two strings.
+        for lang in Language::ALL {
+            let msg = get_messages(lang);
+            assert!(msg.legend_profiles_ja4.contains("JA4"), "{}", lang.label());
+        }
+    }
 }

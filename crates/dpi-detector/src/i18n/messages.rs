@@ -65,6 +65,10 @@ pub struct Messages {
     /// Marks a profile that a run presents when no set was asked for, inside
     /// the `--legend` profile rows.
     pub legend_profiles_default: &'static str,
+    /// Explains the JA4 line printed under every `--legend` profile row: what
+    /// the key is, why one shape can have two of them, and why JA3 is not
+    /// printed at all.
+    pub legend_profiles_ja4: &'static str,
     pub lang: Language,
     pub replies_label: &'static str,
     pub blocked_short: &'static str,

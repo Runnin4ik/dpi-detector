@@ -49,6 +49,7 @@ pub(crate) fn messages() -> Messages {
         fingerprint_note: "每个配置复现一个固定的 curl-impersonate 形态：某个客户端版本的 ClientHello、User-Agent 及其请求头，以及 HTTP/2 前导帧。--legend 会列出全部配置及各自复现的版本。它们均非真实浏览器的逐字节复制，更深层的指纹识别（HTTP/2 设置、记录时序）仍可能将它们区分开。",
         legend_profiles_heading: "— 指纹配置 —",
         legend_profiles_default: "默认",
+        legend_profiles_ja4: "JA4 是配置自身 ClientHello 的顺序无关哈希，也就是指纹匹配方可以持有的键。若某个形态的 hello 可能落到 512 字节的 padding 下限之下，它会给出两个 JA4（带 padding 与不带）；不打印 JA3，因为会打乱扩展顺序的形态没有唯一的 JA3。",
         lang: Language::Zh,
         replies_label: "响应",
         blocked_short: "阻断",

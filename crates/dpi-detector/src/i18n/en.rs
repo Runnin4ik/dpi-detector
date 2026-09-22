@@ -49,6 +49,7 @@ pub(crate) fn messages() -> Messages {
         fingerprint_note: "Each profile reproduces one pinned curl-impersonate shape: the ClientHello, the User-Agent with its headers, and the HTTP/2 preface of one client version. --legend lists every profile with the version it reproduces. None is byte-for-byte a real browser — deeper fingerprinting (HTTP/2 settings, record timing) can still distinguish them.",
         legend_profiles_heading: "— FINGERPRINT PROFILES —",
         legend_profiles_default: "default",
+        legend_profiles_ja4: "JA4 is the order-insensitive hash of the profile's own ClientHello — the key a fingerprint matcher can carry. A shape whose hello can fall under the 512-byte padding floor answers with two of them (with and without `padding`); JA3 is not printed, because a shape that shuffles its extension order has no single one.",
         lang: Language::En,
         replies_label: "replies",
         blocked_short: "blocked",
