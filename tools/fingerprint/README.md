@@ -91,6 +91,27 @@ compare a seeded pair by JA3/JA4 and not by bytes. The module pins uTLS v1.8.2 �
 the release `docs/ADDING_A_PROFILE.md` lists as the source of our extension
 lists — so a capture and a transcription cannot come from two different ones.
 
+`fingerprint.py versions` answers a third question — what a *middlebox* can pin —
+by running every wrapper in the bundle ten times and printing the JA4 each version
+produces next to what moves between draws:
+
+```
+curl_chrome116  t13d1516h2_8daaf6152771_e5627efa2ab1  JA3 x10
+curl_chrome123  t13d1516h2_8daaf6152771_02713d6af862  JA3 x10; JA4 x2; size 512/524/556/588; padding coin
+                t13d1517h2_8daaf6152771_b1ff8ab2d16f
+curl_chrome146  t13d1516h2_8daaf6152771_d8a2da3f94cd  JA3 x10; size 1714/1746/1778/1810
+curl_firefox147 t13d1717h2_5b57614c22b0_3cbfd9057e0d  size 1826/1858/1890
+curl_safari260  t13d2014h2_a09f3c656075_d0a99439f9b1  stable
+```
+
+A Chromium from 110 on permutes its extension order on every connection, so no
+two connections share a JA3 and only JA4 can be pinned; 119 to 123 and
+`chrome131_android` take a *second* JA4 whenever the GREASE ECH payload draw
+leaves the hello under the 512-byte floor, which is the one case where a
+single-hash whitelist drops half of a browser's connections. Firefox, Safari and
+Tor do not permute, and their size still moves 32 bytes at a time — the ECH
+payload draw, which no hash sees.
+
 ## The three comparisons
 
 Weakest to strongest. A profile is done when it is `SAME` in `hello-diff`, or

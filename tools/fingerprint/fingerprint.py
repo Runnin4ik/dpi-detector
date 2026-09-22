@@ -46,6 +46,7 @@ Usage
     python tools/fingerprint/fingerprint.py echo-diff safari18
     python tools/fingerprint/fingerprint.py flags chrome131
     python tools/fingerprint/fingerprint.py utls
+    python tools/fingerprint/fingerprint.py versions
     python tools/fingerprint/fingerprint.py captures-fetch
 
 `all` runs every stage for every profile; naming codes limits it to those.
@@ -1333,6 +1334,73 @@ def stage_utls(harness, args):
 
 
 # ---------------------------------------------------------------------------
+# Stage: versions — every wrapper in the bundle, by hash and by what moves
+# ---------------------------------------------------------------------------
+
+# How many times each wrapper is run. Ten draws is what it takes to see a
+# one-in-four slot twice with the odds in our favour (1 - (3/4)^10 is 94%) and to
+# tell a shuffling order from a fixed one, which two draws already settle.
+VERSION_DRAWS = 10
+
+
+def wrapper_names(bundle):
+    """Every `curl_*` wrapper in the bundle, by name."""
+    return sorted(os.path.splitext(os.path.basename(path))[0]
+                  for path in glob.glob(os.path.join(bundle, "curl_*")))
+
+
+def stage_versions(harness, args):
+    """What each version in the bundle sends, and which of its hashes move.
+
+    Not "is our profile right" but "what can a middlebox pin at all": a Chromium
+    from 110 on permutes its extension order on every connection, so its JA3 is
+    never twice the same and only JA4 can be pinned — while Firefox and Safari do
+    not permute, and the ones whose hello falls near the 512-byte floor take a
+    second JA4 whenever the GREASE ECH payload draw leaves them room to pad.
+    """
+    section("versions — every wrapper in the bundle, by what it sends and what moves")
+    root = os.path.join(harness.work, "versions")
+    os.makedirs(root, exist_ok=True)
+    for wrapper in wrapper_names(harness.bundle):
+        draws = []
+        for index in range(VERSION_DRAWS):
+            path = os.path.join(root, f"{wrapper}-{index}.hex")
+            if not os.path.exists(path) or os.path.getsize(path) < 12:
+                with Listener(PORT) as listener:
+                    run_wrapper(harness.bundle, wrapper, f"https://{SNI}/",
+                                extra=("--connect-to", f"{SNI}:{PORT}:127.0.0.1:{PORT}",
+                                       "--max-time", "10"))
+                    listener.done.wait(8)
+                open(path, "w").write(listener.data.hex())
+            fields = dict(re.findall(r"^(\w+)\s+= (.*)$", harness.example("hello", path), re.M))
+            if "ja4" in fields:
+                draws.append(fields)
+        if not draws:
+            log(f"  {wrapper:22} no capture")
+            continue
+        ja4 = sorted({draw["ja4"] for draw in draws})
+        ja3 = {draw["ja3"] for draw in draws}
+        sizes = sorted({int(draw["record"].split()[0]) for draw in draws})
+        sets = {tuple(sorted(draw["exts"].split("-"))) for draw in draws}
+        moves = []
+        if len(ja3) > 1:
+            moves.append(f"JA3 x{len(ja3)}")
+        if len(ja4) > 1:
+            moves.append(f"JA4 x{len(ja4)}")
+        if len(sizes) > 1:
+            moves.append("size " + "/".join(str(size) for size in sizes))
+        if len(sets) > 1:
+            moves.append("padding coin")
+        log(f"  {wrapper:22} {ja4[0]:44} {'; '.join(moves) if moves else 'stable'}")
+        for extra in ja4[1:]:
+            log(f"  {'':22} {extra}")
+        if not args.summary:
+            first = draws[0]
+            log(f"  {'':22} ciphers {len(first['ja3'].split(',')[1].split('-'))}, "
+                f"exts {len(first['exts'].split('-'))}, key shares {first['key_share']}")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1461,6 +1529,7 @@ STAGES = {
     "hello-diff": stage_hello_diff,
     "flags": stage_flags,
     "utls": stage_utls,
+    "versions": stage_versions,
 }
 
 
