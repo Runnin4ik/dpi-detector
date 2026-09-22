@@ -63,12 +63,13 @@ pub const BURST_PORT: u16 = 443;
 /// one host, launched [`BURST_LAUNCH_GAP`] apart. One is a single connection, the
 /// floor the settings row wraps around to; a hundred is the ceiling, high enough to
 /// flood deliberately (crossing a rate threshold is the question the test asks) and
-/// still a bound, so a mistyped `--burst` cannot turn the run into an accident. The
-/// default sits one above the commonest throttle (a link that cuts the fourth
-/// connection): at four, the run ends exactly where the answer starts.
+/// still a bound, so a mistyped `--burst` cannot turn the run into an accident.
+/// The default is the sample the table is read at: ten attempts per shape per
+/// host, so a rate reads in tenths and a shape that passes half the time shows
+/// as that rather than as a coin flip.
 pub const BURST_MIN_ATTEMPTS: usize = 1;
 pub const BURST_MAX_ATTEMPTS: usize = 100;
-pub const BURST_DEFAULT_ATTEMPTS: usize = 5;
+pub const BURST_DEFAULT_ATTEMPTS: usize = 10;
 /// Delay between the starts of two consecutive attempts of one round.
 ///
 /// The attempts of a round overlap. The trigger this test reproduces is a *rate*

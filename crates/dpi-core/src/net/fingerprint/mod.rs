@@ -270,7 +270,8 @@ impl TlsFingerprint {
     }
 
     /// Values accepted by the config validator and the CLI, in report order:
-    /// the baseline, then one browser at a time alphabetically, newest version
+    /// the baseline, then Go — the one shape that impersonates nothing and is no
+    /// browser — then one browser at a time alphabetically, newest version
     /// first inside each browser (a desktop shape before the phone shape of the
     /// same version). A new record goes where its browser and version put it —
     /// `chrome146` heads the Chromium block, `safari153` closes Safari's.
@@ -285,6 +286,7 @@ impl TlsFingerprint {
     /// (`--fingerprint`) or as a burst list (`--burst-profiles all`).
     pub const ALL: [TlsFingerprint; 29] = [
         Self::Rustls,
+        Self::Go127,
         Self::Chrome146,
         Self::Chrome131,
         Self::Chrome131Android,
@@ -303,7 +305,6 @@ impl TlsFingerprint {
         Self::Firefox105,
         Self::Firefox99,
         Self::Firefox65,
-        Self::Go127,
         Self::Safari260,
         Self::Safari260Ios,
         Self::Safari184Ios,

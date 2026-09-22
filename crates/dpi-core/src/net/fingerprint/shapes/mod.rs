@@ -157,17 +157,18 @@ const H2_AND_HTTP11: &[&[u8]] = &[b"h2", b"http/1.1"];
 /// brotli, exactly what Chrome 107, Chrome 133 and Edge 101 advertise.
 const BROTLI: &[u16] = &[2];
 
-/// Every selectable shape, in report order: the baseline first, then one browser
-/// at a time alphabetically with the newest version of each first, and the phone
-/// shape of a version right after its desktop sibling (`chrome146` … `chrome70`,
-/// `edge101`, `firefox147` … `firefox65`, `go127`, `safari260` … `safari153`,
-/// `tor145`).
+/// Every selectable shape, in report order: the baseline first, then Go, then one
+/// browser at a time alphabetically with the newest version of each first, and
+/// the phone shape of a version right after its desktop sibling (`go127`,
+/// `chrome146` … `chrome70`, `edge101`, `firefox147` … `firefox65`,
+/// `safari260` … `safari153`, `tor145`).
 /// `tests::fingerprint_table_is_total` pins the table against
 /// [`TlsFingerprint::ALL`] in both directions, so a variant without a record
 /// fails the suite instead of silently falling back to the baseline, and a
 /// record added out of order is a one-line move here and in `ALL`.
 pub(crate) static SHAPES: &[TlsShape] = &[
     baseline::RUSTLS,
+    go::GO127,
     chrome::CHROME146,
     chrome::CHROME131,
     chrome::CHROME131_ANDROID,
@@ -186,7 +187,6 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     firefox::FIREFOX105,
     firefox::FIREFOX99,
     firefox::FIREFOX65,
-    go::GO127,
     safari::SAFARI260,
     safari::SAFARI260_IOS,
     safari::SAFARI184_IOS,
