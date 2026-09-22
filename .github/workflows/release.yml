@@ -17,11 +17,76 @@ env:
   CROSS_VERSION: 0.2.5
 
 jobs:
+  # Fails in seconds what would otherwise fail after ninety minutes of building:
+  # the tag is what the release page, every `--version` and the installer's own
+  # `VERSION` are compared against, and nothing else checks that it names the
+  # version in Cargo.toml. A tag pushed without the bump publishes eleven
+  # binaries whose banner disagrees with the release they are attached to, and
+  # no later step notices — the installers only check that a download reports
+  # *a* version, not which one the tag promised.
+  #
+  # The step is tag-gated rather than the job: a manual dispatch is a build
+  # rehearsal, and a skipped job would take every `needs: version` job down with
+  # it, leaving dispatch with nothing to do.
+  version:
+    name: Check the tag against Cargo.toml
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Check the tag names the version in Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `[workspace.package]`: the root manifest is a virtual one, and both
+          # crates take their version from it (`version.workspace = true`), so
+          # this is the single literal the binaries are built with.
+          version="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["workspace"]["package"]["version"])' Cargo.toml)"
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "::error file=Cargo.toml::tag ${GITHUB_REF_NAME} does not name workspace.package.version ${version}; this release would publish binaries whose --version is not the tag"
+            exit 1
+          fi
+          echo "Release version OK: ${GITHUB_REF_NAME} matches Cargo.toml ${version}"
+
+          # The two installers carry the version as well, and nothing tied them
+          # to the crate before this: bump Cargo.toml, tag, and leave `VERSION=`
+          # behind, and the release's own installer downloads the *previous*
+          # release — and its own verification passes, because what it compares
+          # a download against is its own stale constant. `build.rs` reads the
+          # version from `CARGO_PKG_VERSION` for exactly this reason; these are
+          # the last literals left.
+          #
+          # Read out of each file rather than assumed: a reworded line has to
+          # fail here rather than match nothing and pass.
+          check_installer_version() {
+            file="$1"
+            pattern="$2"
+            found="$(sed -n "$pattern" "$file" | head -n 1)"
+            if [ -z "$found" ]; then
+              echo "::error file=$file::the installer's default version is not where this check looks for it; update the check with the line"
+              exit 1
+            fi
+            if [ "$found" != "${GITHUB_REF_NAME}" ]; then
+              echo "::error file=$file::the installer installs ${found}, but this release is ${GITHUB_REF_NAME}"
+              exit 1
+            fi
+          }
+          # `[$]{…}` rather than `${…}`: shellcheck reads the latter inside single
+          # quotes as a mistaken non-expansion (SC2016), and this is a sed pattern
+          # matching a literal `${`.
+          check_installer_version install.sh 's/^  VERSION="[$]{DPI_VERSION:-\([^}]*\)}"$/\1/p'
+          check_installer_version install.ps1 's/^.*else { "\(.*\)" }$/\1/p'
+          echo "Release version OK: both installers install ${GITHUB_REF_NAME}"
+
   # The two third-party actions below are pinned by commit: a tag can be moved to
   # another commit, and this is the workflow that publishes a release — the
   # `actions/*` ones stay on their major tags, as in `check.yml`.
   build:
     name: Build ${{ matrix.name }}
+    needs: version
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -313,16 +378,30 @@ jobs:
         run: |
           cp dist/${{ matrix.name }} dist/${{ matrix.name }}-upx
           upx --best --lzma dist/${{ matrix.name }}-upx
-          # The only check CI can make on these rows: they are the
-          # foreign-architecture ones (arm/mips) and cannot be executed on the
-          # runner. `upx -t` unpacks in memory and compares, so it is
+          # `upx -t` unpacks in memory and compares, so it is
           # architecture-independent — verified with the pinned 4.2.4 packing a
           # mipsel ELF here (`testing … [OK]`) — and it catches the truncated or
           # mis-packed artifact that would otherwise reach a router as a
-          # `Trace/breakpoint trap`.
+          # `Trace/breakpoint trap`. What it cannot see is a stub that unpacks
+          # cleanly and then dies on the target ABI, which is why the packed
+          # file is started for real by the step below.
           upx -t dist/${{ matrix.name }}-upx
           chmod +x dist/${{ matrix.name }}-upx
           ls -lh dist/
+
+      # The packed artifact is the one that has to start on the router, and it
+      # was the one nothing had ever started: `upx -t` compares bytes, and the
+      # plain binary's smoke says nothing about the stub that replaced its entry
+      # point. Every row that packs is a row with a `qemu` in the matrix, and
+      # the emulator is already installed by the smoke step above. Measured with
+      # the pinned 4.2.4 on a static mipsel musl binary: packed to 30.05%, `upx
+      # -t` OK, and both `--version` and `--help` run from the packed file under
+      # `qemu-mipsel`.
+      - name: Smoke the packed artifact under qemu
+        if: matrix.has_upx && matrix.qemu
+        run: |
+          "qemu-${{ matrix.qemu }}" "dist/${{ matrix.name }}-upx" --version
+          "qemu-${{ matrix.qemu }}" "dist/${{ matrix.name }}-upx" --legend > /dev/null
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v7
@@ -367,17 +446,63 @@ jobs:
       # still run `--version` on what they install.
       - name: Prepare release files
         run: |
+          set -euo pipefail
           cp install.sh release-files/
           cp install.ps1 release-files/
           cd release-files
-          sha256sum * > SHA256SUMS.txt
+
+          # A leg that never uploaded is invisible in the manifest otherwise:
+          # `download-artifact` merges whatever arrived, the globs match what is
+          # there, and the release ships nine architectures out of eleven with
+          # nothing in the log to say so — `fail_on_unmatched_files` only
+          # catches a pattern that matches nothing at all. Counted per group so
+          # the message names the one that came up short.
+          #
+          # The numbers are the build matrix: eleven rows, three of which pack a
+          # `-upx` variant (`has_upx`). Adding a row means adding it here — that
+          # is what this is for. The two installers are copied in above, so
+          # `set -e` has already failed the step if either is missing from the
+          # checkout.
+          shopt -s nullglob
+          plain=()
+          for file in dpi-detector-*; do
+            case "$file" in
+              *-upx) ;;
+              *) plain+=("$file") ;;
+            esac
+          done
+          packed=(dpi-detector-*-upx)
+
+          problems=''
+          [ "${#plain[@]}" -eq 11 ] || problems="${problems} ${#plain[@]}/11 binaries;"
+          [ "${#packed[@]}" -eq 3 ] || problems="${problems} ${#packed[@]}/3 packed;"
+          if [ -n "$problems" ]; then
+            echo "::error::release files are incomplete:$problems a build leg did not upload"
+            ls -1
+            exit 1
+          fi
+
+          # Written elsewhere first: `> SHA256SUMS.txt` would create the file
+          # before `*` is expanded, and it would then hash its own empty self.
+          sha256sum -- * > "${RUNNER_TEMP}/SHA256SUMS.txt"
+          mv "${RUNNER_TEMP}/SHA256SUMS.txt" SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      # Created as a draft, and published by the last step of this job. The
+      # action creates the release first and uploads into it second, so with
+      # `draft: false` a run that dies between the two — a dropped connection, a
+      # cancelled job, an upload that fails — leaves a *published* release page
+      # carrying part of the set, and the missing architectures are invisible on
+      # it. A draft that never gets published is the failure mode we want: the
+      # page is empty of consequences until every upload has landed.
+      #
+      # `generate_release_notes` is a create-time input and `gh release edit`
+      # has no equivalent, so the notes are generated here, on the draft.
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           files: release-files/*
-          draft: false
+          draft: true
           # The tag says which line this is: `v5.0.0-alpha.19` is a prerelease,
           # `v5.0.0` is not. A hardcoded `true` would publish the stable line as
           # one.
@@ -388,3 +513,15 @@ jobs:
           # The release page had no text at all: these are the commits and pull
           # requests between the previous tag and this one.
           generate_release_notes: true
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release edit "${GITHUB_REF_NAME}" --draft=false --repo "${GITHUB_REPOSITORY}"
+          # Printed because it is the one input above whose effect a draft could
+          # change: if the generated notes ever come back empty here, this is
+          # where it shows, next to the tag it happened on.
+          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --json body --jq '"release body: \(.body | length) characters"'
