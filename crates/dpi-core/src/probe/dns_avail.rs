@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Semaphore};
 
+use crate::classify::{classify_connect_error_full, Detail, DpiStatus};
 use crate::dns::doh::DohSession;
 use crate::dns::dot::DotSession;
 use crate::dns::socks::SocksProxyConfig;
@@ -86,51 +87,76 @@ pub fn org_label(org: &str) -> String {
     org.split(" - ").next().unwrap_or(org).trim().to_string()
 }
 
-/// Maps a session/query error to a display token: a staged transport error
-/// surfaces as its classification label (SYN DROP / TLS DROP, …), a resolve
-/// failure or malformed request as DNS FAIL, and everything else as TIMEOUT.
-pub fn connect_fail_label(err: &DnsError) -> &'static str {
+/// Why an endpoint failed: the classified status plus the detail behind it.
+///
+/// The status is what a table cell shows (`label`, Rule 4 canonical Latin); the
+/// detail is what `--json` reports beside it (`Detail::code`), so a token in a
+/// report can be traced back to the branch that produced it — `no_ca_bundle`
+/// arrives from a TLS chain that did not reach a bundled root, and no amount of
+/// looking at the table tells the two apart otherwise.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FailReason {
+    pub status: DpiStatus,
+    pub detail: Detail,
+}
+
+impl FailReason {
+    /// The cell token for this failure.
+    pub fn label(&self) -> &'static str {
+        self.status.display_label()
+    }
+
+    /// A failure with no classification of its own: the probe ran out of its
+    /// window before the transport said anything.
+    pub fn timeout() -> Self {
+        Self { status: DpiStatus::Timeout, detail: Detail::TimeoutWord }
+    }
+}
+
+/// Maps a session/query error to the failure it represents: a staged transport
+/// error keeps the classification it earned (SYN DROP / TLS DROP / NO CA
+/// BUNDLE, …), a resolve failure reads DNS FAIL, and a failure the classifier
+/// cannot place reads UNKNOWN — its status never claims a timeout it did not
+/// measure, while its detail carries the original message, because the table
+/// only has room for the token and a report is read by whoever has to act on it.
+pub fn connect_fail(err: &DnsError) -> FailReason {
     match err {
-        DnsError::Timeout => "TIMEOUT",
+        DnsError::Timeout => FailReason::timeout(),
         DnsError::ConnectFault { stage, detail } => {
             if *stage == "resolve" {
-                return "DNS FAIL";
+                return FailReason { status: DpiStatus::DnsFail, detail: Detail::DnsError };
             }
             let norm_stage = match *stage {
                 "connected" => "tls_connected",
                 s => s,
             };
-            let (status, _) = crate::classify::classify_connect_error_full(detail, None, None, 0, norm_stage);
-            if status != crate::classify::DpiStatus::Unknown {
-                status.display_label()
-            } else {
-                "TIMEOUT"
-            }
+            let (status, classified) =
+                classify_connect_error_full(detail, None, None, 0, norm_stage);
+            FailReason { status, detail: classified }
         }
-        // Non-staged errors (bad URL/SNI/length; HTTP status is handled by callers).
+        // Non-staged errors (bad URL/SNI/length; HTTP status is handled by
+        // callers): the message says which, the resolve markers are the only
+        // ones that name a transport verdict of their own.
         DnsError::Io(msg) => {
             let m = msg.to_lowercase();
-            if m.contains("resolve")
-                || m.contains("no address")
-                || m.contains("invalid")
-                || m.contains("bad ")
-            {
-                "DNS FAIL"
+            let status = if ["resolve", "no address", "invalid", "bad "].iter().any(|t| m.contains(t)) {
+                DpiStatus::DnsFail
             } else {
-                "TIMEOUT"
-            }
+                DpiStatus::Unknown
+            };
+            FailReason { status, detail: Detail::Other(msg.clone()) }
         }
-        _ => "TIMEOUT",
+        // Malformed packets, a server rcode, an HTTP status: none of them is a
+        // transport verdict, so the status says so and the message identifies
+        // the failure in a report.
+        other => FailReason { status: DpiStatus::Unknown, detail: Detail::Other(other.to_string()) },
     }
 }
 
 /// First error wins: the earliest failure reason recorded for a key is kept,
 /// later ones for the same key are dropped.
-fn record_fail(report: &mut DnsAvailReport, key: &ProbeKey, label: &str) {
-    report
-        .fail_reasons
-        .entry(key.clone())
-        .or_insert_with(|| label.to_string());
+fn record_fail(report: &mut DnsAvailReport, key: &ProbeKey, reason: FailReason) {
+    report.fail_reasons.entry(key.clone()).or_insert(reason);
 }
 
 /// All-None latency map for an aborted server: every domain is present with no
@@ -150,6 +176,18 @@ pub enum ProbeKind {
     Udp,
     DohWire,
     Dot,
+}
+
+impl ProbeKind {
+    /// The wire token for this transport: `udp`, `doh_wire`, `dot`. `--json`
+    /// carries it, and it never changes with `--lang`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProbeKind::Udp => "udp",
+            ProbeKind::DohWire => "doh_wire",
+            ProbeKind::Dot => "dot",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -177,8 +215,9 @@ pub struct DnsAvailStats {
     pub resolvers_total: usize,
     pub subst_sub: usize,
     pub subst_total: usize,
+    /// The part of `subst_sub` that came back inside the fake-ip range: a proxy
+    /// or VPN answering instead of the resolver.
     pub fakeip_sub: usize,
-    pub fakeip_total: usize,
     pub top_stub: Option<String>,
 }
 
@@ -192,8 +231,8 @@ pub struct DnsAvailReport {
     pub dot_servers: Vec<(String, String, u16)>,
     /// (kind, addr, name) → domain → latency ms (None = fail)
     pub raw: HashMap<ProbeKey, HashMap<String, Option<f64>>>,
-    /// (kind, addr, name) → fail label (e.g. "DNS FAIL", "TIMEOUT")
-    pub fail_reasons: HashMap<ProbeKey, String>,
+    /// (kind, addr, name) → why the endpoint's first failure happened
+    pub fail_reasons: HashMap<ProbeKey, FailReason>,
     /// (kind, addr, name, domain) → parsed answer
     pub udp_answers: HashMap<(ProbeKey, String), DnsAnswer>,
     pub doh_answers: HashMap<(ProbeKey, String), DnsAnswer>,
@@ -212,6 +251,57 @@ pub struct DnsAvailReport {
     pub non_socks_proxy_warn: bool,
     pub stats: DnsAvailStats,
     pub skipped_no_servers: bool,
+}
+
+/// One endpoint that did not answer every domain it was asked, with the reason
+/// its first failure carried.
+///
+/// The table shows the same token in the endpoint's cell, one line per address;
+/// this is the same finding as data, so a run can be diagnosed from `--json`
+/// without a person reading the table — an endpoint that shows `NO CA BUNDLE`
+/// for all its domains is a different problem from one that answers some.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EndpointFailure {
+    pub kind: ProbeKind,
+    pub provider: String,
+    pub endpoint: String,
+    pub ok: usize,
+    /// Domains the endpoint was asked: `forbidden` for DoH/DoT, `allowed` for
+    /// UDP, the same denominators the table colours its cells by.
+    pub total: usize,
+    pub reason: Option<FailReason>,
+}
+
+impl DnsAvailReport {
+    /// Every endpoint that was not clean, ordered by transport, provider and
+    /// endpoint so two runs produce the same list.
+    pub fn endpoint_failures(&self) -> Vec<EndpointFailure> {
+        let mut out: Vec<EndpointFailure> = self
+            .raw
+            .iter()
+            .filter_map(|(key, lat)| {
+                let total = match key.kind {
+                    ProbeKind::Udp => self.allowed.len(),
+                    ProbeKind::DohWire | ProbeKind::Dot => self.forbidden.len(),
+                };
+                let ok = lat.values().filter(|v| v.is_some()).count();
+                let reason = self.fail_reasons.get(key).cloned();
+                (ok < total || reason.is_some()).then(|| EndpointFailure {
+                    kind: key.kind,
+                    provider: key.name.clone(),
+                    endpoint: key.addr.clone(),
+                    ok,
+                    total,
+                    reason,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            (a.kind.as_str(), &a.provider, &a.endpoint)
+                .cmp(&(b.kind.as_str(), &b.provider, &b.endpoint))
+        });
+        out
+    }
 }
 
 // ─── Engine ───────────────────────────────────────────────────────────────────
@@ -541,7 +631,7 @@ pub async fn check_dns_availability(
                     let mut session = match DohSession::connect(&addr, timeout_dur).await {
                         Ok(s) => s,
                         Err(e) => {
-                            return (HashMap::new(), Vec::new(), Some(connect_fail_label(&e).to_string()));
+                            return (HashMap::new(), Vec::new(), Some(connect_fail(&e)));
                         }
                     };
                     // Warmup is non-critical for DoH (it only warms up the HTTP/2
@@ -555,7 +645,7 @@ pub async fn check_dns_availability(
 
                     let mut lat = HashMap::new();
                     let mut answers = Vec::new();
-                    let mut first_fail: Option<String> = None;
+                    let mut first_fail: Option<FailReason> = None;
                     // Once the transport is gone, no further request can be
                     // answered: hyper tears down an HTTP/1.1 connection whose
                     // response future was dropped, and reports it through
@@ -590,7 +680,7 @@ pub async fn check_dns_availability(
                         if first_fail.is_none() {
                             if let Err(e) = &res {
                                 if matches!(e, DnsError::Timeout | DnsError::Io(_) | DnsError::ConnectFault { .. }) {
-                                    first_fail = Some(connect_fail_label(e).to_string());
+                                    first_fail = Some(connect_fail(e));
                                 }
                             }
                         }
@@ -605,7 +695,7 @@ pub async fn check_dns_availability(
                 };
                 let out = match tokio::time::timeout(cap, probe).await {
                     Ok((lat, answers, fail)) => (key, lat, answers, fail),
-                    Err(_) => (key, lat_none(&forbidden), Vec::new(), Some("TIMEOUT".to_string())),
+                    Err(_) => (key, lat_none(&forbidden), Vec::new(), Some(FailReason::timeout())),
                 };
                 if let Some(t) = &block_tick {
                     t(ProgressBlock::Doh);
@@ -641,7 +731,7 @@ pub async fn check_dns_availability(
                     let mut session = match DotSession::connect(&host, ep_port, timeout_dur).await {
                         Ok(s) => s,
                         Err(e) => {
-                            return (HashMap::new(), Vec::new(), Some(connect_fail_label(&e).to_string()));
+                            return (HashMap::new(), Vec::new(), Some(connect_fail(&e)));
                         }
                     };
                     // Warmup is fatal — its error aborts the whole server with
@@ -649,7 +739,7 @@ pub async fn check_dns_availability(
                     // shortening it would turn a slow server into a dead one.
                     let warmup = forbidden.first().cloned().unwrap_or_else(|| "google.com".to_string());
                     if let Err(e) = session.query(&warmup).await {
-                        return (HashMap::new(), Vec::new(), Some(connect_fail_label(&e).to_string()));
+                        return (HashMap::new(), Vec::new(), Some(connect_fail(&e)));
                     }
 
                     let mut lat = HashMap::new();
@@ -675,12 +765,12 @@ pub async fn check_dns_availability(
                         }
                         lat.insert(d.clone(), l);
                     }
-                    let none: Option<String> = None;
+                    let none: Option<FailReason> = None;
                     (lat, answers, none)
                 };
                 let out = match tokio::time::timeout(cap, probe).await {
                     Ok((lat, answers, fail)) => (key, lat, answers, fail),
-                    Err(_) => (key, lat_none(&forbidden), Vec::new(), Some("TIMEOUT".to_string())),
+                    Err(_) => (key, lat_none(&forbidden), Vec::new(), Some(FailReason::timeout())),
                 };
                 if let Some(t) = &block_tick {
                     t(ProgressBlock::Dot);
@@ -729,7 +819,7 @@ pub async fn check_dns_availability(
     for h in doh_handles {
         if let Ok((key, lat, answers, fail)) = h.await {
             if let Some(f) = fail {
-                record_fail(&mut report, &key, &f);
+                record_fail(&mut report, &key, f);
             }
             for (k, a) in answers {
                 report.doh_answers.insert(k, a);
@@ -742,7 +832,7 @@ pub async fn check_dns_availability(
     for h in dot_handles {
         if let Ok((key, lat, answers, fail)) = h.await {
             if let Some(f) = fail {
-                record_fail(&mut report, &key, &f);
+                record_fail(&mut report, &key, f);
             }
             for (k, a) in answers {
                 report.dot_answers.insert(k, a);
@@ -1006,7 +1096,6 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
         subst_sub,
         subst_total,
         fakeip_sub: fakeip_count,
-        fakeip_total: subst_total,
         top_stub,
     }
 }
@@ -1111,50 +1200,115 @@ mod tests {
         assert!(fits_in_budget(Duration::ZERO, window, budget));
     }
 
-    /// Each staged fault surfaces as the classifier's label for that stage.
+    /// Each staged fault surfaces as the classifier's label for that stage, and
+    /// the failure carries the detail `--json` reports beside it.
     #[test]
-    fn test_connect_fail_label() {
+    fn test_connect_fail_stage_and_detail() {
         use crate::dns::types::DnsError;
-        assert_eq!(connect_fail_label(&DnsError::Timeout), "TIMEOUT");
         let fault = |stage: &'static str, detail: &str| DnsError::ConnectFault {
             stage,
             detail: detail.to_string(),
         };
-        assert_eq!(connect_fail_label(&fault("resolve", "lookup failed")), "DNS FAIL");
-        assert_eq!(connect_fail_label(&fault("tcp_connect", "connect timed out")), "SYN DROP");
+        let label = |e: &DnsError| connect_fail(e).label().to_string();
+        assert_eq!(label(&DnsError::Timeout), "TIMEOUT");
+        assert_eq!(label(&fault("resolve", "lookup failed")), "DNS FAIL");
+        assert_eq!(label(&fault("tcp_connect", "connect timed out")), "SYN DROP");
         assert_eq!(
-            connect_fail_label(&fault("tcp_connect", "connection reset by peer (os error 104)")),
+            label(&fault("tcp_connect", "connection reset by peer (os error 104)")),
             "TCP RST"
         );
         assert_eq!(
-            connect_fail_label(&fault("tcp_connect", "network is unreachable (os error 101)")),
+            label(&fault("tcp_connect", "network is unreachable (os error 101)")),
             "NET UNREACH"
         );
         assert_eq!(
-            connect_fail_label(&fault("tls_handshake", "handshake timed out")),
+            label(&fault("tls_handshake", "handshake timed out")),
             "TLS DROP"
         );
         assert_eq!(
-            connect_fail_label(&fault("tls_handshake", "connection reset by peer")),
+            label(&fault("tls_handshake", "connection reset by peer")),
             "TLS RST"
         );
         assert_eq!(
-            connect_fail_label(&fault("tls_handshake", "tls alert handshake failure")),
+            label(&fault("tls_handshake", "tls alert handshake failure")),
             "TLS ALERT"
         );
-        assert_eq!(connect_fail_label(&fault("connected", "timeout")), "TIMEOUT");
-        assert_eq!(connect_fail_label(&fault("connected", "connection reset")), "TLS RST");
+        assert_eq!(label(&fault("connected", "timeout")), "TIMEOUT");
+        assert_eq!(label(&fault("connected", "connection reset")), "TLS RST");
         assert_eq!(
-            connect_fail_label(&DnsError::Io("DoH resolve failed: dns error".to_string())),
+            label(&DnsError::Io("DoH resolve failed: dns error".to_string())),
             "DNS FAIL"
         );
         assert_eq!(
-            connect_fail_label(&fault("tls_handshake", "certificate verify failed: self-signed")),
+            label(&fault("tls_handshake", "certificate verify failed: self-signed")),
             "TLS ERR"
         );
         assert_eq!(
-            connect_fail_label(&fault("tls_handshake", "certificate verify failed: unable to get local issuer certificate")),
+            label(&fault("tls_handshake", "certificate verify failed: unable to get local issuer certificate")),
             "NO CA BUNDLE"
+        );
+
+        // The pair a report is read from: the token in the cell and the code
+        // `--json` carries, for the outcomes that are the point of the DNS test.
+        let code = |e: &DnsError| connect_fail(e).detail.code().into_owned();
+        let status = |e: &DnsError| connect_fail(e).status.as_str();
+        let no_ca = fault(
+            "tls_handshake",
+            "certificate verify failed: unable to get local issuer certificate",
+        );
+        assert_eq!((status(&no_ca), code(&no_ca).as_str()), ("no_ca_bundle", "no_root_certificates"));
+        assert_eq!(code(&DnsError::Timeout), "timeout");
+        assert_eq!(
+            code(&fault("resolve", "lookup failed")),
+            "dns_error"
+        );
+        assert_eq!(
+            code(&fault("tls_handshake", "certificate verify failed: self-signed")),
+            "self_signed_cert"
+        );
+        // A fault the classifier cannot place keeps its message rather than
+        // claiming a timeout it never measured.
+        let unplaced = DnsError::DohHttp(403);
+        assert_eq!((status(&unplaced), code(&unplaced).as_str()), ("unknown", "DoH HTTP error: status 403"));
+    }
+
+    /// `endpoint_failures` is the per-endpoint data `--json` reports: whatever
+    /// answered every domain stays out, a partial endpoint and an endpoint whose
+    /// connect aborted are both listed with their own reason, and the order does
+    /// not depend on hash iteration.
+    #[test]
+    fn endpoint_failures_lists_only_what_failed() {
+        use crate::dns::types::DnsError;
+        let key = |kind, addr: &str| ProbeKey { kind, addr: addr.to_string(), name: "P".to_string() };
+        let lat = |pairs: [(&str, Option<f64>); 2]| {
+            pairs.into_iter().map(|(d, l)| (d.to_string(), l)).collect()
+        };
+        let mut report = DnsAvailReport {
+            allowed: vec!["a.com".to_string()],
+            forbidden: vec!["x.com".to_string(), "y.com".to_string()],
+            ..DnsAvailReport::default()
+        };
+        report.raw.insert(key(ProbeKind::DohWire, "clean"), lat([("x.com", Some(1.0)), ("y.com", Some(2.0))]));
+        report.raw.insert(key(ProbeKind::DohWire, "partial"), lat([("x.com", Some(1.0)), ("y.com", None)]));
+        report.raw.insert(key(ProbeKind::Dot, "aborted"), HashMap::new());
+        report.fail_reasons.insert(
+            key(ProbeKind::Dot, "aborted"),
+            connect_fail(&DnsError::ConnectFault {
+                stage: "tls_handshake",
+                detail: "certificate verify failed: unable to get local issuer certificate".to_string(),
+            }),
+        );
+
+        let failures = report.endpoint_failures();
+        assert_eq!(failures.len(), 2);
+        assert_eq!(failures[0].endpoint, "partial");
+        assert_eq!((failures[0].kind.as_str(), failures[0].ok, failures[0].total), ("doh_wire", 1, 2));
+        assert!(failures[0].reason.is_none());
+        assert_eq!(failures[1].endpoint, "aborted");
+        assert_eq!((failures[1].kind.as_str(), failures[1].ok, failures[1].total), ("dot", 0, 2));
+        assert_eq!(
+            failures[1].reason.as_ref().map(|r| (r.label(), r.detail.code().into_owned())),
+            Some(("NO CA BUNDLE", "no_root_certificates".to_string()))
         );
     }
 

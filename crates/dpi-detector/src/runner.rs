@@ -674,6 +674,20 @@ pub(crate) async fn run_test_suite(
                     resolvers_total: s.resolvers_total,
                     subst_sub: s.subst_sub,
                     subst_total: s.subst_total,
+                    fakeip_sub: s.fakeip_sub,
+                    failures: report
+                        .endpoint_failures()
+                        .into_iter()
+                        .map(|f| crate::json::DnsEndpointFailure {
+                            provider: f.provider,
+                            protocol: f.kind.as_str(),
+                            endpoint: f.endpoint,
+                            ok: f.ok,
+                            total: f.total,
+                            status: f.reason.as_ref().map(|r| r.status.as_str()),
+                            detail: f.reason.as_ref().map(|r| r.detail.code().into_owned()),
+                        })
+                        .collect(),
                 });
             }
             dns_stats = Some(report.stats.clone());

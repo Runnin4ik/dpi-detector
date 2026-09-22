@@ -238,7 +238,6 @@ mod tests {
             subst_sub: 43,
             subst_total: 44,
             fakeip_sub: 0,
-            fakeip_total: 0,
             top_stub: None,
         };
         let out = render_summary(

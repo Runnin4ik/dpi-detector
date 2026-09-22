@@ -132,14 +132,14 @@ fn dns_latency_lines(
             .filter_map(|d| dm.and_then(|m| m.get(d)).copied().flatten())
             .collect();
         if vals.is_empty() {
-            // A UDP miss reads TIMEOUT; DoH/DoT show the recorded fail label.
+            // A UDP miss reads TIMEOUT; DoH/DoT show the recorded fail token.
             let token = if udp {
                 "TIMEOUT".to_string()
             } else {
                 report
                     .fail_reasons
                     .get(&key)
-                    .cloned()
+                    .map(|reason| reason.label().to_string())
                     .unwrap_or_else(|| "TIMEOUT".to_string())
             };
             lines.push((token.clone(), fail_color(&token)));

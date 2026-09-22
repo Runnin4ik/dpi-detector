@@ -76,6 +76,39 @@ pub struct DnsAvailability {
     pub resolvers_total: usize,
     pub subst_sub: usize,
     pub subst_total: usize,
+    /// Of the substituted UDP answers, how many came back inside the fake-ip
+    /// range (198.18.0.0/15) — a proxy or VPN answering instead of the resolver.
+    /// The table prints them as their own line (`FakeIP responses`) and counts
+    /// them out of `subst_sub`, so this is that part of it.
+    pub fakeip_sub: usize,
+    /// Every endpoint that did not answer all its domains, one entry each: the
+    /// summary counts say how many resolvers answered, these say which did not
+    /// and why (`no_ca_bundle` reads differently from `tls_dropped`).
+    pub failures: Vec<DnsEndpointFailure>,
+}
+
+/// One endpoint of test 1 that was not clean.
+#[derive(Serialize)]
+pub struct DnsEndpointFailure {
+    /// Provider as configured (`Google`, `AdGuard (F)`, …).
+    pub provider: String,
+    /// `ProbeKind::as_str()`: `udp`, `doh_wire` or `dot`.
+    pub protocol: &'static str,
+    /// The endpoint as configured: the DoH URL, or the host of a DoT/UDP server.
+    pub endpoint: String,
+    /// Domains this endpoint answered.
+    pub ok: usize,
+    /// Domains it was asked (`forbidden` for DoH/DoT, `allowed` for UDP).
+    pub total: usize,
+    /// `DpiStatus::as_str()` of its first failure, absent when some domains
+    /// answered and the connection itself never failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<&'static str>,
+    /// `Detail::code()` behind that failure: `no_root_certificates` for a chain
+    /// that did not reach a bundled root, `tls_drop_handshake` for a hello that
+    /// was dropped, and the raw message where no classification fits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -139,4 +172,42 @@ pub struct FingerprintBurst {
     pub timeout_secs: u64,
     pub profiles: Vec<String>,
     pub domains: Vec<BurstDomain>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dpi_core::classify::{Detail, DpiStatus};
+
+    /// Rule 5: the payload carries the core's own tokens, not the table's badges.
+    #[test]
+    fn dns_failures_carry_wire_tokens() {
+        let payload = DnsAvailability {
+            doh_ok: 0,
+            doh_total: 1,
+            dot_ok: 0,
+            dot_total: 1,
+            udp_ok: 1,
+            udp_total: 1,
+            hijacked_brands: Vec::new(),
+            resolvers_total: 1,
+            subst_sub: 0,
+            subst_total: 1,
+            fakeip_sub: 0,
+            failures: vec![DnsEndpointFailure {
+                provider: "Google".to_string(),
+                protocol: dpi_core::probe::dns_avail::ProbeKind::Dot.as_str(),
+                endpoint: "dns.google".to_string(),
+                ok: 0,
+                total: 5,
+                status: Some(DpiStatus::NoCa.as_str()),
+                detail: Some(Detail::NoRootCa.code().into_owned()),
+            }],
+        };
+
+        let text = serde_json::to_string(&payload).expect("the payload serializes");
+        assert!(text.contains(r#""protocol":"dot""#), "{text}");
+        assert!(text.contains(r#""status":"no_ca_bundle""#), "{text}");
+        assert!(text.contains(r#""detail":"no_root_certificates""#), "{text}");
+    }
 }
