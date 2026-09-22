@@ -4,7 +4,7 @@
 //! Anything that changes a pinned JA3/JA4 — an extension added or dropped, a
 //! cipher reordered, the padding extension lost — makes the profile stop
 //! reproducing the fingerprint the censor is reported to match on, so the pins
-//! are the reason the numbers live in `shapes.rs` and not in a builder.
+//! are the reason the numbers live in `shapes/` and not in a builder.
 
 use super::shapes::*;
 use super::*;

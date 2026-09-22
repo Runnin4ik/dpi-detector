@@ -100,7 +100,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # The profile table: our code name -> the wrapper it reproduces and the fork's
 # reference capture of that client. This is the one place the mapping lives; a
 # new profile is a line here plus its record in
-# `crates/dpi-core/src/net/fingerprint/shapes.rs`.
+# `crates/dpi-core/src/net/fingerprint/shapes/`.
 # ---------------------------------------------------------------------------
 
 PROFILES = [
