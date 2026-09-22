@@ -11,6 +11,7 @@
 //! cargo run --release --example tls_fingerprint dump-hex chrome107 > capture.hex
 //! cargo run --release --example tls_fingerprint variant chrome107 sigalg-swap  # one delta
 //! cargo run --release --example tls_fingerprint hello capture.hex  # bytes from elsewhere
+//! cargo run --release --example tls_fingerprint diff a.hex b.hex   # two captures, compared
 //! cargo run --release --example tls_fingerprint live firefox  # real servers
 //! cargo run --release --example tls_fingerprint liveany firefox # the unpinned offer
 //! cargo run --release --example tls_fingerprint live12 firefox hub.docker.com
@@ -29,8 +30,11 @@
 //! `tools/fingerprint/utls` produces such a capture from a named uTLS profile
 //! (`go run . dump HelloChrome_133 -o capture.hex`), which is what a
 //! circumvention tool puts on the wire — a different question from what a
-//! browser sends. `variant` needs a profile: the baseline (`rustls`) presents
-//! none, so there is nothing to edit.
+//! browser sends. `diff <a.hex> <b.hex>` compares two captures field by field,
+//! under the same rule `tools/fingerprint/fingerprint.py` applies in its
+//! `hello_diff`, so a uTLS shape and ours can be told apart without Python, a
+//! bundle or a network. `variant` needs a profile: the baseline (`rustls`)
+//! presents none, so there is nothing to edit.
 //!
 //! Every `live` form takes an optional host list; `live`/`live13` pin TLS 1.3
 //! (test 2's first column), `live12` pins 1.2, and `liveany` sends the browser's
@@ -134,6 +138,7 @@
 //!    service reports, and the profile is then blamed for the network. When an
 //!    echo result disagrees with a captured-byte comparison, trust the bytes.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -171,11 +176,21 @@ async fn main() {
     let which = std::env::args().nth(2).unwrap_or_else(|| "firefox".into());
     let extra: Vec<String> = std::env::args().skip(3).collect();
 
-    // `hello` takes a path where every other mode takes a profile code, and it
-    // needs no config of ours at all: the bytes are the whole input.
-    if mode == "hello" {
-        hello_file(&which);
-        return;
+    // `hello` and `diff` take paths where every other mode takes a profile code,
+    // and they need no config of ours at all: the bytes are the whole input.
+    match mode.as_str() {
+        "hello" => {
+            hello_file(&which);
+            return;
+        }
+        "diff" => {
+            let b = extra
+                .first()
+                .unwrap_or_else(|| panic!("diff takes two capture paths: diff <a.hex> <b.hex>"));
+            diff_files(&which, b);
+            return;
+        }
+        _ => {}
     }
 
     let hosts: Vec<String> = if extra.is_empty() {
@@ -200,7 +215,7 @@ async fn main() {
         "peet" => peet(fingerprint).await,
         "headers" => headers(fingerprint, hosts.first().map(String::as_str).unwrap_or("localhost")).await,
         other => panic!(
-            "unknown mode {other}, expected dump|dump13|dump12|dump-alpn|variant|hello|live|live13|live12|liveany|peet|headers"
+            "unknown mode {other}, expected dump|dump13|dump12|dump-alpn|variant|hello|diff|live|live13|live12|liveany|peet|headers"
         ),
     }
 }
@@ -439,7 +454,19 @@ impl Delta {
 /// This is the offline half of every comparison in the header above: it needs no
 /// network, no profile of ours, and no echo service's opinion.
 fn hello_file(path: &str) {
+    let (_, record) = capture(path);
+    print_dump(&format!("profile   = {path} (captured bytes)"), &record);
+}
+
+/// A capture file as `(label, record)`: the `#` header line when it has one (the
+/// uTLS dumper writes one), the path otherwise, and the bytes with a record
+/// header added when the file carries a bare handshake message.
+fn capture(path: &str) -> (String, Vec<u8>) {
     let text = std::fs::read_to_string(path).unwrap_or_else(|err| panic!("{path}: {err}"));
+    let label = text
+        .lines()
+        .find_map(|line| line.strip_prefix('#').map(|rest| rest.trim().to_owned()))
+        .unwrap_or_else(|| path.to_owned());
     let bytes = decode_hex(&text);
     let record = if bytes.first() == Some(&0x16) {
         bytes
@@ -448,7 +475,268 @@ fn hello_file(path: &str) {
         record.extend_from_slice(&bytes);
         record
     };
-    print_dump(&format!("profile   = {path} (captured bytes)"), &record);
+    (label, record)
+}
+
+// ---------------------------------------------------------------------------
+// `diff`: two captures, compared
+// ---------------------------------------------------------------------------
+
+/// Extension types `body_diff` branches on.
+const EXT_SUPPORTED_GROUPS: u16 = 10;
+const EXT_SIGNATURE_ALGORITHMS: u16 = 13;
+const EXT_PRE_SHARED_KEY: u16 = 41;
+const EXT_SUPPORTED_VERSIONS: u16 = 43;
+const EXT_KEY_SHARE: u16 = 51;
+const EXT_ENCRYPTED_CLIENT_HELLO: u16 = 65037;
+
+/// Bodies two hellos are never compared on: the name itself (0), an empty body
+/// (5, 18, 23), a ticket that is fresh per connection (35), renegotiation (65281).
+const BODIES_NOT_COMPARED: [u16; 6] = [0, 5, 18, 23, 35, 65281];
+
+/// The payload lengths a GREASE ECH body declares: BoringSSL's four estimates of
+/// an encoded inner hello, rounded to 32 (`setup_ech_grease()` in its
+/// `ssl/encrypted_client_hello.cc`). Two independent draws from the same four are
+/// the same shape; a body of any other size identifies the build.
+const ECH_PAYLOAD_LENGTHS: [usize; 4] = [144, 176, 208, 240];
+
+/// `diff <a.hex> <b.hex>`: two ClientHellos from anywhere, compared.
+///
+/// The rule is the one `tools/fingerprint/fingerprint.py` applies in its
+/// `hello_diff`, so both tools agree on what "the same shape" means. What is new
+/// here is the input: any two captures — ours, the bundle's, a uTLS build's, a
+/// live browser's — with no network, no Python and no bundle.
+fn diff_files(a_path: &str, b_path: &str) {
+    let (a_label, a_record) = capture(a_path);
+    let (b_label, b_record) = capture(b_path);
+    let a = ja3::client_hello(&a_record).unwrap_or_else(|| panic!("{a_path}: not a ClientHello"));
+    let b = ja3::client_hello(&b_record).unwrap_or_else(|| panic!("{b_path}: not a ClientHello"));
+
+    println!("a          = {a_label}");
+    println!("b          = {b_label}");
+    println!("record     = a {} bytes, b {} bytes", a_record.len(), b_record.len());
+    println!("ja3        = a {}", ja3::client_hello_ja3(&a_record));
+    println!("             b {}", ja3::client_hello_ja3(&b_record));
+    println!("ja4        = a {}", ja4::client_hello_ja4(&a_record));
+    println!("             b {}", ja4::client_hello_ja4(&b_record));
+
+    let mut found: Vec<String> = Vec::new();
+    report(
+        &mut found,
+        a.record_version == b.record_version,
+        "record version",
+        &format!("{} vs {}", hex(&a.record_version), hex(&b.record_version)),
+    );
+    report(
+        &mut found,
+        a.legacy_version == b.legacy_version,
+        "legacy version",
+        &format!("{} vs {}", hex(&a.legacy_version), hex(&b.legacy_version)),
+    );
+    report(
+        &mut found,
+        a.session_id_len == b.session_id_len,
+        "session id",
+        &format!("length {} vs {}", a.session_id_len, b.session_id_len),
+    );
+
+    let (a_ciphers, b_ciphers) = (masked(a.ciphers.iter().copied()), masked(b.ciphers.iter().copied()));
+    let same = a_ciphers == b_ciphers;
+    report(&mut found, same, "ciphers", &format!("{} vs {}", a.ciphers.len(), b.ciphers.len()));
+    if !same {
+        println!("      a   {}", a_ciphers.join("-"));
+        println!("      b   {}", b_ciphers.join("-"));
+    }
+    let same = a.compressions == b.compressions;
+    report(&mut found, same, "compression", &format!("{} vs {}", a.compressions.len(), b.compressions.len()));
+    if !same {
+        println!("      a   {:?}", a.compressions);
+        println!("      b   {:?}", b.compressions);
+    }
+    let (a_types, b_types) = (ext_types(&a), ext_types(&b));
+    let same = a_types == b_types;
+    report(&mut found, same, "extensions", &format!("{} vs {}", a_types.len(), b_types.len()));
+    if !same {
+        println!("      a   {}", a_types.join("-"));
+        println!("      b   {}", b_types.join("-"));
+    }
+
+    // The bodies, which is what the hashes above cannot see. GREASE slots are
+    // skipped here: their values are drawn per connection, and the extension list
+    // above already reports a slot that only one side has.
+    let a_bodies: BTreeMap<u16, &[u8]> =
+        a.extensions.iter().map(|(kind, body)| (*kind, body.as_slice())).collect();
+    let b_bodies: BTreeMap<u16, &[u8]> =
+        b.extensions.iter().map(|(kind, body)| (*kind, body.as_slice())).collect();
+    let mut kinds: Vec<u16> = a_bodies.keys().chain(b_bodies.keys()).copied().collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    for kind in kinds.into_iter().filter(|kind| !ja3::is_grease(*kind)) {
+        let label = format!("body {}", name(kind));
+        match (a_bodies.get(&kind), b_bodies.get(&kind)) {
+            (None, Some(body)) => report(&mut found, false, &label, &format!("only b ({} bytes)", body.len())),
+            (Some(body), None) => report(&mut found, false, &label, &format!("only a ({} bytes)", body.len())),
+            (Some(a_body), Some(b_body)) => {
+                if let Some(what) = body_diff(kind, a_body, b_body) {
+                    report(&mut found, false, &label, &what);
+                }
+            }
+            // Not reachable: `kind` comes from the union of the two maps.
+            (None, None) => unreachable!("kind comes from the union of both extension maps"),
+        }
+    }
+
+    match found.len() {
+        0 => println!("result     = SAME"),
+        n => println!("result     = {n} difference(s): {}", found.join(", ")),
+    }
+}
+
+/// One comparison line, and the label of a difference for the closing summary.
+fn report(found: &mut Vec<String>, same: bool, label: &str, detail: &str) {
+    println!("  {label:24} {:4}  {detail}", if same { "SAME" } else { "DIFF" });
+    if !same {
+        found.push(label.to_owned());
+    }
+}
+
+/// What differs between two extension bodies, `None` when the difference is
+/// per-connection randomness rather than shape.
+fn body_diff(kind: u16, a: &[u8], b: &[u8]) -> Option<String> {
+    if BODIES_NOT_COMPARED.contains(&kind) {
+        return None;
+    }
+    match kind {
+        EXT_ENCRYPTED_CLIENT_HELLO => {
+            let (a_len, b_len) = (ech_payload_len(a), ech_payload_len(b));
+            let drawn = |len: Option<usize>| len.is_some_and(|len| ECH_PAYLOAD_LENGTHS.contains(&len));
+            (!(drawn(a_len) && drawn(b_len))).then(|| {
+                format!("payloads {a_len:?} vs {b_len:?}, one of {ECH_PAYLOAD_LENGTHS:?} expected")
+            })
+        }
+        EXT_PADDING | EXT_PRE_SHARED_KEY => {
+            (a.len() != b.len()).then(|| format!("length {} vs {}", a.len(), b.len()))
+        }
+        EXT_KEY_SHARE => {
+            let (a_shares, b_shares) = (key_shares(a), key_shares(b));
+            (a_shares != b_shares).then(|| format!("{} vs {}", a_shares.join("-"), b_shares.join("-")))
+        }
+        EXT_SUPPORTED_GROUPS => list_diff(masked_u16s(a, 2), masked_u16s(b, 2), "groups"),
+        EXT_SUPPORTED_VERSIONS => list_diff(masked_u16s(a, 1), masked_u16s(b, 1), "versions"),
+        EXT_SIGNATURE_ALGORITHMS => list_diff(plain_u16s(a, 2), plain_u16s(b, 2), "schemes"),
+        _ => (a != b).then(|| format!("{} vs {}", brief(a), brief(b))),
+    }
+}
+
+/// `None` when two masked lists are equal, else what differs.
+fn list_diff(a: Vec<String>, b: Vec<String>, what: &str) -> Option<String> {
+    (a != b).then(|| format!("{what} {} vs {}", a.join("-"), b.join("-")))
+}
+
+/// The payload length a GREASE ECH body declares: `type(1) kdf(2) aead(2)
+/// config_id(1) enc<2+len> payload<2+len>`, X25519, outer hello.
+fn ech_payload_len(body: &[u8]) -> Option<usize> {
+    for off in [1usize, 0] {
+        if body.len() < off + 9 || body[off] != 0 || body[off + 1] != 1 {
+            continue;
+        }
+        let enc_len = be16(body, off + 5)? as usize;
+        if let Some(len) = be16(body, off + 7 + enc_len) {
+            return Some(len as usize);
+        }
+    }
+    None
+}
+
+/// `(group, key length)` pairs of a `key_share` body, GREASE masked: the key is
+/// fresh per connection, its length is not.
+fn key_shares(body: &[u8]) -> Vec<String> {
+    let end = (2 + be16(body, 0).unwrap_or(0) as usize).min(body.len());
+    let mut out = Vec::new();
+    let mut at = 2;
+    while at + 4 <= end {
+        let group = be16(body, at).unwrap_or(0);
+        let len = be16(body, at + 2).unwrap_or(0) as usize;
+        let group = if ja3::is_grease(group) { "GREASE".to_owned() } else { format!("{group:#06x}") };
+        out.push(format!("{group}:{len}"));
+        at += 4 + len;
+    }
+    out
+}
+
+/// A `u16` list with GREASE masked, in decimal — the spelling `dump` prints
+/// ciphers and extension types in. Two draws from the GREASE set are the same
+/// shape, and the count is still compared.
+fn masked(values: impl IntoIterator<Item = u16>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| if ja3::is_grease(value) { "GREASE".to_owned() } else { value.to_string() })
+        .collect()
+}
+
+fn masked_u16s(body: &[u8], at: usize) -> Vec<String> {
+    u16s(body, at).into_iter().map(mask).collect()
+}
+
+fn plain_u16s(body: &[u8], at: usize) -> Vec<String> {
+    u16s(body, at).into_iter().map(|value| format!("{value:#06x}")).collect()
+}
+
+fn mask(value: u16) -> String {
+    if ja3::is_grease(value) {
+        "GREASE".to_owned()
+    } else {
+        format!("{value:#06x}")
+    }
+}
+
+/// Every big-endian `u16` of `body` from `at`, stopping at a short tail.
+fn u16s(body: &[u8], at: usize) -> Vec<u16> {
+    let mut out = Vec::new();
+    let mut at = at;
+    while let Some(value) = be16(body, at) {
+        out.push(value);
+        at += 2;
+    }
+    out
+}
+
+/// A big-endian `u16` at `at`, `None` when the slice is short of one — the
+/// fallible twin of the crate's own reader, because these bodies come from a
+/// capture rather than from our builder.
+fn be16(bytes: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]))
+}
+
+/// The extension types the rules above name, for the lines a reader has to
+/// recognise; anything else is printed by number alone.
+fn name(kind: u16) -> String {
+    let known = match kind {
+        EXT_PADDING => "padding",
+        EXT_SUPPORTED_GROUPS => "supported_groups",
+        EXT_SIGNATURE_ALGORITHMS => "signature_algorithms",
+        EXT_PRE_SHARED_KEY => "pre_shared_key",
+        EXT_SUPPORTED_VERSIONS => "supported_versions",
+        EXT_KEY_SHARE => "key_share",
+        EXT_ENCRYPTED_CLIENT_HELLO => "encrypted_client_hello",
+        _ => return kind.to_string(),
+    };
+    format!("{kind} ({known})")
+}
+
+/// Extension types of a hello, in wire order, GREASE masked.
+fn ext_types(hello: &ja3::ClientHello) -> Vec<String> {
+    masked(hello.extensions.iter().map(|(kind, _)| *kind))
+}
+
+/// A body as hex, cut short: a body no rule above names is short, and a long one
+/// would bury the line it appears on.
+fn brief(body: &[u8]) -> String {
+    const LIMIT: usize = 48;
+    if body.len() <= LIMIT {
+        return hex(body);
+    }
+    format!("{}... ({} bytes)", hex(&body[..LIMIT]), body.len())
 }
 
 /// The hex in `text`, ignoring whitespace, `0x` prefixes and `#` comments.

@@ -26,6 +26,7 @@ cargo run --release --example tls_fingerprint dump-alpn chrome107 h1
 cargo run --release --example tls_fingerprint variant chrome107 sigalg-swap
 cargo run --release --example tls_fingerprint dump-hex chrome107 > capture.hex
 cargo run --release --example tls_fingerprint hello capture.hex
+cargo run --release --example tls_fingerprint diff a.hex b.hex
 ```
 
 `dump-alpn` pins the ALPN offer (which moves JA4's ALPN field and nothing
@@ -37,6 +38,14 @@ can be measured without a profile of ours and without a network. The deltas
 whose JA4 does not move (`+grease`, `padding:<n>`, `sigalg-swap` for JA3) are
 the controls: a verdict that changes on one of them says the matcher reads more
 than the hash.
+
+`diff` compares two captures field by field — ours, the bundle's, a uTLS
+build's, a live browser's — under the same rule this tool's `hello_diff`
+applies, so the offline half needs no Python, no bundle and no network. It is
+what turns `tools/fingerprint/utls` into a measurement rather than a dump:
+`diff` of a uTLS `HelloChrome_133` capture and our `chrome146` reports the
+extension order and nothing else, which is the whole difference between the two
+clients' hellos.
 
 ## uTLS captures (`utls/`)
 
@@ -88,6 +97,18 @@ prints. A one-byte difference in an extension body survives every hash — that 
 how Safari's duplicated `rsa_pss_rsae_sha384` and its dropped `ecdsa_sha1` went
 unnoticed for a release, and how the h2 pseudo-header order of Safari 18 survived
 the sampled tests that pinned everything else.
+
+`all` ends with a **verdict table**: one line per profile, every comparison that
+ran, and which of the differences the profile's own client accounts for. That
+judgement is measured rather than declared — the profile's own hello is drawn 24
+times, so an extension *order* that moves marks a shuffling shape and an
+extension *set* that moves marks the padding floor's coin flip (the bundle names
+`--tls-permute-extensions` from `curl_chrome123` on while the fork's captures
+mark every Chromium from 110 up, so a flag alone would miss `chrome116`), and a
+wrapper that names `--tls-key-shares-limit` explains its own key-share count.
+Everything else is printed as `to look at`, because only the named differences
+below can say whether it is expected: a run of all nineteen profiles should read
+`13 clean, 6 explained by their own client, 0 to look at`.
 
 ## Adding or re-checking a profile
 

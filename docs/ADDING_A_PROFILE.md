@@ -53,7 +53,8 @@
 Инструменты: `python tools/fingerprint/fingerprint.py flags <код>` (флаги обёртки),
 `go run . dump <HelloSpec> -o capture.hex` в `tools/fingerprint/utls` (спека uTLS),
 `cargo run --release --example tls_fingerprint -- hello capture.hex` (чтение любого
-захвата), `--legend` (что мы шлём сейчас).
+захвата), `... -- diff a.hex b.hex` (сравнение двух любых захватов по полям, без
+сети) и `--legend` (что мы шлём сейчас).
 
 Бандл ищется по `$CURL_IMPERSONATE_DIR`, затем в `~/Downloads`; путь можно задать
 `--bundle DIR`. Имя каталога бандла несёт версию (`curl-impersonate-v2.2.2.x86_64-win32`)
@@ -106,6 +107,17 @@
 | `fingerprint.py headers-diff <код>` | блок запроса HTTP/1.1: имена с регистром, порядок, значения | ничего про TLS и h2 |
 | `live` / `liveany <код>` | настоящие рукопожатия: базовые хосты, `hub.docker.com` и `danbooru.donmai.us` (SCT в certificate entry), `standby-rezka.tv` | — |
 | `peet <код>` | akamai-отпечаток преамбулы | — |
+| `diff <a.hex> <b.hex>` | два любых захвата — наш, бандла, uTLS, живого браузера — по полям, без сети | что сервер с ними делает |
+
+`fingerprint.py all` заканчивается **таблицей вердикта**: строка на профиль,
+какие сравнения расходились и что из этого объясняет сам клиент записи. Судит
+она по замеру, а не по объявлению: hello профиля снимается 24 раза, поэтому
+уезжающий *порядок* расширений отмечает тасующую форму, а уезжающий *набор* —
+монетку padding'а; обёртка с `--tls-key-shares-limit` объясняет свои доли ключа.
+Всё остальное печатается как `to look at` — судить о нём может только список
+намеренных расхождений в `tools/fingerprint/README.md`. Полный прогон по
+девятнадцати профилям должен читаться `13 clean, 6 explained by their own client,
+0 to look at`.
 
 Профиль считается сделанным, когда `hello-diff` говорит `SAME`, либо когда каждое
 оставшееся различие названо в `tools/fingerprint/README.md` и в §5 этого документа.

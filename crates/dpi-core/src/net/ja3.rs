@@ -21,7 +21,7 @@ pub(crate) fn u16_at(bytes: &[u8], at: usize) -> u16 {
 }
 
 /// GREASE: `0x0a0a`, `0x1a1a`, … `0xfafa`.
-pub(crate) fn is_grease(value: u16) -> bool {
+pub fn is_grease(value: u16) -> bool {
     value & 0x0f0f == 0x0a0a
 }
 
@@ -165,4 +165,86 @@ pub fn key_share_groups(record: &[u8]) -> String {
         at += 4 + u16_at(body, at + 2) as usize;
     }
     groups.join(",")
+}
+
+/// A ClientHello as the fields a comparison reads: the record and legacy
+/// versions, the session id length, the cipher suites, the compression methods,
+/// and every extension with its body, in wire order.
+///
+/// This is the parse behind the harness's `diff`. Two captures — ours, the
+/// bundle's, a uTLS build's, a live browser's — are compared field by field,
+/// which is the only comparison that sees what no hash does: an extension body,
+/// the padding length, the GREASE draw. GREASE is **not** filtered here, because
+/// a comparison masks it itself and a GREASE slot on one side only is a
+/// difference.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClientHello {
+    /// The version in the record header (`0301` on every current client).
+    pub record_version: [u8; 2],
+    /// `legacy_version` in the handshake message (`0303`).
+    pub legacy_version: [u8; 2],
+    /// Length of the session id — the id itself is fresh per connection, so its
+    /// length is what two hellos can be compared on.
+    pub session_id_len: usize,
+    /// Cipher suites, in wire order, GREASE included.
+    pub ciphers: Vec<u16>,
+    /// Compression methods, in wire order.
+    pub compressions: Vec<u8>,
+    /// `(type, body)` pairs, in wire order, GREASE included.
+    pub extensions: Vec<(u16, Vec<u8>)>,
+}
+
+/// Parses a TLS record that carries a ClientHello, `None` when it does not parse
+/// as one.
+///
+/// A bare handshake message has to be wrapped in a record first — the harness
+/// wraps it, so `record_version` is always the real one.
+pub fn client_hello(record: &[u8]) -> Option<ClientHello> {
+    let message = record.get(RECORD_HEADER..)?;
+    if message.first() != Some(&1) {
+        return None;
+    }
+    let declared = usize::from(*message.get(1)?) << 16
+        | usize::from(*message.get(2)?) << 8
+        | usize::from(*message.get(3)?);
+    let hello = message.get(..4 + declared)?;
+
+    let mut at = 4 + 2 + 32; // handshake header, legacy version, random
+    let session_id_len = usize::from(*hello.get(at)?);
+    at += 1 + session_id_len;
+    let cipher_len = usize::from(be16(hello, at)?);
+    at += 2;
+    let ciphers = hello
+        .get(at..at + cipher_len)?
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_be_bytes(*pair))
+        .collect();
+    at += cipher_len;
+    let compression_len = usize::from(*hello.get(at)?);
+    at += 1;
+    let compressions = hello.get(at..at + compression_len)?.to_vec();
+    at += compression_len;
+
+    let ext_len = usize::from(be16(hello, at)?);
+    let end = (at + 2 + ext_len).min(hello.len());
+    let extensions = extensions(&hello[..end])
+        .into_iter()
+        .map(|(ext_type, body)| (ext_type, body.to_vec()))
+        .collect();
+
+    Some(ClientHello {
+        record_version: [*record.get(1)?, *record.get(2)?],
+        legacy_version: [*hello.first()?, *hello.get(1)?],
+        session_id_len,
+        ciphers,
+        compressions,
+        extensions,
+    })
+}
+
+/// A big-endian `u16` at `at`, `None` when the slice is short of one.
+fn be16(bytes: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]))
 }

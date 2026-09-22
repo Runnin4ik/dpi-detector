@@ -25,7 +25,12 @@ Three independent comparisons, weakest to strongest:
              JA4 and peetprint.
 
 A profile is done when `hello` shows no difference but per-connection randomness,
-or when every remaining difference is named in `docs/ADDING_A_PROFILE.md`.
+or when every remaining difference is named in `docs/ADDING_A_PROFILE.md`. `all`
+ends with a verdict table: one line per profile, every comparison that ran, and
+which of the differences the profile's own wrapper flags account for (a shuffling
+shape differs from any single capture in the extension order on every run) —
+everything else is printed as `to look at`, because only that named list can say
+whether it is expected.
 
 Usage
 -----
@@ -113,6 +118,18 @@ CAPTURE_REPO = "https://github.com/lexiforest/curl-impersonate.git"
 # the AEAD tag (`setup_ech_grease()` in its `ssl/encrypted_client_hello.cc`).
 ECH_EXTENSION = 65037
 ECH_PAYLOAD_LENGTHS = (144, 176, 208, 240)
+
+# The 512-byte floor's slot (RFC 7685). A shape whose hello can fall under the
+# floor draws it per connection, so its *presence* is not a shape difference.
+PADDING_EXTENSION = 21
+
+# The labels a padding draw can move, shared by `hello_variation` and the verdict:
+# the extension set and order (the slot appears or not), JA4 (which counts it), and
+# the echo service's hashes, peetprint among its inputs.
+PADDING_LABELS = frozenset({
+    "extensions", "ext order", "ja4", "padding", "body padding",
+    "tls.ja3", "tls.ja3_hash", "tls.ja4", "tls.ja4_hash", "tls.peetprint_hash",
+})
 
 EXT_NAMES = {
     0: "server_name", 5: "status_request", 10: "supported_groups", 11: "ec_point_formats",
@@ -236,7 +253,7 @@ def body_diff(kind, mine, theirs):
         return None  # no body worth comparing: the name, an empty body, or a ticket
     if kind == ECH_EXTENSION:
         return _ech_diff(mine, theirs)
-    if kind == 21 or kind == 41:
+    if kind in (PADDING_EXTENSION, 41):
         return None if len(mine) == len(theirs) else f"length {len(mine)} vs {len(theirs)}"
     if kind == 51:
         return None if _key_shares(mine) == _key_shares(theirs) else \
@@ -299,6 +316,28 @@ def hello_diff(mine, theirs, show_same=False):
         if diff:
             lines.append(f"  body {ext_name(kind):20} DIFF  {diff}")
     return lines
+
+
+def hello_labels(mine, theirs):
+    """The checks `hello_diff` found, as short labels.
+
+    The extension line is split into `ext order` and `extensions`: a shape whose
+    client shuffles its order differs from any single capture on every run even
+    when the sets are identical, and telling the two apart is what the verdict
+    table needs — `captures` already makes the distinction with its two checks.
+    """
+    labels = []
+    for line in hello_diff(mine, theirs):
+        words = line.strip().split()
+        if not any(word in ("DIFF", "MISSING", "EXTRA") for word in words):
+            continue
+        label = " ".join(word for word in words[:2] if word not in ("DIFF", "MISSING", "EXTRA"))
+        if label == "extensions":
+            mine_types = [ext_name(kind) for kind, _ in mine["exts"]]
+            their_types = [ext_name(kind) for kind, _ in theirs["exts"]]
+            label = "ext order" if sorted(mine_types) == sorted(their_types) else "extensions"
+        labels.append(label)
+    return labels
 
 
 # ---------------------------------------------------------------------------
@@ -670,8 +709,18 @@ def stage_captures(harness, args):
             ("key shares", shares, shape["shares"]),
             ("ja4", mine["ja4"], shape["ja4"]),
         )
+        differing = []
+        for label, ours, theirs in checks:
+            if ours == theirs:
+                continue
+            # A set difference that is the padding slot alone is the 512-byte
+            # floor's coin flip, not a shape difference: the fork's capture holds
+            # one draw and our dump holds another.
+            if label == "extensions" and set(ours) ^ set(theirs) == {PADDING_EXTENSION}:
+                label = "padding"
+            differing.append(label)
+        verdict(code, "captures", differing)
         if args.summary:
-            differing = [label for label, ours, theirs in checks if ours != theirs]
             log(f"  {code:16} {'SAME' if not differing else ', '.join(differing)}")
             continue
         log(f"  {code:16} {shape['browser']}  ({shape['file']})")
@@ -832,10 +881,16 @@ def stage_headers_diff(harness, args):
         same_case = mine["headers"] == theirs["headers"]
         same_lower = ([(n.lower(), v) for n, v in mine["headers"]]
                       == [(n.lower(), v) for n, v in theirs["headers"]])
+        labels = []
+        if not same_line:
+            labels.append("request line")
+        if not same_case:
+            labels.append("headers case" if same_lower else "headers")
+        verdict(code, "headers-diff", labels)
         if args.summary:
-            verdict = "SAME" if same_case else ("case only" if same_lower else "DIFF")
+            case_text = "SAME" if same_case else ("case only" if same_lower else "DIFF")
             log(f"  {code:16} {len(mine['headers'])} headers, "
-                f"{'request line SAME' if same_line else 'request line DIFF'}, {verdict}")
+                f"{'request line SAME' if same_line else 'request line DIFF'}, {case_text}")
             continue
         log(f"\n  {code} <- {wrapper}")
         log(f"    request line  {'SAME' if same_line else 'DIFF'}  ours {mine['line']!r}"
@@ -937,13 +992,13 @@ def stage_echo_diff(harness, args):
             continue
         ours = parse_ours_echo(ours_path)
         theirs = parse_bundle_echo(theirs_path)
+        differing = [f for f in ECHO_FIELDS if ours["fields"].get(f) != theirs["fields"].get(f)]
+        if ours["frames"] != theirs["frames"]:
+            differing.append("h2 frames")
+        if ours["headers"] != theirs["headers"]:
+            differing.append("headers")
+        verdict(code, "echo-diff", differing)
         if args.summary:
-            differing = [f for f in ECHO_FIELDS
-                         if ours["fields"].get(f) != theirs["fields"].get(f)]
-            if ours["frames"] != theirs["frames"]:
-                differing.append("h2 frames")
-            if ours["headers"] != theirs["headers"]:
-                differing.append("headers")
             log(f"  {code:16} {'SAME' if not differing else ', '.join(differing)}")
             continue
         log(f"\n  {code} <- {wrapper}")
@@ -1063,12 +1118,9 @@ def stage_hello_diff(harness, args):
             continue
         mine = parse_hello(bytes.fromhex(open(mine_path).read()))
         theirs = parse_hello(bytes.fromhex(open(theirs_path).read()))
+        labels = hello_labels(mine, theirs)
+        verdict(code, "hello-diff", labels)
         if args.summary:
-            labels = []
-            for line in hello_diff(mine, theirs):
-                text = line.strip()
-                if "DIFF" in text or "MISSING" in text or "EXTRA" in text:
-                    labels.append(text.split()[0] + " " + text.split()[1])
             log(f"  {code:16} ours {mine['total']:5} B, bundle {theirs['total']:5} B, "
                 f"{'SAME' if not labels else '; '.join(labels)}")
             continue
@@ -1111,6 +1163,120 @@ def stage_flags(harness, args):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# The verdict: every profile, every comparison, one line each
+# ---------------------------------------------------------------------------
+
+VERDICTS = {}
+
+# How many times a profile's own hello is drawn before the verdict judges whether
+# it varies at all. The padding floor flips one connection in four, so a handful of
+# draws is not enough: at 24 the chance of missing it is (3/4)^24, about 0.1%.
+SAMPLES = 24
+
+
+def verdict(code, stage, labels):
+    """Records one profile's outcome for the closing table."""
+    VERDICTS.setdefault(code, {})[stage] = ", ".join(labels) if labels else "SAME"
+
+
+def hello_variation(harness, code):
+    """Which labels the profile's own hello already varies in, across draws.
+
+    Measured, not declared: the bundle names `--tls-permute-extensions` from
+    `curl_chrome123` on while the fork's captures mark every Chromium from 110 up,
+    so the flag alone would miss `chrome116` — and the two shapes that can fall
+    under the 512-byte padding floor draw a padding slot on one connection in
+    four. An extension *order* that moves is a shuffling shape; a *set* that moves
+    is the padding coin flip, which moves the order with it. JA3 follows both,
+    JA4 and peetprint follow the padding.
+    """
+    def draw():
+        text = harness.example("dump", code)
+        exts = re.search(r"^exts\s+= (.*)$", text, re.M)
+        size = re.search(r"^record\s+= (\d+) bytes$", text, re.M)
+        return (exts.group(1) if exts else None, size.group(1) if size else None)
+
+    draws = {draw() for _ in range(SAMPLES)}
+    if len(draws) < 2 or any(exts is None for exts, _ in draws):
+        return set(), []
+    orders = {tuple(exts.split("-")) for exts, _ in draws}
+    sets = {tuple(sorted(exts.split("-"))) for exts, _ in draws}
+    if len(sets) > 1:
+        return set(PADDING_LABELS), ["its own hello varies (padding)"]
+    if len(orders) > 1:
+        return {"ext order", "tls.ja3", "tls.ja3_hash"}, ["its own hello varies (order)"]
+    return set(), []
+
+
+def expectations(harness, code, wrapper):
+    """The differences this profile's own client explains, and why.
+
+    Two sources, both about the client rather than about the record: a measured
+    pair of its own hellos (`hello_variation`) and its wrapper's flags (a
+    key-share limit belongs to the wrapper, not to the browser). Nothing else is
+    judged here — the named differences in `tools/fingerprint/README.md` are the
+    list a reader checks the rest against, and copying them into code would be a
+    second list to keep in step.
+    """
+    explained, why = hello_variation(harness, code)
+    # A `padding` label anywhere is the same coin flip seen once: eight draws can
+    # miss a one-in-four slot, while the comparison against the fork's single
+    # capture cannot. The reason is printed, so a reader can tell what was
+    # explained rather than take it on faith.
+    if any("padding" in outcome for outcome in VERDICTS.get(code, {}).values()):
+        explained |= PADDING_LABELS
+        why.append("the padding slot is a per-connection draw")
+    flags = (wrapper_flags(harness.bundle, wrapper) or {}).get("flags", {}) if wrapper else {}
+    if "tls-key-shares-limit" in flags:
+        explained |= {"key shares"}
+        why.append("its wrapper limits the key shares")
+    return explained, why
+
+
+def print_verdicts(harness, args):
+    """The closing table: what each comparison found, and what that means.
+
+    A difference is explained when the profile's own client accounts for it, and
+    the reason is printed beside it; everything else is listed as `to look at`,
+    because only the named list in the README can say whether it is expected.
+    """
+    if not VERDICTS:
+        return
+    section("verdict — every profile, every comparison")
+    stages = [stage for stage in ("captures", "echo-diff", "headers-diff", "hello-diff")
+              if any(stage in row for row in VERDICTS.values())]
+    clean, explained_count, unexplained = 0, 0, []
+    for code, wrapper, _ in selected(args):
+        row = VERDICTS.get(code)
+        if row is None:
+            continue
+        differing = {stage: row[stage] for stage in stages if row.get(stage) not in (None, "SAME")}
+        if not differing:
+            clean += 1
+            log(f"  {code:16} SAME in every comparison")
+            continue
+        # Only a profile that differs is worth drawing 24 times: a clean one has
+        # nothing to explain.
+        explained, why = expectations(harness, code, wrapper)
+        parts, loose = [], []
+        for stage, outcome in differing.items():
+            labels = outcome.split(", ")
+            mine = [label for label in labels if label not in explained]
+            loose += [f"{stage}: {label}" for label in mine]
+            parts.append(f"{stage}={outcome}" + ("" if mine else f" ({'; '.join(why)})"))
+        if loose:
+            unexplained.append(code)
+            log(f"  {code:16} " + "; ".join(parts))
+            log(f"  {'':16} to look at: {', '.join(loose)}")
+        else:
+            explained_count += 1
+            log(f"  {code:16} " + "; ".join(parts))
+    log(f"\n  {len(VERDICTS)} profiles: {clean} clean, {explained_count} explained by their own client, "
+        f"{len(unexplained)} to look at")
+    log("  named differences are listed in tools/fingerprint/README.md; anything else is a bug in the record")
+
 
 STAGES = {
     "dump": stage_dump,
@@ -1157,6 +1323,8 @@ def main():
               "hello", "hello-diff"] if args.stage == "all" else [args.stage]
     for stage in stages:
         STAGES[stage](harness, args)
+    if args.stage == "all":
+        print_verdicts(harness, args)
 
 
 if __name__ == "__main__":
