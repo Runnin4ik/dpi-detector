@@ -103,20 +103,56 @@ pub enum DpiStatus {
     OsErr,
     DnsFail,
     DnsFake,
-    /// Rule 5: the DNS tokens are the resolver vocabulary's own spellings —
-    /// `nxdomain`, `fakeip` — not the derived `nx_domain`/`fake_ip`.
+    /// Rule 5: the DNS token is the resolver vocabulary's own spelling —
+    /// `nxdomain` — not the derived `nx_domain`.
     #[serde(rename = "nxdomain")]
     NxDomain,
-    DnsHijacked,
-    #[serde(rename = "fakeip")]
-    FakeIp,
-    HttpBlocked,
-    Unreachable,
     Err,
     Unknown,
 }
 
 impl DpiStatus {
+    /// Every variant, in declaration order.
+    ///
+    /// The enum cannot be iterated, and a check that has to see all of it — the
+    /// binary's legend coverage test — walks this. Keep it in step with the
+    /// enum: a variant added above and not added here is simply not checked.
+    pub const ALL: &'static [DpiStatus] = &[
+        DpiStatus::Ok,
+        DpiStatus::RedirSuspect,
+        DpiStatus::Blocked,
+        DpiStatus::IspPage,
+        DpiStatus::LocalIp,
+        DpiStatus::Timeout,
+        DpiStatus::SendTimeout,
+        DpiStatus::ReadTimeout,
+        DpiStatus::PoolTimeout,
+        DpiStatus::Tcp16Detected,
+        DpiStatus::TcpRst,
+        DpiStatus::TcpAbort,
+        DpiStatus::TlsRst,
+        DpiStatus::TlsAbort,
+        DpiStatus::TlsDropped,
+        DpiStatus::TlsAlert,
+        DpiStatus::TlsBlock,
+        DpiStatus::TlsErr,
+        DpiStatus::NoCa,
+        DpiStatus::TlsSpoof,
+        DpiStatus::TlsEof,
+        DpiStatus::Tcp16Range,
+        DpiStatus::NoTls13,
+        DpiStatus::SynDropped,
+        DpiStatus::Refused,
+        DpiStatus::NetUnreach,
+        DpiStatus::HostUnreach,
+        DpiStatus::OsErr,
+        DpiStatus::DnsFail,
+        DpiStatus::DnsFake,
+        DpiStatus::NxDomain,
+        DpiStatus::Err,
+        DpiStatus::Unknown,
+    ];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Ok => "ok",
@@ -150,10 +186,6 @@ impl DpiStatus {
             Self::DnsFail => "dns_fail",
             Self::DnsFake => "dns_fake",
             Self::NxDomain => "nxdomain",
-            Self::DnsHijacked => "dns_hijacked",
-            Self::FakeIp => "fakeip",
-            Self::HttpBlocked => "http_blocked",
-            Self::Unreachable => "unreachable",
             Self::Err => "err",
             Self::Unknown => "unknown",
         }
@@ -192,10 +224,6 @@ impl DpiStatus {
             Self::DnsFail => "DNS FAIL",
             Self::DnsFake => "DNS FAKE",
             Self::NxDomain => "NXDOMAIN",
-            Self::DnsHijacked => "DNS HIJACK",
-            Self::FakeIp => "FAKE IP",
-            Self::HttpBlocked => "HTTP BLOCK",
-            Self::Unreachable => "UNREACHABLE",
             Self::Err => "ERR",
             Self::Unknown => "UNKNOWN",
         }
@@ -224,9 +252,6 @@ impl DpiStatus {
                 | Self::TlsEof
                 | Self::TcpRst
                 | Self::TcpAbort
-                | Self::HttpBlocked
-                | Self::DnsHijacked
-                | Self::FakeIp
                 | Self::DnsFake
                 | Self::SynDropped
                 | Self::TlsDropped
@@ -276,9 +301,9 @@ mod tests {
         assert!(!DpiStatus::RedirSuspect.is_blocked());
     }
 
-    /// Rule 5: serde and `as_str()` must agree on the wire token. Five variants
+    /// Rule 5: serde and `as_str()` must agree on the wire token. Four variants
     /// had drifted — `--json` carries `as_str()`, so a `DpiStatus` serialized
-    /// anywhere else said `tcp16_range`, `no_ca`, `nx_domain`, `fake_ip` or
+    /// anywhere else said `tcp16_range`, `no_ca`, `nx_domain` or
     /// `tcp16_detected` where the documented token was something else. Pinned one
     /// by one: the enum cannot be iterated, and a list that rots is worse than
     /// none, so the ones that drifted are the ones named here.
@@ -289,7 +314,6 @@ mod tests {
             (DpiStatus::Tcp16Detected, "detected"),
             (DpiStatus::NoCa, "no_ca_bundle"),
             (DpiStatus::NxDomain, "nxdomain"),
-            (DpiStatus::FakeIp, "fakeip"),
             (DpiStatus::RedirSuspect, "redir"),
             (DpiStatus::TlsErr, "tls_err"),
         ] {
