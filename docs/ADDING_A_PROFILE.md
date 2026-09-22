@@ -51,10 +51,11 @@
 | `bogdanfinn/tls-client`, базы JA4 (ja4db, FoxIO) | «есть ли вообще такой профиль» и сверка JA4 | кросс-проверка |
 
 Инструменты: `python tools/fingerprint/fingerprint.py flags <код>` (флаги обёртки),
-`go run . dump <HelloSpec> -o capture.hex` в `tools/fingerprint/utls` (спека uTLS),
-`cargo run --release --example tls_fingerprint -- hello capture.hex` (чтение любого
-захвата), `... -- diff a.hex b.hex` (сравнение двух любых захватов по полям, без
-сети) и `--legend` (что мы шлём сейчас).
+`... utls` (все профили библиотеки uTLS против ближайшей обёртки бандла — что
+именно шлёт клиент на uTLS), `go run . dump <HelloSpec> -o capture.hex` в
+`tools/fingerprint/utls` (спека uTLS), `cargo run --release --example tls_fingerprint
+-- hello capture.hex` (чтение любого захвата), `... -- diff a.hex b.hex` (сравнение
+двух любых захватов по полям, без сети) и `--legend` (что мы шлём сейчас).
 
 Бандл ищется по `$CURL_IMPERSONATE_DIR`, затем в `~/Downloads`; путь можно задать
 `--bundle DIR`. Имя каталога бандла несёт версию (`curl-impersonate-v2.2.2.x86_64-win32`)

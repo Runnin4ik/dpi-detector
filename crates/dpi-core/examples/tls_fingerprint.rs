@@ -554,11 +554,20 @@ fn diff_files(a_path: &str, b_path: &str) {
         println!("      b   {:?}", b.compressions);
     }
     let (a_types, b_types) = (ext_types(&a), ext_types(&b));
-    let same = a_types == b_types;
-    report(&mut found, same, "extensions", &format!("{} vs {}", a_types.len(), b_types.len()));
-    if !same {
+    let mut a_set = a_types.clone();
+    a_set.sort_unstable();
+    let mut b_set = b_types.clone();
+    b_set.sort_unstable();
+    let same_set = a_set == b_set;
+    // The set and the order are reported apart, the way the Python `hello_labels`
+    // splits them: a shuffling profile permutes the same extensions on every
+    // connection, so calling that "a missing extension" would be wrong.
+    report(&mut found, same_set, "extensions", &format!("{} vs {}", a_types.len(), b_types.len()));
+    if !same_set {
         println!("      a   {}", a_types.join("-"));
         println!("      b   {}", b_types.join("-"));
+    } else {
+        report(&mut found, a_types == b_types, "ext order", "");
     }
 
     // The bodies, which is what the hashes above cannot see. GREASE slots are

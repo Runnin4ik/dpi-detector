@@ -52,15 +52,26 @@ clients' hellos.
 The Python tool above compares us against the browser we copy. This one answers
 the other question — what a *circumvention tool* sends — by dumping the
 ClientHello of a named uTLS profile, which is what the tools that ship uTLS put
-on the wire:
+on the wire. `fingerprint.py utls` runs the whole table in one go: every profile
+the library ships against the bundle's nearest wrapper, which is how the two
+libraries' clients can be told apart without a hand-run of each pair. By hand:
 
 ```
 cd tools/fingerprint/utls
 go run . list                                         # the library's own identifiers
 go run . dump HelloChrome_133 -o ../../../target/fingerprint/utls-chrome133.hex
+go run . dump HelloGolang -handshake -o ../../../target/fingerprint/utls-golang.hex
 go run . dump HelloRandomized -seed 0001…1f -o ../../../target/fingerprint/utls-random.hex
 cargo run --release --example tls_fingerprint -- hello target/fingerprint/utls-chrome133.hex
 ```
+
+`-handshake` takes the first flight off a real handshake against a local
+listener instead of marshalling the spec, and `HelloGolang` needs it: the library
+builds that one with `crypto/tls` and ignores the uTLS extension list, so
+marshalling it would emit a hello with no extensions vector at all (the dumper
+refuses rather than write that). The two routes agree byte for byte on a profile
+that draws nothing per connection — `HelloChrome_100` is `SAME` either way — and
+differ by exactly the per-connection draw on one that does.
 
 It prints hex and nothing else — no JA3, no JA4, no verdict — so a uTLS capture
 and a live-browser capture are read by the one implementation in

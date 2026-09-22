@@ -9,7 +9,7 @@
 // two that can drift apart.
 //
 //	utlsdump list
-//	utlsdump dump HelloChrome_133 [-sni example.com] [-seed <64 hex>] [-o capture.hex]
+//	utlsdump dump HelloChrome_133 [-sni example.com] [-seed <64 hex>] [-o capture.hex] [-handshake]
 //
 // The names are uTLS's own identifiers, not our profile names. `HelloChrome_133`
 // is the library's spec and `chrome133` would be ours: the two are not the same
@@ -17,6 +17,13 @@
 // shuffles what neither of them controls. What a capture proves is what a
 // uTLS-based client sends — which is what the circumvention tools ship, and a
 // different question from what a browser sends.
+//
+// `-handshake` takes the first flight off a real handshake against a local
+// listener instead of marshalling the spec, and it is the only route that covers
+// every profile: `HelloGolang` is built by `crypto/tls` ("UConn.Extensions will be
+// completely ignored", says its declaration), so marshalling it writes the
+// uTLS-level extension list instead — empty for that profile, which is a hello
+// with no extensions vector at all.
 package main
 
 import (
@@ -29,6 +36,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	utls "github.com/refraction-networking/utls"
 )
@@ -40,7 +48,8 @@ import (
 //
 // `HelloCustom` is not here: it starts with an empty extension list and is meant
 // to be filled by hand, so it has nothing of its own to dump — marshalling it
-// fails the library's own length check.
+// fails the library's own length check. `HelloGolang` is here and needs
+// `-handshake`: see the note above the package.
 var profiles = map[string]utls.ClientHelloID{
 	"HelloGolang":           utls.HelloGolang,
 	"HelloRandomized":       utls.HelloRandomized,
@@ -161,6 +170,8 @@ func dump(args []string, stdout io.Writer) error {
 	sni := fs.String("sni", "example.com", "SNI to offer; an empty value omits the extension")
 	seed := fs.String("seed", "", "hex seed for a HelloRandomized* profile (32 bytes)")
 	out := fs.String("o", "", "write the hex to this file instead of stdout")
+	handshake := fs.Bool("handshake", false,
+		"take the first flight off a real handshake instead of marshalling the spec (needed for HelloGolang)")
 	// `dump <profile> [-flags]` and `dump [-flags] <profile>` both work: the
 	// stdlib parser stops at the first non-flag argument, so a profile in front
 	// has to be split off before the flags are read.
@@ -197,7 +208,13 @@ func dump(args []string, stdout io.Writer) error {
 		id.Seed = &s
 	}
 
-	record, err := helloRecord(&id, *sni)
+	var record []byte
+	var err error
+	if *handshake {
+		record, err = handshakeRecord(&id, *sni)
+	} else {
+		record, err = helloRecord(&id, *sni)
+	}
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -211,7 +228,7 @@ func dump(args []string, stdout io.Writer) error {
 		defer f.Close()
 		w = f
 	}
-	return writeHex(w, name, &id, *sni, *seed, record)
+	return writeHex(w, name, &id, *sni, *seed, *handshake, record)
 }
 
 // The record header a listener would have captured the hello under: the
@@ -229,16 +246,22 @@ const (
 // it. The pipe exists only because the constructor wants a connection, and
 // nothing is ever written to it.
 func helloRecord(id *utls.ClientHelloID, sni string) ([]byte, error) {
+	if id.Client == utls.HelloGolang.Client {
+		return nil, errors.New("the library builds this profile with crypto/tls and ignores the uTLS " +
+			"extension list, so marshalling it would emit a hello with no extensions at all: use -handshake")
+	}
 	client, server := net.Pipe()
 	defer client.Close()
 	defer server.Close()
 
 	uconn := utls.UClient(client, &utls.Config{ServerName: sni}, *id)
+	// `BuildHandshakeState` marshals the spec itself, into `HandshakeState.Hello.Raw`.
+	// Marshalling a second time here would redraw the per-connection GREASE and
+	// padding slots, so the capture would be one draw of the profile rather than
+	// the bytes the library built — and it would differ from what a real
+	// handshake with the same profile writes.
 	if err := uconn.BuildHandshakeState(); err != nil {
 		return nil, fmt.Errorf("building the hello: %w", err)
-	}
-	if err := uconn.MarshalClientHello(); err != nil {
-		return nil, fmt.Errorf("marshalling the hello: %w", err)
 	}
 	message := uconn.HandshakeState.Hello.Raw
 	if len(message) == 0 {
@@ -257,10 +280,73 @@ func helloRecord(id *utls.ClientHelloID, sni string) ([]byte, error) {
 	return append(record, message...), nil
 }
 
+// handshakeRecord dials a local listener with the profile and returns the first
+// record the client sent — the route for a profile whose hello `crypto/tls`
+// builds, and the one that catches a spec whose marshalled bytes differ from
+// what the library actually writes on a connection.
+//
+// The listener never answers, so the handshake ends in a read error on both
+// sides; that is the point, since the first flight is the whole capture.
+func handshakeRecord(id *utls.ClientHelloID, sni string) ([]byte, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	defer listener.Close()
+
+	type captured struct {
+		record []byte
+		err    error
+	}
+	done := make(chan captured, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			done <- captured{nil, err}
+			return
+		}
+		defer conn.Close()
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		record, err := readRecord(conn)
+		done <- captured{record, err}
+	}()
+
+	conn, err := (&net.Dialer{Timeout: 5 * time.Second}).Dial("tcp", listener.Addr().String())
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	uconn := utls.UClient(conn, &utls.Config{ServerName: sni}, *id)
+	go func() { _ = uconn.Handshake() }()
+	got := <-done
+	if got.err != nil {
+		return nil, fmt.Errorf("reading the first flight: %w", got.err)
+	}
+	if len(got.record) == 0 {
+		return nil, errors.New("the client sent nothing")
+	}
+	return got.record, nil
+}
+
+// readRecord reads one TLS record: the five-byte header, then the body its
+// length declares.
+func readRecord(r io.Reader) ([]byte, error) {
+	header := make([]byte, 5)
+	if _, err := io.ReadFull(r, header); err != nil {
+		return nil, err
+	}
+	body := make([]byte, int(header[3])<<8|int(header[4]))
+	if _, err := io.ReadFull(r, body); err != nil {
+		return nil, err
+	}
+	return append(header, body...), nil
+}
+
 // writeHex prints the record as a header line and 32-byte rows. Both the header
 // (a `#` comment) and the row breaks are ignored by the harness's decoder, so
 // the file can be read as it is.
-func writeHex(w io.Writer, name string, id *utls.ClientHelloID, sni, seed string, record []byte) error {
+func writeHex(w io.Writer, name string, id *utls.ClientHelloID, sni, seed string, handshake bool, record []byte) error {
 	parts := []string{fmt.Sprintf("uTLS %s (%s)", name, id.Str())}
 	if sni == "" {
 		parts = append(parts, "SNI none")
@@ -270,6 +356,9 @@ func writeHex(w io.Writer, name string, id *utls.ClientHelloID, sni, seed string
 	parts = append(parts, fmt.Sprintf("%d bytes, %d-byte hello", len(record), len(record)-5))
 	if seed != "" {
 		parts = append(parts, "seed "+seed)
+	}
+	if handshake {
+		parts = append(parts, "handshake")
 	}
 	if _, err := fmt.Fprintf(w, "# %s\n", strings.Join(parts, ", ")); err != nil {
 		return err

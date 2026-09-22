@@ -236,7 +236,9 @@ pub fn client_hello(record: &[u8]) -> Option<ClientHello> {
 
     Some(ClientHello {
         record_version: [*record.get(1)?, *record.get(2)?],
-        legacy_version: [*hello.first()?, *hello.get(1)?],
+        // `hello` starts at the handshake header, so the body's own fields begin
+        // at 4: type, three-byte length, then `legacy_version`.
+        legacy_version: [*hello.get(4)?, *hello.get(5)?],
         session_id_len,
         ciphers,
         compressions,
@@ -247,4 +249,23 @@ pub fn client_hello(record: &[u8]) -> Option<ClientHello> {
 /// A big-endian `u16` at `at`, `None` when the slice is short of one.
 fn be16(bytes: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::fingerprint::TlsFingerprint;
+    use crate::net::tls::{hello_record, TlsProfile};
+
+    /// The two versions live in different places — one in the record header, one
+    /// in the handshake body — and reading the body one off the handshake header
+    /// instead is invisible in a comparison, because both sides are wrong the
+    /// same way. Only a pin on a real hello catches it.
+    #[test]
+    fn client_hello_reads_both_versions() {
+        let record = hello_record(&TlsProfile::insecure(TlsFingerprint::Chrome107));
+        let hello = client_hello(&record).expect("a built hello parses");
+        assert_eq!(hello.record_version, [0x03, 0x01], "the record opens at TLS 1.0");
+        assert_eq!(hello.legacy_version, [0x03, 0x03], "the body's legacy version is TLS 1.2");
+    }
 }
