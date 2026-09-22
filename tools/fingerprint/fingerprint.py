@@ -25,7 +25,7 @@ Three independent comparisons, weakest to strongest:
              JA4 and peetprint.
 
 A profile is done when `hello` shows no difference but per-connection randomness,
-or when every remaining difference is named in `docs/FINGERPRINT_PLAN.md`.
+or when every remaining difference is named in `docs/ADDING_A_PROFILE.md`.
 
 Usage
 -----

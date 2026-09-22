@@ -102,7 +102,8 @@ pub(crate) struct TlsShape {
     ///
     /// This is what `net::tls` turns into `EchMode::Grease`; a real
     /// `EchMode::Enable` would need the host's own HTTPS record, which is a
-    /// different kind of fidelity than these records promise (see the plan).
+    /// different kind of fidelity than these records promise (see
+    /// `docs/ADDING_A_PROFILE.md`).
     pub(crate) ech: bool,
     /// Shuffle the extension order once per connection.
     ///

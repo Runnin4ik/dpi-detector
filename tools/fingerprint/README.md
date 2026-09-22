@@ -68,13 +68,13 @@ which is what a capture is for.
 bytes of hex, echoed in the capture's header line, so a shape can be rebuilt);
 the client random, the session id and the GREASE values stay per-connection, so
 compare a seeded pair by JA3/JA4 and not by bytes. The module pins uTLS v1.8.2 —
-the release `docs/FINGERPRINT_PLAN.md` lists as the source of our extension
+the release `docs/ADDING_A_PROFILE.md` lists as the source of our extension
 lists — so a capture and a transcription cannot come from two different ones.
 
 ## The three comparisons
 
 Weakest to strongest. A profile is done when it is `SAME` in `hello-diff`, or
-when every remaining difference is named below and in `docs/FINGERPRINT_PLAN.md`.
+when every remaining difference is named below and in `docs/ADDING_A_PROFILE.md`.
 
 | stage | what it compares | what it can see | what it misses |
 | --- | --- | --- | --- |
@@ -90,6 +90,10 @@ unnoticed for a release, and how the h2 pseudo-header order of Safari 18 survive
 the sampled tests that pinned everything else.
 
 ## Adding or re-checking a profile
+
+`docs/ADDING_A_PROFILE.md` is the full procedure — where the numbers come from,
+what has to be pinned, what the tests gate and what is out of scope. This is the
+part of it that the tool itself drives.
 
 1. Add the wrapper, the capture and the code name to `PROFILES` in
    `fingerprint.py` (one line).
@@ -108,7 +112,7 @@ the sampled tests that pinned everything else.
 4. Pin the new values in `crates/dpi-core/src/net/fingerprint/tests.rs` **from
    the bundle**, never from our own dump: a constant copied from our output turns
    the test into a lock-in and hides exactly the difference it exists to catch.
-5. Land code, tests, `README.md` and `docs/FINGERPRINT_PLAN.md` in one commit.
+5. Land code, tests, `README.md` and `docs/ADDING_A_PROFILE.md` in one commit.
 
 ## Differences the tool will keep reporting
 
