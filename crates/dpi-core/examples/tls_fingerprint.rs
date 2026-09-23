@@ -296,20 +296,23 @@ async fn main() {
         "dump13" => dump(fingerprint, TlsVersion::Tls13),
         "dump12" => dump(fingerprint, TlsVersion::Tls12),
         "dump-alpn" => dump_alpn(fingerprint, extra.first().map(String::as_str).unwrap_or("h1")),
-        "dump-hex" => println!(
-            "{}",
-            hex(&match extra.first() {
-                // The name a capture is made for is part of the shape: its length
-                // moves the padding, so a replay against another host needs the
-                // capture that host would have produced.
-                Some(sni) => hello_record_for(
-                    &profile_for(fingerprint, TlsVersion::Any),
-                    None,
-                    sni
-                ),
-                None => client_hello(fingerprint, TlsVersion::Any),
-            })
-        ),
+        "dump-hex" => {
+            // `dump-hex <profile> [sni] [variant]`: the name a capture is made
+            // for is part of the shape — its length moves the padding — and so is
+            // the edit, so both are arguments rather than assumptions.
+            let variant = extra
+                .get(1)
+                .map(|text| HelloVariant::parse(text).expect("a variant the help lists"));
+            let profile = profile_for(fingerprint, TlsVersion::Any);
+            let record = match extra.first() {
+                Some(sni) => hello_record_for(&profile, variant.as_ref(), sni),
+                None => match variant.as_ref() {
+                    Some(variant) => hello_record_with(&profile, Some(variant)),
+                    None => client_hello(fingerprint, TlsVersion::Any),
+                },
+            };
+            println!("{}", hex(&record));
+        }
         "variant" => variant(fingerprint, extra.first().map(String::as_str).unwrap_or("sigalg-swap")),
         "live" => live(fingerprint, &hosts, TlsVersion::Tls13, connect_to.as_ref()).await,
         "live13" => live(fingerprint, &hosts, TlsVersion::Tls13, connect_to.as_ref()).await,
