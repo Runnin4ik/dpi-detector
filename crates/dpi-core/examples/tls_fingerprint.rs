@@ -11,6 +11,7 @@
 //! cargo run --release --example tls_fingerprint dump-hex chrome107 > capture.hex
 //! cargo run --release --example tls_fingerprint variant chrome107 sigalg-swap  # one delta
 //! cargo run --release --example tls_fingerprint hello capture.hex  # bytes from elsewhere
+//! cargo run --release --example tls_fingerprint replay capture.hex host  # send those bytes
 //! cargo run --release --example tls_fingerprint diff a.hex b.hex   # two captures, compared
 //! cargo run --release --example tls_fingerprint live firefox  # real servers
 //! cargo run --release --example tls_fingerprint liveany firefox # the unpinned offer
@@ -155,7 +156,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use dpi_core::net::fingerprint::{http_identity, HelloVariant, TlsFingerprint};
-use dpi_core::net::tls::{create_tls_config, hello_record, hello_record_with, TlsProfile, TlsVersion};
+use dpi_core::net::tls::{create_tls_config, hello_record, hello_record_for, hello_record_with, TlsProfile, TlsVersion};
 use dpi_core::net::{ja3, ja4};
 use dpi_core::probe::http::{request_headers, HttpRequest, HttpSender};
 use http_body_util::BodyExt;
@@ -267,6 +268,11 @@ async fn main() {
             hello_file(&which);
             return;
         }
+        "replay" => {
+            let host = extra.first().cloned().unwrap_or_else(|| panic!("replay takes a capture and a host"));
+            replay(&which, &host, connect_to.as_ref()).await;
+            return;
+        }
         "diff" => {
             let b = extra
                 .first()
@@ -290,7 +296,20 @@ async fn main() {
         "dump13" => dump(fingerprint, TlsVersion::Tls13),
         "dump12" => dump(fingerprint, TlsVersion::Tls12),
         "dump-alpn" => dump_alpn(fingerprint, extra.first().map(String::as_str).unwrap_or("h1")),
-        "dump-hex" => println!("{}", hex(&client_hello(fingerprint, TlsVersion::Any))),
+        "dump-hex" => println!(
+            "{}",
+            hex(&match extra.first() {
+                // The name a capture is made for is part of the shape: its length
+                // moves the padding, so a replay against another host needs the
+                // capture that host would have produced.
+                Some(sni) => hello_record_for(
+                    &profile_for(fingerprint, TlsVersion::Any),
+                    None,
+                    sni
+                ),
+                None => client_hello(fingerprint, TlsVersion::Any),
+            })
+        ),
         "variant" => variant(fingerprint, extra.first().map(String::as_str).unwrap_or("sigalg-swap")),
         "live" => live(fingerprint, &hosts, TlsVersion::Tls13, connect_to.as_ref()).await,
         "live13" => live(fingerprint, &hosts, TlsVersion::Tls13, connect_to.as_ref()).await,
@@ -330,6 +349,51 @@ fn client_hello(fingerprint: TlsFingerprint, version: TlsVersion) -> Vec<u8> {
     // the padding floor drawn for this hello) rather than a hand-built config —
     // and so the hashes printed here are the ones `--legend` prints.
     hello_record(&profile_for(fingerprint, version))
+}
+
+/// `replay <capture.hex> <host>`: send a captured ClientHello from our own socket
+/// and report what came back.
+///
+/// The question a profile cannot ask: whether a verdict belongs to the *bytes* or
+/// to the client that sent them. The record goes out exactly as it was captured
+/// and the handshake is never completed — there is no key material to continue it
+/// — so the only answers are "the peer spoke" and "it stayed silent", which is
+/// precisely what a middlebox decides on a ClientHello. A control is another
+/// capture: the same shape replayed against the same host in the same window.
+async fn replay(path: &str, host: &str, connect_to: Option<&ConnectTo>) {
+    let (label, record) = capture(path);
+    let (addr, port) = dial_address(connect_to, host, 443);
+    println!("capture   = {label}");
+    println!("record    = {} bytes, ja4 {}", record.len(), ja4::client_hello_ja4(&record));
+    println!("target    = {host}, dialing {addr}:{port}");
+    let mut tcp = match TcpStream::connect((addr, port)).await {
+        Ok(stream) => stream,
+        Err(err) => {
+            println!("{host:22} TCP FAILED: {err}");
+            return;
+        }
+    };
+    if let Err(err) = tcp.write_all(&record).await {
+        println!("{host:22} WRITE FAILED: {err}");
+        return;
+    }
+    let started = Instant::now();
+    let mut buf = vec![0u8; 4096];
+    match tokio::time::timeout(std::time::Duration::from_secs(8), tcp.read(&mut buf)).await {
+        Ok(Ok(0)) => {
+            println!("{host:22} closed without an answer ({} ms)", started.elapsed().as_millis())
+        }
+        Ok(Ok(n)) => println!(
+            "{host:22} answered: {n} bytes, first record type {} ({} ms)",
+            buf[0],
+            started.elapsed().as_millis()
+        ),
+        Ok(Err(err)) => println!("{host:22} read failed: {err}"),
+        Err(_) => println!(
+            "{host:22} silent after the ClientHello ({} ms)",
+            started.elapsed().as_millis()
+        ),
+    }
 }
 
 /// The record as lowercase hex, one line — what `hello` reads back, so a shape

@@ -262,7 +262,7 @@ pub(crate) fn messages() -> Messages {
         cli_burst_profiles: "Fingerprint для теста 6: all или имена профилей через запятую; список печатает --legend [по умолчанию: набор по умолчанию]",
         cli_burst_tls: "TLS для теста 6: 1.3+1.2 (предложение браузера, ответ должен быть 1.3)|1.3 (только 1.3)|1.2 (только 1.2) [по умолчанию: 1.3+1.2]",
         cli_burst_alpn: "ALPN для теста 6: h2 (предлагает h2 с откатом на http/1.1)|http/1.1 (только http/1.1) [по умолчанию: h2]",
-        cli_burst_variant: "Тест 6, вариант: одна правка ClientHello каждого профиля, чтобы вердикт читался против формы, отличающейся одним полем — -ext:ID, +ext:ID, groups:A,B,…, key-shares:A,B,…, ext-order:A,B,… (0x0a0a — слот GREASE), padding:N, no-padding, sigalg-swap, +grease, +group:ID, alpn-reverse [по умолчанию: нет]",
+        cli_burst_variant: "Тест 6, вариант: одна правка ClientHello каждого профиля, чтобы вердикт читался против формы, отличающейся одним полем — -ext:ID, ext-body:ID:HEX, +ext:ID, ext-body:ID:HEX, groups:A,B,…, key-shares:A,B,…, ext-order:A,B,… (0x0a0a — слот GREASE), padding:N, no-padding, sigalg-swap, +grease, +group:ID, alpn-reverse [по умолчанию: нет]",
         burst_variant_bad: "Тест 6: `{}` — не одна из правок формы ({})",
         cli_trace: "Трассировка теста 6: строка на каждую попытку (раунд, отпечаток, домен, статус, деталь, мс); без пути — в stderr, с путём — в указанный файл [по умолчанию: выключено]",
         trace_open_failed: "Не удалось открыть файл трассировки {}",

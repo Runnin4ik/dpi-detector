@@ -115,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install
       --burst-profiles <LIST>    Fingerprint для теста 6: all или имена профилей через запятую; список печатает --legend [по умолчанию: набор по умолчанию]
       --burst-tls <VERSION>      TLS для теста 6: 1.3+1.2 (предложение браузера, ответ должен быть 1.3)|1.3 (только 1.3)|1.2 (только 1.2) [по умолчанию: 1.3+1.2]
       --burst-alpn <PROTOCOL>    ALPN для теста 6: h2 (предлагает h2 с откатом на http/1.1)|http/1.1 (только http/1.1) [по умолчанию: h2]
-      --burst-variant <DELTA>    Тест 6, вариант: одна правка ClientHello каждого профиля, чтобы вердикт читался против формы, отличающейся одним полем — -ext:ID, +ext:ID, groups:A,B,…, key-shares:A,B,…, ext-order:A,B,… (0x0a0a — слот GREASE), padding:N, no-padding, sigalg-swap, +grease, +group:ID, alpn-reverse [по умолчанию: нет]
+      --burst-variant <DELTA>    Тест 6, вариант: одна правка ClientHello каждого профиля, чтобы вердикт читался против формы, отличающейся одним полем — -ext:ID, ext-body:ID:HEX, +ext:ID, ext-body:ID:HEX, groups:A,B,…, key-shares:A,B,…, ext-order:A,B,… (0x0a0a — слот GREASE), padding:N, no-padding, sigalg-swap, +grease, +group:ID, alpn-reverse [по умолчанию: нет]
       --trace [<PATH>]           Тест 6: трасса по строке на попытку (раунд, отпечаток, домен, статус, деталь, мс); без пути — в stderr, с путём — в указанный файл [по умолчанию: выключено]
   -h, --help                     Показать справку
   -V, --version                  Показать версию

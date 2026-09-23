@@ -33,6 +33,10 @@ pub enum HelloVariant {
     GreaseExtra,
     /// Append an extension, sent as an empty body.
     AddExtension(u16),
+    /// Replace an extension's body, keeping its code point and its place in the
+    /// order — the one edit that separates "the type is read" from "the bytes are
+    /// read".
+    ExtBody(u16, Vec<u8>),
     /// Remove an extension from the order, the raw list and the hello.
     DropExtension(u16),
     /// Append a `supported_groups` entry.
@@ -75,10 +79,28 @@ impl HelloVariant {
             }
             argument.split(',').map(number).collect()
         };
+        // `ext-body:<id>:<hex>`: the code point first, the bytes after it, in the
+        // hex the harness prints (`00 03 02 68 32` and `0003026832` both read).
+        let body = || -> Result<Self, String> {
+            let (id, hex) = argument
+                .split_once(':')
+                .ok_or_else(|| format!("{text} wants a code point and hex bytes"))?;
+            let id = number(id)?;
+            let digits: String = hex.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+            if !digits.len().is_multiple_of(2) {
+                return Err(format!("{text}: hex bytes must come in pairs"));
+            }
+            let bytes = (0..digits.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).map_err(|_| format!("{text}: bad byte")))
+                .collect::<Result<Vec<u8>, String>>()?;
+            Ok(Self::ExtBody(id, bytes))
+        };
         match name {
             "sigalg-swap" => Ok(Self::SigalgSwap),
             "+grease" => Ok(Self::GreaseExtra),
             "+ext" => one().map(Self::AddExtension),
+            "ext-body" => body(),
             "-ext" => one().map(Self::DropExtension),
             "+group" => one().map(Self::AddGroup),
             "padding" => one().map(Self::Padding),
@@ -100,6 +122,10 @@ impl HelloVariant {
             Self::SigalgSwap => "sigalg-swap".into(),
             Self::GreaseExtra => "+grease".into(),
             Self::AddExtension(id) => format!("+ext:{id}"),
+            Self::ExtBody(id, body) => {
+                let hex: String = body.iter().map(|byte| format!("{byte:02x}")).collect();
+                format!("ext-body:{id}:{hex}")
+            }
             Self::DropExtension(id) => format!("-ext:{id}"),
             Self::AddGroup(id) => format!("+group:{id}"),
             Self::Padding(n) => format!("padding:{n}"),
@@ -138,6 +164,18 @@ impl HelloVariant {
                 // looks for a typed value, so an id rustls has no encoder for is
                 // emitted as an empty extension rather than refused.
                 hello.raw_extensions.push((*id, Vec::new()));
+            }
+            Self::ExtBody(id, body) => {
+                // The profile's own verbatim entry goes first, so replacing it is
+                // what changes the bytes: the code point and its place in the
+                // order stay, only the body moves.
+                hello.raw_extensions.retain(|(ext, _)| ext != id);
+                hello.raw_extensions.push((*id, body.clone()));
+                if let Some(order) = hello.extension_order.as_mut() {
+                    if !order.contains(id) {
+                        order.push(*id);
+                    }
+                }
             }
             Self::DropExtension(id) => {
                 if let Some(order) = hello.extension_order.as_mut() {
@@ -201,7 +239,7 @@ mod tests {
     use crate::net::fingerprint::TlsFingerprint;
     use crate::net::ja3::{extensions, is_grease};
     use crate::net::ja4::client_hello_ja4;
-    use crate::net::tls::{hello_record_with, TlsProfile};
+    use crate::net::tls::{hello_record, hello_record_with, TlsProfile};
 
     /// The hello `fingerprint` sends with `variant` applied.
     fn shaped(fingerprint: TlsFingerprint, variant: &str) -> Vec<u8> {
@@ -248,6 +286,15 @@ mod tests {
         extensions(&record[5..]).into_iter().map(|(ext_type, _)| ext_type).collect()
     }
 
+    /// The same order with every GREASE value folded onto the marker: the value
+    /// itself is drawn per connection, so two hellos of one shape never share it.
+    fn order_shape(record: &[u8]) -> Vec<u16> {
+        order(record)
+            .into_iter()
+            .map(|ext_type| if is_grease(ext_type) { GREASE_EXTENSION_MARKER } else { ext_type })
+            .collect()
+    }
+
     #[test]
     fn dropping_an_extension_takes_it_out_of_the_hello() {
         // `chrome107` sends ALPS (17513) and padding; dropping the ALPS entry
@@ -291,11 +338,27 @@ mod tests {
     }
 
     #[test]
+    fn a_body_swap_keeps_the_type_and_changes_the_bytes() {
+        // `chrome107`'s ALPS carries `00 03 02 68 32`; replacing the body leaves
+        // the code point and its place in the order alone, which is the one edit
+        // that tells "the type is read" from "the bytes are read".
+        let plain = hello_record(&TlsProfile::insecure(TlsFingerprint::Chrome107));
+        let swapped = shaped(TlsFingerprint::Chrome107, "ext-body:17513:0003026833");
+        assert_eq!(body(&plain, 17513), vec![0x00, 0x03, 0x02, b'h', b'2']);
+        assert_eq!(body(&swapped, 17513), vec![0x00, 0x03, 0x02, b'h', b'3']);
+        assert_eq!(order_shape(&plain), order_shape(&swapped));
+        // JA4 hashes the type set, so a body swap is invisible to it — which is
+        // the whole reason the verdict has to be read with a variant.
+        assert_eq!(client_hello_ja4(&plain), client_hello_ja4(&swapped));
+    }
+
+    #[test]
     fn a_variant_names_itself_the_way_it_parses() {
         for text in [
             "sigalg-swap",
             "+grease",
             "+ext:65037",
+            "ext-body:17513:0003026832",
             "-ext:17513",
             "+group:29",
             "padding:1200",

@@ -256,7 +256,7 @@ pub(crate) fn messages() -> Messages {
         cli_burst_profiles: "Fingerprint haye test 6: all ya nam-e profile ha ba kama; list ra --legend chap mikonad [pishfarz: set-e pishfarz]",
         cli_burst_tls: "TLS baraye test 6: 1.3+1.2 (pishnahad-e browser, pasokh bayad 1.3 bashad)|1.3 (faghat 1.3)|1.2 (faghat 1.2) [pishfarz: 1.3+1.2]",
         cli_burst_alpn: "ALPN baraye test 6: h2 (h2 ba bazgasht be http/1.1)|http/1.1 (faghat http/1.1) [pishfarz: h2]",
-        cli_burst_variant: "Test 6 variant: yek taghir be ClientHello-e har profile, ta natije ba shekl-i ke faghat yek field farq darad moghayese shavad - -ext:ID, +ext:ID, groups:A,B,..., key-shares:A,B,..., ext-order:A,B,... (0x0a0a yani slot-e GREASE), padding:N, no-padding, sigalg-swap, +grease, +group:ID, alpn-reverse [pishfarz: hich]",
+        cli_burst_variant: "Test 6 variant: yek taghir be ClientHello-e har profile, ta natije ba shekl-i ke faghat yek field farq darad moghayese shavad - -ext:ID, ext-body:ID:HEX, +ext:ID, ext-body:ID:HEX, groups:A,B,..., key-shares:A,B,..., ext-order:A,B,... (0x0a0a yani slot-e GREASE), padding:N, no-padding, sigalg-swap, +grease, +group:ID, alpn-reverse [pishfarz: hich]",
         burst_variant_bad: "Test 6: `{}` yek-i az taghir haye shekl nist ({})",
         cli_trace: "Trace baraye test 6: yek khat baraye har talash (dore, fingerPrint, domain, vaziyat, joz'yat, ms); bedun-e masir be stderr, ba masir be an file [pishfarz: khamush]",
         trace_open_failed: "File-e trace baz nashod {}",

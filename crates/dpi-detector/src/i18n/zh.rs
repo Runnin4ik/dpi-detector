@@ -258,7 +258,7 @@ pub(crate) fn messages() -> Messages {
         cli_burst_profiles: "测试 6 的 Fingerprint: all，或以逗号分隔的配置名；列表见 --legend [默认: 默认集合]",
         cli_burst_tls: "测试 6 的 TLS: 1.3+1.2（浏览器提议，应答必须为 1.3）|1.3（仅提供 1.3）|1.2（仅提供 1.2）[默认: 1.3+1.2]",
         cli_burst_alpn: "测试 6 ALPN: h2（提供 h2 并回退 http/1.1）|http/1.1（仅提供 http/1.1）[默认: h2]",
-        cli_burst_variant: "测试 6 变体: 对每个配置的 ClientHello 施加一处修改，使判定可与其仅差一个字段的形态对比 — -ext:ID、+ext:ID、groups:A,B,…、key-shares:A,B,…、ext-order:A,B,…（0x0a0a 为 GREASE 槽位）、padding:N、no-padding、sigalg-swap、+grease、+group:ID、alpn-reverse [默认: 无]",
+        cli_burst_variant: "测试 6 变体: 对每个配置的 ClientHello 施加一处修改，使判定可与其仅差一个字段的形态对比 — -ext:ID, ext-body:ID:HEX、+ext:ID, ext-body:ID:HEX、groups:A,B,…、key-shares:A,B,…、ext-order:A,B,…（0x0a0a 为 GREASE 槽位）、padding:N、no-padding、sigalg-swap、+grease、+group:ID、alpn-reverse [默认: 无]",
         burst_variant_bad: "测试 6: `{}` 不是可用的形态修改（{}）",
         cli_trace: "测试 6 追踪: 每次尝试一行（轮次、指纹、域名、状态、详情、毫秒）；无路径写入 stderr，有路径写入该文件 [默认: 关闭]",
         trace_open_failed: "无法打开追踪文件 {}",

@@ -254,8 +254,20 @@ pub fn hello_record(profile: &TlsProfile) -> Vec<u8> {
 /// with one field moved: the bytes a variant actually sends, so a caller can
 /// assert the edit landed rather than trust that it did.
 pub fn hello_record_with(profile: &TlsProfile, variant: Option<&HelloVariant>) -> Vec<u8> {
+    hello_record_for(profile, variant, "example.com")
+}
+
+/// The ClientHello `profile` puts on the wire for the name `sni`, record header
+/// included.
+///
+/// The name is the only field a profile takes from the domain, and it is not
+/// cosmetic: its length moves the padding a shape pads to, so a capture made
+/// against one host is not the capture another host would see. A replay has to
+/// carry the name of the host it is dialled at, or it is answering a different
+/// question than the run it is compared with.
+pub fn hello_record_for(profile: &TlsProfile, variant: Option<&HelloVariant>, sni: &str) -> Vec<u8> {
     let config = create_tls_config_variant(profile, variant);
-    let name = ServerName::try_from("example.com").expect("a static name");
+    let name = ServerName::try_from(sni.to_string()).expect("a name to dial");
     let mut conn = rustls::ClientConnection::new(config, name).expect("a client connection");
     let mut buf = Vec::new();
     conn.write_tls(&mut buf).expect("a ClientHello is the first flight");
