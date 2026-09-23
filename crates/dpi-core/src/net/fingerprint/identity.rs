@@ -335,6 +335,33 @@ pub(crate) const CHROME131_ANDROID_HEADERS: &[(&str, &str)] = &[
     ("priority", "u=0, i"),
 ];
 
+/// Chrome 133 headers: the block Chrome 133–146 send, with the 133 brand list
+/// and UA. The two values are the whole difference between the 133 and the 146
+/// client — `curl_chrome133a` reports the same JA4, peetprint, h2 frames and
+/// header names as `curl_chrome146` — so this record exists to ask whether a
+/// censor's table reads the identity or the hello.
+pub(crate) const CHROME133_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#""Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133""#),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", r#""macOS""#),
+    ("Upgrade-Insecure-Requests", "1"),
+    (
+        "User-Agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    ),
+    (
+        "Accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    ),
+    ("Sec-Fetch-Site", "none"),
+    ("Sec-Fetch-Mode", "navigate"),
+    ("Sec-Fetch-User", "?1"),
+    ("Sec-Fetch-Dest", "document"),
+    ("Accept-Encoding", "gzip, deflate, br, zstd"),
+    ("Accept-Language", "en-US,en;q=0.9"),
+    ("priority", "u=0, i"),
+];
+
 /// Chrome 146 headers: the block Chrome 133–146 send, with the 146 brand list
 /// and UA — the whole difference between those clients. Measured against the
 /// echo service, where `curl_chrome146` reports the same JA4, peetprint, h2

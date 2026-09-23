@@ -295,7 +295,7 @@ fn the_shuffling_shapes_are_the_chromium_ones_from_110_on() {
     permuting.sort_unstable();
     assert_eq!(
         permuting,
-        ["chrome115pq", "chrome116", "chrome123", "chrome131", "chrome131android", "chrome146"]
+        ["chrome115pq", "chrome116", "chrome123", "chrome131", "chrome131android", "chrome133", "chrome146"]
     );
 }
 
@@ -409,6 +409,7 @@ fn the_ech_shapes_carry_the_grease_extension_and_the_others_do_not() {
             "chrome123",
             "chrome131",
             "chrome131android",
+            "chrome133",
             "chrome146",
             "firefox120",
             "firefox133",
@@ -486,6 +487,7 @@ fn http_identity_names_the_version_the_hello_imitates() {
         let expected = match fingerprint {
             TlsFingerprint::Firefox133
             | TlsFingerprint::Chrome146
+            | TlsFingerprint::Chrome133
             | TlsFingerprint::Chrome131
             | TlsFingerprint::Chrome131Android
             | TlsFingerprint::Chrome123
@@ -694,6 +696,7 @@ fn fingerprint_parses_known_values_and_rejects_others() {
         ("firefox99", TlsFingerprint::Firefox99),
         ("firefox65", TlsFingerprint::Firefox65),
         ("go127", TlsFingerprint::Go127),
+        ("chrome133", TlsFingerprint::Chrome133),
     ] {
         assert_eq!(TlsFingerprint::parse(name), Some(fingerprint), "{name}");
         assert_eq!(
@@ -720,7 +723,6 @@ fn fingerprint_parses_known_values_and_rejects_others() {
         "curl_edge101",
         "curl_tor145",
         "chrome99",
-        "chrome133",
         "firefox135",
         "safari184",
         "safari184_ios",

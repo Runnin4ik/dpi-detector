@@ -189,6 +189,11 @@ pub enum TlsFingerprint {
     /// set, same h2 preface — so a single record covers them, under the newest
     /// identity; keeping four names for it would only multiply the report.
     Chrome146,
+    /// Chrome 133's (`curl_chrome133a`): Chrome 146's hello under the 133
+    /// identity. The bundle sends one hello for 133 through 146, so this record
+    /// is a deliberate second name for it — the one that asks whether a censor's
+    /// table reads the identity or the ClientHello.
+    Chrome133,
     /// Firefox 147's (`curl_firefox147`): Firefox 133's hello plus a certificate
     /// timestamp extension. Firefox 135, 144 and 147 send this one hello, so the
     /// record carries the newest identity.
@@ -289,10 +294,11 @@ impl TlsFingerprint {
     /// default; the rest are older and newer releases of the same clients plus
     /// the mobile, Tor and missing-version shapes, selectable one at a time
     /// (`--fingerprint`) or as a burst list (`--burst-profiles all`).
-    pub const ALL: [TlsFingerprint; 29] = [
+    pub const ALL: [TlsFingerprint; 30] = [
         Self::Rustls,
         Self::Go127,
         Self::Chrome146,
+        Self::Chrome133,
         Self::Chrome131,
         Self::Chrome131Android,
         Self::Chrome123,

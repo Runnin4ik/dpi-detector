@@ -118,8 +118,11 @@ PROFILES = [
     ("chrome131", "curl_chrome131", "chrome_131.0.6778.86.yaml"),
     ("chrome131android", "curl_chrome131_android", "chrome_131.0.6778.81_android.yaml"),
     # 133-146 send one hello, so the newest wrapper stands for the line and the
-    # fork publishes no capture for it — the pin is the wrapper itself.
+    # fork publishes no capture for it — the pin is the wrapper itself. The 133
+    # row is a deliberate second name for that hello, kept so a run can ask
+    # whether the identity is read; see docs/ADDING_A_PROFILE.md.
     ("chrome146", "curl_chrome146", None),
+    ("chrome133", "curl_chrome133a", None),
     ("firefox147", "curl_firefox147", "firefox_144.0.0_linux.yaml"),
     ("safari153", "curl_safari153", "safari_15.3_macos11.6.4.yaml"),
     ("safari184ios", "curl_safari184_ios", "safari_18.4_iOS.yaml"),

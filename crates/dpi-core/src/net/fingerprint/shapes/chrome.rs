@@ -7,7 +7,7 @@ use super::super::TlsFingerprint;
 use super::super::h2::{CHROME123_H2, CHROME99_ANDROID_H2, CHROME_H2};
 use super::super::identity::{
     CHROME115_PQ_HEADERS, CHROME116_HEADERS, CHROME123_HEADERS, CHROME131_ANDROID_HEADERS,
-    CHROME131_HEADERS, CHROME146_HEADERS, CHROME70_HEADERS, CHROME72_HEADERS, CHROME87_HEADERS,
+    CHROME131_HEADERS, CHROME133_HEADERS, CHROME146_HEADERS, CHROME70_HEADERS, CHROME72_HEADERS, CHROME87_HEADERS,
     CHROME99_ANDROID_HEADERS, CHROME_HEADERS,
 };
 use super::{
@@ -428,6 +428,52 @@ pub(crate) const CHROME146: TlsShape = TlsShape {
     headers: Some(CHROME146_HEADERS),
     h2: Some(&CHROME123_H2),
 };
+
+// Chrome 133, as `curl_chrome133a` sends it: Chrome 146's hello exactly — the
+// same ciphers, extension set, order, bodies, hybrid group, ECH and shuffling —
+// under the 133 identity. The bundle's own capture agrees: the two report one
+// JA4 (`t13d1516h2_8daaf6152771_d8a2da3f94cd`), one peetprint and one h2
+// preface, and differ only in the brand list and the `User-Agent`.
+//
+// The repository's rule is one record per hello, and this is a deliberate
+// exception to it: with the censor reading the ClientHello, a 133 record can
+// only behave like the 146 one, and a run that presents both asks whether that
+// is true. A difference between them would be the identity being read, which is
+// what the record is for.
+pub(crate) const CHROME133: TlsShape = TlsShape {
+    variant: TlsFingerprint::Chrome133,
+    code: "chrome133",
+    token: "CHROME",
+    label: "CHROME 133",
+    source: "curl-impersonate v2.2.2",
+    baseline: false,
+    ciphers: CHROME_TLS_CIPHERS,
+    groups: CHROME_TLS_PQ_GROUPS,
+    sig_algs: CHROME_TLS_SIG_ALGS,
+    ext_order: CHROME_ALPS_NEW_EXT_ORDER,
+    raw_exts: CHROME_ALPS_NEW_RAW_EXTS,
+    suppress: &[],
+    drop13: &[
+        EXT_EXTENDED_MASTER_SECRET,
+        EXT_RENEGOTIATION_INFO,
+        EXT_EC_POINT_FORMATS,
+        EXT_SESSION_TICKET,
+    ],
+    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS_NEW],
+    alpn: H2_AND_HTTP11,
+    padding_to: None,
+    grease: true,
+    permute_extensions: true,
+    ech: true,
+    priority_on_h1: false,
+    cert_compression: BROTLI,
+    key_share_groups: None,
+    pq: true,
+    legacy_versions: &[],
+    headers: Some(CHROME133_HEADERS),
+    h2: Some(&CHROME123_H2),
+};
+
 // Chrome 131, as `curl_chrome131` sends it: Chrome 146's shape with ALPS
 // one code point earlier — the hybrid group leads the list and is shared,
 // ALPS is still at 17513, and there is no padding.

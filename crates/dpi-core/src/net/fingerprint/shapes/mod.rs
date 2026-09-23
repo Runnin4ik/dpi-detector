@@ -170,6 +170,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     baseline::RUSTLS,
     go::GO127,
     chrome::CHROME146,
+    chrome::CHROME133,
     chrome::CHROME131,
     chrome::CHROME131_ANDROID,
     chrome::CHROME123,
