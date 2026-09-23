@@ -22,7 +22,7 @@ use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::net::netinfo::{detect_bypass_tools, fetch_public_ips, get_system_dns, is_tun_name};
 use dpi_core::probe::burst::{
     burst_targets, BurstAlpn, BurstObserver, BurstProfileReport, BurstSettings, BurstTarget,
-    BurstTlsVersion, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_TIMEOUT_SECS,
+    BurstTlsVersion, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_LAUNCH_GAP_MS, BURST_DEFAULT_TIMEOUT_SECS,
 };
 use dpi_core::probe::cymru::{fetch_ip_cymru, IpCymruInfo};
 use dpi_core::probe::domains::{
@@ -240,6 +240,7 @@ pub(crate) fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Mess
     let settings = BurstSettings::clamped(
         args.burst.unwrap_or(BURST_DEFAULT_ATTEMPTS),
         args.burst_timeout.unwrap_or(BURST_DEFAULT_TIMEOUT_SECS),
+        args.burst_gap.unwrap_or(BURST_DEFAULT_LAUNCH_GAP_MS),
         tls,
         alpn,
         profiles,
@@ -955,6 +956,7 @@ pub(crate) async fn run_test_suite(
                 tls: settings.tls.code().to_string(),
                 alpn: settings.alpn.token().to_string(),
                 timeout_secs: settings.timeout.as_secs(),
+                gap_ms: settings.launch_gap.as_millis() as u64,
                 profiles: settings.profiles.iter().map(|f| f.code().to_string()).collect(),
                 domains: domains_wire,
             });

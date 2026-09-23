@@ -1,5 +1,6 @@
-//! Test 6's settings screen: handshake count, timeout, host and the ClientHello
-//! profiles a burst run reproduces.
+//! Test 6's settings screen: handshake count, timeout, the delay between the
+//! starts of two attempts, host and the ClientHello profiles a burst run
+//! reproduces.
 
 use crossterm::execute;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -8,13 +9,14 @@ use dpi_core::config::clean_domain;
 use crate::i18n::{Language, Messages, format_bidi, get_messages};
 use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::probe::burst::{
-    BURST_MAX_ATTEMPTS, BURST_MAX_TIMEOUT_SECS, BURST_MIN_ATTEMPTS, BURST_MIN_TIMEOUT_SECS,
-    BurstAlpn, BurstSettings, BurstTlsVersion,
+    BURST_MAX_ATTEMPTS, BURST_MAX_LAUNCH_GAP_MS, BURST_MAX_TIMEOUT_SECS, BURST_MIN_ATTEMPTS,
+    BURST_MIN_LAUNCH_GAP_MS, BURST_MIN_TIMEOUT_SECS, BurstAlpn, BurstSettings, BurstTlsVersion,
 };
 use futures_util::StreamExt;
 
 use crate::render::{
     asc, clean_output, frame_home, frame_repaint, output_str, panel_to_string, plain_mode,
+    strip_ansi_len,
 };
 use crate::tui::input::{nav_key, normalize_key_char};
 use crate::tui::screens::main::pad_width;
@@ -30,13 +32,17 @@ pub struct BurstChoice {
 /// Rows of the settings screen, in cursor order.
 const BURST_ROW_ATTEMPTS: usize = 0;
 const BURST_ROW_TIMEOUT: usize = 1;
-const BURST_ROW_TLS: usize = 2;
-const BURST_ROW_HTTP: usize = 3;
-const BURST_ROW_DOMAIN: usize = 4;
-const BURST_ROW_PROFILES: usize = 5;
+const BURST_ROW_GAP: usize = 2;
+const BURST_ROW_TLS: usize = 3;
+const BURST_ROW_HTTP: usize = 4;
+const BURST_ROW_DOMAIN: usize = 5;
+const BURST_ROW_PROFILES: usize = 6;
 /// Label column of the settings screen: wide enough for the longest label at
 /// the widest language, so the values line up in one column.
-const BURST_LABEL_WIDTH: usize = 24;
+const BURST_LABEL_WIDTH: usize = 25;
+/// How far one press moves the launch-gap row, in milliseconds: the row's unit,
+/// so the 20 ms default is two presses away from zero.
+const BURST_GAP_STEP_MS: u64 = 10;
 /// Inner cells of the domain input box (`[ ` … ` ]` is drawn around them).
 const BURST_INPUT_WIDTH: usize = 34;
 /// Longest domain box content: a pasted list would otherwise become the SNI.
@@ -65,8 +71,8 @@ fn tail_of(text: &str, width: usize) -> String {
     }
 }
 
-/// Test 6's own screen: how many handshakes at once, how long each may take,
-/// which host, and which ClientHello profiles.
+/// Test 6's own screen: how many handshakes at once, how long each may take, how
+/// far apart their starts are, which host, and which ClientHello profiles.
 ///
 /// Returns `None` when the user cancels (Q/Esc/Ctrl-C): the caller then skips
 /// test 6 instead of running it with guesses. The screen is only shown for an
@@ -103,6 +109,7 @@ async fn burst_settings_loop(
     let mut cursor = BURST_ROW_ATTEMPTS;
     let mut attempts = initial.attempts;
     let mut timeout_secs = initial.timeout.as_secs();
+    let mut gap_ms = initial.launch_gap.as_millis() as u64;
     let mut tls = initial.tls;
     let mut alpn = initial.alpn;
     // The box opens holding the host the caller probed last, so a repeated run
@@ -124,7 +131,7 @@ async fn burst_settings_loop(
 
     loop {
         draw_burst_settings(
-            msg, lang, cursor, attempts, timeout_secs, tls, alpn, &text, editing,
+            msg, lang, cursor, attempts, timeout_secs, gap_ms, tls, alpn, &text, editing,
             profile_index, domain_count, &mut prev_max, &mut drawn,
         );
 
@@ -190,7 +197,7 @@ async fn burst_settings_loop(
                 // URL probes its host and an empty box means that list.
                 let domain = clean_domain(&text);
                 return Some(BurstChoice {
-                    settings: BurstSettings::clamped(attempts, timeout_secs, tls, alpn, profiles),
+                    settings: BurstSettings::clamped(attempts, timeout_secs, gap_ms, tls, alpn, profiles),
                     domain,
                 });
             }
@@ -206,6 +213,7 @@ async fn burst_settings_loop(
             if !editing => match cursor {
                 BURST_ROW_ATTEMPTS => attempts = cycle(attempts, false, BURST_MIN_ATTEMPTS, BURST_MAX_ATTEMPTS),
                 BURST_ROW_TIMEOUT => timeout_secs = timeout_secs.saturating_sub(1).max(BURST_MIN_TIMEOUT_SECS),
+                BURST_ROW_GAP => gap_ms = step_gap(gap_ms, false),
                 // The TLS axis has three values, so each direction steps it.
                 BURST_ROW_TLS => tls = flip_tls(tls, false),
                 BURST_ROW_HTTP => alpn = flip_alpn(alpn),
@@ -228,6 +236,7 @@ async fn burst_settings_loop(
                 BURST_ROW_DOMAIN => editing = true,
                 BURST_ROW_ATTEMPTS => attempts = cycle(attempts, true, BURST_MIN_ATTEMPTS, BURST_MAX_ATTEMPTS),
                 BURST_ROW_TIMEOUT => timeout_secs = (timeout_secs + 1).min(BURST_MAX_TIMEOUT_SECS),
+                BURST_ROW_GAP => gap_ms = step_gap(gap_ms, true),
                 BURST_ROW_TLS => tls = flip_tls(tls, true),
                 BURST_ROW_HTTP => alpn = flip_alpn(alpn),
                 BURST_ROW_PROFILES => {
@@ -260,6 +269,7 @@ fn draw_burst_settings(
     cursor: usize,
     attempts: usize,
     timeout_secs: u64,
+    gap_ms: u64,
     tls: BurstTlsVersion,
     alpn: BurstAlpn,
     text: &str,
@@ -270,7 +280,7 @@ fn draw_burst_settings(
     drawn: &mut u16,
 ) {
     let rows = burst_settings_rows(
-        msg, lang, cursor, attempts, timeout_secs, tls, alpn, text, editing, profile_index,
+        msg, lang, cursor, attempts, timeout_secs, gap_ms, tls, alpn, text, editing, profile_index,
         domain_count,
     );
     frame_home(*drawn);
@@ -288,6 +298,7 @@ fn burst_settings_rows(
     cursor: usize,
     attempts: usize,
     timeout_secs: u64,
+    gap_ms: u64,
     tls: BurstTlsVersion,
     alpn: BurstAlpn,
     text: &str,
@@ -313,9 +324,13 @@ fn burst_settings_rows(
         }
     };
 
-    let mut lines: Vec<String> = Vec::with_capacity(6);
+    let mut lines: Vec<String> = Vec::with_capacity(8);
     lines.push(field(BURST_ROW_ATTEMPTS, msg.burst_field_attempts, steer(BURST_ROW_ATTEMPTS, attempts.to_string())));
     lines.push(field(BURST_ROW_TIMEOUT, msg.burst_field_timeout, steer(BURST_ROW_TIMEOUT, timeout_secs.to_string())));
+    // The unit of the value is translated, so the whole template comes from
+    // `Messages` (rule 6) instead of a format literal here.
+    let gap_value = msg.burst_gap_value.replacen("{}", &gap_ms.to_string(), 1);
+    lines.push(field(BURST_ROW_GAP, msg.burst_field_gap, steer(BURST_ROW_GAP, gap_value)));
     // Canonical protocol tokens, never translated (rule 4).
     lines.push(field(BURST_ROW_TLS, msg.burst_field_tls, steer(BURST_ROW_TLS, tls.token().to_string())));
     lines.push(field(BURST_ROW_HTTP, msg.burst_field_http, steer(BURST_ROW_HTTP, alpn.token().to_string())));
@@ -332,7 +347,10 @@ fn burst_settings_rows(
             (EDITING_BG, EDITING_FG, format!("{}\x1b[1;33m▏", shown), visible)
         } else if text.is_empty() {
             let placeholder = label(msg.burst_domain_placeholder);
-            let visible = placeholder.chars().count();
+            // Translated text, so it is measured in display columns: a Chinese
+            // glyph is two of them, and counting characters left the box five
+            // columns wider than the panel in Chinese.
+            let visible = strip_ansi_len(&placeholder);
             (IDLE_BG, IDLE_FG, placeholder, visible)
         } else {
             let shown = tail_of(text, BURST_INPUT_WIDTH);
@@ -426,6 +444,20 @@ fn cycle(value: usize, forward: bool, min: usize, max: usize) -> usize {
     }
 }
 
+/// One press of the launch-gap row: [`BURST_GAP_STEP_MS`] in the pressed
+/// direction, held at the bounds the core declares. It deliberately does not
+/// wrap the way [`cycle`] does — zero is a value a run may want (the whole round
+/// at one instant), so stepping down from it must stay there instead of jumping
+/// to a full second.
+fn step_gap(gap_ms: u64, forward: bool) -> u64 {
+    let stepped = if forward {
+        gap_ms.saturating_add(BURST_GAP_STEP_MS)
+    } else {
+        gap_ms.saturating_sub(BURST_GAP_STEP_MS)
+    };
+    stepped.clamp(BURST_MIN_LAUNCH_GAP_MS, BURST_MAX_LAUNCH_GAP_MS)
+}
+
 /// Either direction steps through [`TLS_CHOICES`].
 fn flip_tls(tls: BurstTlsVersion, forward: bool) -> BurstTlsVersion {
     let at = TLS_CHOICES.iter().position(|choice| *choice == tls).unwrap_or(0);
@@ -507,7 +539,7 @@ mod tests {
     fn burst_settings_rows_align_and_prompt() {
         let msg = get_messages(Language::Ru);
 
-        let empty = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13And12, BurstAlpn::Http2, "", false, 0, 35);
+        let empty = burst_settings_rows(&msg, Language::Ru, BURST_ROW_DOMAIN, 4, 8, 20, BurstTlsVersion::Tls13And12, BurstAlpn::Http2, "", false, 0, 35);
         // The last row is the footer, which lives outside the box.
         for row in empty.iter().take(empty.len() - 1) {
             assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{row:?}");
@@ -516,6 +548,19 @@ mod tests {
         let joined = strip_ansi(&empty.join("\n"));
         assert!(joined.contains("Переключитесь для ввода"), "{joined}");
         assert!(joined.contains("По умолчанию — все домены (35)"), "{joined}");
+        // The launch-gap row sits directly under the timeout row and renders the
+        // value through the language's own template — the number with the unit
+        // the language spells.
+        let row_at = |needle: &str| {
+            empty
+                .iter()
+                .position(|row| strip_ansi(row).contains(needle))
+                .unwrap_or_else(|| panic!("no row with {needle:?}"))
+        };
+        let timeout_at = row_at(msg.burst_field_timeout);
+        let gap_at = row_at(msg.burst_field_gap);
+        assert_eq!(gap_at, timeout_at + 1, "the gap row follows the timeout row");
+        assert!(strip_ansi(&empty[gap_at]).contains("20мс"), "{}", strip_ansi(&empty[gap_at]));
         // The cycler's position and size come from the profile table, so this
         // is the count the tool actually offers rather than a number here.
         assert!(joined.contains(&format!("все [1/{PROFILE_CHOICES}]")), "{joined}");
@@ -531,7 +576,7 @@ mod tests {
 
         // Typing replaces the prompt; the caret marks the active field, and the
         // row still fits the box.
-        let typed = burst_settings_rows(&msg, Language::Ru, 4, 4, 8, BurstTlsVersion::Tls13And12, BurstAlpn::Http11, "www.google.com", true, 0, 35);
+        let typed = burst_settings_rows(&msg, Language::Ru, BURST_ROW_DOMAIN, 4, 8, 20, BurstTlsVersion::Tls13And12, BurstAlpn::Http11, "www.google.com", true, 0, 35);
         for row in typed.iter().take(typed.len() - 1) {
             assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{row:?}");
         }
@@ -545,7 +590,7 @@ mod tests {
         // with the bare family.
         let chrome = [TlsFingerprint::Chrome107];
         let single = burst_settings_rows(
-            &msg, Language::Ru, 3, 4, 8, BurstTlsVersion::Tls12Only, BurstAlpn::Http2, "", false, profile_index_of(&chrome), 35,
+            &msg, Language::Ru, BURST_ROW_PROFILES, 4, 8, 20, BurstTlsVersion::Tls12Only, BurstAlpn::Http2, "", false, profile_index_of(&chrome), 35,
         );
         let chrome_position = TlsFingerprint::ALL
             .iter()
@@ -560,6 +605,25 @@ mod tests {
         );
     }
 
+    /// The box is a fixed width in every language, not only the one the layout
+    /// test draws: a translated label can be longer than the column it is padded
+    /// to — the launch-gap row's Russian label is exactly that column — and a
+    /// label past it pushes the right border out of line instead of wrapping.
+    #[test]
+    fn the_settings_box_fits_every_language() {
+        for lang in Language::ALL {
+            let msg = get_messages(lang);
+            let rows = burst_settings_rows(
+                &msg, lang, BURST_ROW_DOMAIN, 4, 8, 20, BurstTlsVersion::Tls13And12,
+                BurstAlpn::Http2, "", false, 0, 35,
+            );
+            // The last row is the footer, which lives outside the box.
+            for row in rows.iter().take(rows.len() - 1) {
+                assert_eq!(strip_ansi_len(row), BOX_WIDTH, "{lang:?}: {row:?}");
+            }
+        }
+    }
+
     /// The row holds a value the cycler can show, never a list of names: a
     /// selection it cannot express — the CLI's default set, which is what
     /// opening test 6 starts with — opens on the first value, every shape, and
@@ -572,7 +636,7 @@ mod tests {
         let chosen = profiles_for_index(profile_index_of(&incoming));
         assert_eq!(chosen, TlsFingerprint::ALL.to_vec(), "and the screen adopts it");
         let rows = burst_settings_rows(
-            &msg, Language::Ru, BURST_ROW_PROFILES, 4, 8, BurstTlsVersion::Tls13And12,
+            &msg, Language::Ru, BURST_ROW_PROFILES, 4, 8, 20, BurstTlsVersion::Tls13And12,
             BurstAlpn::Http2, "", false, profile_index_of(&chosen), 35,
         );
         for row in rows.iter().take(rows.len() - 1) {
@@ -593,6 +657,21 @@ mod tests {
         assert_eq!(cycle(max, true, min, max), min, "right from the ceiling lands on the floor");
         assert_eq!(cycle(5, false, min, max), 4);
         assert_eq!(cycle(5, true, min, max), 6);
+    }
+
+    /// The launch-gap row steps by ten milliseconds and holds at the bounds the
+    /// core declares. It does not wrap the way the attempts row does: zero is a
+    /// real value — the whole round at one instant — so stepping down from it
+    /// must stay there instead of jumping to a full second.
+    #[test]
+    fn the_gap_row_steps_by_ten_and_stops_at_the_bounds() {
+        assert_eq!(BURST_GAP_STEP_MS, 10, "one press is ten milliseconds");
+        assert_eq!((BURST_MIN_LAUNCH_GAP_MS, BURST_MAX_LAUNCH_GAP_MS), (0, 1000));
+        assert_eq!(step_gap(20, true), 30);
+        assert_eq!(step_gap(20, false), 10);
+        assert_eq!(step_gap(BURST_MIN_LAUNCH_GAP_MS, false), BURST_MIN_LAUNCH_GAP_MS, "zero stays zero");
+        assert_eq!(step_gap(BURST_MAX_LAUNCH_GAP_MS, true), BURST_MAX_LAUNCH_GAP_MS, "the ceiling holds");
+        assert_eq!(step_gap(BURST_MAX_LAUNCH_GAP_MS - 1, true), BURST_MAX_LAUNCH_GAP_MS, "and the last press lands on it");
     }
 
     /// The row offers every shape the detector can present, one press away, and
@@ -659,6 +738,7 @@ mod tests {
                 BURST_ROW_DOMAIN,
                 4,
                 8,
+                20,
                 BurstTlsVersion::Tls13And12,
                 BurstAlpn::Http2,
                 text,

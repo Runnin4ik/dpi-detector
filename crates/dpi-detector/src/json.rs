@@ -170,6 +170,9 @@ pub struct FingerprintBurst {
     pub tls: String,
     pub alpn: String,
     pub timeout_secs: u64,
+    /// Delay between attempt starts, milliseconds — `0` when the run fired the
+    /// whole round at one instant.
+    pub gap_ms: u64,
     pub profiles: Vec<String>,
     pub domains: Vec<BurstDomain>,
 }

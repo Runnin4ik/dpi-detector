@@ -767,6 +767,26 @@ mod tests {
         );
     }
 
+    /// `--burst-gap` reaches the plan, which is what the firing loop reads: the
+    /// flag is a value like any other knob, so zero survives (the whole round at
+    /// one instant) and an out-of-range one clamps instead of spreading the
+    /// round over minutes.
+    #[test]
+    fn the_cli_gap_flag_reaches_the_plan() {
+        use dpi_core::probe::burst::{BURST_DEFAULT_LAUNCH_GAP_MS, BURST_MAX_LAUNCH_GAP_MS};
+
+        let msg = get_messages(Language::En);
+        let configured = vec!["www.google.com".to_string()];
+        let gap = |asked: Option<u64>| {
+            let args = CliArgs { burst_gap: asked, ..CliArgs::default() };
+            burst_plan_from_cli(&args, &configured, &msg).settings.launch_gap
+        };
+        assert_eq!(gap(Some(0)), Duration::ZERO, "zero is a value, not the default");
+        assert_eq!(gap(Some(250)), Duration::from_millis(250));
+        assert_eq!(gap(None), Duration::from_millis(BURST_DEFAULT_LAUNCH_GAP_MS));
+        assert_eq!(gap(Some(9999)), Duration::from_millis(BURST_MAX_LAUNCH_GAP_MS));
+    }
+
     /// Test digits map to per-test flags: "123" runs DNS, domains and TCP, while
     /// "7" alone is a legend-only run.
     #[test]

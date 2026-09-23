@@ -44,6 +44,11 @@ pub struct Messages {
     pub burst_settings_title: &'static str,
     pub burst_field_attempts: &'static str,
     pub burst_field_timeout: &'static str,
+    pub burst_field_gap: &'static str,
+    /// Value of the launch-gap row: one `{}` for the milliseconds with the unit
+    /// right after it (`20ms`). The unit is translated, so it lives here rather
+    /// than in a format literal at the call site.
+    pub burst_gap_value: &'static str,
     pub burst_field_domain: &'static str,
     pub burst_domain_placeholder: &'static str,
     pub burst_domain_default_hint: &'static str,
@@ -289,6 +294,7 @@ pub struct Messages {
     pub cli_output: &'static str,
     pub cli_burst: &'static str,
     pub cli_burst_timeout: &'static str,
+    pub cli_burst_gap: &'static str,
     pub cli_burst_profiles: &'static str,
     pub cli_burst_tls: &'static str,
     pub cli_burst_alpn: &'static str,

@@ -7,14 +7,14 @@
 //! negotiated. What the test reports is how many of the N came back whole and
 //! the classified verdict of each that did not.
 //!
-//! The attempts of a round are **launched 20 ms apart and overlap**: the trigger
+//! The attempts of a round are **launched a gap apart and overlap**: the trigger
 //! this test reproduces watches a rate (several connection attempts inside a
 //! window of a few hundred milliseconds), so attempts spread over the length of a
 //! slow link never reach it — but a round fired at a single instant is answered
 //! before the block can land, letting all of them through and hiding the block
-//! until the next run. The small delay keeps the round inside any plausible
-//! window (five attempts span 80 ms) while leaving the block room to land between
-//! two starts; the attempt it lands on is the verdict the report shows.
+//! until the next run. How long that gap is, is a setting
+//! ([`BURST_DEFAULT_LAUNCH_GAP_MS`] and the bounds beside it), and the attempt the
+//! block lands on is the verdict the report shows.
 //!
 //! The handshake alone is not the whole story: a shape can be answered and then
 //! cut, redirected or blocked the moment the request goes out, which is the
@@ -60,7 +60,7 @@ use crate::net::tls::TlsProfile;
 /// Port every attempt dials (the probes' TLS column uses the same one).
 pub const BURST_PORT: u16 = 443;
 /// Bounds of the per-round attempt count — the connections one shape fires at
-/// one host, launched [`BURST_LAUNCH_GAP`] apart. One is a single connection, the
+/// one host, [`BURST_DEFAULT_LAUNCH_GAP_MS`] apart. One is a single connection, the
 /// floor the settings row wraps around to; a hundred is the ceiling, high enough to
 /// flood deliberately (crossing a rate threshold is the question the test asks) and
 /// still a bound, so a mistyped `--burst` cannot turn the run into an accident.
@@ -70,21 +70,35 @@ pub const BURST_PORT: u16 = 443;
 pub const BURST_MIN_ATTEMPTS: usize = 1;
 pub const BURST_MAX_ATTEMPTS: usize = 100;
 pub const BURST_DEFAULT_ATTEMPTS: usize = 10;
-/// Delay between the starts of two consecutive attempts of one round.
+/// Bounds of the delay between the starts of two consecutive attempts of one
+/// round, in whole milliseconds — the knob behind `--burst-gap` and the settings
+/// screen's row.
 ///
-/// The attempts of a round overlap. The trigger this test reproduces is a *rate*
-/// — several connection attempts inside a window of a few hundred milliseconds —
-/// and a round that waits for each attempt to finish before starting the next
-/// never reaches that rate on anything but a fast link. Firing them all at once
-/// answers the wrong question the other way round: every attempt is already
-/// established by the time the block lands, so the whole round passes and the
-/// block only shows up in the *next* one.
+/// The attempts of a round overlap, and this is the setting that keeps them from
+/// being a single instant. The trigger this test reproduces is a *rate* — several
+/// connection attempts inside a window of a few hundred milliseconds — and a
+/// round that waits for each attempt to finish before starting the next never
+/// reaches that rate on anything but a fast link. Firing them all at once answers
+/// the wrong question the other way round: every attempt is already established
+/// by the time the block lands, so the whole round passes and the block only
+/// shows up in the *next* one.
 ///
-/// 20 ms keeps a five-attempt round inside any window a trigger would plausibly
-/// use (80 ms end to end), while still leaving the block room to land *between*
-/// two starts — which is what makes the refusal visible in the run that caused
-/// it, at the index of the attempt it landed on.
-pub const BURST_LAUNCH_GAP: Duration = Duration::from_millis(20);
+/// Zero is the "no gap" end — exactly that case: the whole round goes out at one
+/// instant, it is answered before the block can land, and a block the run itself
+/// triggered stays invisible until the next run. It is still offered, because a
+/// stand that wants the round to be one instant can ask for it.
+///
+/// A thousand is the ceiling: ten attempts spread over nine seconds are already
+/// past any window a trigger would plausibly use, so a larger gap would stop
+/// measuring the rate the test is about.
+///
+/// The default, 20 ms, keeps a five-attempt round inside any window a trigger
+/// would plausibly use (80 ms end to end), while still leaving the block room to
+/// land *between* two starts — which is what makes the refusal visible in the run
+/// that caused it, at the index of the attempt it landed on.
+pub const BURST_MIN_LAUNCH_GAP_MS: u64 = 0;
+pub const BURST_MAX_LAUNCH_GAP_MS: u64 = 1000;
+pub const BURST_DEFAULT_LAUNCH_GAP_MS: u64 = 20;
 /// Bounds of the per-attempt timeout, in whole seconds.
 pub const BURST_MIN_TIMEOUT_SECS: u64 = 1;
 pub const BURST_MAX_TIMEOUT_SECS: u64 = 60;
@@ -189,6 +203,11 @@ impl BurstAlpn {
 pub struct BurstSettings {
     pub attempts: usize,
     pub timeout: Duration,
+    /// Delay between the starts of two consecutive attempts of one round: the
+    /// later starts wait `launch_gap × index` after the first. Zero fires the
+    /// whole round at one instant — see [`BURST_MIN_LAUNCH_GAP_MS`] for what that
+    /// costs.
+    pub launch_gap: Duration,
     /// Pinned TLS version of every handshake in the run.
     pub tls: BurstTlsVersion,
     /// ALPN list the run offers.
@@ -222,6 +241,7 @@ impl Default for BurstSettings {
         Self {
             attempts: BURST_DEFAULT_ATTEMPTS,
             timeout: Duration::from_secs(BURST_DEFAULT_TIMEOUT_SECS),
+            launch_gap: Duration::from_millis(BURST_DEFAULT_LAUNCH_GAP_MS),
             tls: BurstTlsVersion::default(),
             alpn: BurstAlpn::default(),
             profiles: TlsFingerprint::DEFAULT_SET.to_vec(),
@@ -234,6 +254,7 @@ impl BurstSettings {
     pub fn clamped(
         attempts: usize,
         timeout_secs: u64,
+        launch_gap_ms: u64,
         tls: BurstTlsVersion,
         alpn: BurstAlpn,
         profiles: Vec<TlsFingerprint>,
@@ -241,6 +262,9 @@ impl BurstSettings {
         Self {
             attempts: attempts.clamp(BURST_MIN_ATTEMPTS, BURST_MAX_ATTEMPTS),
             timeout: Duration::from_secs(timeout_secs.clamp(BURST_MIN_TIMEOUT_SECS, BURST_MAX_TIMEOUT_SECS)),
+            launch_gap: Duration::from_millis(
+                launch_gap_ms.clamp(BURST_MIN_LAUNCH_GAP_MS, BURST_MAX_LAUNCH_GAP_MS),
+            ),
             tls,
             alpn,
             profiles: if profiles.is_empty() {
@@ -476,8 +500,8 @@ async fn resolve_targets(
 }
 
 /// One profile's round against one address: the first attempt goes out at once
-/// and every next one [`BURST_LAUNCH_GAP`] later, so the whole round overlaps
-/// without being a single instant.
+/// and every next one [`BurstSettings::launch_gap`] later, so the whole round
+/// overlaps without being a single instant.
 ///
 /// Overlapping is the measurement. The attempts have to be close enough together
 /// to reach the rate a throttling trigger watches for — on a slow link, a round
@@ -512,11 +536,12 @@ pub async fn burst_profile(
         let profile = profile.clone();
         let round = Arc::clone(&round);
         let limit = settings.timeout;
+        let launch_gap = settings.launch_gap;
         launches.spawn(async move {
             // The clock, not the previous attempt's completion: this is what
             // keeps the round inside a rate window on a slow link.
             if index > 0 {
-                tokio::time::sleep(BURST_LAUNCH_GAP * index as u32).await;
+                tokio::time::sleep(launch_gap * index as u32).await;
             }
             let connector = RustlsConnector::from(profile);
             let attempt = match connect_attempt(addr, limit).await {
@@ -770,6 +795,39 @@ mod tests {
         assert!(elapsed < Duration::from_millis(780), "round took {elapsed:?}");
     }
 
+    /// The gap is the setting, not a constant: the last start of a round waits
+    /// `(attempts - 1) × launch_gap` after the first, and a gap of zero fires the
+    /// whole round at one instant.
+    #[tokio::test]
+    async fn the_launch_gap_delays_the_later_starts() {
+        // Bound but never accepted: every attempt goes unanswered and dies on its
+        // own timeout, so the round ends one timeout after its last start.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        let mut spread = settings(3, 300, vec![]);
+        spread.launch_gap = Duration::from_millis(400);
+        let started = Instant::now();
+        let spread_report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &spread, &AppConfig::default()).await;
+        let spread_elapsed = started.elapsed();
+
+        let mut instant = settings(3, 300, vec![]);
+        instant.launch_gap = Duration::ZERO;
+        let started = Instant::now();
+        let instant_report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &instant, &AppConfig::default()).await;
+        let instant_elapsed = started.elapsed();
+        drop(listener);
+
+        assert_eq!(spread_report.attempts.len(), 3);
+        assert_eq!(instant_report.attempts.len(), 3);
+        // Two 400 ms gaps put the last start 800 ms out and it then pays its own
+        // 300 ms timeout; with no gap all three start at once and the round is
+        // one timeout long. The bounds are wide on purpose — they separate the
+        // two rounds, they do not measure the scheduler.
+        assert!(spread_elapsed >= Duration::from_millis(1000), "spread round took {spread_elapsed:?}");
+        assert!(instant_elapsed < Duration::from_millis(900), "instant round took {instant_elapsed:?}");
+    }
+
     /// Nothing answers the dial. Windows may either refuse the loopback SYN or
     /// drop it silently, so the assertion is on the invariant: every attempt
     /// comes back as a connect verdict with a reason, nothing is counted as an
@@ -802,7 +860,7 @@ mod tests {
             assert!(!attempt.detail.is_none());
         }
         // Dead dials come back at once, so the round's budget is the slowest of
-        // the two plus the 20 ms between them — the assertion is that it ends, not
+        // the two plus the gap between them — the assertion is that it ends, not
         // that it ends fast.
         assert!(elapsed < Duration::from_millis(5200), "round took {elapsed:?}");
     }
@@ -1041,28 +1099,49 @@ mod tests {
     #[test]
     fn settings_are_clamped_into_the_meaningful_range() {
         let axes = (BurstTlsVersion::Tls13And12, BurstAlpn::Http2);
-        assert_eq!(BurstSettings::clamped(0, 0, axes.0, axes.1, vec![]).attempts, BURST_MIN_ATTEMPTS);
-        assert_eq!(BurstSettings::clamped(999, 999, axes.0, axes.1, vec![]).attempts, BURST_MAX_ATTEMPTS);
+        assert_eq!(BurstSettings::clamped(0, 0, 20, axes.0, axes.1, vec![]).attempts, BURST_MIN_ATTEMPTS);
+        assert_eq!(BurstSettings::clamped(999, 999, 20, axes.0, axes.1, vec![]).attempts, BURST_MAX_ATTEMPTS);
         assert_eq!(
-            BurstSettings::clamped(4, 0, axes.0, axes.1, vec![]).timeout,
+            BurstSettings::clamped(4, 0, 20, axes.0, axes.1, vec![]).timeout,
             Duration::from_secs(BURST_MIN_TIMEOUT_SECS)
         );
         assert_eq!(
-            BurstSettings::clamped(4, 999, axes.0, axes.1, vec![]).timeout,
+            BurstSettings::clamped(4, 999, 20, axes.0, axes.1, vec![]).timeout,
             Duration::from_secs(BURST_MAX_TIMEOUT_SECS)
+        );
+        // The gap clamps the same way: zero is a real value — the whole round at
+        // one instant — not a typo to be lifted to the default, and the ceiling
+        // is what stops a mistyped `--burst-gap` from spreading a round over
+        // minutes.
+        assert_eq!(
+            BurstSettings::clamped(4, 8, 0, axes.0, axes.1, vec![]).launch_gap,
+            Duration::from_millis(BURST_MIN_LAUNCH_GAP_MS)
+        );
+        assert_eq!(
+            BurstSettings::clamped(4, 8, 9999, axes.0, axes.1, vec![]).launch_gap,
+            Duration::from_millis(BURST_MAX_LAUNCH_GAP_MS)
+        );
+        assert_eq!(
+            BurstSettings::clamped(4, 8, 30, axes.0, axes.1, vec![]).launch_gap,
+            Duration::from_millis(30),
+            "a value inside the range is kept"
         );
         // An empty profile set means "no preference", not "run nothing" — and
         // "no preference" is the default set, not everything: `all` is an
         // explicit request (`--burst-profiles all`), and the two lists stopped
         // being the same one the day the mobile and older rows arrived.
         assert_eq!(
-            BurstSettings::clamped(4, 8, axes.0, axes.1, vec![]).profiles,
+            BurstSettings::clamped(4, 8, 20, axes.0, axes.1, vec![]).profiles,
             TlsFingerprint::DEFAULT_SET.to_vec()
         );
         // The axes survive clamping untouched.
-        let kept = BurstSettings::clamped(4, 8, BurstTlsVersion::Tls12Only, BurstAlpn::Http11, vec![]);
+        let kept = BurstSettings::clamped(4, 8, 20, BurstTlsVersion::Tls12Only, BurstAlpn::Http11, vec![]);
         assert_eq!((kept.tls, kept.alpn), (BurstTlsVersion::Tls12Only, BurstAlpn::Http11));
         assert_eq!(BurstSettings::default().attempts, BURST_DEFAULT_ATTEMPTS);
+        assert_eq!(
+            BurstSettings::default().launch_gap,
+            Duration::from_millis(BURST_DEFAULT_LAUNCH_GAP_MS)
+        );
         // Defaults keep what a browser sends: both versions, and the profile's
         // own `h2, http/1.1`.
         let default = BurstSettings::default();

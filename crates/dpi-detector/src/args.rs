@@ -25,10 +25,13 @@ pub struct CliArgs {
     pub tcp16: Option<String>,
     pub ascii: bool,
     pub fingerprint: Option<String>,
-    /// Test 6: connections fired at each host, 20 ms apart.
+    /// Test 6: connections fired at each host, overlapping.
     pub burst: Option<usize>,
     /// Test 6: per-handshake timeout in seconds.
     pub burst_timeout: Option<u64>,
+    /// Test 6: delay between attempt starts, milliseconds. Zero fires the whole
+    /// round at one instant.
+    pub burst_gap: Option<u64>,
     /// Test 6: `all` or a comma list of profile codes/names.
     pub burst_profiles: Option<String>,
     /// Test 6: pinned TLS version, `1.2` or `1.3`.
@@ -173,6 +176,14 @@ pub fn command(msg: &Messages) -> Command {
                 .help(msg.cli_burst_timeout),
         )
         .arg(
+            Arg::new("burst-gap")
+                .long("burst-gap")
+                .value_name("MS")
+                .value_parser(clap::value_parser!(u64))
+                .help_heading(msg.cli_options_heading)
+                .help(msg.cli_burst_gap),
+        )
+        .arg(
             Arg::new("burst-profiles")
                 .long("burst-profiles")
                 .value_name("LIST")
@@ -244,6 +255,7 @@ pub fn parse_cli(lang: Language) -> CliArgs {
         fingerprint: m.get_one::<String>("fingerprint").cloned(),
         burst: m.get_one::<usize>("burst").copied(),
         burst_timeout: m.get_one::<u64>("burst-timeout").copied(),
+        burst_gap: m.get_one::<u64>("burst-gap").copied(),
         burst_profiles: m.get_one::<String>("burst-profiles").cloned(),
         burst_tls: m.get_one::<String>("burst-tls").cloned(),
         burst_alpn: m.get_one::<String>("burst-alpn").cloned(),
