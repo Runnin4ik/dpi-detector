@@ -38,6 +38,8 @@ pub struct CliArgs {
     pub burst_tls: Option<String>,
     /// Test 6: ALPN to offer, `h2` or `http/1.1`.
     pub burst_alpn: Option<String>,
+    /// Test 6: one edit applied to every profile's ClientHello.
+    pub burst_variant: Option<String>,
     /// Test 6: per-attempt trace. `Some("")` is stderr, `Some(path)` that file,
     /// `None` means no trace.
     pub trace: Option<String>,
@@ -205,6 +207,16 @@ pub fn command(msg: &Messages) -> Command {
                 .help(msg.cli_burst_alpn),
         )
         .arg(
+            Arg::new("burst-variant")
+                .long("burst-variant")
+                .value_name("DELTA")
+                // Most deltas start with a hyphen (`-ext:17513`), which clap would
+                // otherwise read as the next option.
+                .allow_hyphen_values(true)
+                .help_heading(msg.cli_options_heading)
+                .help(msg.cli_burst_variant),
+        )
+        .arg(
             // An optional value: no path means stderr, a path means that file.
             // The empty string is what clap stores for "flag given, no value".
             Arg::new("trace")
@@ -259,6 +271,7 @@ pub fn parse_cli(lang: Language) -> CliArgs {
         burst_profiles: m.get_one::<String>("burst-profiles").cloned(),
         burst_tls: m.get_one::<String>("burst-tls").cloned(),
         burst_alpn: m.get_one::<String>("burst-alpn").cloned(),
+        burst_variant: m.get_one::<String>("burst-variant").cloned(),
         trace: m.get_one::<String>("trace").cloned(),
     }
 }

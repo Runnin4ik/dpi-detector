@@ -49,7 +49,7 @@ use crate::classify::{
     DpiProbeStream, DpiProbeTracker, Detail, DpiStatus,
 };
 use crate::config::AppConfig;
-use crate::net::fingerprint::TlsFingerprint;
+use crate::net::fingerprint::{HelloVariant, TlsFingerprint};
 use crate::probe::connector::{DpiTlsConnector, RustlsConnector};
 use crate::probe::domains::{resolve_ip, IpFamily};
 use crate::probe::http::check_http;
@@ -216,6 +216,10 @@ pub struct BurstSettings {
     /// shapes are never interleaved, so a block triggered by one of them cannot
     /// be read as the next one's.
     pub profiles: Vec<TlsFingerprint>,
+    /// One edit applied to every profile's ClientHello, so a verdict can be read
+    /// against the shape it differs from in exactly one field — see
+    /// [`HelloVariant`]. `None` fires the profiles as they are.
+    pub variant: Option<HelloVariant>,
 }
 
 /// One host of a run: what goes into the SNI, and the address to dial when it is
@@ -245,6 +249,7 @@ impl Default for BurstSettings {
             tls: BurstTlsVersion::default(),
             alpn: BurstAlpn::default(),
             profiles: TlsFingerprint::DEFAULT_SET.to_vec(),
+            variant: None,
         }
     }
 }
@@ -272,6 +277,7 @@ impl BurstSettings {
             } else {
                 profiles
             },
+            variant: None,
         }
     }
 }
@@ -537,13 +543,14 @@ pub async fn burst_profile(
         let round = Arc::clone(&round);
         let limit = settings.timeout;
         let launch_gap = settings.launch_gap;
+        let variant = settings.variant.clone();
         launches.spawn(async move {
             // The clock, not the previous attempt's completion: this is what
             // keeps the round inside a rate window on a slow link.
             if index > 0 {
                 tokio::time::sleep(launch_gap * index as u32).await;
             }
-            let connector = RustlsConnector::from(profile);
+            let connector = RustlsConnector::with_variant(profile, variant.as_ref());
             let attempt = match connect_attempt(addr, limit).await {
                 Ok((stream, tracker)) => {
                     handshake_attempt(&connector, &domain, stream, tracker, limit, &round).await

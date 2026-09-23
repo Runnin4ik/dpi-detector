@@ -6,7 +6,7 @@ use rustls::crypto::hpke::Hpke;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme};
 
-use crate::net::fingerprint::TlsFingerprint;
+use crate::net::fingerprint::{HelloVariant, TlsFingerprint};
 use crate::net::hpke;
 
 /// Returns the shared pure-Rust RustCrypto provider.
@@ -214,6 +214,25 @@ pub fn create_tls_config(profile: &TlsProfile) -> Arc<ClientConfig> {
     }
 }
 
+/// The config [`create_tls_config`] builds, with `variant` applied to its
+/// ClientHello.
+///
+/// A verifying profile's config is cached and shared, so an edit copies it into
+/// an owned one: a variant is private to the run that asked for it and must not
+/// reach the next connection that presents the same shape.
+pub fn create_tls_config_variant(
+    profile: &TlsProfile,
+    variant: Option<&HelloVariant>,
+) -> Arc<ClientConfig> {
+    let config = create_tls_config(profile);
+    let Some(variant) = variant else {
+        return config;
+    };
+    let mut edited = (*config).clone();
+    crate::net::fingerprint::install_variant(&mut edited, variant);
+    Arc::new(edited)
+}
+
 /// The ClientHello `profile` puts on the wire, record header included.
 ///
 /// The same factory the probes use, so a caller hashes what goes out rather than
@@ -225,7 +244,17 @@ pub fn create_tls_config(profile: &TlsProfile) -> Arc<ClientConfig> {
 /// it captures bytes: it is the only field a profile takes from the domain, and
 /// its length moves the padding.
 pub fn hello_record(profile: &TlsProfile) -> Vec<u8> {
-    let config = create_tls_config(profile);
+    hello_record_with(profile, None)
+}
+
+/// The ClientHello `profile` puts on the wire with `variant` applied, record
+/// header included.
+///
+/// What [`hello_record`] is for the shape as it stands, this is for the shape
+/// with one field moved: the bytes a variant actually sends, so a caller can
+/// assert the edit landed rather than trust that it did.
+pub fn hello_record_with(profile: &TlsProfile, variant: Option<&HelloVariant>) -> Vec<u8> {
+    let config = create_tls_config_variant(profile, variant);
     let name = ServerName::try_from("example.com").expect("a static name");
     let mut conn = rustls::ClientConnection::new(config, name).expect("a client connection");
     let mut buf = Vec::new();

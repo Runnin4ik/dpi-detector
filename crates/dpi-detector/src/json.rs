@@ -174,6 +174,10 @@ pub struct FingerprintBurst {
     /// whole round at one instant.
     pub gap_ms: u64,
     pub profiles: Vec<String>,
+    /// The one edit applied to every profile's hello, in the spelling
+    /// `--burst-variant` takes. Absent when the run fired the shapes as they are.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
     pub domains: Vec<BurstDomain>,
 }
 

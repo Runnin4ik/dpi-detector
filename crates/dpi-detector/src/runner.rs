@@ -18,7 +18,7 @@ use dpi_core::probe::dns_avail::check_dns_availability;
 use dpi_core::dns::parse_socks_proxy;
 use dpi_core::dns::udp::probe_udp_dns;
 use crate::i18n::{legend_text, Language, Messages};
-use dpi_core::net::fingerprint::TlsFingerprint;
+use dpi_core::net::fingerprint::{HelloVariant, TlsFingerprint};
 use dpi_core::net::netinfo::{detect_bypass_tools, fetch_public_ips, get_system_dns, is_tun_name};
 use dpi_core::probe::burst::{
     burst_targets, BurstAlpn, BurstObserver, BurstProfileReport, BurstSettings, BurstTarget,
@@ -237,7 +237,24 @@ pub(crate) fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Mess
         }),
         None => BurstAlpn::default(),
     };
-    let settings = BurstSettings::clamped(
+    // Fatal rather than a warning, the way an interface name that matches nothing
+    // is: carrying on would fire the profiles as they are while the caller
+    // believes a variant was tested, and that is a wrong answer instead of a
+    // missing one. Every other axis keeps its default and says so.
+    let variant = match &args.burst_variant {
+        Some(value) => match HelloVariant::parse(value) {
+            Ok(variant) => Some(variant),
+            Err(reason) => {
+                eprintln!(
+                    "{}",
+                    msg.burst_variant_bad.replacen("{}", value, 1).replacen("{}", &reason, 1)
+                );
+                std::process::exit(2);
+            }
+        },
+        None => None,
+    };
+    let mut settings = BurstSettings::clamped(
         args.burst.unwrap_or(BURST_DEFAULT_ATTEMPTS),
         args.burst_timeout.unwrap_or(BURST_DEFAULT_TIMEOUT_SECS),
         args.burst_gap.unwrap_or(BURST_DEFAULT_LAUNCH_GAP_MS),
@@ -245,6 +262,7 @@ pub(crate) fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Mess
         alpn,
         profiles,
     );
+    settings.variant = variant;
     // `all` and any long explicit list cost a handshake per profile per host per
     // version axis, so the price is stated before the run rather than discovered
     // in the wall clock. The default set stays quiet: it is the budget a run
@@ -958,6 +976,7 @@ pub(crate) async fn run_test_suite(
                 timeout_secs: settings.timeout.as_secs(),
                 gap_ms: settings.launch_gap.as_millis() as u64,
                 profiles: settings.profiles.iter().map(|f| f.code().to_string()).collect(),
+                variant: settings.variant.as_ref().map(HelloVariant::name),
                 domains: domains_wire,
             });
         }

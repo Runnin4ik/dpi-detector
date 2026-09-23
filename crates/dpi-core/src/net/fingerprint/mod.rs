@@ -122,6 +122,7 @@
 mod h2;
 mod identity;
 mod shapes;
+mod variant;
 
 #[cfg(test)]
 mod tests;
@@ -135,6 +136,7 @@ use crate::net::tls::TlsVersion;
 
 pub use h2::{h2_fingerprint, H2Fingerprint};
 pub use identity::{http_identity, HttpIdentity};
+pub use variant::{install_variant, HelloVariant};
 
 pub(crate) use shapes::{
     EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW, EXT_FAKE_CHANNEL_ID,

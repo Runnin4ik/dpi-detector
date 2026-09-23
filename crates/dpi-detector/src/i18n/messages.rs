@@ -56,6 +56,10 @@ pub struct Messages {
     pub burst_field_http: &'static str,
     pub burst_field_profiles: &'static str,
     pub burst_profiles_all: &'static str,
+    /// Line above a test 6 table whose run carried a variant; `{}` is the delta
+    /// (`-ext:17513`, `groups:29,4588,23`), never translated — it is a command
+    /// line token, like the profile codes.
+    pub burst_variant_note: &'static str,
     /// Word in front of the profile the burst is firing right now
     /// (`Тестируем: CHROME 107 2/4`).
     pub burst_testing: &'static str,
@@ -298,6 +302,11 @@ pub struct Messages {
     pub cli_burst_profiles: &'static str,
     pub cli_burst_tls: &'static str,
     pub cli_burst_alpn: &'static str,
+    /// Test 6's variant help: names every delta `HelloVariant::parse` accepts.
+    pub cli_burst_variant: &'static str,
+    /// Fatal: test 6's variant is not one of the edits. `{}` is the value given,
+    /// `{}` the parse error; the run stops rather than firing plain shapes.
+    pub burst_variant_bad: &'static str,
     pub cli_trace: &'static str,
     /// Shown when the `--trace` path cannot be opened; `{}` is `<path>: <error>`.
     pub trace_open_failed: &'static str,

@@ -6,7 +6,8 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 
 use crate::classify::DpiProbeStream;
-use crate::net::tls::{create_tls_config, TlsProfile};
+use crate::net::fingerprint::HelloVariant;
+use crate::net::tls::{create_tls_config, create_tls_config_variant, TlsProfile};
 
 /// Pluggable TLS connector trait.
 /// Probes interact only with this interface, allowing drop-in browser TLS impersonation (rama)
@@ -29,6 +30,17 @@ impl From<TlsProfile> for RustlsConnector {
     fn from(profile: TlsProfile) -> Self {
         Self {
             connector: TlsConnector::from(create_tls_config(&profile)),
+        }
+    }
+}
+
+impl RustlsConnector {
+    /// The rustls connector presenting `profile` with `variant` applied to its
+    /// ClientHello — one field of the shape moved, everything else as the profile
+    /// has it. `None` is [`Self::from`].
+    pub(crate) fn with_variant(profile: TlsProfile, variant: Option<&HelloVariant>) -> Self {
+        Self {
+            connector: TlsConnector::from(create_tls_config_variant(&profile, variant)),
         }
     }
 }

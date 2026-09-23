@@ -98,6 +98,12 @@ pub fn render_burst_table(reports: &[BurstReport], settings: &BurstSettings, msg
     }
 
     let mut out = String::new();
+    // A run with an edit says which edit: without the line, a variant run's table
+    // is indistinguishable from the profile's own, and the difference between the
+    // two tables is the whole result.
+    if let Some(variant) = &settings.variant {
+        out.push_str(&format!("{}\n", msg.burst_variant_note.replacen("{}", &variant.name(), 1)));
+    }
     out.push_str(&format!("{}\n", table));
     out
 }

@@ -154,14 +154,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dpi_core::net::fingerprint::{http_identity, TlsFingerprint};
-use dpi_core::net::tls::{create_tls_config, hello_record, TlsProfile, TlsVersion};
+use dpi_core::net::fingerprint::{http_identity, HelloVariant, TlsFingerprint};
+use dpi_core::net::tls::{create_tls_config, hello_record, hello_record_with, TlsProfile, TlsVersion};
 use dpi_core::net::{ja3, ja4};
 use dpi_core::probe::http::{request_headers, HttpRequest, HttpSender};
 use http_body_util::BodyExt;
 use hyper::Method;
 use hyper_util::rt::TokioIo;
-use rustls::client::hello_profile::{ClientHelloProfile, GREASE_EXTENSION_MARKER};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -333,15 +332,6 @@ fn client_hello(fingerprint: TlsFingerprint, version: TlsVersion) -> Vec<u8> {
     hello_record(&profile_for(fingerprint, version))
 }
 
-/// Writes the first flight of `config` into a buffer.
-fn write_hello(config: Arc<rustls::ClientConfig>) -> Vec<u8> {
-    let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
-    let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
-    let mut buf = Vec::new();
-    conn.write_tls(&mut buf).expect("write ClientHello");
-    buf
-}
-
 /// The record as lowercase hex, one line — what `hello` reads back, so a shape
 /// can be saved, diffed and re-measured without a network:
 /// `dump-hex chrome107 > capture.hex && hello capture.hex`.
@@ -408,133 +398,14 @@ fn dump_alpn(fingerprint: TlsFingerprint, alpn: &str) {
 ///   The JA4s cannot see the padding *length*, only the extension's presence.
 /// * `alpn-reverse` — which protocol JA4 names, with the list untouched.
 fn variant(fingerprint: TlsFingerprint, delta: &str) {
-    let delta = Delta::parse(delta);
+    let delta = HelloVariant::parse(delta).unwrap_or_else(|err| panic!("{err}"));
     let profile = profile_for(fingerprint, TlsVersion::Any);
-    // The factory hands out an `Arc` (a verifying shape is cached and shared),
-    // and this edit is private to the run: unwrap it into an owned config.
-    let mut config = Arc::try_unwrap(create_tls_config(&profile))
-        .unwrap_or_else(|shared| (*shared).clone());
-
-    // A variant is a real hello: the edit lands on the same `ClientHelloProfile`
-    // the builder filled, through the fields the patch reads, so what is printed
-    // is what an encoder does with the change rather than a second implementation
-    // of the encoder. The baseline presents no profile — nothing to edit.
-    let shared = config
-        .hello_profile
-        .as_ref()
-        .unwrap_or_else(|| panic!("{} presents no profile, so there is nothing to edit", fingerprint.code()));
-    let mut edited = (**shared).clone();
-    delta.apply(&mut edited, &mut config.alpn_protocols);
-    config.hello_profile = Some(Arc::new(edited));
-
-    let record = write_hello(Arc::new(config));
+    // A variant is a real hello: the edit goes through the same encoder the
+    // probes use, so what is printed is what goes on the wire rather than a
+    // second implementation of the encoder. The baseline presents no profile —
+    // nothing to edit.
+    let record = hello_record_with(&profile, Some(&delta));
     print_dump(&format!("profile   = {} ({})", fingerprint.code(), delta.name()), &record);
-}
-
-/// One edit to the installed ClientHello.
-enum Delta {
-    SigalgSwap,
-    GreaseExtra,
-    AddExtension(u16),
-    DropExtension(u16),
-    AddGroup(u16),
-    Padding(u16),
-    NoPadding,
-    AlpnReverse,
-}
-
-impl Delta {
-    fn parse(text: &str) -> Self {
-        let (name, argument) = text.split_once(':').unwrap_or((text, ""));
-        let id = || {
-            argument
-                .parse::<u16>()
-                .unwrap_or_else(|_| panic!("{text} wants a numeric code point"))
-        };
-        match name {
-            "sigalg-swap" => Self::SigalgSwap,
-            "+grease" => Self::GreaseExtra,
-            "+ext" => Self::AddExtension(id()),
-            "-ext" => Self::DropExtension(id()),
-            "+group" => Self::AddGroup(id()),
-            "padding" => Self::Padding(id()),
-            "no-padding" => Self::NoPadding,
-            "alpn-reverse" => Self::AlpnReverse,
-            other => panic!("unknown delta {other}"),
-        }
-    }
-
-    fn name(&self) -> String {
-        match self {
-            Self::SigalgSwap => "sigalg-swap".into(),
-            Self::GreaseExtra => "+grease".into(),
-            Self::AddExtension(id) => format!("+ext:{id}"),
-            Self::DropExtension(id) => format!("-ext:{id}"),
-            Self::AddGroup(id) => format!("+group:{id}"),
-            Self::Padding(n) => format!("padding:{n}"),
-            Self::NoPadding => "no-padding".into(),
-            Self::AlpnReverse => "alpn-reverse".into(),
-        }
-    }
-
-    /// Applies the edit. `alpn_protocols` is the config's own copy of the list
-    /// rustls validates the server's choice against; it is kept in step because a
-    /// hello that offers what the config does not makes every server answer
-    /// `SelectedUnofferedApplicationProtocol`.
-    fn apply(&self, hello: &mut ClientHelloProfile, alpn_protocols: &mut Vec<Vec<u8>>) {
-        match self {
-            Self::SigalgSwap => {
-                if let Some(schemes) = hello.signature_schemes.as_mut() {
-                    if schemes.len() > 1 {
-                        schemes.swap(0, 1);
-                    }
-                }
-            }
-            Self::GreaseExtra => {
-                if let Some(order) = hello.extension_order.as_mut() {
-                    order.insert(0, GREASE_EXTENSION_MARKER);
-                }
-                hello.grease = true;
-            }
-            Self::AddExtension(id) => {
-                if let Some(order) = hello.extension_order.as_mut() {
-                    order.push(*id);
-                }
-                // A body the profile supplies verbatim is written before rustls
-                // looks for a typed value, so an id rustls has no encoder for is
-                // emitted as an empty extension rather than refused.
-                hello.raw_extensions.push((*id, Vec::new()));
-            }
-            Self::DropExtension(id) => {
-                if let Some(order) = hello.extension_order.as_mut() {
-                    order.retain(|ext| ext != id);
-                }
-                hello.raw_extensions.retain(|(ext, _)| ext != id);
-                // An extension missing from the order is still sent, only later.
-                hello.suppress_extensions.push(*id);
-            }
-            Self::AddGroup(id) => {
-                if let Some(groups) = hello.groups.as_mut() {
-                    groups.push(*id);
-                }
-            }
-            Self::Padding(floor) => {
-                hello.padding_to = Some(*floor);
-                if let Some(order) = hello.extension_order.as_mut() {
-                    if !order.contains(&EXT_PADDING) {
-                        order.push(EXT_PADDING);
-                    }
-                }
-            }
-            Self::NoPadding => hello.padding_to = None,
-            Self::AlpnReverse => {
-                if let Some(alpn) = hello.alpn.as_mut() {
-                    alpn.reverse();
-                    *alpn_protocols = alpn.clone();
-                }
-            }
-        }
-    }
 }
 
 /// `hello <file>`: the hashes of a ClientHello captured elsewhere.
