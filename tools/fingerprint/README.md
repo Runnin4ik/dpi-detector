@@ -122,6 +122,33 @@ compare a seeded pair by JA3/JA4 and not by bytes. The module pins uTLS v1.8.2 �
 the release `docs/ADDING_A_PROFILE.md` lists as the source of our extension
 lists — so a capture and a transcription cannot come from two different ones.
 
+## The lab (`utls/lab/`)
+
+The two tools above read what a client *sends*. This one answers what a server
+does with it and what the client does back — the layer a capture and an echo
+service both cannot see. `lab` is a TLS + HTTP/2 server with a key log, and a TCP
+tap in front of it:
+
+```
+go build -o ../../../target/lab/lab.exe ./lab
+target/lab/lab.exe --port 8443 --tap-port 443 --keylog target/lab/keys.log
+target/lab/lab.exe --tap-port 443 --upstream www.google.com:443   # tap only, in front of a real host
+```
+
+The tap listens where a client dials (443) and relays to the local server or to
+`--upstream`, logging every TLS record in both directions: type, version, length,
+whether it read in one piece, the handshake messages when it can decode them, and
+the bodies of the pre-handshake records in hex. The server logs each request with
+its headers, and `--keylog` writes the NSS key log so the encrypted records can be
+opened afterwards.
+
+Reaching the tap with a real SNI means keeping the name while dialling 127.0.0.1:
+`curl --connect-to www.google.com:443:127.0.0.1:443`, and for the measurement
+example the same flag (`--connect-to www.google.com:443=127.0.0.1:443`), which
+`live`, `live13`, `live12`, `liveany`, `peet` and `headers` all honour. The
+example's probe configs read `SSLKEYLOGFILE`, so its own records can be decrypted
+beside curl's and the two compared record for record.
+
 `fingerprint.py versions` answers a third question — what a *middlebox* can pin —
 by running every client the two sources ship ten times and printing the JA4 each
 version produces next to what moves between draws. Both ladders, because neither

@@ -17,6 +17,8 @@
 //! cargo run --release --example tls_fingerprint live12 firefox hub.docker.com
 //! cargo run --release --example tls_fingerprint peet firefox   # the h2 shape, echoed
 //! cargo run --release --example tls_fingerprint headers firefox localhost # the h1 request
+//! cargo run --release --example tls_fingerprint peet chrome146 www.google.com \
+//!     --connect-to www.google.com:443=127.0.0.1:443   # the h2 shape through a tap
 //! ```
 //!
 //! `dump-alpn`, `variant` and `hello` are the shape-probing half of the same
@@ -40,8 +42,18 @@
 //! (test 2's first column), `live12` pins 1.2, and `liveany` sends the browser's
 //! own offer — the shape test 6's TLS 1.3 axis and tests 3/4 put on the wire, and
 //! the one that can be compared with a bundle script run without version flags.
-//! `peet` sends the profile's own h2 request to `tls.peet.ws` and prints what it
-//! saw; `headers` sends the profile's own header set over h1 to the host named on
+//! `peet` sends the profile's own h2 request and prints what the far side saw;
+//! with `tls.peet.ws` (the default) that is the echo report, and with any other
+//! host it is the profile's h2 request to that host — `GET /`, the same frames a
+//! burst attempt sends — which is the mode to point at a real frontend.
+//!
+//! `--connect-to host:port=ip:port` makes the connection to `ip:port` while the
+//! handshake still names `host` (curl's `--connect-to host:port:ip:port` spelled
+//! with an `=`), so a probe can be aimed at a stand that taps the port without
+//! changing the SNI or the `Host` the far side reads. A run that compares us with
+//! the bundle must point both clients at the same host that way, or the two
+//! hellos differ by the name they carry and the comparison measures that instead.
+//! `headers` sends the profile's own header set over h1 to the host named on
 //! the command line, which is the only way to see the header *names* — RFC 9113
 //! lowercases every name over h2, so the casing a browser uses over h1 (a
 //! fingerprint of its own) is invisible to every other mode.
@@ -170,11 +182,84 @@ const HOSTS: [&str; 6] = [
     "dns.google",
 ];
 
+/// The address override, `--connect-to host:port=ip:port`: the connection is made
+/// to `ip:port` while the handshake still names `host`, so a probe can be pointed
+/// at a local stand without changing the SNI or the `Host` the far side reads.
+/// curl spells the same thing `--connect-to host:port:ip:port`; a run that puts
+/// both clients through one tap needs the two to agree on the host they name.
+#[derive(Clone, Debug)]
+struct ConnectTo {
+    host: String,
+    port: u16,
+    ip: String,
+    ip_port: u16,
+}
+
+impl ConnectTo {
+    fn parse(text: &str) -> Self {
+        let (from, to) = text
+            .split_once('=')
+            .unwrap_or_else(|| panic!("--connect-to takes host:port=ip:port, got {text}"));
+        let (host, port) = split_host_port(from);
+        let (ip, ip_port) = split_host_port(to);
+        Self { host: host.to_string(), port, ip: ip.to_string(), ip_port }
+    }
+}
+
+/// Splits `host:port`, keeping an IPv6 literal's brackets out of the host.
+fn split_host_port(text: &str) -> (&str, u16) {
+    let (host, port) = text
+        .rsplit_once(':')
+        .unwrap_or_else(|| panic!("expected host:port, got {text}"));
+    let port = port.parse().unwrap_or_else(|e| panic!("bad port in {text}: {e}"));
+    (host.trim_start_matches('[').trim_end_matches(']'), port)
+}
+
+/// The address a probe dials for `host`:`port`, and the name the handshake must
+/// still present — the override moves the connection, never the name, which is
+/// the whole reason it exists.
+fn dial_address<'a>(override_to: Option<&'a ConnectTo>, host: &'a str, port: u16) -> (&'a str, u16) {
+    match override_to {
+        Some(to) if to.host == host && to.port == port => (to.ip.as_str(), to.ip_port),
+        _ => (host, port),
+    }
+}
+
+/// Takes `--connect-to <spec>` (or `--connect-to=<spec>`) out of the arguments
+/// wherever it sits, so a host list keeps its order around it.
+fn take_connect_to(args: &mut Vec<String>) -> Option<ConnectTo> {
+    let at = args.iter().position(|a| a == "--connect-to" || a.starts_with("--connect-to="))?;
+    let arg = args.remove(at);
+    let spec = match arg.split_once('=') {
+        Some((_, spec)) => spec.to_string(),
+        None => {
+            assert!(at < args.len(), "--connect-to needs host:port=ip:port");
+            args.remove(at)
+        }
+    };
+    Some(ConnectTo::parse(&spec))
+}
+
+/// The config a probe dials with, with rustls' key log attached.
+///
+/// A tap shows the record boundaries of an exchange and nothing inside an
+/// encrypted record, and the message a profile does or does not send after its
+/// Finished is exactly the part that has to be read — so with `SSLKEYLOGFILE`
+/// set, Wireshark decrypts both directions and the comparison stops being an
+/// inference from record sizes. `KeyLogFile::new()` is inert when the variable
+/// is unset, so the config is built the same way either way.
+fn dial_config(profile: &TlsProfile) -> Arc<rustls::ClientConfig> {
+    let mut config = (*create_tls_config(profile)).clone();
+    config.key_log = Arc::new(rustls::KeyLogFile::new());
+    Arc::new(config)
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "dump".into());
     let which = std::env::args().nth(2).unwrap_or_else(|| "firefox".into());
-    let extra: Vec<String> = std::env::args().skip(3).collect();
+    let mut extra: Vec<String> = std::env::args().skip(3).collect();
+    let connect_to = take_connect_to(&mut extra);
 
     // `hello` and `diff` take paths where every other mode takes a profile code,
     // and they need no config of ours at all: the bytes are the whole input.
@@ -208,12 +293,22 @@ async fn main() {
         "dump-alpn" => dump_alpn(fingerprint, extra.first().map(String::as_str).unwrap_or("h1")),
         "dump-hex" => println!("{}", hex(&client_hello(fingerprint, TlsVersion::Any))),
         "variant" => variant(fingerprint, extra.first().map(String::as_str).unwrap_or("sigalg-swap")),
-        "live" => live(fingerprint, &hosts, TlsVersion::Tls13).await,
-        "live13" => live(fingerprint, &hosts, TlsVersion::Tls13).await,
-        "live12" => live(fingerprint, &hosts, TlsVersion::Tls12).await,
-        "liveany" => live(fingerprint, &hosts, TlsVersion::Any).await,
-        "peet" => peet(fingerprint).await,
-        "headers" => headers(fingerprint, hosts.first().map(String::as_str).unwrap_or("localhost")).await,
+        "live" => live(fingerprint, &hosts, TlsVersion::Tls13, connect_to.as_ref()).await,
+        "live13" => live(fingerprint, &hosts, TlsVersion::Tls13, connect_to.as_ref()).await,
+        "live12" => live(fingerprint, &hosts, TlsVersion::Tls12, connect_to.as_ref()).await,
+        "liveany" => live(fingerprint, &hosts, TlsVersion::Any, connect_to.as_ref()).await,
+        "peet" => {
+            peet(
+                fingerprint,
+                hosts.first().map(String::as_str).unwrap_or("tls.peet.ws"),
+                connect_to.as_ref(),
+            )
+            .await
+        }
+        "headers" => {
+            headers(fingerprint, hosts.first().map(String::as_str).unwrap_or("localhost"), connect_to.as_ref())
+                .await
+        }
         other => panic!(
             "unknown mode {other}, expected dump|dump13|dump12|dump-alpn|variant|hello|diff|live|live13|live12|liveany|peet|headers"
         ),
@@ -768,8 +863,13 @@ fn decode_hex(text: &str) -> Vec<u8> {
         .collect()
 }
 
-async fn live(fingerprint: TlsFingerprint, hosts: &[String], version: TlsVersion) {
-    let config = create_tls_config(&profile_for(fingerprint, version));
+async fn live(
+    fingerprint: TlsFingerprint,
+    hosts: &[String],
+    version: TlsVersion,
+    connect_to: Option<&ConnectTo>,
+) {
+    let config = dial_config(&profile_for(fingerprint, version));
     println!(
         "profile   = {} ({})",
         fingerprint.code(),
@@ -782,7 +882,11 @@ async fn live(fingerprint: TlsFingerprint, hosts: &[String], version: TlsVersion
 
     for host in hosts {
         let started = Instant::now();
-        let tcp = match TcpStream::connect((host.as_str(), 443)).await {
+        let (addr, port) = dial_address(connect_to, host, 443);
+        if addr != host {
+            println!("{host:22} dialing {addr}:{port}, SNI stays {host}");
+        }
+        let tcp = match TcpStream::connect((addr, port)).await {
             Ok(s) => s,
             Err(e) => {
                 println!("{host:22} TCP FAILED: {e}");
@@ -847,9 +951,13 @@ async fn live(fingerprint: TlsFingerprint, hosts: &[String], version: TlsVersion
 /// over h1. This mode sends [`request_headers`] — the same identity the probes
 /// send — down an h1 connection, so a local listener can compare the request
 /// block with the bundle's (`tools/fingerprint/fingerprint.py headers`).
-async fn headers(fingerprint: TlsFingerprint, host: &str) {
-    let config = create_tls_config(&TlsProfile::insecure(fingerprint));
-    let tcp = match TcpStream::connect((host, 443)).await {
+async fn headers(fingerprint: TlsFingerprint, host: &str, connect_to: Option<&ConnectTo>) {
+    let config = dial_config(&TlsProfile::insecure(fingerprint));
+    let (addr, port) = dial_address(connect_to, host, 443);
+    if addr != host {
+        println!("{host:22} dialing {addr}:{port}, SNI stays {host}");
+    }
+    let tcp = match TcpStream::connect((addr, port)).await {
         Ok(stream) => stream,
         Err(e) => return println!("{host:22} TCP FAILED: {e}"),
     };
@@ -884,21 +992,29 @@ async fn headers(fingerprint: TlsFingerprint, host: &str) {
 /// list. `live` measures our TLS shape with a hand-written HTTP/1.1 request,
 /// which is enough for the TLS hashes but leaves the service no HTTP/2 frames
 /// to report — the akamai fingerprint needs this one.
-async fn peet(fingerprint: TlsFingerprint) {
-    const HOST: &str = "tls.peet.ws";
-    let config = create_tls_config(&TlsProfile::insecure(fingerprint));
-    let tcp = match TcpStream::connect((HOST, 443)).await {
+///
+/// Any other host takes the same path — the profile's own h2 request, `GET /`,
+/// headers and all — which is what a burst attempt sends, and the reason this
+/// mode is the one to point at a real frontend through a tap (`--connect-to`).
+async fn peet(fingerprint: TlsFingerprint, host: &str, connect_to: Option<&ConnectTo>) {
+    let echo = host == "tls.peet.ws";
+    let config = dial_config(&TlsProfile::insecure(fingerprint));
+    let (addr, port) = dial_address(connect_to, host, 443);
+    if addr != host {
+        println!("{host:22} dialing {addr}:{port}, SNI stays {host}");
+    }
+    let tcp = match TcpStream::connect((addr, port)).await {
         Ok(stream) => stream,
-        Err(e) => return println!("{HOST:22} TCP FAILED: {e}"),
+        Err(e) => return println!("{host:22} TCP FAILED: {e}"),
     };
-    let name = rustls::pki_types::ServerName::try_from(HOST).expect("valid host");
+    let name = rustls::pki_types::ServerName::try_from(host.to_string()).expect("valid host");
     let tls = match TlsConnector::from(config).connect(name, tcp).await {
         Ok(stream) => stream,
-        Err(e) => return println!("{HOST:22} HANDSHAKE FAILED: {e}"),
+        Err(e) => return println!("{host:22} HANDSHAKE FAILED: {e}"),
     };
     let h2 = tls.get_ref().1.alpn_protocol() == Some(b"h2");
     println!("profile   = {} (the browser's own offer)", fingerprint.code());
-    println!("{HOST:22} alpn={}", if h2 { "h2" } else { "http/1.1" });
+    println!("{host:22} alpn={}", if h2 { "h2" } else { "http/1.1" });
     let mut sender = match HttpSender::handshake(TokioIo::new(tls), h2, fingerprint).await {
         Ok(sender) => sender,
         Err(e) => return println!("HTTP handshake failed: {e}"),
@@ -907,8 +1023,8 @@ async fn peet(fingerprint: TlsFingerprint) {
     let user_agent = identity.user_agent.unwrap_or("");
     let request = HttpRequest {
         method: Method::GET,
-        host: HOST,
-        path: "/api/all",
+        host,
+        path: if echo { "/api/all" } else { "/" },
         headers: request_headers(&identity, user_agent, Vec::new(), false),
         priority_on_h1: identity.priority_on_h1,
     };
@@ -916,10 +1032,14 @@ async fn peet(fingerprint: TlsFingerprint) {
         Ok(response) => response,
         Err(e) => return println!("request failed: {e}"),
     };
+    let status = response.status();
     let body = match response.into_body().collect().await {
         Ok(body) => body.to_bytes(),
         Err(e) => return println!("body failed: {e}"),
     };
+    if !echo {
+        return println!("{host:22} {status}, {} bytes", body.len());
+    }
     match serde_json::from_slice::<serde_json::Value>(&body) {
         Ok(report) => print_peet_report(&report),
         Err(_) => println!("   (no JSON report in {} bytes)", body.len()),
