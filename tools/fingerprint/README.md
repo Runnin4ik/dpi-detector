@@ -110,9 +110,10 @@ go run . probe HelloRandomizedALPN ezgame.su:443 -n 10 -gap 400ms -timeout 3s
 go run . probe HelloGolang ezgame.su:443 -n 10      # the control, a shape that answers
 ```
 
-Attempts are spaced by `-gap` on purpose: the burst test measures a rate, while
-`probe` measures a shape, and firing ten connections into one window answers the
-rate question instead.
+Attempts are started `-gap` apart and run together, the way the burst test fires
+a round: a shape that is dropped costs one timeout rather than one per attempt,
+and `-gap 20ms` reproduces test 6's rate while `-gap 400ms` asks about the shape
+alone.
 
 `-seed` fixes the PRNG the `HelloRandomized*` profiles draw their spec from (32
 bytes of hex, echoed in the capture's header line, so a shape can be rebuilt);

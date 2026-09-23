@@ -40,6 +40,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -154,8 +155,9 @@ would capture — so the file can be diffed against a real one.
 probe dials the host itself, one connection per attempt, and prints how each
 ended: ok (the handshake finished), timeout (the peer went quiet after the
 ClientHello — a silent drop), eof (the peer closed), reset (the peer reset),
-tcp-failed (no connection at all). The randomized profiles draw a fresh spec per
-attempt, so a run of ten is ten different hellos.
+tcp-failed (no connection at all). The attempts are started gap apart and run
+together, so a round costs one timeout rather than one per attempt, and the
+randomized profiles draw a fresh spec per attempt: a run of ten is ten hellos.
 `)
 }
 
@@ -392,8 +394,9 @@ func writeHex(w io.Writer, name string, id *utls.ClientHelloID, sni, seed string
 // The question `dump` cannot answer: a network in between may refuse a shape
 // whatever the client does with it, and the only way to see that is to connect.
 // Every attempt is a fresh connection and a fresh spec for the randomized
-// profiles, and attempts are separated by `-gap` so the run measures a shape
-// rather than a rate.
+// profiles, and the attempts are started `gap` apart and run together — the way
+// the burst test fires a round — so a shape that is dropped costs one timeout
+// rather than ten.
 func probe(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("probe", flag.ExitOnError)
 	sni := fs.String("sni", "", "server name to send; empty uses the host's name")
@@ -428,14 +431,34 @@ func probe(args []string, stdout io.Writer) error {
 		addr, server, *attempts, *gap, *timeout)
 
 	tally := map[string]int{}
+	// The attempts are started `gap` apart and run together, the way the burst
+	// test fires a round: a shape that is dropped costs one timeout, not ten.
+	// Results are printed as they arrive, from this goroutine only.
+	type outcome struct {
+		attempt int
+		name    string
+		detail  string
+	}
+	results := make(chan outcome, *attempts)
+	var wg sync.WaitGroup
 	for attempt := 1; attempt <= *attempts; attempt++ {
 		if attempt > 1 {
 			time.Sleep(*gap)
 		}
-		outcome, detail := oneProbe(id, addr, server, *timeout)
-		tally[outcome]++
-		fmt.Fprintf(stdout, "  %2d/%-2d %-10s %s\n", attempt, *attempts, outcome, detail)
+		wg.Add(1)
+		go func(attempt int) {
+			defer wg.Done()
+			name, detail := oneProbe(id, addr, server, *timeout)
+			results <- outcome{attempt, name, detail}
+		}(attempt)
 	}
+	for range *attempts {
+		got := <-results
+		tally[got.name]++
+		fmt.Fprintf(stdout, "  %2d/%-2d %-10s %s\n", got.attempt, *attempts, got.name, got.detail)
+	}
+	wg.Wait()
+	close(results)
 	order := []string{"ok", "timeout", "eof", "reset", "tcp-failed", "error"}
 	parts := make([]string, 0, len(tally))
 	for _, outcome := range order {
