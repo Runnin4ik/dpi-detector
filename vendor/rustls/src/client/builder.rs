@@ -181,6 +181,7 @@ impl ConfigBuilder<ClientConfig, WantsClientCert> {
             provider: self.provider,
             alpn_protocols: Vec::new(),
             hello_profile: None,
+            client_follow_up: None,
             check_selected_alpn: true,
             resumption: Resumption::default(),
             max_fragment_size: None,

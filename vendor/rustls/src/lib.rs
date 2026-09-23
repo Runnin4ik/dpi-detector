@@ -584,6 +584,7 @@ pub mod client {
     mod client_conn;
     mod common;
     mod ech;
+    pub mod follow_up;
     pub(super) mod handy;
     mod hs;
     pub mod hello_profile;
@@ -601,6 +602,7 @@ pub mod client {
     #[cfg(feature = "std")]
     pub use client_conn::{ClientConnection, WriteEarlyData};
     pub use ech::{EchConfig, EchGreaseConfig, EchMode, EchStatus};
+    pub use follow_up::ClientFollowUp;
     pub use hello_profile::ClientHelloProfile;
     pub use handy::AlwaysResolvesClientRawPublicKeys;
     #[cfg(any(feature = "std", feature = "hashbrown"))]

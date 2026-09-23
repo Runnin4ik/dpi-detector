@@ -410,6 +410,26 @@ fn apply_profile(config: &mut ClientConfig, profile: &TlsProfile) {
             }
         }
     }
+
+    // A shape that advertises a stateful application extension — ALPS (17513 or
+    // 17613) or `channel_id` (30032) — is owed a follow-up message by any server
+    // that acknowledges it, and the patched rustls sends what the hook returns
+    // ahead of the Finished (see `vendor/rustls/README-PATCH.md`). A shape that
+    // advertises neither gets no hook: it can never be acknowledged, and a hook
+    // that answered an unsolicited acknowledgement would put a message on the
+    // wire the server never asked for.
+    config.client_follow_up = config
+        .hello_profile
+        .as_ref()
+        .and_then(|hello| {
+            let advertised: Vec<u16> = hello
+                .raw_extensions
+                .iter()
+                .map(|(ext, _)| *ext)
+                .collect();
+            crate::net::follow_up::ProbeFollowUp::for_shape(&advertised)
+        })
+        .map(|follow_up| Arc::new(follow_up) as Arc<dyn rustls::client::ClientFollowUp>);
 }
 
 /// Whether cipher suite `suite` belongs to `version`.

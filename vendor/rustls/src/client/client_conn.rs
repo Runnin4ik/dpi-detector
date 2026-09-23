@@ -5,6 +5,7 @@ use core::{fmt, mem};
 
 use pki_types::{ServerName, UnixTime};
 
+use super::follow_up::ClientFollowUp;
 use super::handy::NoClientSessionStorage;
 use super::hello_profile::ClientHelloProfile;
 use super::hs::{self, ClientHelloInput};
@@ -175,6 +176,18 @@ pub struct ClientConfig {
     /// the profile instead of being derived or randomized. See
     /// [`ClientHelloProfile`] for what it does and does not reproduce.
     pub hello_profile: Option<Arc<ClientHelloProfile>>,
+
+    /// Optional client-side follow-up messages (dpi-detector patch).
+    ///
+    /// `None` (the default) is upstream rustls behaviour: nothing is sent
+    /// between the server's Finished and the client's own. When set, the hook
+    /// is consulted once the server's EncryptedExtensions has been processed
+    /// and whatever it returns is sent as handshake messages ahead of the
+    /// Finished — the answer a shape that advertises ALPS or `channel_id` owes
+    /// a server that acknowledged the extension. See [`ClientFollowUp`].
+    ///
+    /// [`ClientFollowUp`]: crate::client::ClientFollowUp
+    pub client_follow_up: Option<Arc<dyn ClientFollowUp>>,
 
     /// Whether to check the selected ALPN was offered.
     ///
@@ -814,6 +827,17 @@ mod connection {
             self.inner.core.data.ech_status
         }
 
+        /// The extension type ids the server sent in its EncryptedExtensions
+        /// (dpi-detector patch).
+        ///
+        /// Empty until that message has been processed. The set a
+        /// [`ClientFollowUp`] hook has to look at: ALPS (17513/17613) and
+        /// `channel_id` (30032) are exactly the extensions rustls has no typed
+        /// field for, so they appear here and nowhere else.
+        pub fn server_encrypted_extensions(&self) -> &[u16] {
+            &self.inner.core.data.server_extensions
+        }
+
         /// Returns the number of TLS1.3 tickets that have been received.
         pub fn tls13_tickets_received(&self) -> u32 {
             self.inner.tls13_tickets_received
@@ -1085,6 +1109,11 @@ impl std::error::Error for EarlyDataError {}
 pub struct ClientConnectionData {
     pub(super) early_data: EarlyData,
     pub(super) ech_status: EchStatus,
+    /// Extension type ids the server sent in its EncryptedExtensions
+    /// (dpi-detector patch). Empty until that message is processed; read back
+    /// through [`ClientConnection::server_encrypted_extensions`] and handed to
+    /// [`ClientConfig::client_follow_up`].
+    pub(super) server_extensions: Vec<u16>,
 }
 
 impl ClientConnectionData {
@@ -1092,6 +1121,7 @@ impl ClientConnectionData {
         Self {
             early_data: EarlyData::new(),
             ech_status: EchStatus::NotOffered,
+            server_extensions: Vec::new(),
         }
     }
 }

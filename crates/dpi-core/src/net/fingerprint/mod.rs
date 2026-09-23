@@ -136,6 +136,9 @@ use crate::net::tls::TlsVersion;
 pub use h2::{h2_fingerprint, H2Fingerprint};
 pub use identity::{http_identity, HttpIdentity};
 
+pub(crate) use shapes::{
+    EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW, EXT_FAKE_CHANNEL_ID,
+};
 use shapes::{TlsShape, SHAPES};
 
 /// Which ClientHello shape the probes present.

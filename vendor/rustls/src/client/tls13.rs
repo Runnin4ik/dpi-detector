@@ -568,6 +568,11 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
         self.transcript.add_message(&m);
 
         validate_encrypted_extensions(cx.common, &self.hello, exts)?;
+        // dpi-detector patch: keep what the server acknowledged. A profile that
+        // advertised ALPS or `channel_id` owes the server a follow-up message
+        // when it sees the extension here, and rustls has no typed field for
+        // either, so the set is read back off the message itself.
+        cx.data.server_extensions = exts.extension_types();
         hs::process_alpn_protocol(
             cx.common,
             &self.hello.alpn_protocols,
@@ -1466,6 +1471,25 @@ impl State<ClientConnectionData> for ExpectFinished {
                         emit_certificate_tls13(&mut flight, Some(&certkey), auth_context);
                     }
                     emit_certverify_tls13(&mut flight, signer.as_ref())?;
+                }
+            }
+        }
+
+        // dpi-detector patch: the follow-up messages a profile owes a server
+        // that acknowledged one of its application extensions. BoringSSL sends
+        // them in this flight, ahead of the Finished, and hashes them into the
+        // transcript; the server hashes what it reads the same way, so the
+        // Finished below covers them either way.
+        if let Some(follow_up) = &st.config.client_follow_up {
+            if !cx.data.server_extensions.is_empty() {
+                let transcript_hash = flight.transcript.current_hash();
+                for (typ, body) in
+                    follow_up.messages(&cx.data.server_extensions, transcript_hash.as_ref())
+                {
+                    flight.add(HandshakeMessagePayload(HandshakePayload::Unknown((
+                        HandshakeType::Unknown(typ),
+                        Payload::new(body),
+                    ))));
                 }
             }
         }

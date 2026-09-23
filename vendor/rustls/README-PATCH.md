@@ -1,8 +1,9 @@
 # vendor/rustls — patched rustls 0.23.43
 
 This directory is the **upstream `rustls` 0.23.43 source** (copied verbatim from
-crates.io) plus one small patch: a ClientHello profile hook. It is wired in the
-root `Cargo.toml` as
+crates.io) plus one small patch: a ClientHello profile hook, and a second hook
+that lets a profile answer a server which acknowledged one of the application
+extensions its hello carries. It is wired in the root `Cargo.toml` as
 
 ```toml
 [patch.crates-io]
@@ -44,27 +45,28 @@ their patched rustls rejected valid server configurations.
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 0.23.43 — 1357 lines across 10
-files, one of them new (`src/client/hello_profile.rs`). It applies to a pristine
-copy with `patch -p1` (`patch -p1 --binary` was run against the crates.io source
-before this file was replaced, and the result compared against this tree with
-`diff -r --strip-trailing-cr`: identical apart from these two files) and
-reproduces this tree byte for byte, up to the line endings git checks out. Two of
-the changes are not about the profile hook itself but about making a
-*browser-shaped* hello survive real servers; they are described under "findings"
-below.
+`PATCH.diff` is the exact diff against pristine 0.23.43 — 1533 lines across 11
+files, two of them new (`src/client/hello_profile.rs` and
+`src/client/follow_up.rs`). It applies to a pristine copy with `patch -p1`
+(`patch -p1 --binary` was run against the crates.io source before this file was
+replaced, and the result compared against this tree with `diff -r
+--strip-trailing-cr`: identical apart from these two files) and reproduces this
+tree byte for byte, up to the line endings git checks out. Three of the changes
+are not about the profile hook itself but about making a *browser-shaped* hello
+survive real servers; they are described under "findings" below.
 
 | File | Change |
 | --- | --- |
 | `src/client/hello_profile.rs` | **new**: public `ClientHelloProfile` (cipher list, groups, the key-share group list, signature schemes, ALPN, extension order with `GREASE_EXTENSION_MARKER` placeholders, verbatim extra extensions, suppressed extensions, GREASE, the per-connection shuffle, certificate compression, `padding_to`, `legacy_versions`) and its `apply`. An empty certificate-compression list clears the typed value instead of setting an empty one: the profiles whose client advertises no algorithm (Safari 15.3, Tor 14.5) must send no extension 27 at all, not one with zero entries. `permute_extensions` shuffles the order the way BoringSSL's `ssl_setup_extension_permutation` does — one Fisher–Yates pass from the end, seeded by `hs.rs`, with the GREASE slots, the padding and the extensions TLS 1.3 requires last left in place |
-| `src/client/client_conn.rs` | `ClientConfig::hello_profile: Option<Arc<ClientHelloProfile>>` |
-| `src/client/builder.rs` | initializes it to `None`; `with_ech_mode` sets the ECH mode on a builder that has already chosen its versions — upstream's `with_ech` forces TLS 1.3 alone, and a profile that keeps its 1.2 fallback (Chrome 120) still carries the extension |
+| `src/client/follow_up.rs` | **new**: public `ClientFollowUp` (one method, `messages(acknowledged, transcript_hash) -> Vec<(u8, Vec<u8>)>`) and the place it is called from. A browser hello advertises ALPS or `channel_id`, the server acknowledges it in its EncryptedExtensions, and the client then owes the server a handshake message before its Finished; upstream rustls has neither a typed field for either extension nor a way to add a message to the second flight |
+| `src/client/client_conn.rs` | `ClientConfig::hello_profile: Option<Arc<ClientHelloProfile>>`, `ClientConfig::client_follow_up: Option<Arc<dyn ClientFollowUp>>`, `ClientConnectionData::server_extensions` (the extension ids the server sent in its EncryptedExtensions) and `ClientConnection::server_encrypted_extensions()`, which reads that set back |
+| `src/client/builder.rs` | initializes both hooks to `None`; `with_ech_mode` sets the ECH mode on a builder that has already chosen its versions — upstream's `with_ech` forces TLS 1.3 alone, and a profile that keeps its 1.2 fallback (Chrome 120) still carries the extension |
 | `src/crypto/hpke.rs` | re-exports `HpkeKem`, `HpkeKdf`, `HpkeAead` and `HpkeSymmetricCipherSuite` — an `Hpke` implementation outside the crate cannot name the suite it implements otherwise — and gives `HpkePrivateKey` the `from_bytes` constructor its private field implies |
 | `src/client/hs.rs` | applies the profile while building the ClientHello, with a per-connection GREASE seed and a 128-bit shuffle seed from the provider's CSPRNG; adds the GREASE key share and the GREASE `supported_versions` entry for a greasing profile; carries a *list* of key exchanges (`offered_key_shares`) instead of one, so a profile can send the shares a browser's `--tls-key-shares-limit` produces, and handles the HelloRetryRequest against that list; records the *encoded* extension set as `sent_extensions`; gates `compress_certificate` on the hello offering TLS 1.3 |
-| `src/client/tls13.rs` | `initial_key_shares` builds one exchange per group `key_share_groups` names; `KeyExchangeChoice::new` looks the server's group up among every share the client sent (whole or hybrid component) |
+| `src/client/tls13.rs` | `initial_key_shares` builds one exchange per group `key_share_groups` names; `KeyExchangeChoice::new` looks the server's group up among every share the client sent (whole or hybrid component); `ExpectEncryptedExtensions` records the server's extension set, and `ExpectFinished` calls `client_follow_up` and appends what it returns to the client's second flight ahead of the Finished, hashed into the transcript |
 | `src/client/ech.rs` | `EchGreaseConfig::grease_ext` sizes the GREASE payload the way BoringSSL does — one of 128, 160, 192 or 224 bytes, a rounded estimate of the inner hello, plus the AEAD tag (`setup_ech_grease()` in its `ssl/encrypted_client_hello.cc`) — instead of encoding the inner hello this client would really send, which is 441 bytes and a length no browser produces. The outer hello is no longer needed to size the body, so that argument is gone |
-| `src/msgs/handshake.rs` | `SupportedProtocolVersions` gains `grease: Option<u16>` (written ahead of the real versions) and `legacy: Vec<u16>` (the fallbacks a browser advertises behind 1.2, written after them); `ClientExtensions` gains `profile_order`, `raw_extensions`, `suppress_extensions`, `padding_to`; the encoder honours them, computes RFC 7685 padding to the profile's target size, and still keeps ECH/PSK last; a certificate entry carrying SCTs (type 18) is accepted and ignored |
-| `src/lib.rs` | exports the module and `ClientHelloProfile` |
+| `src/msgs/handshake.rs` | `SupportedProtocolVersions` gains `grease: Option<u16>` (written ahead of the real versions) and `legacy: Vec<u16>` (the fallbacks a browser advertises behind 1.2, written after them); `ClientExtensions` gains `profile_order`, `raw_extensions`, `suppress_extensions`, `padding_to`; the encoder honours them, computes RFC 7685 padding to the profile's target size, and still keeps ECH/PSK last; a certificate entry carrying SCTs (type 18) is accepted and ignored; `ServerExtensions::extension_types()` lists every extension id the server sent, typed fields and unknown ones together |
+| `src/lib.rs` | exports the two modules, `ClientHelloProfile` and `ClientFollowUp` |
 | `src/server/test.rs` | upstream's own test constructor uses `..Default::default()` now that the version carrier has a field it does not care about |
 
 With `hello_profile` unset the ClientHello is byte-for-byte upstream rustls, so
@@ -92,6 +94,10 @@ patch -p1 -d vendor/rustls < PATCH.diff      # expect hunks only in the files ab
 
 * `cargo test --workspace` — the profile unit tests cover the extension order,
   the suppressed set, the Firefox 133 shape and the PQ group round trip.
+* `cargo test -p dpi-core follow_up` pins the follow-up without a network: the
+  ALPS message's type, length and measured six-byte body, the draft code point
+  echoed as itself, the empty answer to a server that acknowledged nothing, and a
+  `channel_id` assertion that verifies against the public key it carries.
 * `cargo run --release --example tls_fingerprint dump <profile>` prints the JA3,
   the JA4 and the extension list straight from the wire bytes — no network
   needed, so the output can be diffed against a known-good capture.
@@ -196,6 +202,29 @@ failing handshake or a real mismatched fingerprint, not a theoretical concern:
   skipped. Servers that answer extension 34 with a credential would still break
   the handshake — rustls cannot consume one — but none of the twelve hosts in the
   verification sweep does.
+* **A server that acknowledges ALPS or `channel_id` requires a follow-up before
+  the Finished.** Every browser-shaped hello here advertises a *stateful*
+  application extension — ALPS (`application_settings`, 17513/17613) or the
+  `channel_id` placeholder (30032) — and a server that implements it
+  acknowledges it in its EncryptedExtensions and then reads the client's second
+  flight as one more handshake message: an EncryptedExtensions (type 8) carrying
+  the acknowledged code point, or a `ChannelId` message (type 203) carrying a
+  P-256 assertion. BoringSSL sends them ahead of its Finished, in the same record
+  (measured: `www.google.com` against `curl_chrome146` — a 63-byte record where
+  the Finished alone is 53); upstream rustls has neither a field for the server's
+  EncryptedExtensions nor a way to add a message to the flight, so the first
+  thing google read after our Finished was the HTTP/2 preface and it aborted with
+  `unexpected_message` — for exactly the shapes that carry one of the two, while
+  chrome87, firefox147, safari260, go127 and rustls were answered. The patch
+  keeps the server's extension set, exposes it, and calls
+  `ClientConfig::client_follow_up` once the EncryptedExtensions has been
+  processed, adding what it returns to the second flight. The messages themselves
+  are built in the client (`crates/dpi-core/src/net/follow_up.rs`), the only
+  place that knows what the hello advertised. A server that acknowledges nothing
+  — the local Go stand, whose `crypto/tls` knows neither extension — gets no
+  follow-up, and the hook is additionally gated on the shape having advertised
+  the extension the server named, so an unsolicited acknowledgement is not
+  answered either.
 * **`compress_certificate` belongs to TLS 1.3 only.** rustls sets the extension
   only when the hello offers 1.3; the profile hook runs after that and must not
   put it back into a 1.2-only hello (RFC 8879), which is exactly the hello the

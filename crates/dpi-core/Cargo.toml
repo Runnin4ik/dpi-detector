@@ -23,6 +23,7 @@ serde_yaml = { workspace = true }
 rand = { workspace = true }
 ml-kem = { workspace = true }
 x25519-dalek = { workspace = true }
+p256 = { workspace = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }

@@ -74,6 +74,10 @@ unicode-width = "0.2"
 rand = "0.8"
 ml-kem = "0.3"
 x25519-dalek = "2"
+# The `channel_id` follow-up signs a P-256 assertion (see `net::follow_up`).
+# Already in the graph through `rustls-rustcrypto`, so naming it here compiles
+# nothing new.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 thiserror = "1.0"
 base64 = "0.22"
 sha2 = "0.10"

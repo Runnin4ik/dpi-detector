@@ -20,26 +20,29 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      /// Choose how to verify server certificates.
      ///
      /// Using this function does not configure revocation.  If you wish to
-@@ -168,6 +180,7 @@
+@@ -168,6 +180,8 @@
          ClientConfig {
              provider: self.provider,
              alpn_protocols: Vec::new(),
 +            hello_profile: None,
++            client_follow_up: None,
              check_selected_alpn: true,
              resumption: Resumption::default(),
              max_fragment_size: None,
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/client_conn.rs b/src/client/client_conn.rs
 --- a/src/client/client_conn.rs	2006-07-24 05:21:28.000000000 +0400
 +++ b/src/client/client_conn.rs	2026-09-11 00:15:36.623504600 +0300
-@@ -6,6 +6,7 @@
+@@ -5,7 +5,9 @@
+ 
  use pki_types::{ServerName, UnixTime};
  
++use super::follow_up::ClientFollowUp;
  use super::handy::NoClientSessionStorage;
 +use super::hello_profile::ClientHelloProfile;
  use super::hs::{self, ClientHelloInput};
  #[cfg(feature = "std")]
  use crate::WantsVerifier;
-@@ -166,6 +167,15 @@
+@@ -166,6 +168,27 @@
      /// If empty, no ALPN extension is sent.
      pub alpn_protocols: Vec<Vec<u8>>,
  
@@ -52,9 +55,59 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +    /// [`ClientHelloProfile`] for what it does and does not reproduce.
 +    pub hello_profile: Option<Arc<ClientHelloProfile>>,
 +
++    /// Optional client-side follow-up messages (dpi-detector patch).
++    ///
++    /// `None` (the default) is upstream rustls behaviour: nothing is sent
++    /// between the server's Finished and the client's own. When set, the hook
++    /// is consulted once the server's EncryptedExtensions has been processed
++    /// and whatever it returns is sent as handshake messages ahead of the
++    /// Finished — the answer a shape that advertises ALPS or `channel_id` owes
++    /// a server that acknowledged the extension. See [`ClientFollowUp`].
++    ///
++    /// [`ClientFollowUp`]: crate::client::ClientFollowUp
++    pub client_follow_up: Option<Arc<dyn ClientFollowUp>>,
++
      /// Whether to check the selected ALPN was offered.
      ///
      /// The default is true.
+@@ -804,6 +827,17 @@
+             self.inner.core.data.ech_status
+         }
+ 
++        /// The extension type ids the server sent in its EncryptedExtensions
++        /// (dpi-detector patch).
++        ///
++        /// Empty until that message has been processed. The set a
++        /// [`ClientFollowUp`] hook has to look at: ALPS (17513/17613) and
++        /// `channel_id` (30032) are exactly the extensions rustls has no typed
++        /// field for, so they appear here and nowhere else.
++        pub fn server_encrypted_extensions(&self) -> &[u16] {
++            &self.inner.core.data.server_extensions
++        }
++
+         /// Returns the number of TLS1.3 tickets that have been received.
+         pub fn tls13_tickets_received(&self) -> u32 {
+             self.inner.tls13_tickets_received
+@@ -1075,6 +1109,11 @@
+ pub struct ClientConnectionData {
+     pub(super) early_data: EarlyData,
+     pub(super) ech_status: EchStatus,
++    /// Extension type ids the server sent in its EncryptedExtensions
++    /// (dpi-detector patch). Empty until that message is processed; read back
++    /// through [`ClientConnection::server_encrypted_extensions`] and handed to
++    /// [`ClientConfig::client_follow_up`].
++    pub(super) server_extensions: Vec<u16>,
+ }
+ 
+ impl ClientConnectionData {
+@@ -1082,6 +1121,7 @@
+         Self {
+             early_data: EarlyData::new(),
+             ech_status: EchStatus::NotOffered,
++            server_extensions: Vec::new(),
+         }
+     }
+ }
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/ech.rs b/src/client/ech.rs
 --- a/src/client/ech.rs	2006-07-24 05:21:28.000000000 +0400
 +++ b/src/client/ech.rs	2026-09-18 14:46:47.452465000 +0300
@@ -99,9 +152,67 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
              + suite
                  .sym
                  .aead_id
+diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/follow_up.rs b/src/client/follow_up.rs
+--- a/src/client/follow_up.rs	1970-01-01 03:00:00.000000000 +0300
++++ b/src/client/follow_up.rs	2026-09-23 04:34:14.244831000 +0300
+@@ -0,0 +1,54 @@
++//! Client-side follow-up messages (dpi-detector patch).
++//!
++//! A handful of extensions work the other way round from the rest: the client
++//! advertises one in its ClientHello, the server *acknowledges* it in its
++//! EncryptedExtensions, and the client then owes the server a handshake message
++//! of its own before its Finished. Two do this — ALPS (`application_settings`,
++//! 17513 and 17613) and `channel_id` (30032) — and a server that acknowledged
++//! one refuses a client that does not answer: BoringSSL's server reads the
++//! client's second flight as `EncryptedExtensions` (ALPS) or `ChannelId`
++//! (`channel_id`) and aborts with `unexpected_message` when it finds the
++//! Finished there instead (measured against `www.google.com`; see
++//! `target/lab/decrypted-evidence.txt`).
++//!
++//! Upstream rustls neither keeps the server's EncryptedExtensions around nor
++//! offers any way to add a message to the client's second flight, so a
++//! browser-shaped hello that carries one of these extensions — as every profile
++//! this project ships does — is refused by such a server.
++//!
++//! This module adds the hook. [`ClientFollowUp::messages`] is called once, after
++//! the server's EncryptedExtensions has been processed and after any client
++//! authentication has been emitted, and every `(type, body)` it returns is
++//! encoded as one handshake message and appended to the client's second flight
++//! ahead of the Finished — hashed into the transcript exactly like the messages
++//! around it, because the server hashes what it reads the same way. That is
++//! where BoringSSL puts both messages, so the TLS record that carries the
++//! Finished carries them too.
++//!
++//! Nothing changes unless [`ClientConfig::client_follow_up`] is set, and the
++//! hook is only consulted when the server acknowledged something; with it unset
++//! the client's second flight is byte-for-byte upstream rustls.
++//!
++//! [`ClientConfig::client_follow_up`]: crate::client::ClientConfig::client_follow_up
++
++use alloc::vec::Vec;
++use core::fmt::Debug;
++
++/// Builds the handshake messages a client owes a server that acknowledged one of
++/// its application extensions.
++///
++/// Implemented by the client that knows what its ClientHello advertised (this
++/// project's profiles) rather than by rustls, which has no typed field for ALPS
++/// or `channel_id` and no opinion about their bodies.
++pub trait ClientFollowUp: Send + Sync + Debug {
++    /// `acknowledged` is every extension type id the server sent in its
++    /// EncryptedExtensions (in no particular order), `transcript_hash` is the
++    /// handshake hash at the point the messages are built — after any client
++    /// authentication, before the Finished.
++    ///
++    /// Each returned `(type, body)` becomes one handshake message of that type
++    /// with that body, sent in the order returned. An empty list sends nothing,
++    /// which is the right answer for a server that acknowledged nothing this
++    /// client's shape owes it.
++    fn messages(&self, acknowledged: &[u16], transcript_hash: &[u8]) -> Vec<(u8, Vec<u8>)>;
++}
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/hello_profile.rs b/src/client/hello_profile.rs
 --- a/src/client/hello_profile.rs	1970-01-01 03:00:00.000000000 +0300
-+++ b/src/client/hello_profile.rs	2026-09-18 13:51:12.033626700 +0300
++++ b/src/client/hello_profile.rs	2026-09-23 04:35:45.533274900 +0300
 @@ -0,0 +1,445 @@
 +//! ClientHello profile override (dpi-detector patch).
 +//!
@@ -550,7 +661,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +}
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/hs.rs b/src/client/hs.rs
 --- a/src/client/hs.rs	2006-07-24 05:21:28.000000000 +0400
-+++ b/src/client/hs.rs	2026-09-18 14:46:53.215044400 +0300
++++ b/src/client/hs.rs	2026-09-23 04:35:45.533274900 +0300
 @@ -56,7 +56,7 @@
      //
      // If this is `None` then we do not support early data.
@@ -1019,9 +1130,47 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
  pub(super) fn initial_key_share(
      config: &ClientConfig,
      server_name: &ServerName<'_>,
+@@ -500,6 +568,11 @@
+         self.transcript.add_message(&m);
+ 
+         validate_encrypted_extensions(cx.common, &self.hello, exts)?;
++        // dpi-detector patch: keep what the server acknowledged. A profile that
++        // advertised ALPS or `channel_id` owes the server a follow-up message
++        // when it sees the extension here, and rustls has no typed field for
++        // either, so the set is read back off the message itself.
++        cx.data.server_extensions = exts.extension_types();
+         hs::process_alpn_protocol(
+             cx.common,
+             &self.hello.alpn_protocols,
+@@ -1402,6 +1475,25 @@
+             }
+         }
+ 
++        // dpi-detector patch: the follow-up messages a profile owes a server
++        // that acknowledged one of its application extensions. BoringSSL sends
++        // them in this flight, ahead of the Finished, and hashes them into the
++        // transcript; the server hashes what it reads the same way, so the
++        // Finished below covers them either way.
++        if let Some(follow_up) = &st.config.client_follow_up {
++            if !cx.data.server_extensions.is_empty() {
++                let transcript_hash = flight.transcript.current_hash();
++                for (typ, body) in
++                    follow_up.messages(&cx.data.server_extensions, transcript_hash.as_ref())
++                {
++                    flight.add(HandshakeMessagePayload(HandshakePayload::Unknown((
++                        HandshakeType::Unknown(typ),
++                        Payload::new(body),
++                    ))));
++                }
++            }
++        }
++
+         let (key_schedule_pre_finished, verify_data) = st
+             .key_schedule
+             .into_pre_finished_client_traffic(
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/crypto/hpke.rs b/src/crypto/hpke.rs
 --- a/src/crypto/hpke.rs	2006-07-24 05:21:28.000000000 +0400
-+++ b/src/crypto/hpke.rs	2026-09-18 14:03:58.263858300 +0300
++++ b/src/crypto/hpke.rs	2026-09-23 04:35:45.537788500 +0300
 @@ -5,9 +5,14 @@
  use zeroize::Zeroize;
  
@@ -1056,18 +1205,22 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs	2006-07-24 05:21:28.000000000 +0400
 +++ b/src/lib.rs	2026-09-11 00:15:28.043209400 +0300
-@@ -586,6 +586,7 @@
+@@ -584,8 +584,10 @@
+     mod client_conn;
+     mod common;
      mod ech;
++    pub mod follow_up;
      pub(super) mod handy;
      mod hs;
 +    pub mod hello_profile;
      #[cfg(test)]
      mod test;
      #[cfg(feature = "tls12")]
-@@ -600,6 +601,7 @@
+@@ -600,6 +602,8 @@
      #[cfg(feature = "std")]
      pub use client_conn::{ClientConnection, WriteEarlyData};
      pub use ech::{EchConfig, EchGreaseConfig, EchMode, EchStatus};
++    pub use follow_up::ClientFollowUp;
 +    pub use hello_profile::ClientHelloProfile;
      pub use handy::AlwaysResolvesClientRawPublicKeys;
      #[cfg(any(feature = "std", feature = "hashbrown"))]
@@ -1326,7 +1479,30 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      }
  
      fn read(r: &mut Reader<'a>) -> Result<Self, InvalidMessage> {
-@@ -1756,7 +1916,16 @@
+@@ -1252,6 +1412,22 @@
+ }
+ 
+ impl ServerExtensions<'_> {
++    /// Every extension type id present in this message (dpi-detector patch).
++    ///
++    /// The typed fields first, then the ones rustls has no field for. A client
++    /// that owes a follow-up for an extension rustls does not know — ALPS
++    /// (17513/17613) and `channel_id` (30032) are both in this set — reads it
++    /// from here rather than from a typed accessor.
++    pub(crate) fn extension_types(&self) -> Vec<u16> {
++        let mut out: Vec<u16> = self
++            .collect_used()
++            .iter()
++            .map(|typ| u16::from(*typ))
++            .collect();
++        out.extend(self.unknown_extensions.iter().copied());
++        out
++    }
++
+     fn into_owned(self) -> ServerExtensions<'static> {
+         let Self {
+             ec_point_formats,
+@@ -1756,7 +1932,16 @@
          let mut sub = r.sub(len)?;
  
          while sub.any_left() {

@@ -1412,6 +1412,22 @@ extension_struct! {
 }
 
 impl ServerExtensions<'_> {
+    /// Every extension type id present in this message (dpi-detector patch).
+    ///
+    /// The typed fields first, then the ones rustls has no field for. A client
+    /// that owes a follow-up for an extension rustls does not know — ALPS
+    /// (17513/17613) and `channel_id` (30032) are both in this set — reads it
+    /// from here rather than from a typed accessor.
+    pub(crate) fn extension_types(&self) -> Vec<u16> {
+        let mut out: Vec<u16> = self
+            .collect_used()
+            .iter()
+            .map(|typ| u16::from(*typ))
+            .collect();
+        out.extend(self.unknown_extensions.iter().copied());
+        out
+    }
+
     fn into_owned(self) -> ServerExtensions<'static> {
         let Self {
             ec_point_formats,
