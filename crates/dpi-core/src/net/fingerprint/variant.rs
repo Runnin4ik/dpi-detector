@@ -57,12 +57,22 @@ pub enum HelloVariant {
     Groups(Vec<u16>),
     /// The groups a key share is sent for, in wire order.
     KeyShares(Vec<u16>),
+    /// Several edits applied in the order they are written. A key that reads a
+    /// configuration rather than a field — a group list *and* the shares sent for
+    /// it — can only be told from a key that reads one of them by moving both in
+    /// the same hello.
+    Chain(Vec<HelloVariant>),
 }
 
 impl HelloVariant {
     /// Parses `name[:argument]`. The names are the ones the help lists, and every
     /// code point is decimal or `0x`-prefixed hex.
     pub fn parse(text: &str) -> Result<Self, String> {
+        // `a;b` is two edits at once. A code point list is comma-separated and a
+        // body is hex, so the semicolon is free to mean "and then".
+        if text.contains(';') {
+            return text.split(';').map(Self::parse).collect::<Result<Vec<_>, _>>().map(Self::Chain);
+        }
         let (name, argument) = text.split_once(':').unwrap_or((text, ""));
         let number = |part: &str| -> Result<u16, String> {
             let part = part.trim();
@@ -134,6 +144,7 @@ impl HelloVariant {
             Self::ExtOrder(order) => format!("ext-order:{}", list(order)),
             Self::Groups(groups) => format!("groups:{}", list(groups)),
             Self::KeyShares(groups) => format!("key-shares:{}", list(groups)),
+            Self::Chain(parts) => parts.iter().map(Self::name).collect::<Vec<_>>().join(";"),
         }
     }
 
@@ -213,6 +224,11 @@ impl HelloVariant {
             }
             Self::Groups(groups) => hello.groups = Some(groups.clone()),
             Self::KeyShares(groups) => hello.key_share_groups = Some(groups.clone()),
+            Self::Chain(parts) => {
+                for part in parts {
+                    part.apply(hello, alpn_protocols);
+                }
+            }
         }
     }
 }
@@ -353,6 +369,23 @@ mod tests {
     }
 
     #[test]
+    fn a_chain_moves_every_field_it_names() {
+        // A group list and the shares sent for it are one configuration: moving
+        // the list alone leaves shares for groups the hello no longer offers, so a
+        // key that reads the pair has to be asked with both in one hello.
+        let plain = hello_record(&TlsProfile::insecure(TlsFingerprint::Chrome146));
+        let chained = shaped(TlsFingerprint::Chrome146, "groups:29,23,24;key-shares:29");
+        assert_ne!(groups(&plain), vec![29, 23, 24]);
+        assert_eq!(groups(&chained), vec![29, 23, 24]);
+        assert_eq!(shares(&chained), vec![29]);
+        assert!(shares(&plain).len() > 1);
+        // The halves are the deltas the help lists, and the chain is their sum.
+        let only_groups = shaped(TlsFingerprint::Chrome146, "groups:29,23,24");
+        assert_eq!(groups(&only_groups), groups(&chained));
+        assert_ne!(shares(&only_groups), shares(&chained));
+    }
+
+    #[test]
     fn a_variant_names_itself_the_way_it_parses() {
         for text in [
             "sigalg-swap",
@@ -367,6 +400,8 @@ mod tests {
             "ext-order:0,23,65281",
             "groups:29,4588,23",
             "key-shares:29",
+            "groups:29,23,24;key-shares:29",
+            "-ext:17513;no-padding",
         ] {
             let variant = HelloVariant::parse(text).expect("a variant the help lists");
             assert_eq!(variant.name(), text);

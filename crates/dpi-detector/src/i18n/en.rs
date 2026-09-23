@@ -262,7 +262,7 @@ pub(crate) fn messages() -> Messages {
         cli_burst_profiles: "Test 6 fingerprints: all, or profile names separated by commas; --legend lists them [default: the default set]",
         cli_burst_tls: "Test 6 TLS: 1.3+1.2 (the browser's own offer, must answer 1.3)|1.3 (offers 1.3 only)|1.2 (offers 1.2 only) [default: 1.3+1.2]",
         cli_burst_alpn: "Test 6 ALPN: h2 (offers h2 with the http/1.1 fallback)|http/1.1 (offers http/1.1 only) [default: h2]",
-        cli_burst_variant: "Test 6 variant: one edit to every profile's ClientHello, so a verdict can be read against the shape it differs from in one field — -ext:ID, ext-body:ID:HEX, +ext:ID, ext-body:ID:HEX, groups:A,B,…, key-shares:A,B,…, ext-order:A,B,… (0x0a0a is a GREASE slot), padding:N, no-padding, sigalg-swap, +grease, +group:ID, alpn-reverse [default: none]",
+        cli_burst_variant: "Test 6 variant: one edit to every profile's ClientHello, so a verdict can be read against the shape it differs from in one field — -ext:ID, ext-body:ID:HEX, +ext:ID, groups:A,B,…, key-shares:A,B,…, ext-order:A,B,… (0x0a0a is a GREASE slot), padding:N, no-padding, sigalg-swap, +grease, +group:ID, alpn-reverse; a `;` applies several at once [default: none]",
         burst_variant_bad: "Test 6: `{}` is not one of the shape edits ({})",
         cli_trace: "Test 6 trace: one line per attempt (round, shape, host, status, detail, ms); without a path to stderr, with one to that file [default: off]",
         trace_open_failed: "Could not open the trace file {}",
