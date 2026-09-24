@@ -29,7 +29,7 @@ authors = ["runnin"]
 license = "MIT"
 
 [workspace.dependencies]
-tokio = { version = "1.40", default-features = false, features = ["rt", "net", "time", "macros", "io-util", "sync", "process"] }
+tokio = { version = "1.40", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "macros", "io-util", "sync", "process"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
 # RFC 8879 certificate decompression, decoder side only (see
 # `dpi_core::net::cert_compression`): rustls's own `brotli`/`zlib` features would

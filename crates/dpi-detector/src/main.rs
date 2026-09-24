@@ -210,14 +210,36 @@ fn intercept_for(slot: &InterceptSlot, ip_version: &str) -> Option<Intercept> {
     }
 }
 
-/// Single-threaded runtime on purpose — see `docs/OPTIMIZATIONS.md` §2.5: one
-/// thread serves the whole probe fan-out, which is what the 1–2 core routers this
-/// targets can afford, it saves ~50–120 KB against `rt-multi-thread`, and the
-/// crypto that runs inline (X25519, ML-KEM-768, certificate verification) is
-/// bounded — `auto_gate` already downscales the concurrency to the local CPU
-/// count, which is where a wide fan-out on a weak core actually hurt.
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
+/// One or two worker threads, never more.
+///
+/// The runtime used to be `current_thread`, on the argument in
+/// `docs/OPTIMIZATIONS.md` §2.5 that one thread is what the 1–2 core routers this
+/// targets can afford. Measured on the target — MT7621, four hardware threads,
+/// musl — that argument holds for one core and costs real time above it: the CPU
+/// work (X25519, ML-KEM-768, certificate verification) is serialized behind a
+/// single executor, and spreading it over two threads took test 6 from 21 s to
+/// 13 s and test 1 from 43 s to 25 s for +3–8% processor time. Four threads
+/// bought nothing further (13.2 s, unchanged) and cost +33–45% plus a peak of
+/// ~3.9 cores against ~2 — the half of a router that has to keep routing.
+///
+/// So the count is derived, not fixed: `min(2, available_parallelism())`. On the
+/// one-core routers §2.5 was about, that is one worker and the measured behaviour
+/// is unchanged, which a fixed `worker_threads = 2` would not give: the attribute
+/// takes a constant, and would put two workers on a single core.
+fn main() {
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(2);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .enable_all()
+        .build()
+        .expect("the runtime is built once, from a constant configuration");
+    runtime.block_on(run());
+}
+
+async fn run() {
     // Panic hook: write crash details to file and pause so console does not instantly vanish.
     std::panic::set_hook(Box::new(|info| {
         let msg = get_messages(lang_from_code(PANIC_LANG.load(std::sync::atomic::Ordering::Relaxed)));

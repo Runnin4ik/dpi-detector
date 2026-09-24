@@ -49,12 +49,32 @@ This document records the architectural decisions and compilation profiles appli
 * **Mechanics:** Disabled the heavy fuzzy typo-search algorithms (Levenshtein distance tables in `suggestions`), contextual error formatting and versioning macros.
 * **Result:** Savings of **~35 KB** in `clap_builder` machine code.
 
-### 2.5. Single-Threaded Tokio Runtime (`current_thread`)
+### 2.5. Runtime: one worker thread per core, capped at two
+
 * **Files:** `Cargo.toml`, `crates/dpi-detector/src/main.rs`
-* **Mechanics:** The multi-threaded `rt-multi-thread` scheduler was replaced with the lightweight single-threaded `current_thread` (`features = ["rt"]`). For network I/O on epoll/IOCP a single thread efficiently serves dozens of simultaneous sockets.
-* **Result:**
-  * Cuts **~50–120 KB** of machine code (the work-stealing scheduler, thread pool and inter-thread queues are removed).
-  * Significantly reduces RAM consumption (RSS) on 1–2 core routers (no separate 1–2 MB OS stack is allocated per thread).
+* **History:** `rt-multi-thread` was replaced with `current_thread`
+  (`features = ["rt"]`) on the argument that one thread is what the 1–2 core
+  routers this targets can afford: it cuts **~50–120 KB** of machine code, and it
+  was believed to cut RSS by not allocating a stack per thread.
+* **Measured on the target** — MT7621, four hardware threads, musl; tests 1 and 6,
+  two passes each, interleaved. Each cell is CPU time / wall, in seconds:
+
+| workers | test 1 | test 6 | peak load | peak RSS |
+| --- | --- | --- | --- | --- |
+| 1 (`current_thread`) | 34.6/40.6, 33.3/45.6 | 18.9/21.9, 17.8/20.9 | ~1 core | 7.8–9.1 MB |
+| 2 | 38.8/32.6, 36.6/24.2 | 20.4/13.8, 19.2/12.7 | ~2 cores | 8.2–8.5 MB |
+| 4 | 44.5/23.6, 47.7/25.4 | 27.6/13.2, 25.1/13.2 | ~3.9 cores | 8.0–8.3 MB |
+
+* **Result:** two workers take the whole gain on test 6 and most of it on test 1,
+  for +3–8% processor time. Four take nothing further (test 6: 13.2 s either way)
+  and cost +33–45% plus a peak of ~3.9 cores against ~2 — the half of a router
+  that has to keep routing and serving Wi-Fi.
+* The RSS claim above is **not** supported: the thread stacks are virtual, and
+  resident memory measured the same at one, two and four workers.
+* **Choice:** `min(2, available_parallelism())` — derived, so the one-core routers
+  this section was about keep one worker and their measured behaviour is
+  unchanged. A fixed `worker_threads = 2` would not give that: the attribute takes
+  a constant, and would put two workers on a single core.
 
 ### 2.6. Cutting Stack Unwind Tables on Linux (`-C force-unwind-tables=no`)
 * **File:** `.github/workflows/release.yml`
