@@ -440,4 +440,27 @@ mod tests {
         assert_eq!(measured.code(), "timeout_20.4kb");
         assert_eq!(Detail::TimeoutStage { stage: "reading_data".into() }.code(), "timeout_reading_data");
     }
+
+    /// Every stage the timeout path can name, and the `--json` code each one
+    /// composes to. `timeout_at_stage` writes one of `ProbeStage::as_str()`'s
+    /// tokens into `Detail::TimeoutStage`, and `code()` spells it
+    /// `timeout_<stage>`, so the stage word is half of a frozen machine channel
+    /// — one pinned example (`timeout_reading_data`) let the other four be
+    /// renamed in silence. The set is listed one by one because the enum cannot
+    /// be iterated; a lost variant fails here as a name that no longer resolves,
+    /// which is the compile-time half of the pin.
+    #[test]
+    fn every_timeout_stage_keeps_its_code() {
+        use crate::classify::types::ProbeStage;
+        for (stage, code) in [
+            (ProbeStage::TcpConnect, "timeout_tcp_connect"),
+            (ProbeStage::TlsHandshake, "timeout_tls_handshake"),
+            (ProbeStage::TlsConnected, "timeout_tls_connected"),
+            (ProbeStage::SendingData, "timeout_sending_data"),
+            (ProbeStage::ReadingData, "timeout_reading_data"),
+        ] {
+            let detail = Detail::TimeoutStage { stage: stage.as_str().to_string() };
+            assert_eq!(detail.code(), code, "stage {}", stage.as_str());
+        }
+    }
 }

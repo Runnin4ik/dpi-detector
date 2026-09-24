@@ -1,6 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use thiserror::Error;
 
+use crate::classify::types::ConnectStage;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DnsRecord {
     A(Ipv4Addr),
@@ -58,12 +60,41 @@ pub enum DnsError {
     UnsupportedRdata,
     #[error("network I/O error: {0}")]
     Io(String),
+    /// A transport step failed before the exchange: `stage` is the place it
+    /// happened, `detail` the raw cause. The stage is a [`ConnectStage`] — a
+    /// closed vocabulary, not a hand-written word — so the classifier maps it
+    /// by variant and `--json` never sees it.
     #[error("connection failed at stage {stage}: {detail}")]
-    ConnectFault { stage: &'static str, detail: String },
+    ConnectFault { stage: ConnectStage, detail: String },
     #[error("query timeout")]
     Timeout,
     #[error("SOCKS5 error: {0}")]
     Socks5(String),
     #[error("DoH HTTP error: status {0}")]
     DohHttp(u16),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The four stage words are what `DnsError`'s own message carries, and they
+    /// used to be hand-written at every producer. Pinned one by one: a lost word
+    /// fails to compile here, a renamed one fails the assert, and the message
+    /// the format string spells is pinned with it.
+    #[test]
+    fn connect_fault_stage_words_are_frozen() {
+        for (stage, word) in [
+            (ConnectStage::Resolve, "resolve"),
+            (ConnectStage::TcpConnect, "tcp_connect"),
+            (ConnectStage::TlsHandshake, "tls_handshake"),
+            (ConnectStage::Connected, "connected"),
+        ] {
+            assert_eq!(stage.as_str(), word);
+            assert_eq!(
+                DnsError::ConnectFault { stage, detail: "x".to_string() }.to_string(),
+                format!("connection failed at stage {word}: x")
+            );
+        }
+    }
 }

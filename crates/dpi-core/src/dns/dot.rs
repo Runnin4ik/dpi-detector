@@ -14,6 +14,7 @@ use tokio_rustls::TlsConnector;
 use super::resolve::resolve_host;
 use super::types::DnsError;
 use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
+use crate::classify::ConnectStage;
 use crate::net::tcp::set_no_delay;
 use crate::net::tls::{create_tls_config, TlsProfile};
 
@@ -67,11 +68,11 @@ impl DotSession {
                 timeout(timeout_dur, resolve_host(host, port, timeout_dur))
                     .await
                     .map_err(|_| DnsError::ConnectFault {
-                        stage: "resolve",
+                        stage: ConnectStage::Resolve,
                         detail: "lookup timed out".to_string(),
                     })?
                     .map_err(|e| DnsError::ConnectFault {
-                        stage: "resolve",
+                        stage: ConnectStage::Resolve,
                         detail: e.to_string(),
                     })?;
             let addr = addrs_vec
@@ -80,7 +81,7 @@ impl DotSession {
                 .copied()
                 .or_else(|| addrs_vec.first().copied())
                 .ok_or_else(|| DnsError::ConnectFault {
-                    stage: "resolve",
+                    stage: ConnectStage::Resolve,
                     detail: "no address".to_string(),
                 })?;
             addr.ip().to_string()
@@ -92,11 +93,11 @@ impl DotSession {
         let tcp = timeout(timeout_dur, crate::net::bind::tcp_connect(&addr))
             .await
             .map_err(|_| DnsError::ConnectFault {
-                stage: "tcp_connect",
+                stage: ConnectStage::TcpConnect,
                 detail: "connect timed out".to_string(),
             })?
             .map_err(|e| DnsError::ConnectFault {
-                stage: "tcp_connect",
+                stage: ConnectStage::TcpConnect,
                 detail: e.to_string(),
             })?;
         set_no_delay(&tcp);
@@ -114,11 +115,11 @@ impl DotSession {
         let tls = timeout(timeout_dur, connector.connect(server_name, tcp))
             .await
             .map_err(|_| DnsError::ConnectFault {
-                stage: "tls_handshake",
+                stage: ConnectStage::TlsHandshake,
                 detail: "handshake timed out".to_string(),
             })?
             .map_err(|e| DnsError::ConnectFault {
-                stage: "tls_handshake",
+                stage: ConnectStage::TlsHandshake,
                 detail: e.to_string(),
             })?;
         Ok(Self { tls, timeout_dur })

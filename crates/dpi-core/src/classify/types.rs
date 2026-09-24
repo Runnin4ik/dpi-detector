@@ -40,6 +40,51 @@ impl ConnectionStage {
     }
 }
 
+/// The stage a `DnsError::ConnectFault` names, for the resolver sessions that
+/// report their own progress words.
+///
+/// It is a vocabulary of its own only in spelling: three of the four words name
+/// a place [`ProbeStage`] already has (`connected` is its `tls_connected`), and
+/// [`ProbeStage::of_fault_stage`] is the bridge between them. `resolve` is the
+/// caller's own case — the endpoint's own name lookup is a DNS verdict, not a
+/// transport one. Before this type the words were string literals in
+/// `dns/doh.rs`, `dns/dot.rs` and `dns/resolve.rs`, and the wildcard arm of that
+/// bridge decided what an unknown word meant, so a typo classified as `UNKNOWN`
+/// in silence.
+///
+/// `as_str()` is what `DnsError`'s `Display` interpolates (`connection failed at
+/// stage resolve: ...`); these are not `--json` tokens — `ProbeStage` is the
+/// vocabulary those are composed from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectStage {
+    /// The endpoint's own name lookup, before any socket was opened.
+    Resolve,
+    /// The TCP connect: a SYN that was never answered.
+    TcpConnect,
+    /// Inside the TLS handshake, up to and including the ALPN exchange.
+    TlsHandshake,
+    /// The socket is up and the session's own protocol could not start — the
+    /// HTTP/2 or HTTP/1.1 handshake of a DoH endpoint.
+    Connected,
+}
+
+impl ConnectStage {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Resolve => "resolve",
+            Self::TcpConnect => "tcp_connect",
+            Self::TlsHandshake => "tls_handshake",
+            Self::Connected => "connected",
+        }
+    }
+}
+
+impl std::fmt::Display for ConnectStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Where a connection was when it failed, as the classifier asks it.
 ///
 /// This is the stage
@@ -82,21 +127,19 @@ impl ProbeStage {
         }
     }
 
-    /// The stage a `DnsError::ConnectFault` names, for the resolver sessions
-    /// that report their own progress words.
+    /// The stage a [`ConnectStage`] names in this enum's own vocabulary.
     ///
-    /// `dns::types::DnsError` carries a third vocabulary of its own —
-    /// `resolve`, `tcp_connect`, `tls_handshake`, `connected` — and only the
-    /// words that name the same place map over; `resolve` is the caller's own
-    /// case (it is a DNS verdict, not a transport one). `None` is a word this
-    /// enum does not have, which the caller must answer for itself: guessing a
-    /// stage here is what a wildcard arm would do.
-    pub fn of_fault_stage(stage: &str) -> Option<Self> {
+    /// Only the words that name the same place map over: `connected` is
+    /// `tls_connected`. `resolve` is the caller's own case (a DNS verdict, not a
+    /// transport one) and is the one stage that answers `None`, which the caller
+    /// answers for itself. The match has no wildcard, so a stage added to
+    /// `dns::types` is a compile error here rather than a silent `UNKNOWN`.
+    pub fn of_fault_stage(stage: ConnectStage) -> Option<Self> {
         match stage {
-            "connected" => Some(Self::TlsConnected),
-            "tcp_connect" => Some(Self::TcpConnect),
-            "tls_handshake" => Some(Self::TlsHandshake),
-            _ => None,
+            ConnectStage::Connected => Some(Self::TlsConnected),
+            ConnectStage::TcpConnect => Some(Self::TcpConnect),
+            ConnectStage::TlsHandshake => Some(Self::TlsHandshake),
+            ConnectStage::Resolve => None,
         }
     }
 }
@@ -377,19 +420,15 @@ mod tests {
         }
     }
 
-    /// The three words `of_fault_stage` maps, and the tracker's own vocabulary
-    /// that is not a failure stage: a mapping that guessed here would be the
-    /// wildcard arm this type exists to remove.
+    /// The three words `of_fault_stage` maps, and the one it must not: `resolve`
+    /// is the caller's own verdict, not a transport stage, and a stage the map
+    /// does not know cannot be invented here — the match has no wildcard.
     #[test]
     fn of_fault_stage_maps_only_the_shared_places() {
-        assert_eq!(ProbeStage::of_fault_stage("connected"), Some(ProbeStage::TlsConnected));
-        assert_eq!(ProbeStage::of_fault_stage("tcp_connect"), Some(ProbeStage::TcpConnect));
-        assert_eq!(ProbeStage::of_fault_stage("tls_handshake"), Some(ProbeStage::TlsHandshake));
-        // `resolve` is the caller's own verdict and the tracker's own words are
-        // not this vocabulary: neither may be read as a failure stage here.
-        for unknown in ["resolve", "tcp_connected", "tls_handshake_done", "http_payload"] {
-            assert_eq!(ProbeStage::of_fault_stage(unknown), None, "{unknown}");
-        }
+        assert_eq!(ProbeStage::of_fault_stage(ConnectStage::Connected), Some(ProbeStage::TlsConnected));
+        assert_eq!(ProbeStage::of_fault_stage(ConnectStage::TcpConnect), Some(ProbeStage::TcpConnect));
+        assert_eq!(ProbeStage::of_fault_stage(ConnectStage::TlsHandshake), Some(ProbeStage::TlsHandshake));
+        assert_eq!(ProbeStage::of_fault_stage(ConnectStage::Resolve), None);
     }
 
     /// Rule 5: the `--json` token of a redirect to a foreign host is `redir` —

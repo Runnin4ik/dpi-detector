@@ -14,6 +14,7 @@ use url::Url;
 use super::resolve::resolve_host;
 use super::types::{DnsError, DnsRecord};
 use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
+use crate::classify::ConnectStage;
 use crate::config::AppConfig;
 use crate::net::tcp::set_no_delay;
 use crate::net::tls::{create_tls_config, TlsProfile};
@@ -56,11 +57,11 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
     let addrs: Vec<std::net::SocketAddr> = timeout(timeout_dur, resolve_host(&host, port, timeout_dur))
         .await
         .map_err(|_| DnsError::ConnectFault {
-            stage: "resolve",
+            stage: ConnectStage::Resolve,
             detail: "lookup timed out".to_string(),
         })?
         .map_err(|e| DnsError::ConnectFault {
-            stage: "resolve",
+            stage: ConnectStage::Resolve,
             detail: e.to_string(),
         })?;
     // Prefer IPv4 unless the user specifically requested IPv6; otherwise
@@ -71,17 +72,17 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
         .copied()
         .or_else(|| addrs.first().copied())
         .ok_or_else(|| DnsError::ConnectFault {
-            stage: "resolve",
+            stage: ConnectStage::Resolve,
             detail: "no address".to_string(),
         })?;
     let tcp = timeout(timeout_dur, crate::net::bind::tcp_connect(&addr))
         .await
         .map_err(|_| DnsError::ConnectFault {
-            stage: "tcp_connect",
+            stage: ConnectStage::TcpConnect,
             detail: "connect timed out".to_string(),
         })?
         .map_err(|e| DnsError::ConnectFault {
-            stage: "tcp_connect",
+            stage: ConnectStage::TcpConnect,
             detail: e.to_string(),
         })?;
     set_no_delay(&tcp);
@@ -97,11 +98,11 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
     let tls_stream = timeout(timeout_dur, connector.connect(server_name, tcp))
         .await
         .map_err(|_| DnsError::ConnectFault {
-            stage: "tls_handshake",
+            stage: ConnectStage::TlsHandshake,
             detail: "handshake timed out".to_string(),
         })?
         .map_err(|e| DnsError::ConnectFault {
-            stage: "tls_handshake",
+            stage: ConnectStage::TlsHandshake,
             detail: e.to_string(),
         })?;
     let alpn = tls_stream.get_ref().1.alpn_protocol();
@@ -115,11 +116,11 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
         )
         .await
         .map_err(|_| DnsError::ConnectFault {
-            stage: "connected",
+            stage: ConnectStage::Connected,
             detail: "HTTP/2 handshake timed out".to_string(),
         })?
         .map_err(|e| DnsError::ConnectFault {
-            stage: "connected",
+            stage: ConnectStage::Connected,
             detail: e.to_string(),
         })?;
         tokio::spawn(async move {
@@ -132,11 +133,11 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
         let (sender, conn) = timeout(timeout_dur, hyper::client::conn::http1::handshake(io))
             .await
             .map_err(|_| DnsError::ConnectFault {
-                stage: "connected",
+                stage: ConnectStage::Connected,
                 detail: "HTTP handshake timed out".to_string(),
             })?
             .map_err(|e| DnsError::ConnectFault {
-                stage: "connected",
+                stage: ConnectStage::Connected,
                 detail: e.to_string(),
             })?;
         tokio::spawn(async move {

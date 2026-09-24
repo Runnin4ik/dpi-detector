@@ -33,6 +33,7 @@ use tokio::time::timeout;
 
 use super::types::DnsError;
 use super::udp::probe_udp_dns;
+use crate::classify::ConnectStage;
 
 /// Last-resort resolvers (IP literals — usable without any resolution).
 const BOOTSTRAP_RESOLVERS: &[&str] = &["8.8.8.8:53", "1.1.1.1:53", "9.9.9.9:53"];
@@ -171,7 +172,7 @@ pub async fn resolve_host(
         }
     }
     let mut last_err = DnsError::ConnectFault {
-        stage: "resolve",
+        stage: ConnectStage::Resolve,
         detail: "no address".to_string(),
     };
     for server in servers {
@@ -179,7 +180,7 @@ pub async fn resolve_host(
             Ok(Ok((ips, _))) => {
                 if ips.is_empty() {
                     return Err(DnsError::ConnectFault {
-                        stage: "resolve",
+                        stage: ConnectStage::Resolve,
                         detail: "no address".to_string(),
                     });
                 }
@@ -192,7 +193,7 @@ pub async fn resolve_host(
             Ok(Err(e)) => last_err = e,
             Err(_) => {
                 last_err = DnsError::ConnectFault {
-                    stage: "resolve",
+                    stage: ConnectStage::Resolve,
                     detail: "fallback timed out".to_string(),
                 }
             }

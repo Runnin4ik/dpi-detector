@@ -123,17 +123,13 @@ pub fn connect_fail(err: &DnsError) -> FailReason {
     match err {
         DnsError::Timeout => FailReason::timeout(),
         DnsError::ConnectFault { stage, detail } => {
-            if *stage == "resolve" {
+            // `resolve` is the one stage the classifier does not have — an
+            // endpoint's name lookup is a DNS verdict, not a transport one — and
+            // the only one `of_fault_stage` answers `None` for. No word can fall
+            // through any more: the stage is a variant, so a stage this arm does
+            // not know is a compile error rather than an `UNKNOWN` verdict.
+            let Some(stage) = ProbeStage::of_fault_stage(*stage) else {
                 return FailReason { status: DpiStatus::DnsFail, detail: Detail::DnsError };
-            }
-            // The third vocabulary — `DnsError::ConnectFault::stage` — maps onto
-            // the classifier's own stages only where it names the same place:
-            // `connected` is `tls_connected`, and a word this enum does not have
-            // is no longer interpolated into a verdict. Unreachable with today's
-            // three producers (doh.rs/dot.rs/resolve.rs write only resolve,
-            // tcp_connect, tls_handshake, connected), and `resolve` returned above.
-            let Some(stage) = ProbeStage::of_fault_stage(stage) else {
-                return FailReason { status: DpiStatus::Unknown, detail: Detail::Other(detail.clone()) };
             };
             let (status, classified) =
                 classify_connect_error_full(detail, None, None, 0, stage);
@@ -1274,47 +1270,48 @@ mod tests {
     /// the failure carries the detail `--json` reports beside it.
     #[test]
     fn test_connect_fail_stage_and_detail() {
+        use crate::classify::ConnectStage;
         use crate::dns::types::DnsError;
-        let fault = |stage: &'static str, detail: &str| DnsError::ConnectFault {
+        let fault = |stage: ConnectStage, detail: &str| DnsError::ConnectFault {
             stage,
             detail: detail.to_string(),
         };
         let label = |e: &DnsError| connect_fail(e).label().to_string();
         assert_eq!(label(&DnsError::Timeout), "TIMEOUT");
-        assert_eq!(label(&fault("resolve", "lookup failed")), "DNS FAIL");
-        assert_eq!(label(&fault("tcp_connect", "connect timed out")), "SYN DROP");
+        assert_eq!(label(&fault(ConnectStage::Resolve, "lookup failed")), "DNS FAIL");
+        assert_eq!(label(&fault(ConnectStage::TcpConnect, "connect timed out")), "SYN DROP");
         assert_eq!(
-            label(&fault("tcp_connect", "connection reset by peer (os error 104)")),
+            label(&fault(ConnectStage::TcpConnect, "connection reset by peer (os error 104)")),
             "TCP RST"
         );
         assert_eq!(
-            label(&fault("tcp_connect", "network is unreachable (os error 101)")),
+            label(&fault(ConnectStage::TcpConnect, "network is unreachable (os error 101)")),
             "NET UNREACH"
         );
         assert_eq!(
-            label(&fault("tls_handshake", "handshake timed out")),
+            label(&fault(ConnectStage::TlsHandshake, "handshake timed out")),
             "TLS DROP"
         );
         assert_eq!(
-            label(&fault("tls_handshake", "connection reset by peer")),
+            label(&fault(ConnectStage::TlsHandshake, "connection reset by peer")),
             "TLS RST"
         );
         assert_eq!(
-            label(&fault("tls_handshake", "tls alert handshake failure")),
+            label(&fault(ConnectStage::TlsHandshake, "tls alert handshake failure")),
             "TLS ALERT"
         );
-        assert_eq!(label(&fault("connected", "timeout")), "TIMEOUT");
-        assert_eq!(label(&fault("connected", "connection reset")), "TLS RST");
+        assert_eq!(label(&fault(ConnectStage::Connected, "timeout")), "TIMEOUT");
+        assert_eq!(label(&fault(ConnectStage::Connected, "connection reset")), "TLS RST");
         assert_eq!(
             label(&DnsError::Io("DoH resolve failed: dns error".to_string())),
             "DNS FAIL"
         );
         assert_eq!(
-            label(&fault("tls_handshake", "certificate verify failed: self-signed")),
+            label(&fault(ConnectStage::TlsHandshake, "certificate verify failed: self-signed")),
             "TLS ERR"
         );
         assert_eq!(
-            label(&fault("tls_handshake", "certificate verify failed: unable to get local issuer certificate")),
+            label(&fault(ConnectStage::TlsHandshake, "certificate verify failed: unable to get local issuer certificate")),
             "NO CA BUNDLE"
         );
 
@@ -1323,17 +1320,17 @@ mod tests {
         let code = |e: &DnsError| connect_fail(e).detail.code().into_owned();
         let status = |e: &DnsError| connect_fail(e).status.as_str();
         let no_ca = fault(
-            "tls_handshake",
+            ConnectStage::TlsHandshake,
             "certificate verify failed: unable to get local issuer certificate",
         );
         assert_eq!((status(&no_ca), code(&no_ca).as_str()), ("no_ca_bundle", "no_root_certificates"));
         assert_eq!(code(&DnsError::Timeout), "timeout");
         assert_eq!(
-            code(&fault("resolve", "lookup failed")),
+            code(&fault(ConnectStage::Resolve, "lookup failed")),
             "dns_error"
         );
         assert_eq!(
-            code(&fault("tls_handshake", "certificate verify failed: self-signed")),
+            code(&fault(ConnectStage::TlsHandshake, "certificate verify failed: self-signed")),
             "self_signed_cert"
         );
         // A fault the classifier cannot place keeps its message rather than
@@ -1348,6 +1345,7 @@ mod tests {
     /// not depend on hash iteration.
     #[test]
     fn endpoint_failures_lists_only_what_failed() {
+        use crate::classify::ConnectStage;
         use crate::dns::types::DnsError;
         let key = |kind, addr: &str| ProbeKey { kind, addr: addr.to_string(), name: "P".to_string() };
         let lat = |pairs: [(&str, Option<f64>); 2]| {
@@ -1364,7 +1362,7 @@ mod tests {
         report.fail_reasons.insert(
             key(ProbeKind::Dot, "aborted"),
             connect_fail(&DnsError::ConnectFault {
-                stage: "tls_handshake",
+                stage: ConnectStage::TlsHandshake,
                 detail: "certificate verify failed: unable to get local issuer certificate".to_string(),
             }),
         );
