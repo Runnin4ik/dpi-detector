@@ -160,3 +160,16 @@ runner. Plain `#[test]` plus a few `#[tokio::test]`; names are full sentences
   ```
 
   Re-check a profile whenever its data changes; a difference the harness reports that `tools/fingerprint/README.md` does not name as deliberate = a bug. `docs/ADDING_A_PROFILE.md` lists the five artifact locations a new profile touches.
+
+### Verifying a fix, and running an audit
+
+Two passes over the same external guideline (`RUST_GUIDELINES.md`, `andrico21/rmcp-server-kit`) produced the same classes of mistake. Each rule below names the case it came from, so the claim can be checked rather than trusted.
+
+- **A fix is confirmed by the absence of the old pattern, not the presence of the new one.** Grep for what was removed. A search for the new code that finds nothing proves nothing: `net/bind.rs` kept `push` + `last_mut().expect("just pushed")` while a check for `push_mut` found none and read that as done, and `cast_lossless` was recorded as declared on a hit in the vendored provider's crate root.
+- **While another writer holds a file, the working tree is not evidence.** `git diff HEAD -- <path>` answers "what changed" and "what was there" at once. Reading a file mid-edit made four correctly capped, deadlined response-body reads look unbounded, and the refutation was wrong.
+- **A measurement is not refuted by an argument.** A report said the brotli decoder could be made to ask for a gibibyte; RFC 7932 caps a conforming window at 16 MiB, so the number was "corrected" — and the correction was wrong: `brotli_decompressor` enables Large-Window-Brotli, and a window-30 stream was measured asking its allocator for `(1 << 30) + 66` bytes.
+- **One cargo process at a time.** Concurrent builds over one `target/` leave metadata-only stubs, and the next build fails with `only metadata stub found for rlib dependency core` — which reads as a broken toolchain. Never build during a parallel-edit phase; build once, at integration. On that failure, check `rustc --print sysroot` and a plain `rustc` link before re-diagnosing, and clear `target/`.
+- **Frozen outputs are pinned before the type behind them changes.** `--json` tokens and `display_label()` strings are contracts; the pinning in `detail.rs` covers one stage string of the set, so a typo in the rest is silent today.
+- **Removing an indirection is not free.** Count call sites and owners first: the `i18n::format_bidi` wrappers had 35 call sites in seven files, and removing them moved no allocation — the call sites need a `String` either way. Record the decision with its measurement, the way `cast_lossless` and `cargo fmt` are recorded.
+- **An audit pass hands its dismissals forward, with reasons.** The second pass was productive only because every agent was given the first pass's verdicts: what was fixed, and what was examined and deliberately left alone. Write them where the next pass can find them — the commit message, or a context artifact handed to the agents.
+- **One writer per file.** Route cross-file edits — a signature that moved, a doc link a narrowing broke — through the integration owner. Two writers in one file lose one writer's work silently; the compile error is the only reason it is ever noticed.
