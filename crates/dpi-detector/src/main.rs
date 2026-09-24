@@ -267,7 +267,7 @@ async fn main() {
     // way an unknown `--lang`/`--fingerprint` is — the same kind of recoverable
     // value: the default stands and the operator is told. stderr in every mode,
     // `--json` included: stdout is the document, and a consumer cannot tell a
-    // rejected flag from a correct one. `warn_unknown_burst_axis` is the tree's
+    // rejected flag from a correct one. `warn_unknown_flag_value` is the tree's
     // generic "unknown flag value" wording (three `{}`: flag, value, what is used
     // instead), already shared by the test 6 axis flags.
     let profile = match RegionProfile::from_code(&args.profile) {
@@ -275,7 +275,7 @@ async fn main() {
         None => {
             eprintln!(
                 "{}",
-                msg.warn_unknown_burst_axis
+                msg.warn_unknown_flag_value
                     .replacen("{}", "--profile", 1)
                     .replacen("{}", &args.profile, 1)
                     .replacen("{}", RegionProfile::default().code(), 1)

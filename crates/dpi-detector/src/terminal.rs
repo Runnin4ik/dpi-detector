@@ -5,7 +5,7 @@
 //! printed, because it also decides the glyph set.
 #![allow(
     unsafe_code,
-    reason = "Win32 console FFI: GetStdHandle/GetConsoleMode/SetConsoleMode read and write a mode word through a handle, and SetConsoleOutputCP/SetConsoleCP take a constant code page. The single out-parameter (`out_mode`) is a live local `u32`, and the calls are reached only on the `windows` arm of the cfg_select below, so no pointer this code owns outlives the call."
+    reason = "Win32 console FFI — the console-mode and code-page calls that decide whether this terminal can render ANSI. Each block carries its own SAFETY note."
 )]
 
 cfg_select! {
@@ -24,9 +24,16 @@ cfg_select! {
             const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
             // Probe Virtual Terminal Processing (VT100) on stdout.
             // On Windows 7 / 8 this returns 0 (fails), indicating legacy conhost.
+            // SAFETY: `STD_OUTPUT_HANDLE` is a constant pseudo-handle, not a
+            // pointer, and the call takes no out-parameter.
             let out_handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
             let mut out_mode: u32 = 0;
+            // SAFETY: `out_mode` is a live local `u32` that outlives the call, and
+            // the handle is the one just returned. A failed call leaves the local
+            // at its zero initialiser, which the test then reads as "no VT".
             let vt_ok = if unsafe { GetConsoleMode(out_handle, &mut out_mode) } != 0 {
+                // SAFETY: the mode word is the local the previous call filled,
+                // ORed with a constant bit; the handle is the same one.
                 unsafe { SetConsoleMode(out_handle, out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0 }
             } else {
                 false
@@ -34,6 +41,9 @@ cfg_select! {
 
             // Only switch to UTF-8 code page if VT is supported; on Win7 raster fonts require OEM codepage
             if vt_ok {
+                // SAFETY: both calls take a constant code page and no pointer;
+                // their return value says whether the console accepted it, which
+                // this code does not depend on.
                 unsafe {
                     SetConsoleOutputCP(65001);
                     SetConsoleCP(65001);

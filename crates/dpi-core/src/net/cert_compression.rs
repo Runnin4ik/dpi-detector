@@ -170,10 +170,16 @@ fn frame_window_size(frame: &[u8]) -> Option<u64> {
         return Some(value);
     }
 
-    let descriptor = *frame.get(at)?;
-    let window_log = 10 + (descriptor >> 3) as u32;
+    // RFC 8878 §3.1.1.1.2: with `single_segment` clear the Window_Descriptor
+    // is the byte right after the frame header descriptor — it comes *before*
+    // the dictionary id, not after it. Reading it at `at` (which is past the
+    // dictionary id) read a dictionary or content-size byte instead, so a frame
+    // that declares one got a window computed from the wrong byte: the cap the
+    // caller applies was then measured against a number that was not the window.
+    let window = *frame.get(5)?;
+    let window_log = 10 + (window >> 3) as u32;
     let base = 1u64 << window_log;
-    let add = (base / 8) * u64::from(descriptor & 7);
+    let add = (base / 8) * u64::from(window & 7);
     Some(base + add)
 }
 
@@ -388,6 +394,12 @@ mod tests {
 
         let mut out = vec![0u8; 64];
         assert!(ZSTD.decompress(&frame, &mut out).is_err());
+
+        // The same declared window behind a 4-byte dictionary id (0x03): the
+        // descriptor byte is still at 5, so the cap still sees 1 GiB.
+        let with_id = [0x28, 0xb5, 0x2f, 0xfd, 0x03, 0xa0, 0x01, 0x02, 0x03, 0x04];
+        assert!(frame_window_size(&with_id).expect("a readable header") > MAX_ZSTD_WINDOW);
+        assert_eq!(frame_window_size(&with_id), Some(1 << 30));
     }
 
     /// The window a frame declares is read from its header alone, in both forms
@@ -400,6 +412,14 @@ mod tests {
         assert_eq!(frame_window_size(&[0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x00]), Some(1024));
         assert_eq!(frame_window_size(&[0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x08]), Some(2048));
         assert_eq!(frame_window_size(&[0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x09]), Some(2304));
+        // Frame_Header_Descriptor 0x03: no content size, not a single segment, a
+        // 4-byte dictionary id. The window descriptor is still the byte at 5 and
+        // the id runs 6..10 — reading the window past the id (the mistake this
+        // pins) would take 0x04 here and report 1024.
+        assert_eq!(
+            frame_window_size(&[0x28, 0xb5, 0x2f, 0xfd, 0x03, 0x40, 0x01, 0x02, 0x03, 0x04]),
+            Some(1 << 18)
+        );
         // 0x60: a single segment with a 2-byte content size, which is the window.
         assert_eq!(frame_window_size(ZSTD_FRAME), Some(64 * 1024));
         // Not a frame at all: wrong magic, a reserved bit, or a header that does

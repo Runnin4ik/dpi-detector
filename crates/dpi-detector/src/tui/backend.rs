@@ -111,7 +111,7 @@ const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
 #[cfg(windows)]
 #[allow(
     unsafe_code,
-    reason = "Win32 console FFI (GetStdHandle/GetConsoleScreenBufferInfo/SetConsoleTextAttribute/WriteConsoleW): the handle is checked against 0 and -1 before any call, the out-parameter `info` and the `written` counter are live locals, and `utf16` is a local Vec that outlives the write. The block writes to this process's own stdout and reads nothing back."
+    reason = "Win32 console FFI — the ANSI-to-console translation for legacy consoles (Windows 7/8). Each block carries its own SAFETY note."
 )]
 fn write_win32_ansi(s: &str) {
     extern "system" {
@@ -130,6 +130,9 @@ fn write_win32_ansi(s: &str) {
         ) -> i32;
     }
 
+    // SAFETY: `STD_OUTPUT_HANDLE` is a constant pseudo-handle, not a pointer,
+    // and the call takes no out-parameter. A 0 or -1 return is checked below
+    // before the handle is used.
     let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
     if handle == 0 || handle == -1 {
         let _ = std::io::stdout().write_all(s.as_bytes());
@@ -139,6 +142,9 @@ fn write_win32_ansi(s: &str) {
     static DEFAULT_ATTR: OnceLock<u16> = OnceLock::new();
     let default_attr = *DEFAULT_ATTR.get_or_init(|| {
         let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+        // SAFETY: `info` is a live local the call fills, and the handle was
+        // checked against 0 and -1 before this point. A failure leaves `info` at
+        // its `Default` (all zeroes), which the `!= 0` test discards.
         if unsafe { GetConsoleScreenBufferInfo(handle, &mut info) } != 0 {
             info.attributes
         } else {
@@ -161,6 +167,9 @@ fn write_win32_ansi(s: &str) {
             if i < len && bytes[i] == b'm' {
                 let code_str = std::str::from_utf8(&bytes[start + 2..i]).unwrap_or("");
                 cur_attr = apply_ansi_code(code_str, cur_attr, default_attr);
+                // SAFETY: the attribute word is the live local `cur_attr`,
+                // produced by `apply_ansi_code` from a parsed SGR code, and the
+                // handle was checked before use.
                 unsafe { SetConsoleTextAttribute(handle, cur_attr) };
                 i += 1;
                 continue;
@@ -177,6 +186,10 @@ fn write_win32_ansi(s: &str) {
         let chunk = &s[start..i];
         let utf16: Vec<u16> = chunk.encode_utf16().collect();
         let mut written = 0;
+        // SAFETY: `utf16` is a live local `Vec<u16>` that outlives the call and
+        // `written` a live `u32`; the reserved pointer is null as the API
+        // requires. The call writes to this process's own stdout and reads
+        // nothing back.
         unsafe {
             WriteConsoleW(
                 handle,
@@ -216,7 +229,7 @@ pub(crate) fn frame_home(drawn: u16) {
 #[cfg(windows)]
 #[allow(
     unsafe_code,
-    reason = "Win32 console FFI (GetStdHandle/GetConsoleScreenBufferInfo/SetConsoleCursorPosition): the handle is checked against 0 and -1 first, and `info` is a live local the call fills. The cursor row is clamped to the buffer, so the coordinates handed back are inside it."
+    reason = "Win32 console FFI — the cursor move a repaint needs on legacy consoles. Each block carries its own SAFETY note."
 )]
 fn win32_frame_home(drawn: u16) {
     extern "system" {
@@ -227,15 +240,21 @@ fn win32_frame_home(drawn: u16) {
         ) -> i32;
         fn SetConsoleCursorPosition(hConsoleOutput: isize, dwCursorPosition: COORD) -> i32;
     }
+    // SAFETY: the same constant pseudo-handle as in `write_win32_ansi`, checked
+    // against 0 and -1 before use.
     let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
     if handle == 0 || handle == -1 {
         return;
     }
     let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+    // SAFETY: `info` is a live local the call fills; a failure leaves it at its
+    // `Default`, which the `!= 0` test discards, so the move is skipped.
     if unsafe { GetConsoleScreenBufferInfo(handle, &mut info) } != 0 {
         // Buffer coordinates, clamped: an escape would wrap past the top row of
         // the screen buffer and come back up from the bottom.
         let row = (info.cursor_pos.y as i32 - drawn as i32).max(0) as i16;
+        // SAFETY: `COORD` is a plain `#[repr(C)]` pair of `i16` built on the
+        // stack, and `row` was clamped to the buffer above.
         unsafe { SetConsoleCursorPosition(handle, COORD { x: 0, y: row }) };
     }
 }

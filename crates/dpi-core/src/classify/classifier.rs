@@ -79,7 +79,7 @@ pub fn classify_ssl_error(
 ) -> (DpiStatus, Detail) {
     let msg = err_msg.to_ascii_lowercase();
 
-    if msg.contains("pop from an empty deque") || msg.contains("brokenresourceerror") {
+    if msg.contains("brokenresourceerror") {
         return (DpiStatus::TlsRst, Detail::RstHello);
     }
 

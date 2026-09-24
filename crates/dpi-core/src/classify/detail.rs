@@ -379,7 +379,14 @@ impl Serialize for Detail {
     }
 }
 
-/// Details are read back from `--json` for round-trips in tests and tooling.
+/// Required by [`ProbeMetrics`](crate::classify::types::ProbeMetrics), which
+/// derives `Deserialize`; nothing in this tree reads one back.
+///
+/// A detail that comes back is [`Detail::Other`] carrying the code, so the
+/// machine contract survives a round trip — `code()` of what is read equals
+/// `code()` of what was written, for every variant — while the variant itself
+/// does not. Reconstructing the variants here would be a second table to keep in
+/// step with [`Detail::code`], and one table is the point of having codes.
 impl<'de> Deserialize<'de> for Detail {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(deserializer)?;

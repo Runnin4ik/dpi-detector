@@ -73,8 +73,12 @@ fn cache_get(host: &str, now: Instant) -> Option<Vec<IpAddr>> {
 fn cache_put(host: &str, ips: &[IpAddr], now: Instant) {
     let mut cache = PIN_CACHE.lock();
     if cache.len() >= PIN_CACHE_MAX && !cache.contains_key(host) {
-        if let Some(evict) = cache.keys().next().cloned() {
-            cache.remove(&evict);
+        // A `HashMap` iterates in an order SipHash randomises, so `keys().next()`
+        // dropped an arbitrary entry while this comment promised the oldest one.
+        // The stamp is already in the value, and the cache is 256 entries, so the
+        // oldest is one scan away — and this runs once per miss at capacity.
+        if let Some(oldest) = cache.iter().min_by_key(|(_, (at, _))| *at).map(|(k, _)| k.clone()) {
+            cache.remove(&oldest);
         }
     }
     cache.insert(host.to_string(), (now, ips.to_vec()));

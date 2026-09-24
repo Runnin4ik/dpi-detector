@@ -368,7 +368,14 @@ fn header_case_map(req: &HttpRequest<'_>) -> HeaderCaseMap {
 /// The headers RFC 7540 §8.1.2.2 forbids on an HTTP/2 request: sending one is a
 /// protocol error, and `keep-alive` semantics are implied by the connection.
 fn is_connection_specific(name: &str) -> bool {
-    const FORBIDDEN: [&str; 5] = ["connection", "host", "keep-alive", "transfer-encoding", "upgrade"];
+    const FORBIDDEN: [&str; 6] = [
+        "connection",
+        "proxy-connection",
+        "host",
+        "keep-alive",
+        "transfer-encoding",
+        "upgrade",
+    ];
     FORBIDDEN.iter().any(|forbidden| name.eq_ignore_ascii_case(forbidden))
 }
 

@@ -259,7 +259,7 @@ pub(crate) fn warn_unknown_axis(msg: &Messages, args: &CliArgs, flag: &str, valu
     }
     eprintln!(
         "{}",
-        msg.warn_unknown_burst_axis
+        msg.warn_unknown_flag_value
             .replacen("{}", flag, 1)
             .replacen("{}", value, 1)
             .replacen("{}", fallback, 1)

@@ -271,7 +271,7 @@ pub(crate) struct Messages {
     /// about to run and the size of the default set.
     pub warn_burst_budget: &'static str,
     pub warn_unknown_fingerprint: &'static str,
-    pub warn_unknown_burst_axis: &'static str,
+    pub warn_unknown_flag_value: &'static str,
     pub press_enter_to_exit: &'static str,
     pub invalid_proxy_err: &'static str,
     pub dns_servers_empty_skip: &'static str,
@@ -314,9 +314,12 @@ pub(crate) struct Messages {
     pub cli_trace: &'static str,
     /// Shown when the `--trace` path cannot be opened; `{}` is `<path>: <error>`.
     pub trace_open_failed: &'static str,
-    /// Fatal: the list `--domains` named cannot be read. `{}` is
-    /// `<path>: <error>`; the run stops, because a run with no targets would
-    /// report an empty table as if it were a result.
+    /// Fatal: a target list the operator named cannot be built. `{}` is the
+    /// reason — `<path>: <error>` for a file, or `domains_list_empty`'s
+    /// parenthetical for a list that parsed to nothing — and it names the
+    /// source (`<path>` or `-d`) itself, so this sentence names no flag: it
+    /// serves both. The run stops, because a run with no targets would report
+    /// an empty table as if it were a result.
     pub domains_load_failed: &'static str,
     /// The reason `domains_load_failed` prints when the list the operator named
     /// holds nothing to probe: `{}` is the source (`<path>` or `-d`), and the
