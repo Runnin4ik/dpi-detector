@@ -79,10 +79,6 @@ pub fn classify_ssl_error(
 ) -> (DpiStatus, Detail) {
     let msg = err_msg.to_ascii_lowercase();
 
-    if msg.contains("brokenresourceerror") {
-        return (DpiStatus::TlsRst, Detail::RstHello);
-    }
-
     if msg.contains("wrong version number") || msg.contains("wrong_version_number") {
         return (DpiStatus::TlsSpoof, Detail::WrongVersion);
     }
