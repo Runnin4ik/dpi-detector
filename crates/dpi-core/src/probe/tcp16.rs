@@ -20,7 +20,7 @@ use tokio_rustls::TlsConnector;
 
 use crate::classify::{
     classify_connect_error_full, classify_connect_error_icmp, classify_read_error, Detail,
-    DpiStatus, ProbeMetrics,
+    DpiStatus, ProbeMetrics, ProbeStage,
 };
 use crate::config::AppConfig;
 use crate::net::fingerprint::http_identity;
@@ -99,7 +99,7 @@ async fn connect_fat_target(
     use_tls: bool,
     cfg: &AppConfig,
 ) -> Result<HttpSender, (DpiStatus, Detail)> {
-    let connect_stage = "tcp_connect";
+    let connect_stage = ProbeStage::TcpConnect;
     let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.fat_connect_timeout)).await {
         Ok(s) => s,
         Err(DialError::Io { error, icmp }) => {
@@ -130,7 +130,7 @@ async fn connect_fat_target(
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
                 let msg = e.to_string();
-                let (s, d) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tls_handshake");
+                let (s, d) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, ProbeStage::TlsHandshake);
                 return Err((s, d));
             }
             Err(_) => {
@@ -143,7 +143,7 @@ async fn connect_fat_target(
             Ok(sender) => Ok(sender),
             Err(e) => {
                 let (msg, os_code, os_kind) = hyper_err_info(&e);
-                let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, "tls_connected");
+                let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, ProbeStage::TlsConnected);
                 Err((s, d))
             }
         }
@@ -154,7 +154,7 @@ async fn connect_fat_target(
             Ok(sender) => Ok(sender),
             Err(e) => {
                 let (msg, os_code, os_kind) = hyper_err_info(&e);
-                let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, "tcp_connect");
+                let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, ProbeStage::TcpConnect);
                 Err((s, d))
             }
         }

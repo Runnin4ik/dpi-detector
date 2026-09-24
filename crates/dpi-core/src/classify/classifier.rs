@@ -2,7 +2,7 @@ use std::io;
 use super::alert;
 use super::detail::{AlertKind, Detail};
 use super::stack;
-use super::types::{ConnectionStage, DpiStatus, IcmpCode};
+use super::types::{ConnectionStage, DpiStatus, IcmpCode, ProbeStage};
 
 fn short_detail(msg: &str) -> String {
     let mut s: String = msg.chars().take(40).collect();
@@ -183,69 +183,84 @@ fn dns_failure_text(msg: &str) -> bool {
 /// lost the `sending_data` / `reading_data` arms, so the same condition was
 /// reported as a bare `Timeout` on one path and as `SendTimeout`/`ReadTimeout`
 /// on the other.
-fn timeout_at_stage(stage: &str, bytes_read: usize) -> (DpiStatus, Detail) {
+///
+/// The stage is a [`ProbeStage`] and not a string because this match is where
+/// the two vocabularies disagreed: `tls_connected` had an arm in the reset path
+/// and none here, so a handshake that completed and then went quiet fell to the
+/// wildcard, which read a stage name that the vocabulary did not have. As a type
+/// every stage is now answered once.
+fn timeout_at_stage(stage: ProbeStage, bytes_read: usize) -> (DpiStatus, Detail) {
     // The data phases carry the offset with them: `READ TIMEOUT at N KB` is the
     // same sentence in every test, and a read that never got a byte says `at 0KB`
     // instead of switching to a second wording for the same thing.
     let kb = bytes_read as f64 / 1024.0;
     match stage {
-        "tls_handshake" => (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout),
-        "tcp_connect" => (DpiStatus::SynDropped, Detail::TcpSynTimeout),
-        "sending_data" => (
+        ProbeStage::TlsHandshake => (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout),
+        ProbeStage::TcpConnect => (DpiStatus::SynDropped, Detail::TcpSynTimeout),
+        ProbeStage::SendingData => (
             DpiStatus::SendTimeout,
             Detail::at_kb(Detail::WriteTimeoutWord, kb),
         ),
-        "reading_data" => (
+        ProbeStage::ReadingData => (
             DpiStatus::ReadTimeout,
             Detail::at_kb(Detail::ReadTimeoutWordCaps, kb),
         ),
-        _ => (DpiStatus::Timeout, Detail::TimeoutStage { stage: stage.to_string() }),
+        // The handshake is done and the answer never came. Nothing short of a
+        // reset or an alert says which side went quiet, so this keeps the bare
+        // `TIMEOUT` badge and names the stage only in the detail — the same
+        // `timeout_tls_connected` token the wildcard arm emitted before this
+        // arm existed, which `--json` must keep reading.
+        ProbeStage::TlsConnected => (
+            DpiStatus::Timeout,
+            Detail::TimeoutStage { stage: stage.as_str().to_string() },
+        ),
     }
 }
 
-/// The errno values of the unreachable family, taken from the platform.
-///
-/// These are the only two the classifier needs as numbers. Refused, reset,
-/// aborted and timed out all arrive as their own stable `ErrorKind` on every
-/// platform, but `io::ErrorKind::HostUnreachable`/`NetworkUnreachable` are
-/// behind `io_error_more`, so these two rested on the message text — and a
-/// wording the check does not spell falls through to `os_err`.
-///
-/// The numbers are not portable and must not be written down by hand: Linux
-/// keeps its own table for MIPS (148/128), SPARC (65/51), PA-RISC (242/229) and
-/// Alpha, while the rest of the architectures share the generic one (113/101);
-/// macOS has its own (65/51). `libc` knows the target's table, so the Unix side
-/// asks it. Windows is the exception: a socket error there is a `WSA*` code,
-/// which `libc` does not carry — it has the CRT's `errno` values (110/118),
-/// a different number space — so those two stay written out.
-#[cfg(windows)]
-const NET_UNREACH: i32 = 10051; // WSAENETUNREACH
-#[cfg(not(windows))]
-const NET_UNREACH: i32 = libc::ENETUNREACH;
-#[cfg(windows)]
-const HOST_UNREACH: i32 = 10065; // WSAEHOSTUNREACH
-#[cfg(not(windows))]
-const HOST_UNREACH: i32 = libc::EHOSTUNREACH;
-#[cfg(windows)]
-const NET_DOWN: i32 = 10050; // WSAENETDOWN
-#[cfg(not(windows))]
-const NET_DOWN: i32 = libc::ENETDOWN;
-#[cfg(windows)]
-const HOST_DOWN: i32 = 10064; // WSAEHOSTDOWN
-#[cfg(not(windows))]
-const HOST_DOWN: i32 = libc::EHOSTDOWN;
+// The errno values of the unreachable family, taken from the platform.
+//
+// These are the only two the classifier needs as numbers. Refused, reset,
+// aborted and timed out all arrive as their own stable `ErrorKind` on every
+// platform, but `io::ErrorKind::HostUnreachable`/`NetworkUnreachable` are
+// behind `io_error_more`, so these two rested on the message text — and a
+// wording the check does not spell falls through to `os_err`.
+//
+// The numbers are not portable and must not be written down by hand: Linux
+// keeps its own table for MIPS (148/128), SPARC (65/51), PA-RISC (242/229) and
+// Alpha, while the rest of the architectures share the generic one (113/101);
+// macOS has its own (65/51). `libc` knows the target's table, so the Unix side
+// asks it. Windows is the exception: a socket error there is a `WSA*` code,
+// which `libc` does not carry — it has the CRT's `errno` values (110/118),
+// a different number space — so those two stay written out. The four are one
+// `cfg_select!` block and not four attribute pairs, because the two halves are
+// the same four constants and a half-migrated pair is what a reader cannot see:
+// `cfg_select!` takes no doc comment, hence the plain `//` above.
+cfg_select! {
+    windows => {
+        const NET_UNREACH: i32 = 10051; // WSAENETUNREACH
+        const HOST_UNREACH: i32 = 10065; // WSAEHOSTUNREACH
+        const NET_DOWN: i32 = 10050; // WSAENETDOWN
+        const HOST_DOWN: i32 = 10064; // WSAEHOSTDOWN
+    }
+    _ => {
+        const NET_UNREACH: i32 = libc::ENETUNREACH;
+        const HOST_UNREACH: i32 = libc::EHOSTUNREACH;
+        const NET_DOWN: i32 = libc::ENETDOWN;
+        const HOST_DOWN: i32 = libc::EHOSTDOWN;
+    }
+}
 
 /// Classifies a TCP connection error: pool exhaustion, timeouts, DNS failures,
 /// TLS alerts surfacing inside connect errors, refusals, resets, aborts and
 /// unreachable hosts/routes.
-/// `stage` is one of "tcp_connect", "tls_handshake", "tls_connected",
-/// "sending_data", "reading_data" and picks the stage-specific verdict.
+/// `stage` is where the connection was when it failed (see [`ProbeStage`]) and
+/// picks the stage-specific verdict.
 pub fn classify_connect_error_full(
     err_msg: &str,
     raw_os_error: Option<i32>,
     kind: Option<io::ErrorKind>,
     bytes_read: usize,
-    stage: &str,
+    stage: ProbeStage,
 ) -> (DpiStatus, Detail) {
     let full = err_msg.to_ascii_lowercase();
 
@@ -305,9 +320,11 @@ pub fn classify_connect_error_full(
         || full.contains("brokenpipe");
     if reset {
         return match stage {
-            "tls_handshake" => (DpiStatus::TlsRst, Detail::RstHello),
-            "tls_connected" => (DpiStatus::TlsRst, Detail::RstAfterHandshake),
-            _ => (DpiStatus::TcpRst, Detail::ConnReset),
+            ProbeStage::TlsHandshake => (DpiStatus::TlsRst, Detail::RstHello),
+            ProbeStage::TlsConnected => (DpiStatus::TlsRst, Detail::RstAfterHandshake),
+            ProbeStage::TcpConnect | ProbeStage::SendingData | ProbeStage::ReadingData => {
+                (DpiStatus::TcpRst, Detail::ConnReset)
+            }
         };
     }
 
@@ -317,10 +334,12 @@ pub fn classify_connect_error_full(
         || full.contains("software caused connection abort");
     if aborted {
         return match stage {
-            "tls_handshake" | "tls_connected" => {
+            ProbeStage::TlsHandshake | ProbeStage::TlsConnected => {
                 (DpiStatus::TlsAbort, Detail::Aborted)
             }
-            _ => (DpiStatus::TcpAbort, Detail::TcpAborted),
+            ProbeStage::TcpConnect | ProbeStage::SendingData | ProbeStage::ReadingData => {
+                (DpiStatus::TcpAbort, Detail::TcpAborted)
+            }
         };
     }
 
@@ -341,12 +360,15 @@ pub fn classify_connect_error_full(
         || full.contains("early eof")
         || full.contains("premature eof")
     {
-        if bytes_read == 0 && stage == "tls_handshake" {
+        if bytes_read == 0 && stage == ProbeStage::TlsHandshake {
             return (DpiStatus::TlsRst, Detail::RstHello);
         }
         return match stage {
-            "tls_handshake" => (DpiStatus::TlsEof, Detail::HandshakeEof),
-            _ => (DpiStatus::TlsEof, Detail::TransferEof),
+            ProbeStage::TlsHandshake => (DpiStatus::TlsEof, Detail::HandshakeEof),
+            ProbeStage::TcpConnect
+            | ProbeStage::TlsConnected
+            | ProbeStage::SendingData
+            | ProbeStage::ReadingData => (DpiStatus::TlsEof, Detail::TransferEof),
         };
     }
 
@@ -376,7 +398,7 @@ pub fn classify_connect_error_icmp(
     err: &io::Error,
     icmp: Option<IcmpCode>,
     bytes_read: usize,
-    stage: &str,
+    stage: ProbeStage,
 ) -> (DpiStatus, Detail) {
     let (status, detail) = classify_connect_error_full(
         &err.to_string(),
@@ -404,7 +426,7 @@ pub fn classify_connect_error(err: Option<&io::Error>, is_timeout: bool) -> (Dpi
     match err {
         Some(e) => {
             let msg = e.to_string();
-            classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tcp_connect")
+            classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, ProbeStage::TcpConnect)
         }
         None => (DpiStatus::Unknown, Detail::UnknownConnectionFailure),
     }
@@ -428,18 +450,20 @@ pub fn classify_tls_error(
         return (DpiStatus::Timeout, Detail::TimeoutConn);
     }
 
+    // The tracker counts bytes between its own six stages; this is where they
+    // are read as failure sites. A handshake that is done and a payload that has
+    // started are the same place for the classifier — `tls_connected` — which is
+    // the stage the timeout path used to miss.
     let stage_name = if is_tls_stage(stage) || stage == ConnectionStage::TcpConnected {
-        if stage == ConnectionStage::TcpConnected {
-            "tls_handshake"
-        } else if stage == ConnectionStage::TlsHandshakeDone {
-            "tls_connected"
+        if stage == ConnectionStage::TlsHandshakeDone {
+            ProbeStage::TlsConnected
         } else {
-            "tls_handshake"
+            ProbeStage::TlsHandshake
         }
     } else if stage == ConnectionStage::HttpPayload {
-        "tls_connected"
+        ProbeStage::TlsConnected
     } else {
-        "tcp_connect"
+        ProbeStage::TcpConnect
     };
 
     // First try SSL-specific classification for alert/cert/spoof texts
@@ -483,7 +507,7 @@ pub fn classify_tls_error(
 }
 
 /// Classifies an HTTP-layer read failure, i.e. one raised while reading the
-/// response body ("reading_data"). `raw_os_error`/`kind` come from the `io::Error`
+/// response body ([`ProbeStage::ReadingData`]). `raw_os_error`/`kind` come from the `io::Error`
 /// at the end of the hyper error chain: Windows localizes that message
 /// ("Удаленный хост принудительно разорвал существующее подключение" is
 /// WSAECONNRESET), so the numeric code is the signal classification can trust.
@@ -494,7 +518,7 @@ pub fn classify_read_error(
     bytes_read: usize,
 ) -> (DpiStatus, Detail) {
     let (status, detail) =
-        classify_connect_error_full(err_msg, raw_os_error, kind, bytes_read, "reading_data");
+        classify_connect_error_full(err_msg, raw_os_error, kind, bytes_read, ProbeStage::ReadingData);
     if status == DpiStatus::Unknown {
         return (DpiStatus::Unknown, unclassified_detail(&err_msg.to_ascii_lowercase(), err_msg));
     }
@@ -533,7 +557,7 @@ mod tests {
             None,
             None,
             0,
-            "tls_handshake",
+            ProbeStage::TlsHandshake,
         );
         assert_eq!(s, DpiStatus::TlsAlert);
         assert_eq!(d, Detail::Alert(AlertKind::InternalError));
@@ -543,7 +567,7 @@ mod tests {
             None,
             None,
             0,
-            "reading_data",
+            ProbeStage::ReadingData,
         );
         assert_eq!(s, DpiStatus::TlsEof);
         assert_eq!(d, Detail::TransferEof);
@@ -555,7 +579,7 @@ mod tests {
             None,
             None,
             0,
-            "tls_handshake",
+            ProbeStage::TlsHandshake,
         );
         assert_eq!(s, DpiStatus::TlsRst);
         assert_eq!(d, Detail::RstHello);
@@ -568,7 +592,7 @@ mod tests {
             None,
             None,
             0,
-            "tls_handshake",
+            ProbeStage::TlsHandshake,
         );
         assert_eq!(s, DpiStatus::NoCa);
     }
@@ -661,7 +685,7 @@ mod tests {
             None,
             None,
             0,
-            "tls_handshake",
+            ProbeStage::TlsHandshake,
         );
         assert_eq!((s, d.code().as_ref()), (DpiStatus::TlsAlert, "alert_bad_certificate"));
 
@@ -732,7 +756,7 @@ mod tests {
             Some(104),
             None,
             0,
-            "tls_handshake",
+            ProbeStage::TlsHandshake,
         );
         assert_eq!(s, DpiStatus::TlsRst);
 
@@ -741,7 +765,7 @@ mod tests {
             Some(104),
             None,
             0,
-            "tcp_connect",
+            ProbeStage::TcpConnect,
         );
         assert_eq!(s, DpiStatus::TcpRst);
     }
@@ -758,7 +782,7 @@ mod tests {
             Some(10060),
             None,
             0,
-            "reading_data",
+            ProbeStage::ReadingData,
         );
         assert_eq!(s, DpiStatus::ReadTimeout);
 
@@ -767,7 +791,7 @@ mod tests {
             Some(110),
             Some(io::ErrorKind::TimedOut),
             0,
-            "sending_data",
+            ProbeStage::SendingData,
         );
         assert_eq!(s, DpiStatus::SendTimeout);
 
@@ -776,9 +800,27 @@ mod tests {
             Some(10060),
             None,
             0,
-            "tls_handshake",
+            ProbeStage::TlsHandshake,
         );
         assert_eq!(s, DpiStatus::TlsDropped);
+    }
+
+    /// The fifth stage the classifier names. `tls_connected` had an arm in the
+    /// reset path and none in the timeout path, so a handshake that completed
+    /// and then went quiet fell through the wildcard and lost its stage. The
+    /// badge stays the bare `TIMEOUT` — a timeout says nothing about which side
+    /// went quiet — and the detail keeps the token the wildcard already emitted,
+    /// which `--json` reads as `timeout_tls_connected`.
+    #[test]
+    fn a_timeout_after_the_handshake_names_its_stage() {
+        for (msg, os_code, kind) in [
+            ("connect timed out", None, None),
+            ("connection error", Some(10060), Some(io::ErrorKind::TimedOut)),
+        ] {
+            let (s, d) = classify_connect_error_full(msg, os_code, kind, 0, ProbeStage::TlsConnected);
+            assert_eq!(s, DpiStatus::Timeout, "{msg}");
+            assert_eq!(d.code().as_ref(), "timeout_tls_connected", "{msg}");
+        }
     }
 
     #[test]
@@ -788,7 +830,7 @@ mod tests {
             None,
             None,
             0,
-            "tcp_connect",
+            ProbeStage::TcpConnect,
         );
         assert_eq!(s, DpiStatus::DnsFail);
     }
@@ -798,9 +840,9 @@ mod tests {
     /// reach the status instead of falling through to `OsErr`.
     #[test]
     fn unreachable_errnos_classify_without_a_message() {
-        let (s, d) = classify_connect_error_full("", Some(NET_UNREACH), None, 0, "tcp_connect");
+        let (s, d) = classify_connect_error_full("", Some(NET_UNREACH), None, 0, ProbeStage::TcpConnect);
         assert_eq!((s, d), (DpiStatus::NetUnreach, Detail::NetUnreach));
-        let (s, d) = classify_connect_error_full("", Some(HOST_UNREACH), None, 0, "tcp_connect");
+        let (s, d) = classify_connect_error_full("", Some(HOST_UNREACH), None, 0, ProbeStage::TcpConnect);
         assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach));
     }
 
@@ -809,11 +851,11 @@ mod tests {
     /// reading it as an anonymous OS error hides the one thing a reader needs.
     #[test]
     fn down_and_unreachable_share_a_status() {
-        let (s, d) = classify_connect_error_full("", Some(NET_DOWN), None, 0, "tcp_connect");
+        let (s, d) = classify_connect_error_full("", Some(NET_DOWN), None, 0, ProbeStage::TcpConnect);
         assert_eq!((s, d), (DpiStatus::NetUnreach, Detail::NetUnreach));
-        let (s, d) = classify_connect_error_full("", Some(HOST_DOWN), None, 0, "tcp_connect");
+        let (s, d) = classify_connect_error_full("", Some(HOST_DOWN), None, 0, ProbeStage::TcpConnect);
         assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach));
-        let (s, _) = classify_connect_error_full("Network is down (os error 100)", None, None, 0, "tcp_connect");
+        let (s, _) = classify_connect_error_full("Network is down (os error 100)", None, None, 0, ProbeStage::TcpConnect);
         assert_eq!(s, DpiStatus::NetUnreach);
     }
 
@@ -825,14 +867,14 @@ mod tests {
         let err = io::Error::from_raw_os_error(HOST_UNREACH);
 
         let (s, d) =
-            classify_connect_error_icmp(&err, Some(IcmpCode::ADMIN_PROHIBITED), 0, "tcp_connect");
+            classify_connect_error_icmp(&err, Some(IcmpCode::ADMIN_PROHIBITED), 0, ProbeStage::TcpConnect);
         assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::IcmpAdminProhibited));
 
         let host_unreachable = IcmpCode { icmp_type: 3, icmp_code: 1 };
-        let (s, d) = classify_connect_error_icmp(&err, Some(host_unreachable), 0, "tcp_connect");
+        let (s, d) = classify_connect_error_icmp(&err, Some(host_unreachable), 0, ProbeStage::TcpConnect);
         assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach));
 
-        let (s, d) = classify_connect_error_icmp(&err, None, 0, "tcp_connect");
+        let (s, d) = classify_connect_error_icmp(&err, None, 0, ProbeStage::TcpConnect);
         assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach));
     }
 
@@ -842,7 +884,7 @@ mod tests {
     fn a_queued_message_does_not_override_another_verdict() {
         let err = io::Error::from_raw_os_error(104);
         let (s, d) =
-            classify_connect_error_icmp(&err, Some(IcmpCode::ADMIN_PROHIBITED), 0, "tcp_connect");
+            classify_connect_error_icmp(&err, Some(IcmpCode::ADMIN_PROHIBITED), 0, ProbeStage::TcpConnect);
         assert_eq!((s, d), (DpiStatus::TcpRst, Detail::ConnReset));
     }
 
@@ -854,9 +896,9 @@ mod tests {
     fn the_mips_table_is_the_one_the_routers_use() {
         assert_eq!(libc::EHOSTUNREACH, 148);
         assert_eq!(libc::ENETUNREACH, 128);
-        let (s, _) = classify_connect_error_full("", Some(148), None, 0, "tcp_connect");
+        let (s, _) = classify_connect_error_full("", Some(148), None, 0, ProbeStage::TcpConnect);
         assert_eq!(s, DpiStatus::HostUnreach);
-        let (s, _) = classify_connect_error_full("", Some(128), None, 0, "tcp_connect");
+        let (s, _) = classify_connect_error_full("", Some(128), None, 0, ProbeStage::TcpConnect);
         assert_eq!(s, DpiStatus::NetUnreach);
     }
 }

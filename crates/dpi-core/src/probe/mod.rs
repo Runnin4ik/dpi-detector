@@ -18,5 +18,5 @@ pub mod whitelist;
 pub mod http;
 pub use burst::{burst_targets, BurstAttempt, BurstProfileReport, BurstReport, BurstSettings, BurstTarget};
 pub use tcp16::{check_tcp_16_20, probe_tcp16};
-pub use telegram::{probe_telegram_all_dcs, probe_telegram_dc, run_download, run_telegram_full, run_telegram_test, run_upload, TelegramDcResult, TelegramFullReport, TelegramReport, TransferStats};
+pub use telegram::{probe_telegram_all_dcs, probe_telegram_dc, run_download, run_telegram_full, run_telegram_test, run_upload, TelegramDcResult, TelegramFullReport, TelegramReport, TransferStats, TransferStatus};
 pub use whitelist::{run_whitelist_sni, AsRow, AsVerdict, WhitelistReport};

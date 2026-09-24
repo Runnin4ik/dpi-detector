@@ -2,6 +2,19 @@ use serde::{Deserialize, Serialize};
 
 use super::detail::Detail;
 
+/// Where a live probe connection has got to, as the byte-counting tracker walks
+/// it: a position in a connection that is still open.
+///
+/// This is NOT the vocabulary a failure is classified with — [`ProbeStage`] is,
+/// and the two deliberately do not share a representation. Three of this enum's
+/// tokens spell the neighbouring place differently (`tcp_connected` vs
+/// `tcp_connect`, `tls_handshake_done` vs `tls_connected`/`tls_handshake`,
+/// `http_payload` vs `sending_data`/`reading_data`), because they answer
+/// different questions: this one is "how far did it get", the other is "which
+/// question is the classifier answering". It is also serialized (it is
+/// `ProbeMetrics::stage`), so it is a representation and not an internal
+/// detail; merging the two would put the classifier's arms over stages that are
+/// not failure sites, and each type names the other here instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionStage {
@@ -23,6 +36,67 @@ impl ConnectionStage {
             Self::TlsClientHelloSent => "tls_client_hello_sent",
             Self::TlsHandshakeDone => "tls_handshake_done",
             Self::HttpPayload => "http_payload",
+        }
+    }
+}
+
+/// Where a connection was when it failed, as the classifier asks it.
+///
+/// This is the stage
+/// [`classify_connect_error_full`](crate::classify::classifier::classify_connect_error_full)
+/// decides its verdict with: the failure is read at the place it happened, so a
+/// reset inside the handshake and the same reset after it are different
+/// verdicts, and a timeout at `sending_data` says which half of the transfer
+/// stalled. It is not [`ConnectionStage`] — that one is a live position the
+/// tracker counts bytes between, and it spells three of the same places
+/// differently; the classifier never sees a byte count, only the failure. A
+/// `&str` here was the defect: the vocabulary lived in doc comments and
+/// hand-written literals, so `tls_connected` could be handled on the reset path
+/// and silently missed on the timeout path.
+///
+/// `as_str()` is the token `--json` carries: `Detail::TimeoutStage` composes its
+/// code out of it (`timeout_tls_connected`), so these five strings are frozen
+/// exactly like a status token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeStage {
+    /// The TCP connect itself: a SYN that was never answered.
+    TcpConnect,
+    /// Inside the handshake, up to and including the ClientHello exchange.
+    TlsHandshake,
+    /// The handshake is done and the request — or its answer — never came.
+    TlsConnected,
+    /// The request is on the wire and the peer stopped reading.
+    SendingData,
+    /// The answer is being read and the peer stopped writing.
+    ReadingData,
+}
+
+impl ProbeStage {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::TcpConnect => "tcp_connect",
+            Self::TlsHandshake => "tls_handshake",
+            Self::TlsConnected => "tls_connected",
+            Self::SendingData => "sending_data",
+            Self::ReadingData => "reading_data",
+        }
+    }
+
+    /// The stage a `DnsError::ConnectFault` names, for the resolver sessions
+    /// that report their own progress words.
+    ///
+    /// `dns::types::DnsError` carries a third vocabulary of its own —
+    /// `resolve`, `tcp_connect`, `tls_handshake`, `connected` — and only the
+    /// words that name the same place map over; `resolve` is the caller's own
+    /// case (it is a DNS verdict, not a transport one). `None` is a word this
+    /// enum does not have, which the caller must answer for itself: guessing a
+    /// stage here is what a wildcard arm would do.
+    pub fn of_fault_stage(stage: &str) -> Option<Self> {
+        match stage {
+            "connected" => Some(Self::TlsConnected),
+            "tcp_connect" => Some(Self::TcpConnect),
+            "tls_handshake" => Some(Self::TlsHandshake),
+            _ => None,
         }
     }
 }
@@ -285,6 +359,38 @@ impl Default for ProbeMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The five stage tokens are wire-visible: `Detail::TimeoutStage` composes
+    /// its `--json` code out of one of them (`timeout_tls_connected`), so a
+    /// rename here silently renames a machine channel. Pinned one by one — the
+    /// enum cannot be iterated, and a rename is exactly what this catches.
+    #[test]
+    fn the_probe_stage_tokens_are_the_frozen_ones() {
+        for (stage, token) in [
+            (ProbeStage::TcpConnect, "tcp_connect"),
+            (ProbeStage::TlsHandshake, "tls_handshake"),
+            (ProbeStage::TlsConnected, "tls_connected"),
+            (ProbeStage::SendingData, "sending_data"),
+            (ProbeStage::ReadingData, "reading_data"),
+        ] {
+            assert_eq!(stage.as_str(), token);
+        }
+    }
+
+    /// The three words `of_fault_stage` maps, and the tracker's own vocabulary
+    /// that is not a failure stage: a mapping that guessed here would be the
+    /// wildcard arm this type exists to remove.
+    #[test]
+    fn of_fault_stage_maps_only_the_shared_places() {
+        assert_eq!(ProbeStage::of_fault_stage("connected"), Some(ProbeStage::TlsConnected));
+        assert_eq!(ProbeStage::of_fault_stage("tcp_connect"), Some(ProbeStage::TcpConnect));
+        assert_eq!(ProbeStage::of_fault_stage("tls_handshake"), Some(ProbeStage::TlsHandshake));
+        // `resolve` is the caller's own verdict and the tracker's own words are
+        // not this vocabulary: neither may be read as a failure stage here.
+        for unknown in ["resolve", "tcp_connected", "tls_handshake_done", "http_payload"] {
+            assert_eq!(ProbeStage::of_fault_stage(unknown), None, "{unknown}");
+        }
+    }
 
     /// Rule 5: the `--json` token of a redirect to a foreign host is `redir` —
     /// the internal variant name never reaches the wire — and both directions of

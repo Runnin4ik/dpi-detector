@@ -194,22 +194,75 @@ fn d_telegram_dcs() -> Vec<Vec<String>> {
     ]
 }
 
-/// One DNS availability server entry: [address, name, type, port?].
-/// Types: "udp", "doh_json", "doh_wire", "dot".
+/// One DNS availability server entry: [address, name, kind, port?].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnsAvailServer {
     pub addr: String,
     pub name: String,
-    pub kind: String,
+    pub kind: DnsAvailServerKind,
     pub port: u16,
 }
 
-impl DnsAvailServer {
-    pub fn default_port(kind: &str) -> u16 {
-        match kind {
-            "udp" => 53,
-            "dot" => 853,
-            _ => 443,
+/// The transport a `DNS_AVAILABILITY_SERVERS` row names, in the four spellings
+/// `config.yml` documents: `udp`, `doh_json`, `doh_wire`, `dot`.
+///
+/// Deliberately not `probe::dns_avail::ProbeKind`. That one is the measurement
+/// vocabulary — a variant per probe path, and its `doh_wire` token is frozen
+/// into `--json` — while `doh_json` and `doh_wire` here are two input
+/// spellings of the same wire probe, and the report names both `doh_wire`.
+/// Adding a `DohJson` variant there would either emit `doh_json` where the
+/// report says `doh_wire` today, or make a JSON-DoH server report as a wire one
+/// from a variant that claims otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnsAvailServerKind {
+    Udp,
+    DohJson,
+    DohWire,
+    Dot,
+}
+
+impl DnsAvailServerKind {
+    /// Parses a `config.yml` token, case-insensitively: `UDP` has always been
+    /// accepted. `None` for anything else, which the row parser turns into a
+    /// skipped row the loader names by key.
+    pub fn parse(s: &str) -> Option<Self> {
+        // ASCII compare rather than `to_lowercase()`: every token is ASCII and
+        // no non-ASCII character lowercases to one of these letters, so this
+        // accepts exactly the spellings the membership test did — without an
+        // allocation on a path that runs once per shipped server row.
+        if s.eq_ignore_ascii_case("udp") {
+            Some(Self::Udp)
+        } else if s.eq_ignore_ascii_case("doh_json") {
+            Some(Self::DohJson)
+        } else if s.eq_ignore_ascii_case("doh_wire") {
+            Some(Self::DohWire)
+        } else if s.eq_ignore_ascii_case("dot") {
+            Some(Self::Dot)
+        } else {
+            None
+        }
+    }
+
+    /// The `config.yml` spelling of this transport: the input contract, pinned
+    /// by the test module so renaming a variant cannot silently change what an
+    /// operator has to write.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Udp => "udp",
+            Self::DohJson => "doh_json",
+            Self::DohWire => "doh_wire",
+            Self::Dot => "dot",
+        }
+    }
+
+    /// The port a row of this kind uses when it names none. Exhaustive on
+    /// purpose: the `_ => 443` it replaces handed every unrecognized spelling a
+    /// DoH port.
+    pub fn default_port(self) -> u16 {
+        match self {
+            Self::Udp => 53,
+            Self::DohJson | Self::DohWire => 443,
+            Self::Dot => 853,
         }
     }
 }
@@ -221,6 +274,44 @@ fn yaml_str(v: &serde_yaml::Value) -> Option<String> {
         serde_yaml::Value::Bool(b) => Some(b.to_string()),
         _ => None,
     }
+}
+
+/// One `DNS_AVAILABILITY_SERVERS` row: `[addr, name, kind, port?]`. `None` for
+/// a short row, a non-string column or a kind outside the four the probes know.
+/// The loader runs this same predicate to warn about the rows it skips, so the
+/// two cannot drift apart.
+fn parse_availability_row(row: &[serde_yaml::Value]) -> Option<DnsAvailServer> {
+    let [addr_v, name_v, kind_v, rest @ ..] = row else {
+        return None;
+    };
+    let addr = yaml_str(addr_v)?;
+    let name = yaml_str(name_v)?;
+    let kind = DnsAvailServerKind::parse(&yaml_str(kind_v)?)?;
+    // A port that does not parse is not fatal: the kind's default applies.
+    let port = rest
+        .first()
+        .and_then(yaml_str)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or_else(|| kind.default_port());
+    Some(DnsAvailServer { addr, name, kind, port })
+}
+
+/// One `BYPASS_TOOLS` row: `[name, [patterns]]`. `None` for a short row, a
+/// non-string name or a second column that is not a pattern list.
+fn parse_bypass_row(row: &[serde_yaml::Value]) -> Option<(String, Vec<String>)> {
+    let [name_v, patterns_v, ..] = row else {
+        return None;
+    };
+    let name = yaml_str(name_v)?;
+    let patterns = match patterns_v {
+        serde_yaml::Value::Sequence(seq) => seq
+            .iter()
+            .filter_map(yaml_str)
+            .map(|s| s.to_lowercase())
+            .collect(),
+        _ => return None,
+    };
+    Some((name, patterns))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,7 +408,14 @@ pub struct AppConfig {
     #[serde(default = "d_concurrency_presets")]
     pub concurrency_presets: Vec<usize>,
     /// Raw rows: `[name, [patterns]]`. Parsed via `bypass_tools()`.
-    #[serde(default = "d_bypass_tools")]
+    ///
+    /// `from_yaml_str` lowercases every key before deserializing, and the field
+    /// is the one place where the struct name does not match its key: without
+    /// the rename, `BYPASS_TOOLS` became `bypass_tools`, matched no field, and
+    /// was dropped in silence — the default mirrored `config.yml`, so an edit
+    /// to the key never took effect and nothing said so. Deserialize-only, so
+    /// the serialized name stays as it is.
+    #[serde(default = "d_bypass_tools", rename(deserialize = "bypass_tools"))]
     pub bypass_tools_raw: Vec<Vec<serde_yaml::Value>>,
     #[serde(default = "d_dns_known_resolver_names")]
     pub dns_known_resolver_names: Vec<String>,
@@ -349,8 +447,16 @@ pub struct AppConfig {
 /// lives in the binary's `i18n` layer, so warnings follow `--lang`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigWarning {
-    /// Key rejected by the type/shape check.
+    /// Key rejected by the type/shape check: the value was dropped and the
+    /// default applies.
     InvalidValue { key: String },
+    /// A row-list key kept its valid rows and dropped the rest.
+    ///
+    /// Separate from `InvalidValue` because that message ends "using default",
+    /// which is false here: a list where 119 of 120 rows survived would read as
+    /// "the whole list was discarded", and the operator would stop looking for
+    /// the one row that never ran.
+    SkippedRows { key: String },
     /// Key that is not part of the schema.
     UnknownKey { key: String },
     UnknownFingerprint { value: String },
@@ -442,6 +548,39 @@ const KNOWN_KEYS: &[&str] = &[
     "IP6_LOOKUP_URLS", "IP_LOOKUP_URLS",
 ];
 
+/// True when `value` can be an HTTP header value: `http` refuses every control
+/// byte except tab and refuses 0x7F. Obs-text (≥ 0x80) stays valid, so a
+/// Cyrillic user agent is not rejected.
+///
+/// The user agent is the only config string that reaches a request header, and
+/// `probe/http.rs` builds that request with an `expect`: one control byte from
+/// a `USER_AGENT: |` block scalar would abort the whole run. The request
+/// boundary keeps its own guard as a backstop; this is what names the key the
+/// operator has to fix.
+fn valid_header_value(value: &str) -> bool {
+    value.bytes().all(|b| !b.is_ascii_control() || b == b'\t')
+}
+
+/// The shape a `DNS_UDP_SERVERS` / `TELEGRAM_DCS` row must have: at least two
+/// string columns.
+fn valid_pair_row(cols: &[serde_yaml::Value]) -> bool {
+    cols.len() >= 2 && cols.iter().all(|c| c.as_str().is_some())
+}
+
+/// True when `v` is a row sequence holding at least one row the list parser
+/// skips. Such a row is reported, never dropped in silence: these lists are
+/// edited by hand, and a row shortened by an edit would otherwise never run and
+/// never say so. The rows stay in the mapping — the parsers are what skip them.
+fn has_skipped_rows(v: &serde_yaml::Value, valid: impl Fn(&[serde_yaml::Value]) -> bool) -> bool {
+    match v {
+        serde_yaml::Value::Sequence(rows) => rows.iter().any(|r| match r {
+            serde_yaml::Value::Sequence(cols) => !valid(cols),
+            _ => true,
+        }),
+        _ => false,
+    }
+}
+
 /// Per-key type validation: a mistyped value is dropped so its default
 /// survives, and a warning names the key. Without this, one bad scalar fails
 /// the whole serde mapping and resets everything.
@@ -486,7 +625,12 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<Config
                 }
             }
             "IP_VERSION" => matches!(v.as_str(), Some("ipv4") | Some("ipv6")),
-            "FAT_DEFAULT_SNI" | "USER_AGENT" | "TELEGRAM_MEDIA_URL" | "TELEGRAM_UPLOAD_IP" => {
+            // The UA is validated as a header value, not merely as a string:
+            // an unusable one is dropped like a mistyped number, so the
+            // built-in default survives and `user_agent_for` falls back to the
+            // fingerprint's own UA. A valid value still wins over that default.
+            "USER_AGENT" => v.as_str().is_some_and(valid_header_value),
+            "FAT_DEFAULT_SNI" | "TELEGRAM_MEDIA_URL" | "TELEGRAM_UPLOAD_IP" => {
                 v.as_str().is_some()
             }
             "PROXY_URL" | "ASN_CACHE_FILE" => v.is_null() || v.as_str().is_some(),
@@ -523,18 +667,44 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<Config
                 }
             }
             // Pair lists: keep [str, str, ...] rows with ≥2 columns.
-            "DNS_UDP_SERVERS" | "TELEGRAM_DCS" => match v {
+            "DNS_UDP_SERVERS" => match v {
                 serde_yaml::Value::Sequence(rows) => {
-                    rows.retain(|r| match r {
-                        serde_yaml::Value::Sequence(cols) => {
-                            cols.len() >= 2 && cols.iter().all(|c| c.as_str().is_some())
-                        }
-                        _ => false,
-                    });
+                    let before = rows.len();
+                    rows.retain(|r| matches!(r, serde_yaml::Value::Sequence(cols) if valid_pair_row(cols)));
+                    if rows.len() != before {
+                        warnings.push(ConfigWarning::SkippedRows { key: key.clone() });
+                    }
                     true
                 }
                 _ => false,
             },
+            // Same shape, but `telegram_dc_list` reads these rows: a dropped row
+            // would silently lose a DC, so the key is named instead.
+            "TELEGRAM_DCS" => match v {
+                serde_yaml::Value::Sequence(rows) => {
+                    let before = rows.len();
+                    rows.retain(|r| matches!(r, serde_yaml::Value::Sequence(cols) if valid_pair_row(cols)));
+                    if rows.len() != before {
+                        warnings.push(ConfigWarning::SkippedRows { key: key.clone() });
+                    }
+                    true
+                }
+                _ => false,
+            },
+            // Row lists the parsers skip row-by-row: report the skip by key, so
+            // a hand-edit that never ran is not mistaken for one that passed.
+            "DNS_AVAILABILITY_SERVERS" => {
+                if has_skipped_rows(v, |cols| parse_availability_row(cols).is_some()) {
+                    warnings.push(ConfigWarning::SkippedRows { key: key.clone() });
+                }
+                true
+            }
+            "BYPASS_TOOLS" => {
+                if has_skipped_rows(v, |cols| parse_bypass_row(cols).is_some()) {
+                    warnings.push(ConfigWarning::SkippedRows { key: key.clone() });
+                }
+                true
+            }
             _ => true,
         };
         if !ok {
@@ -557,6 +727,7 @@ impl AppConfig {
         serde_yaml::from_str("{}").expect("an empty mapping parses into the serde defaults")
     }
 
+    #[must_use = "the returned config carries the sanitized values and every collected warning"]
     pub fn from_yaml_str(content: &str) -> Self {
         let value: serde_yaml::Value = match serde_yaml::from_str(content) {
             Ok(v) => v,
@@ -648,6 +819,12 @@ impl AppConfig {
     }
 
     fn clamp(&mut self) {
+        // These resets keep their integer types instead of parsing into
+        // `NonZero*`: a zero here is a legitimate input — an operator typo —
+        // whose whole point is to be named and recovered from, which the
+        // warnings below do in four languages. A non-zero type would instead
+        // fail the whole serde mapping, so one zero would silently reset every
+        // other key in the file and take the diagnostic with it.
         if self.max_concurrent < 1 {
             self.max_concurrent = 50;
             self.config_warnings.push(ConfigWarning::MaxConcurrentReset);
@@ -689,62 +866,22 @@ impl AppConfig {
             .or(self.proxy_url.as_deref())
     }
 
-    /// Parsed availability servers, skipping malformed rows.
+    /// Parsed availability servers, skipping malformed rows. `sanitize_mapping`
+    /// warns about every row this skips, so one cannot vanish in silence.
     pub fn availability_servers(&self) -> Vec<DnsAvailServer> {
-        let mut out = Vec::new();
-        for row in &self.dns_availability_servers {
-            if row.len() < 3 {
-                continue;
-            }
-            let addr = match yaml_str(&row[0]) {
-                Some(s) => s,
-                None => continue,
-            };
-            let name = match yaml_str(&row[1]) {
-                Some(s) => s,
-                None => continue,
-            };
-            let kind = match yaml_str(&row[2]) {
-                Some(s) => s.to_lowercase(),
-                None => continue,
-            };
-            if !["udp", "doh_json", "doh_wire", "dot"].contains(&kind.as_str()) {
-                continue;
-            }
-            let port = if row.len() > 3 {
-                yaml_str(&row[3])
-                    .and_then(|s| s.parse::<u16>().ok())
-                    .unwrap_or_else(|| DnsAvailServer::default_port(&kind))
-            } else {
-                DnsAvailServer::default_port(&kind)
-            };
-            out.push(DnsAvailServer { addr, name, kind, port });
-        }
-        out
+        self.dns_availability_servers
+            .iter()
+            .filter_map(|row| parse_availability_row(row))
+            .collect()
     }
 
-    /// Parsed bypass tools: (display name, lowercase patterns).
+    /// Parsed bypass tools: (display name, lowercase patterns). Same warning as
+    /// [`Self::availability_servers`] for the rows this skips.
     pub fn bypass_tools(&self) -> Vec<(String, Vec<String>)> {
-        let mut out = Vec::new();
-        for row in &self.bypass_tools_raw {
-            if row.len() < 2 {
-                continue;
-            }
-            let name = match yaml_str(&row[0]) {
-                Some(s) => s,
-                None => continue,
-            };
-            let patterns = match &row[1] {
-                serde_yaml::Value::Sequence(seq) => seq
-                    .iter()
-                    .filter_map(yaml_str)
-                    .map(|s| s.to_lowercase())
-                    .collect(),
-                _ => continue,
-            };
-            out.push((name, patterns));
-        }
-        out
+        self.bypass_tools_raw
+            .iter()
+            .filter_map(|row| parse_bypass_row(row))
+            .collect()
     }
 
     /// Telegram DC list as (ip, label).
@@ -752,11 +889,10 @@ impl AppConfig {
         self.telegram_dcs
             .iter()
             .filter_map(|row| {
-                if row.len() >= 2 {
-                    Some((row[0].clone(), row[1].clone()))
-                } else {
-                    None
-                }
+                // Pattern-bound columns: a row without both fields is skipped,
+                // never indexed past its end.
+                let [ip, label, ..] = row.as_slice() else { return None };
+                Some((ip.clone(), label.clone()))
             })
             .collect()
     }
@@ -888,9 +1024,14 @@ fn parse_domains(content: &str) -> Vec<String> {
 
 /// Loads whitelist SNI entries: non-empty, non-comment lines with their 1-based
 /// file numbers.
-pub fn load_whitelist_sni(path: impl AsRef<Path>) -> Vec<(String, usize)> {
-    let content = fs::read_to_string(path).unwrap_or_default();
-    parse_whitelist_sni(&content)
+///
+/// The read error is returned instead of flattened to an empty list: a
+/// present-but-unreadable file (an ordinary permissions mishap on an Entware
+/// router) must not look like an absent one, or the caller silently substitutes
+/// the embedded list and test 4 degrades with no diagnostic.
+pub fn load_whitelist_sni(path: impl AsRef<Path>) -> io::Result<Vec<(String, usize)>> {
+    let content = fs::read_to_string(path)?;
+    Ok(parse_whitelist_sni(&content))
 }
 
 /// Line parsing shared by the file and the embedded SNI list. The second field
@@ -1048,6 +1189,64 @@ mod tests {
         assert_eq!(servers[1].port, 8853);
     }
 
+    /// The four `config.yml` tokens are the input contract: each parses, each
+    /// carries its own default port, and any fifth spelling is a skipped row the
+    /// loader names — not a server that quietly dials 443.
+    #[test]
+    fn test_availability_kind_vocabulary() {
+        assert_eq!(
+            ["udp", "doh_json", "doh_wire", "dot"]
+                .map(|t| DnsAvailServerKind::parse(t).unwrap().default_port()),
+            [53, 443, 443, 853]
+        );
+        // Case-insensitive, as the string membership test it replaces was.
+        assert_eq!(DnsAvailServerKind::parse("DOT"), Some(DnsAvailServerKind::Dot));
+        assert_eq!(DnsAvailServerKind::parse("DoH_Json"), Some(DnsAvailServerKind::DohJson));
+        assert_eq!(DnsAvailServerKind::parse("tls"), None);
+        // `as_str` is the spelling an operator has to write, so it round-trips.
+        for token in ["udp", "doh_json", "doh_wire", "dot"] {
+            assert_eq!(DnsAvailServerKind::parse(token).map(|k| k.as_str()), Some(token));
+        }
+    }
+
+    /// A value that cannot become an HTTP header, and a list row the parser
+    /// skips, are both reported instead of silently ignored: the operator
+    /// hand-edits config.yml, and a key that never took effect must not look
+    /// like one that did.
+    #[test]
+    fn test_unusable_values_are_reported_not_swallowed() {
+        // A block scalar keeps its trailing newline, which `http` refuses in a
+        // header value; the built-in default must survive so `user_agent_for`
+        // falls back to the fingerprint's own UA.
+        let yaml = "USER_AGENT: |\n  Mozilla/5.0 (Windows NT 10.0)\n";
+        let cfg = AppConfig::from_yaml_str(yaml);
+        assert_eq!(cfg.user_agent, DEFAULT_USER_AGENT);
+        assert!(cfg.config_warnings.contains(&ConfigWarning::InvalidValue { key: "USER_AGENT".to_string() }));
+
+        // Obs-text is a valid header value, so a Cyrillic UA is kept verbatim.
+        let yaml = "USER_AGENT: \"Мой агент/1.0\"\n";
+        let cfg = AppConfig::from_yaml_str(yaml);
+        assert_eq!(cfg.user_agent, "Мой агент/1.0");
+        assert!(cfg.config_warnings.is_empty(), "{:?}", cfg.config_warnings);
+
+        // A short availability row, a bypass row without its pattern list, a
+        // `telegram_dcs` row the sanitizer has to drop, and a `dns_udp_servers`
+        // row missing its second column.
+        let yaml = "DNS_AVAILABILITY_SERVERS:\n  - [\"8.8.8.8\", \"Google\", \"udp\"]\n  - [\"1.1.1.1\", \"Cloudflare\"]\nBYPASS_TOOLS:\n  - [\"zapret\", [\"nfqws\"]]\n  - [\"broken\"]\nTELEGRAM_DCS:\n  - [\"149.154.175.53\", \"DC1\"]\n  - [\"1\"]\nDNS_UDP_SERVERS:\n  - [\"8.8.8.8\", \"Google\"]\n  - [\"1.1.1.1\"]\n";
+        let cfg = AppConfig::from_yaml_str(yaml);
+        assert_eq!(cfg.availability_servers().len(), 1);
+        assert_eq!(cfg.bypass_tools().len(), 1);
+        assert_eq!(cfg.telegram_dc_list().len(), 1);
+        assert_eq!(cfg.dns_udp_servers.len(), 1);
+        // A list key that dropped rows is reported as skipped rows, not as an
+        // invalid value: "using default" would be a lie about the rows that
+        // survived and did run.
+        assert!(cfg.config_warnings.contains(&ConfigWarning::SkippedRows { key: "DNS_AVAILABILITY_SERVERS".to_string() }));
+        assert!(cfg.config_warnings.contains(&ConfigWarning::SkippedRows { key: "BYPASS_TOOLS".to_string() }));
+        assert!(cfg.config_warnings.contains(&ConfigWarning::SkippedRows { key: "TELEGRAM_DCS".to_string() }));
+        assert!(cfg.config_warnings.contains(&ConfigWarning::SkippedRows { key: "DNS_UDP_SERVERS".to_string() }));
+    }
+
     /// A value of the wrong type or out of range is rejected: each bad key
     /// keeps its default and is named in the warnings.
     #[test]
@@ -1057,11 +1256,12 @@ mod tests {
         assert_eq!(cfg.max_concurrent, 50);
         assert_eq!(cfg.ip_version, "ipv4");
         assert_eq!(cfg.connect_timeout, 8.0);
-        let text = format!("{:?}", cfg.config_warnings);
-        assert!(text.contains("MAX_CONCURRENT"), "{text}");
-        assert!(text.contains("IP_VERSION"), "{text}");
-        assert!(text.contains("CONNECT_TIMEOUT"), "{text}");
-        assert!(text.contains("UNKNOWN_SECRET_KEY"), "{text}");
+        // Assert the typed warning, not its `Debug` rendering: that derive is
+        // not a stable format, and the variant plus its payload is the contract.
+        assert!(cfg.config_warnings.contains(&ConfigWarning::InvalidValue { key: "MAX_CONCURRENT".to_string() }));
+        assert!(cfg.config_warnings.contains(&ConfigWarning::InvalidValue { key: "IP_VERSION".to_string() }));
+        assert!(cfg.config_warnings.contains(&ConfigWarning::InvalidValue { key: "CONNECT_TIMEOUT".to_string() }));
+        assert!(cfg.config_warnings.contains(&ConfigWarning::UnknownKey { key: "UNKNOWN_SECRET_KEY".to_string() }));
     }
 
     /// A config whose every key is valid loads with no warnings.
@@ -1104,9 +1304,9 @@ mod tests {
         assert_eq!(cfg.dns_udp_servers[0], vec!["8.8.8.8", "Google"]);
         assert_eq!(cfg.dns_availability_domains, vec!["vk.ru", "gosuslugi.ru"]);
         let servers = cfg.availability_servers();
-        assert_eq!(servers.iter().filter(|s| s.kind == "udp").count(), 49);
-        assert_eq!(servers.iter().filter(|s| s.kind == "doh_wire").count(), 37);
-        assert_eq!(servers.iter().filter(|s| s.kind == "dot").count(), 34);
+        assert_eq!(servers.iter().filter(|s| s.kind.as_str() == "udp").count(), 49);
+        assert_eq!(servers.iter().filter(|s| s.kind.as_str() == "doh_wire").count(), 37);
+        assert_eq!(servers.iter().filter(|s| s.kind.as_str() == "dot").count(), 34);
         assert_eq!(servers.len(), 120);
         assert_eq!(servers[0].addr, "94.140.14.14");
         assert_eq!(servers.last().map(|s| s.kind.as_str()), Some("dot"));

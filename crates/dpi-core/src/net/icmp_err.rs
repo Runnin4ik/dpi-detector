@@ -105,38 +105,41 @@ pub(crate) async fn verdict_wait(dst: IpAddr) -> Option<IcmpCode> {
     None
 }
 
-/// Opens the raw socket and reads it on a thread of its own. `None` when the
-/// privileges are not there — the detector keeps working without a watcher.
-#[cfg(target_os = "linux")]
-fn start() -> Option<Arc<Watch>> {
-    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_ICMP) };
-    if fd < 0 {
-        return None;
-    }
-    let watch = Arc::new(Watch { seen: Mutex::new(HashMap::new()) });
-    let sink = Arc::clone(&watch);
-    std::thread::Builder::new()
-        .name("icmp-watch".to_string())
-        .spawn(move || {
-            let mut packet = [0u8; 1024];
-            loop {
-                let read = unsafe { libc::recv(fd, packet.as_mut_ptr().cast(), packet.len(), 0) };
-                if read <= 0 {
-                    break;
-                }
-                if let Some((dst, code)) = parse_icmp(&packet[..read as usize]) {
-                    sink.record(dst, code);
-                }
+cfg_select! {
+    target_os = "linux" => {
+        /// Opens the raw socket and reads it on a thread of its own. `None` when the
+        /// privileges are not there — the detector keeps working without a watcher.
+        fn start() -> Option<Arc<Watch>> {
+            let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_ICMP) };
+            if fd < 0 {
+                return None;
             }
-            unsafe { libc::close(fd) };
-        })
-        .ok()?;
-    Some(watch)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn start() -> Option<Arc<Watch>> {
-    None
+            let watch = Arc::new(Watch { seen: Mutex::new(HashMap::new()) });
+            let sink = Arc::clone(&watch);
+            std::thread::Builder::new()
+                .name("icmp-watch".to_string())
+                .spawn(move || {
+                    let mut packet = [0u8; 1024];
+                    loop {
+                        let read = unsafe { libc::recv(fd, packet.as_mut_ptr().cast(), packet.len(), 0) };
+                        if read <= 0 {
+                            break;
+                        }
+                        if let Some((dst, code)) = parse_icmp(&packet[..read as usize]) {
+                            sink.record(dst, code);
+                        }
+                    }
+                    unsafe { libc::close(fd) };
+                })
+                .ok()?;
+            Some(watch)
+        }
+    }
+    _ => {
+        fn start() -> Option<Arc<Watch>> {
+            None
+        }
+    }
 }
 
 /// Reads the ICMP type, the code, and the destination of the packet it quotes.
