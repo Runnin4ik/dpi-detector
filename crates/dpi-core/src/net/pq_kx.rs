@@ -18,7 +18,7 @@
 //!
 //! # Scope
 //!
-//! Used by fingerprint profiles (see [`crate::net::tls::crypto_provider_with_pq`])
+//! Used by fingerprint profiles (the crate-private `crypto_provider_with_pq`)
 //! and, in future, by probes that must satisfy a server requiring PQ. The base
 //! provider is deliberately left alone: adding this group there would change the
 //! ClientHello of every connection, including the DNS truth probes.

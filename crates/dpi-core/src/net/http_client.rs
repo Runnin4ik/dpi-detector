@@ -81,7 +81,8 @@ pub enum HttpGetError {
     Body(Box<dyn std::error::Error + Send + Sync>),
 }
 
-/// Simple, pure-Rust HTTP/HTTPS GET returning text content (capped at 64 KB).
+/// Simple, pure-Rust HTTP/HTTPS GET returning text content (capped at 1 MiB,
+/// `MAX_BODY`).
 pub async fn http_get_text(url_str: &str, timeout_dur: Duration) -> Result<String, HttpGetError> {
     // The timeout bounds the whole fetch, redirects included: `http_get_once`
     // applies it per hop, so four hops could spend four times what the caller

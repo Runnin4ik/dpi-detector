@@ -12,8 +12,14 @@ Exact commands (all `--locked`):
 cargo build --workspace --locked
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy -p dpi-core --features live-network --all-targets --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --no-deps
 ```
+
+The fourth command is the one step that compiles the `live-network` test: the feature is
+off everywhere else, and this is the only place it is ever linted. `--all-features` would
+have covered it in the command above, and is not used: the only other feature it turns on
+is `vendor/rustls-rustcrypto`'s `logging`, a configuration nothing ships.
 
 | Job | What it checks beyond that |
 | --- | --- |
@@ -36,14 +42,19 @@ a runner for the six-hour default.
    `cross` in a container. Three rows build on `nightly-2026-09-17` with `-Z build-std`
    (win7 and both MIPS — the flag is nightly-only; `+toolchain` overrides
    `rust-toolchain.toml`, so the rest of the matrix stays on 1.98.1). That date lives in
-   five places — move them together. Every built binary is smoke-tested by running it
-   (`--version` and `--legend`); foreign architectures run under `qemu-user`.
+   four places — the win7 row's `cargo_args`, both MIPS rows' `cross_args`, and the
+   `rustup toolchain install` step — move them together. Every built binary is
+   smoke-tested by running it (`--version` and `--legend`); foreign architectures run
+   under `qemu-user`.
 3. **Packing** — three rows are additionally compressed with UPX pinned to **4.2.4**: the
    5.x unpack stub needs `memfd_create`, i.e. Linux ≥ 3.17. Only router targets are packed
    (armv7, mipsel, mips); desktop builds are not — the gain there does not pay for the
    unpack delay on every start.
-4. **`release`** — a draft first, then `gh release edit --draft=false --latest`, so a run
-   that fails in between leaves a draft rather than half a release. Publishes
+4. **`release`** — a draft first, then `gh release edit --draft=false`, so a run
+   that fails in between leaves a draft rather than half a release. (`--latest` is
+   deliberately not passed: the action sets `prerelease` from the tag — `v5.0.0-alpha.19`
+   is one — and GitHub marks the latest *non*-prerelease as latest by itself, so forcing
+   the flag would put a pre-release there.) Publishes
    `SHA256SUMS.txt` and counts its assets (11 plain + 3 packed), because
    `fail_on_unmatched_files` catches only a pattern that matches nothing at all.
 
@@ -57,7 +68,8 @@ workflow runs on.
 - `cargo-deny` **0.20.2**, config `deny.toml`, four checks: `licenses` (the repository
   redistributes four patched forks, so a new licence carrying an obligation we cannot meet
   MUST fail here rather than in a release note), `sources` (crates.io only: a git
-  dependency would make the ten cross builds irreproducible), `advisories` (RustSec;
+  dependency would make the six `cross` builds — arm64, armv7, mipsel, mips,
+  android-arm64, android-armv7 — irreproducible), `advisories` (RustSec;
   `yanked = "deny"`, because a withdrawn release is not merely old), `bans`
   (`wildcards = "deny"`, with `allow-wildcard-paths` so the intra-workspace path
   dependencies stay legal; `multiple-versions = "warn"`, because nine crates in the lock

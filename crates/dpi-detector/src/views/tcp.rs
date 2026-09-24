@@ -20,7 +20,14 @@ fn provider_group(provider: &str) -> String {
     clean.split_whitespace().next().unwrap_or(&clean).to_string()
 }
 
-pub(crate) fn render_tcp_table(rows: &[TcpRow], msg: &Messages) -> String {
+/// The test 3 block: title, table, and the load-balancing warning when the run
+/// came back both ways.
+///
+/// `mixed` is a property of the run — some targets answered, some were cut —
+/// and not of a row: no `DpiStatus` spells "mixed", so the caller derives it
+/// from the same verdict predicates the summary line is built from, and this
+/// function never reads a badge label to decide anything.
+pub(crate) fn render_tcp_table(rows: &[TcpRow], mixed: bool, msg: &Messages) -> String {
     let mut out = String::new();
     // Sort: provider group frequency desc, then group name, then id number.
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -49,32 +56,20 @@ pub(crate) fn render_tcp_table(rows: &[TcpRow], msg: &Messages) -> String {
             Cell::new(format_bidi(msg.status, msg.lang)),
             Cell::new(format_bidi(msg.detail, msg.lang)),
         ]);
-    let mut passed = 0;
-    let mut blocked = 0;
-    let mut mixed = 0;
     for r in sorted {
-        let label = r.status.display_label();
-        if label.contains("OK") {
-            passed += 1;
-        } else if label.contains("DETECTED") {
-            blocked += 1;
-        } else if label.contains("MIXED") {
-            mixed += 1;
-        }
         table.add_row(vec![
             Cell::new(&r.id),
             Cell::new(cell_color(&r.asn, Color::Yellow)),
             Cell::new(cell_color(&r.provider, Color::Cyan)),
-            Cell::new(cell_color(label, status_color(r.status))),
+            Cell::new(cell_color(r.status.display_label(), status_color(r.status))),
             Cell::new(detail_text(&r.detail, msg.lang)),
         ]);
     }
     out.push_str(&format!("\n{}\n", msg.tcp16_check_title));
     out.push_str(&format!("{}\n", table));
-    if mixed > 0 {
+    if mixed {
         out.push_str(&format!("{}\n", msg.tcp_mixed_warn));
     }
-    let _ = (passed, blocked);
     out
 }
 

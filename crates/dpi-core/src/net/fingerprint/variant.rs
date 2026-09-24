@@ -64,46 +64,100 @@ pub enum HelloVariant {
     Chain(Vec<HelloVariant>),
 }
 
+/// Why [`HelloVariant::parse`] refused a string.
+///
+/// A type, not the bare `String` it used to be: the text of every variant is the
+/// one the `String` error carried, so a message reads exactly as before, and a
+/// caller that wants to know *which* part was wrong can match instead of parsing
+/// prose.
+#[derive(Debug, thiserror::Error)]
+pub enum HelloVariantError {
+    /// A `name:argument` part that is neither decimal nor `0x`-prefixed hex.
+    #[error("{text}: `{part}` is not a code point")]
+    NotACodePoint {
+        /// The whole text being parsed, as the caller wrote it.
+        text: String,
+        /// The part that is not a code point.
+        part: String,
+    },
+    /// A list-taking variant with no argument at all.
+    #[error("{text} wants a comma-separated list of code points")]
+    EmptyList {
+        /// The whole text being parsed.
+        text: String,
+    },
+    /// `ext-body` with no `<id>:<hex>` argument.
+    #[error("{text} wants a code point and hex bytes")]
+    MissingBody {
+        /// The whole text being parsed.
+        text: String,
+    },
+    /// `ext-body`'s hex does not come in byte-sized pairs.
+    #[error("{text}: hex bytes must come in pairs")]
+    OddHex {
+        /// The whole text being parsed.
+        text: String,
+    },
+    /// `ext-body`'s hex holds a pair that is not a byte.
+    #[error("{text}: bad byte")]
+    BadByte {
+        /// The whole text being parsed.
+        text: String,
+    },
+    /// The name is not one the help lists.
+    #[error("unknown variant `{other}`")]
+    UnknownVariant {
+        /// The name that was written.
+        other: String,
+    },
+}
+
 impl HelloVariant {
     /// Parses `name[:argument]`. The names are the ones the help lists, and every
     /// code point is decimal or `0x`-prefixed hex.
-    pub fn parse(text: &str) -> Result<Self, String> {
+    pub fn parse(text: &str) -> Result<Self, HelloVariantError> {
         // `a;b` is two edits at once. A code point list is comma-separated and a
         // body is hex, so the semicolon is free to mean "and then".
         if text.contains(';') {
             return text.split(';').map(Self::parse).collect::<Result<Vec<_>, _>>().map(Self::Chain);
         }
         let (name, argument) = text.split_once(':').unwrap_or((text, ""));
-        let number = |part: &str| -> Result<u16, String> {
+        let number = |part: &str| -> Result<u16, HelloVariantError> {
             let part = part.trim();
             let parsed = match part.strip_prefix("0x") {
                 Some(hex) => u16::from_str_radix(hex, 16),
                 None => part.parse::<u16>(),
             };
-            parsed.map_err(|_| format!("{text}: `{part}` is not a code point"))
+            parsed.map_err(|_| HelloVariantError::NotACodePoint {
+                text: text.to_string(),
+                part: part.to_string(),
+            })
         };
         let one = || number(argument);
-        let list = || -> Result<Vec<u16>, String> {
+        let list = || -> Result<Vec<u16>, HelloVariantError> {
             if argument.is_empty() {
-                return Err(format!("{text} wants a comma-separated list of code points"));
+                return Err(HelloVariantError::EmptyList { text: text.to_string() });
             }
             argument.split(',').map(number).collect()
         };
         // `ext-body:<id>:<hex>`: the code point first, the bytes after it, in the
         // hex the harness prints (`00 03 02 68 32` and `0003026832` both read).
-        let body = || -> Result<Self, String> {
+        let body = || -> Result<Self, HelloVariantError> {
             let (id, hex) = argument
                 .split_once(':')
-                .ok_or_else(|| format!("{text} wants a code point and hex bytes"))?;
+                .ok_or_else(|| HelloVariantError::MissingBody { text: text.to_string() })?;
             let id = number(id)?;
             let digits: String = hex.chars().filter(|c| c.is_ascii_hexdigit()).collect();
             if !digits.len().is_multiple_of(2) {
-                return Err(format!("{text}: hex bytes must come in pairs"));
+                return Err(HelloVariantError::OddHex { text: text.to_string() });
             }
             let bytes = (0..digits.len())
                 .step_by(2)
-                .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).map_err(|_| format!("{text}: bad byte")))
-                .collect::<Result<Vec<u8>, String>>()?;
+                .map(|i| {
+                    u8::from_str_radix(&digits[i..i + 2], 16)
+                        .map_err(|_| HelloVariantError::BadByte { text: text.to_string() })
+                })
+                .collect::<Result<Vec<u8>, HelloVariantError>>()?;
             Ok(Self::ExtBody(id, bytes))
         };
         match name {
@@ -119,7 +173,7 @@ impl HelloVariant {
             "ext-order" => list().map(Self::ExtOrder),
             "groups" => list().map(Self::Groups),
             "key-shares" => list().map(Self::KeyShares),
-            other => Err(format!("unknown variant `{other}`")),
+            other => Err(HelloVariantError::UnknownVariant { other: other.to_string() }),
         }
     }
 
@@ -152,7 +206,12 @@ impl HelloVariant {
     /// rustls validates the server's choice against; it is kept in step because a
     /// hello that offers what the config does not makes every server answer
     /// `SelectedUnofferedApplicationProtocol`.
-    pub fn apply(&self, hello: &mut ClientHelloProfile, alpn_protocols: &mut Vec<Vec<u8>>) {
+    ///
+    /// Crate-private: `ClientHelloProfile` exists only in the patched rustls
+    /// (`vendor/rustls/README-PATCH.md`), so naming this signature outside the
+    /// crate would put the fork in a caller's source. [`install_variant`] is the
+    /// entry point that takes a `ClientConfig` instead.
+    pub(crate) fn apply(&self, hello: &mut ClientHelloProfile, alpn_protocols: &mut Vec<Vec<u8>>) {
         match self {
             Self::SigalgSwap => {
                 if let Some(schemes) = hello.signature_schemes.as_mut() {
@@ -237,7 +296,12 @@ impl HelloVariant {
 ///
 /// `false` when the config presents no profile — the rustls baseline is its own
 /// hello, which has no fields to edit.
-pub fn install_variant(config: &mut ClientConfig, variant: &HelloVariant) -> bool {
+///
+/// Crate-private: the `ClientConfig` it takes is rustls's, but the field it
+/// writes (`config.hello_profile`) is the patch's, so the function only exists
+/// while `vendor/rustls` is the rustls this crate builds against. Callers reach
+/// it through [`crate::net::tls::create_tls_config_variant`].
+pub(crate) fn install_variant(config: &mut ClientConfig, variant: &HelloVariant) -> bool {
     let Some(shared) = config.hello_profile.as_ref() else {
         return false;
     };

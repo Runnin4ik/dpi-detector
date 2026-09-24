@@ -96,6 +96,24 @@ rustix = { version = "0.38", default-features = false, features = ["use-libc", "
 # the item is `pub` only because it once was exported. Hoisted from
 # `crates/dpi-core/src/lib.rs`, which carried it alone.
 unreachable_pub = "warn"
+# §11 of the guidelines: `unsafe` is a decision, not a default. Before this the
+# tree's 29 blocks were held by review alone — rustc's default is `allow` and
+# neither `clippy -D warnings` nor the rustdoc step turns this lint on — so a
+# new block in ordinary code compiled everywhere without a word.
+#
+# `deny` rather than `forbid`, because the blocks are legitimate where they are:
+# `net/bind.rs` and `net/icmp_err.rs` in `dpi-core`, `src/terminal.rs` and
+# `src/tui/backend.rs` in `dpi-detector` are OS FFI, and each is allowed at the
+# scope that is FFI — a module-level `#![allow(unsafe_code, reason = "...")]`, or
+# one per Win32 function where the file also holds safe code. The `reason` names
+# the call and the invariant the scope holds, and the two `dpi-core` modules
+# carry a `// SAFETY:` note on every block besides. `forbid` would take that door
+# away and break all four at once.
+#
+# `vendor/rustls-rustcrypto` is a workspace member but does not opt into this
+# table, so the patched provider is untouched — which is the point: it is
+# upstream's code, and `vendor/rustls` already carries `forbid(unsafe_code)`.
+unsafe_code = "deny"
 # `dead_code_pub_in_binary` is deliberately NOT set here, though the rule it
 # enforces (a `pub` item must not hide dead code in a crate that ships as a
 # binary) is one this project wants. `cargo test` compiles every library's test
@@ -108,9 +126,18 @@ unreachable_pub = "warn"
 # Equivalent to the `-- -D warnings` the CI clippy step passes — the whole
 # `clippy::all` group, which rustc leaves at `warn`. `pedantic` and `nursery` stay
 # off deliberately: their 196 members against a `-D warnings` tree fail on the
-# first run, and the two this project actually wants (`cast_lossless`, an allow
-# with a reason at every suppression site) are per-lint entries away when they are
-# wanted, not a group.
+# first run, and the per-lint entries this project does want are one line each.
+#
+# `cast_lossless` is the entry that looks like it should be here and is not, so
+# the measurement is recorded rather than rediscovered: turning it on today
+# reports over thirty sites across a dozen files — the byte and `u16` reads in
+# `dns/wire.rs`, `dns/socks.rs`, `dns/dot.rs`, `net/ja3.rs`, `net/ja4.rs`,
+# `net/icmp_err.rs`, `net/cert_compression.rs`, `net/fingerprint/variant.rs`,
+# `probe/tcp16.rs`, `probe/burst.rs`, the fingerprint tests and
+# `examples/tls_fingerprint.rs`, plus the `char as u32` in the i18n and input
+# helpers — each of which would have to become `usize::from(..)`. That is a
+# rewrite of the parsers for no behaviour change, so the lint stays off until
+# those files are touched for another reason.
 all = "deny"
 
 [profile.release]

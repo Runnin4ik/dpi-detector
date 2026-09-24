@@ -77,20 +77,33 @@ jobs:
       # (`dns/doh.rs::test_doh_connect_h2`) sits behind dpi-core's `live-network`
       # feature, off here on purpose — a runner that blocks or rate-limits
       # `dns.google` would otherwise red the tree with no code change. The linux
-      # job compiles that test in a step of its own, so it cannot rot unseen.
+      # job lints and compiles that test in a step of its own, so it cannot rot unseen.
       - name: Test
         run: cargo test --workspace --locked
 
+      # `--workspace --all-targets` and not `--all-features`: the only non-default
+      # feature in the tree is `live-network`, and the one other feature set
+      # `--all-features` would turn on is `vendor/rustls-rustcrypto`'s `logging`
+      # (-> `rustls/logging`, an optional `log` edge). That is a configuration
+      # nothing ships, in the one vendored member whose manifest comment requires
+      # it to be built and linted as it ships — so the feature this step actually
+      # cares about is named below instead.
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # The `live-network` test is compiled by no other step: the run above cannot
-      # see it, and `release.yml` does not run tests at all. Without this, a
-      # signature change in `dns/doh.rs` would surface the day someone runs the
-      # test against the real `dns.google`. `--no-run` builds the harness and stops
-      # short of dialling anything, so this step needs no egress either.
-      - name: Compile the live-network test without running it
-        run: cargo test --locked -p dpi-core --features live-network --no-run
+      # see it (the feature is off there), and `release.yml` does not run tests at
+      # all. Without this, a signature change in `dns/doh.rs` would surface the day
+      # someone runs the test against the real `dns.google`. `--no-run` builds the
+      # harness and stops short of dialling anything, so this step needs no egress
+      # either.
+      #
+      # `clippy` rather than `test`, and with `-D warnings`: this step is the only
+      # one that ever compiles this code, so a rustc warning or a `clippy::all`
+      # finding in it has to fail here — `cargo test --no-run` prints both and
+      # exits 0.
+      - name: Lint the live-network test without running it
+        run: cargo clippy --locked -p dpi-core --features live-network --all-targets -- -D warnings
 
       # Rule 2 (AGENTS.md) caps the shipped binary at 3-6 MB, and nothing measured
       # it: a dependency added for convenience, or a monomorphisation blow-up,
@@ -340,6 +353,12 @@ jobs:
       # and forgotten in the other is a source that platform silently cannot
       # reach. Only the lines that build a URL are read, and the hosts are
       # compared as sets — their order is not a contract.
+      #
+      # The count is read out of each file rather than assumed, and a zero fails:
+      # a `grep -F` whose pattern no longer matches prints nothing and exits 1, but
+      # the pipe ends in `sort`, so this step's status would stay 0 — two empty
+      # files compare equal and the step would report "0 proxies" and pass. Same
+      # reading as the installer-version check in `release.yml`.
       - name: The two installers agree on their mirror list
         run: |
           set -eu
@@ -350,6 +369,15 @@ jobs:
           hosts install.sh '${_gh}' > target/mirrors-sh.txt
           # shellcheck disable=SC2016
           hosts install.ps1 '$gh"' > target/mirrors-ps.txt
+          for pair in "sh:install.sh" "ps:install.ps1"; do
+            side=${pair%%:*}
+            file=${pair#*:}
+            count=$(wc -l < "target/mirrors-$side.txt")
+            if [ "$count" -eq 0 ]; then
+              echo "::error::$file yielded no mirror host — the pattern this step greps for no longer matches, so it would compare two empty lists and pass"
+              exit 1
+            fi
+          done
           diff -u target/mirrors-sh.txt target/mirrors-ps.txt
           echo "both installers carry $(wc -l < target/mirrors-sh.txt) proxies"
 
@@ -422,10 +450,14 @@ jobs:
       # (`dns/doh.rs::test_doh_connect_h2`) sits behind dpi-core's `live-network`
       # feature, off here on purpose — a runner that blocks or rate-limits
       # `dns.google` would otherwise red the tree with no code change. The linux
-      # job compiles that test in a step of its own, so it cannot rot unseen.
+      # job lints and compiles that test in a step of its own, so it cannot rot unseen.
       - name: Test
         run: cargo test --workspace --locked
 
+      # No `--all-features` here either, for the reason the linux step records: the
+      # only feature it would add is the vendored provider's `logging`. The
+      # `live-network` code is feature-gated and platform-independent, and the linux
+      # job lints it with `-D warnings` in a step of its own.
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 

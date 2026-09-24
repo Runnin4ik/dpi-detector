@@ -730,7 +730,9 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<Config
 
 impl AppConfig {
     /// Parses `config.yml` content. Unknown keys and mistyped values produce
-    /// warnings; a parse error or a non-mapping root is recorded instead.
+    /// warnings; a parse error, a non-mapping root, or a mapping serde rejects
+    /// after the sanitizer has run is recorded in `config_load_error` instead —
+    /// never swallowed, because the fallback is the whole built-in config.
     /// A configuration with every field at its serde default. Every field of
     /// this struct carries a default, so an empty mapping parses — a failure
     /// here would be a bug in the struct definition, not in the input.
@@ -800,8 +802,23 @@ impl AppConfig {
                 );
             }
         }
-        let mut cfg: Self = serde_yaml::from_value(serde_yaml::Value::Mapping(norm))
-            .unwrap_or_else(|_| Self::defaults());
+        let mut cfg: Self = match serde_yaml::from_value(serde_yaml::Value::Mapping(norm)) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // The mapping survived `sanitize_mapping` and serde still refused
+                // it. The two row-list arms above report a bad row and keep it —
+                // a row that is not a sequence, or a scalar for the key itself,
+                // cannot deserialize into `Vec<Vec<serde_yaml::Value>>` — so the
+                // fallback here replaces every setting in the file with the
+                // shipped ones. Recording the reason is what keeps that from
+                // being silent: without it the operator reads "one row skipped"
+                // while their proxy, timeouts and server lists are gone.
+                let mut cfg = Self::defaults();
+                cfg.config_load_error =
+                    Some(format!("config.yml could not be applied: {}", e));
+                cfg
+            }
+        };
         cfg.config_warnings = warnings;
         cfg.clamp();
         cfg
@@ -1289,6 +1306,30 @@ mod tests {
         assert!(cfg.config_warnings.contains(&ConfigWarning::SkippedRows { key: "BYPASS_TOOLS".to_string() }));
         assert!(cfg.config_warnings.contains(&ConfigWarning::SkippedRows { key: "TELEGRAM_DCS".to_string() }));
         assert!(cfg.config_warnings.contains(&ConfigWarning::SkippedRows { key: "DNS_UDP_SERVERS".to_string() }));
+    }
+
+    /// A row-list key whose value is not a list of rows: `sanitize_mapping`
+    /// reports the bad row and leaves it in place, so serde refuses the whole
+    /// mapping and the built-in defaults replace the file. That used to be
+    /// silent — the operator read "one row skipped" while their `MAX_CONCURRENT`
+    /// was gone — so the refusal is now a load error, which `main` prints and the
+    /// run carries on with.
+    #[test]
+    fn test_a_row_that_is_not_a_sequence_is_a_load_error() {
+        let yaml = "MAX_CONCURRENT: 25\nDNS_AVAILABILITY_SERVERS:\n  - \"8.8.8.8 Google udp\"\n";
+        let cfg = AppConfig::from_yaml_str(yaml);
+        assert!(cfg.config_load_error.is_some(), "{:?}", cfg.config_load_error);
+
+        // The same shape one key over: a scalar where the rows go.
+        let cfg = AppConfig::from_yaml_str("BYPASS_TOOLS: nfqws\n");
+        assert!(cfg.config_load_error.is_some(), "{:?}", cfg.config_load_error);
+
+        // A row the parser skips but serde can still read is not this failure:
+        // the file loads, and every other key in it survives.
+        let yaml = "MAX_CONCURRENT: 25\nDNS_AVAILABILITY_SERVERS:\n  - [\"8.8.8.8\", \"Google\", \"udp\"]\n  - [\"1.1.1.1\", \"Cloudflare\"]\n";
+        let cfg = AppConfig::from_yaml_str(yaml);
+        assert!(cfg.config_load_error.is_none(), "{:?}", cfg.config_load_error);
+        assert_eq!(cfg.max_concurrent, 25, "the rest of the file is kept");
     }
 
     /// A value of the wrong type or out of range is rejected: each bad key

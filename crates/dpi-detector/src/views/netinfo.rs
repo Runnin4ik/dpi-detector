@@ -2,6 +2,7 @@
 
 use crate::i18n::Messages;
 use dpi_core::net::netinfo::{SystemDnsInfo, is_tun_name};
+use dpi_core::net::sysinfo::DnsSource;
 use dpi_core::probe::domains::{FakeIpType, fake_ip_type};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -15,14 +16,23 @@ pub(crate) enum NetTtlb {
     Ms(u64),
 }
 /// Per-family network fact: address, TTLB, subnet, org, ASN and country code.
+///
+/// The Cymru fields are `Option` because "the lookup never answered" is a fact
+/// of its own: it used to travel here as a bare string, which the panel had to
+/// recognize back by comparing text — and a *composed* row
+/// (`"timeout (AStimeout)"`) no longer matched that text, so it printed as a
+/// value. `ip` is `Option` for the same reason: `timeout_family` is a family
+/// that was probed and answered nothing, which the panel draws as a timeout row
+/// — unlike `None` in `NetInfoData`, a family that is not on the link at all
+/// and gets the dim "unavailable" row.
 #[derive(Debug, Clone)]
 pub(crate) struct NetFamilyInfo {
-    pub ip: String,
+    pub ip: Option<String>,
     pub ttlb: NetTtlb,
-    pub subnet: String,
-    pub org: String,
-    pub asn: String,
-    pub cc: String,
+    pub subnet: Option<String>,
+    pub org: Option<String>,
+    pub asn: Option<String>,
+    pub cc: Option<String>,
 }
 
 pub(crate) struct NetInfoData {
@@ -32,12 +42,18 @@ pub(crate) struct NetInfoData {
     pub empty: bool,
 }
 
-/// Value color: red for the literal "timeout", cyan for anything else.
+/// A measured value: cyan.
 fn cyan_val(v: &str) -> String {
-    if v == "timeout" {
-        format!("\x1b[31m{}\x1b[0m", v)
-    } else {
-        format!("\x1b[36m{}\x1b[0m", v)
+    format!("\x1b[36m{}\x1b[0m", v)
+}
+
+/// A Cymru field of the panel: cyan when the lookup answered, the red
+/// localized timeout label when it did not. This is the only place the two
+/// readings are told apart — the state itself lives in the `Option`.
+fn family_val(v: Option<&str>, msg: &Messages) -> String {
+    match v {
+        Some(v) => cyan_val(v),
+        None => format!("\x1b[31m{}\x1b[0m", msg.timeout_label),
     }
 }
 
@@ -123,15 +139,6 @@ pub(crate) fn render_netinfo_panel(
     msg: &Messages,
 ) -> String {
     let mut lines = Vec::new();
-    // Cymru-less fields carry the canonical "timeout" marker; it renders red
-    // like the DNS cells and follows the interface language.
-    let val = |v: &str| {
-        if v == "timeout" {
-            format!("\x1b[31m{}\x1b[0m", msg.timeout_label)
-        } else {
-            cyan_val(v)
-        }
-    };
 
     if data.empty {
         lines.push(format!(
@@ -145,97 +152,82 @@ pub(crate) fn render_netinfo_panel(
         lines.push(format!("{} {}", msg.org_label, cyan_val("…")));
         lines.push(format!("{} {}", msg.location_label, cyan_val("…")));
     } else {
+        // A family that is `Some` was probed: `None` here is "that family is
+        // not on this link at all", which is what the dim unavailable row says.
+        // Whether the address itself was measured is the field's own `Option`.
         match data.v4.as_ref() {
-            Some(f) if !f.ip.is_empty() => {
+            Some(f) => {
                 lines.push(format!(
                     "IPv4: {}  {} {}  {} {}",
-                    cyan_val(&f.ip),
+                    family_val(f.ip.as_deref(), msg),
                     msg.subnet_label,
-                    val(&f.subnet),
+                    family_val(f.subnet.as_deref(), msg),
                     msg.ttlb_label,
                     ttlb_str(&f.ttlb, msg)
                 ));
             }
-            _ => lines.push(format!("IPv4: {}", dim_val(msg.unavailable))),
+            None => lines.push(format!("IPv4: {}", dim_val(msg.unavailable))),
         }
         match data.v6.as_ref() {
-            Some(f) if !f.ip.is_empty() => {
-                lines.push(format!("IPv6: {}", cyan_val(&f.ip)));
+            Some(f) => {
+                lines.push(format!("IPv6: {}", family_val(f.ip.as_deref(), msg)));
                 lines.push(format!(
                     "      {} {}  {} {}",
                     msg.subnet_label,
-                    val(&f.subnet),
+                    family_val(f.subnet.as_deref(), msg),
                     msg.ttlb_label,
                     ttlb_str(&f.ttlb, msg)
                 ));
             }
-            _ => lines.push(format!("IPv6: {}", dim_val(msg.unavailable))),
+            None => lines.push(format!("IPv6: {}", dim_val(msg.unavailable))),
         }
-        let v4_org = data.v4.as_ref().map(|f| f.org.as_str()).unwrap_or("");
-        let v4_asn = data.v4.as_ref().map(|f| f.asn.as_str()).unwrap_or("");
-        let v4_cc = data.v4.as_ref().map(|f| f.cc.as_str()).unwrap_or("");
-        let v6_org = data.v6.as_ref().map(|f| f.org.as_str()).unwrap_or("");
-        let v6_asn = data.v6.as_ref().map(|f| f.asn.as_str()).unwrap_or("");
-        let v6_cc = data.v6.as_ref().map(|f| f.cc.as_str()).unwrap_or("");
-        let org_s = if !v4_org.is_empty() && !v6_org.is_empty() && v4_org != v6_org {
-            let s4 = if !v4_asn.is_empty() {
-                format!("{} (AS{})", v4_org, v4_asn)
-            } else {
-                v4_org.to_string()
-            };
-            let s6 = if !v6_asn.is_empty() {
-                format!("{} (AS{})", v6_org, v6_asn)
-            } else {
-                v6_org.to_string()
-            };
-            format!("{} {}, {} {}", s4, dim_val("(v4)"), s6, dim_val("(v6)"))
-        } else {
-            let main_org = if !v4_org.is_empty() {
-                v4_org
-            } else if !v6_org.is_empty() {
-                v6_org
-            } else {
-                "…"
-            };
-            let main_asn = if !v4_asn.is_empty() {
-                v4_asn
-            } else if !v6_asn.is_empty() {
-                v6_asn
-            } else {
-                ""
-            };
-            if !main_asn.is_empty() {
-                format!("{} (AS{})", main_org, main_asn)
-            } else {
-                main_org.to_string()
-            }
+        // Per family: `None` is "Cymru never answered", an empty string is an
+        // answer that carried no value (the org query returns the allocation
+        // date as an empty name). Only the first is a timeout; the second falls
+        // back like any other missing field, as it always did.
+        let f4 = data.v4.as_ref();
+        let f6 = data.v6.as_ref();
+        let org4 = f4.and_then(|f| f.org.as_deref()).filter(|s| !s.is_empty());
+        let asn4 = f4.and_then(|f| f.asn.as_deref()).filter(|s| !s.is_empty());
+        let cc4 = f4.and_then(|f| f.cc.as_deref()).filter(|s| !s.is_empty());
+        let org6 = f6.and_then(|f| f.org.as_deref()).filter(|s| !s.is_empty());
+        let asn6 = f6.and_then(|f| f.asn.as_deref()).filter(|s| !s.is_empty());
+        let cc6 = f6.and_then(|f| f.cc.as_deref()).filter(|s| !s.is_empty());
+        let org_asn = |org: &str, asn: Option<&str>| match asn {
+            Some(asn) => format!("{} (AS{})", org, asn),
+            None => org.to_string(),
         };
-        lines.push(format!("{} {}", msg.org_label, val(&org_s)));
-        let loc = if !v4_cc.is_empty() && !v6_cc.is_empty() && v4_cc != v6_cc {
-            format!(
-                "{} {} {}, {} {} {}",
-                geo_country_ascii(v4_cc).trim(),
-                v4_cc,
+        // Two measured orgs that differ are shown side by side; otherwise the
+        // one that was measured. Nothing measured at all is `None` — the red
+        // label. That row used to be composed as `"timeout (AStimeout)"` and
+        // printed cyan, because only a lone marker word was recognized.
+        let org_s = match (org4, org6) {
+            (Some(a), Some(b)) if a != b => Some(format!(
+                "{} {}, {} {}",
+                org_asn(a, asn4),
                 dim_val("(v4)"),
-                geo_country_ascii(v6_cc).trim(),
-                v6_cc,
+                org_asn(b, asn6),
                 dim_val("(v6)")
-            )
-        } else {
-            let main_cc = if !v4_cc.is_empty() {
-                v4_cc
-            } else if !v6_cc.is_empty() {
-                v6_cc
-            } else {
-                "…"
-            };
-            if main_cc == "…" {
-                "…".to_string()
-            } else {
-                format!("{} {}", geo_country_ascii(main_cc).trim(), main_cc)
-            }
+            )),
+            _ => match org4.or(org6) {
+                Some(org) => Some(org_asn(org, asn4.or(asn6))),
+                None => asn4.or(asn6).map(|asn| format!("… (AS{})", asn)),
+            },
         };
-        lines.push(format!("{} {}", msg.location_label, val(&loc)));
+        lines.push(format!("{} {}", msg.org_label, family_val(org_s.as_deref(), msg)));
+        let loc = match (cc4, cc6) {
+            (Some(a), Some(b)) if a != b => Some(format!(
+                "{} {} {}, {} {} {}",
+                geo_country_ascii(a).trim(),
+                a,
+                dim_val("(v4)"),
+                geo_country_ascii(b).trim(),
+                b,
+                dim_val("(v6)")
+            )),
+            _ => cc4.or(cc6).map(|cc| format!("{} {}", geo_country_ascii(cc).trim(), cc)),
+        };
+        lines.push(format!("{} {}", msg.location_label, family_val(loc.as_deref(), msg)));
     }
 
     if let Some(os) = dns_info.os.as_ref() {
@@ -257,7 +249,7 @@ pub(crate) fn render_netinfo_panel(
                 .collect::<Vec<_>>()
         };
         let ips_all: Vec<String> = dns_info.active.iter().map(|e| e.0.clone()).collect();
-        let srcs: HashSet<&str> = dns_info.active.iter().map(|e| e.1.as_str()).collect();
+        let srcs: HashSet<DnsSource> = dns_info.active.iter().map(|e| e.1).collect();
         let mut src_label = String::new();
         if ips_all.iter().any(|ip| {
             ip.parse::<IpAddr>()
@@ -267,9 +259,9 @@ pub(crate) fn render_netinfo_panel(
             src_label = "fake-ip".to_string();
         } else if is_tun_name(&a_name) {
             src_label = "TUN".to_string();
-        } else if srcs.len() == 1 && srcs.contains("wsl") {
+        } else if srcs.len() == 1 && srcs.contains(&DnsSource::Wsl) {
             src_label = msg.wsl_proxy.to_string();
-        } else if srcs.len() == 1 && srcs.contains("dhcp") {
+        } else if srcs.len() == 1 && srcs.contains(&DnsSource::Dhcp) {
             src_label = "DHCP".to_string();
         }
         if (src_label == "fake-ip" || src_label == "TUN")
@@ -360,18 +352,18 @@ mod tests {
         use dpi_core::net::netinfo::SystemDnsInfo;
         let data = NetInfoData {
             v4: Some(NetFamilyInfo {
-                ip: "203.0.113.7".to_string(),
+                ip: Some("203.0.113.7".to_string()),
                 ttlb: NetTtlb::Ms(701),
-                subnet: "203.0.113.0/24".to_string(),
-                org: "EXAMPLE-AS".to_string(),
-                asn: "65001".to_string(),
-                cc: "US".to_string(),
+                subnet: Some("203.0.113.0/24".to_string()),
+                org: Some("EXAMPLE-AS".to_string()),
+                asn: Some("65001".to_string()),
+                cc: Some("US".to_string()),
             }),
             v6: None,
             empty: false,
         };
         let dns = SystemDnsInfo {
-            active: vec![("192.0.2.1".to_string(), "dhcp".to_string())],
+            active: vec![("192.0.2.1".to_string(), DnsSource::Dhcp)],
             active_name: Some("Ethernet".to_string()),
             active_ip: Some("192.0.2.10".to_string()),
             other_static: vec![("198.51.100.2".to_string(), "Wi-Fi".to_string())],
@@ -451,26 +443,55 @@ mod tests {
         }
     }
 
+    /// A family whose address was measured but whose Cymru lookup was not — the
+    /// DoH query timed out, so the producer hands over `None` for every Cymru
+    /// field — reads as the red localized timeout label in each of them.
+    ///
+    /// This is the state that used to print a *value*: "not measured" was a
+    /// string, and the org row was composed as `format!("{} (AS{})", org, asn)`
+    /// = `"timeout (AStimeout)"`, which no longer equalled the marker the panel
+    /// compared against — so a cyan `timeout (AStimeout)` was drawn instead of
+    /// the label. The org-row assertion and the sentinel check below are what
+    /// fails on that code.
     #[test]
     fn netinfo_timeout_rows_are_red() {
         use crate::i18n::get_messages;
         use crate::i18n::Language;
-        let t = || "timeout".to_string();
+        let msg = get_messages(Language::Ru);
+        // The producer's own path: an address from the public-IP race, no Cymru.
+        let v4 = crate::runner::family_info(Some(("203.0.113.7".parse().unwrap(), 100)), None).unwrap();
+        let data = NetInfoData { v4: Some(v4), v6: None, empty: false };
+        let dns = Default::default();
+        let out = render_netinfo_panel(&data, &dns, &[], &msg);
+        let red = format!("\x1b[31m{}\x1b[0m", msg.timeout_label);
+        assert!(out.contains(&red), "cymru-less fields render red: {out}");
+        assert!(
+            out.contains(&format!("{} {}", msg.org_label, red)),
+            "the org row is the red timeout label: {out}"
+        );
+        assert!(!out.contains("AStimeout"), "no sentinel leaks in as a value: {out}");
+    }
+
+    /// Both public-IP lookups dead (`timeout_family`): every cell of both
+    /// families is the red timeout label. It must not become the dim
+    /// "unavailable" row — that one means the family is not on this link at all,
+    /// and the two states are told apart by the family being present, not by the
+    /// address being non-empty (which is what the panel used to do).
+    #[test]
+    fn netinfo_dead_lookups_are_timeout_rows_not_unavailable() {
+        use crate::i18n::get_messages;
+        use crate::i18n::Language;
+        let msg = get_messages(Language::Ru);
         let data = NetInfoData {
-            v4: Some(NetFamilyInfo {
-                ip: "203.0.113.7".to_string(),
-                ttlb: NetTtlb::Ms(100),
-                subnet: t(),
-                org: t(),
-                asn: t(),
-                cc: t(),
-            }),
-            v6: None,
+            v4: Some(crate::runner::timeout_family()),
+            v6: Some(crate::runner::timeout_family()),
             empty: false,
         };
-        let dns = Default::default();
-        let out = render_netinfo_panel(&data, &dns, &[], &get_messages(Language::Ru));
-        assert!(out.contains("\x1b[31mтаймаут\x1b[0m"), "cymru-less fields render red");
+        let out = render_netinfo_panel(&data, &Default::default(), &[], &msg);
+        let red = format!("\x1b[31m{}\x1b[0m", msg.timeout_label);
+        assert!(out.contains(&format!("IPv4: {red}")), "IPv4 row is the red label: {out}");
+        assert!(out.contains(&format!("IPv6: {red}")), "IPv6 row is the red label: {out}");
+        assert!(!out.contains(msg.unavailable), "not the dim unavailable row: {out}");
     }
 
     #[test]

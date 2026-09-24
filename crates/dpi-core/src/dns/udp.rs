@@ -20,7 +20,7 @@ pub async fn probe_udp_dns(
 
     let resp_bytes = if let Some(proxy) = socks_proxy {
         // Run via SOCKS5 UDP relay
-        let (relay_addr, _tcp_stream) = associate_socks5_udp(proxy).await?;
+        let (relay_addr, _tcp_stream) = associate_socks5_udp(proxy, timeout_dur).await?;
         let socket = crate::net::bind::udp_socket(&relay_addr)
             .await
             .map_err(|e| DnsError::Io(e.to_string()))?;

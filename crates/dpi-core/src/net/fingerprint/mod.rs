@@ -58,7 +58,7 @@
 //!   set in `config.yml` wins over the profile's.
 //! * **HTTP/2** — the `SETTINGS` values, which of them are sent, and the
 //!   connection window that becomes the `WINDOW_UPDATE` increment
-//!   ([`h2_fingerprint`]).
+//!   (`h2_fingerprint`).
 //!
 //! It is **not** a byte-for-byte browser. What is left, and why:
 //!
@@ -134,9 +134,15 @@ use rustls::ClientConfig;
 
 use crate::net::tls::TlsVersion;
 
-pub use h2::{h2_fingerprint, H2Fingerprint};
+pub(crate) use h2::h2_fingerprint;
+// The type itself is reached through `h2`'s own module inside the library
+// (`shapes` imports it there); only the fingerprint tests name it through this
+// path, so the re-export carries the same gate they do.
+#[cfg(test)]
+pub(crate) use h2::H2Fingerprint;
 pub use identity::{http_identity, HttpIdentity};
-pub use variant::{install_variant, HelloVariant};
+pub use variant::{HelloVariant, HelloVariantError};
+pub(crate) use variant::install_variant;
 
 pub(crate) use shapes::{
     EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW, EXT_FAKE_CHANNEL_ID,
@@ -416,7 +422,12 @@ fn shape_index(fingerprint: TlsFingerprint) -> usize {
 /// Built once per profile per process: `create_tls_config` runs for every
 /// connection a probe opens, and the profile is a handful of heap vectors that
 /// would otherwise be rebuilt for each one.
-pub fn hello_profile(fingerprint: TlsFingerprint) -> Option<Arc<ClientHelloProfile>> {
+///
+/// Crate-private: `ClientHelloProfile` exists only in the patched rustls
+/// (`vendor/rustls/README-PATCH.md`; upstream rejected the hook, rustls#1421),
+/// so this return type would not survive a rustls swap that a caller could see.
+/// [`crate::net::tls::create_tls_config`] is the public entry point.
+pub(crate) fn hello_profile(fingerprint: TlsFingerprint) -> Option<Arc<ClientHelloProfile>> {
     static CACHE: LazyLock<Vec<Option<Arc<ClientHelloProfile>>>> =
         LazyLock::new(|| SHAPES.iter().map(|shape| shape.build().map(Arc::new)).collect());
     CACHE[shape_index(fingerprint)].clone()
@@ -495,6 +506,10 @@ pub fn pinned_drop(fingerprint: TlsFingerprint, version: TlsVersion) -> &'static
 }
 
 /// Installs the profile on a client config, if the selection has one.
-pub fn apply(config: &mut ClientConfig, fingerprint: TlsFingerprint) {
+///
+/// Crate-private: the `ClientConfig` is rustls's, but `config.hello_profile` is
+/// the patch's field (`vendor/rustls/README-PATCH.md`), so the body only exists
+/// while `vendor/rustls` is the rustls this crate builds against.
+pub(crate) fn apply(config: &mut ClientConfig, fingerprint: TlsFingerprint) {
     config.hello_profile = hello_profile(fingerprint);
 }

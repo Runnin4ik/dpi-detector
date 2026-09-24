@@ -15,9 +15,13 @@
 //! server chose in its `CompressedCertificate`, so it holds both algorithms for
 //! every profile.
 //!
-//! Both decoders write into the caller's buffer, sized by rustls to the length
-//! the server declared, and neither allocates: a certificate that decompresses to
-//! more or fewer bytes than declared is rejected instead of truncated.
+//! All three decoders write into the caller's buffer, sized by rustls to the
+//! length the server declared, and a certificate that decompresses to more or
+//! fewer bytes than declared is rejected instead of truncated. That buffer is not
+//! the only memory a certificate asks for, though: zstd and brotli each name their
+//! own window in the bytes the server sent, so both headers are read here first
+//! and a window above what this build will allocate for is refused before any
+//! decoder state exists (`MAX_ZSTD_WINDOW`, `MAX_BROTLI_WINDOW_BITS`).
 
 use std::io::{Cursor, Read};
 
@@ -25,11 +29,10 @@ use rustls::compress::{CertDecompressor, DecompressionFailed};
 use rustls::CertificateCompressionAlgorithm;
 
 /// Decompressors for every algorithm a browser profile can advertise.
-pub fn decompressors() -> Vec<&'static dyn CertDecompressor> {
+pub(crate) fn decompressors() -> Vec<&'static dyn CertDecompressor> {
     vec![BROTLI, ZLIB, ZSTD]
 }
 
-/// `brotli` (RFC 7932), the algorithm Chrome advertises.
 /// True when `algorithm` is one of [`decompressors`], i.e. readable at all.
 ///
 /// A profile must not advertise an algorithm this returns `false` for: the server
@@ -41,10 +44,11 @@ pub(crate) fn covers(algorithm: CertificateCompressionAlgorithm) -> bool {
     decompressors().iter().any(|d| d.algorithm() == algorithm)
 }
 
-pub const BROTLI: &dyn CertDecompressor = &Brotli;
+/// `brotli` (RFC 7932), the algorithm Chrome advertises.
+pub(crate) const BROTLI: &dyn CertDecompressor = &Brotli;
 
 /// `zlib` (RFC 1950), the algorithm Safari and Firefox advertise.
-pub const ZLIB: &dyn CertDecompressor = &Zlib;
+pub(crate) const ZLIB: &dyn CertDecompressor = &Zlib;
 
 /// `zstd` (RFC 8878), the third algorithm the Firefox family advertises.
 ///
@@ -52,7 +56,7 @@ pub const ZLIB: &dyn CertDecompressor = &Zlib;
 /// `--cert-compression zlib,brotli,zstd` and the bundle's own hello carries
 /// `06000100020003` — zlib, brotli, zstd in that order. Advertising it without a
 /// decoder is not an option: a server that picks zstd would end the handshake.
-pub const ZSTD: &dyn CertDecompressor = &Zstd;
+pub(crate) const ZSTD: &dyn CertDecompressor = &Zstd;
 
 /// The largest zstd window this build will allocate for.
 ///
@@ -62,6 +66,27 @@ pub const ZSTD: &dyn CertDecompressor = &Zstd;
 /// the routers this build targets and then some, so the frame header is read
 /// here first and anything above this is refused before the decoder allocates.
 const MAX_ZSTD_WINDOW: u64 = 1024 * 1024;
+
+/// The largest brotli window this build will allocate for, as the exponent the
+/// stream's own header carries.
+///
+/// brotli, unlike zstd, does not size its window from the input: the header names
+/// the `lgwin` the encoder was configured with, and the encoders this build meets
+/// leave it at the library default of 22 — rustls's own certificate compressor
+/// declares exactly that (`vendor/rustls/src/compress.rs`, `LGWIN = 22`, "the
+/// default lgwin parameter"), as does this module's test. RFC 7932's window is
+/// 10..=24, so 24 is the top of the range a conforming stream can declare and the
+/// only ceiling that cannot refuse a certificate a browser reads.
+///
+/// The decoder in the tree would honour more: `brotli_decompressor::BrotliDecompress`
+/// turns the Large-Window-Brotli extension on (`BrotliState::new` sets
+/// `large_window = true`), and its window reaches 30 — a `11 1e` header followed
+/// by a one-byte, not-last metablock has that decoder ask its allocator for
+/// `1 << 30` bytes, a gibibyte chosen by whoever sent the certificate. Reading the
+/// window first is what keeps that out of the allocator: `1 << 24` plus the
+/// decoder's 66 bytes of ring-buffer slack is the most any stream can make this
+/// build reserve.
+const MAX_BROTLI_WINDOW_BITS: u32 = 24;
 
 #[derive(Debug)]
 struct Brotli;
@@ -152,8 +177,50 @@ fn frame_window_size(frame: &[u8]) -> Option<u64> {
     Some(base + add)
 }
 
+/// The window size a brotli stream declares, from its header alone (RFC 7932 §9.2).
+///
+/// The window is the stream's first one to seven bits — fourteen when it uses the
+/// Large-Window-Brotli extension — read least-significant bit first, the order
+/// `brotli_decompressor`'s own `DecodeWindowBits` reads them in. A stream too
+/// short to hold its own header has no window and is refused by the caller.
+fn stream_window_bits(stream: &[u8]) -> Option<u32> {
+    // `count` bits of `stream` from bit `at` on, least-significant bit first.
+    fn take_bits(stream: &[u8], at: usize, count: u32) -> Option<u32> {
+        let mut value = 0;
+        for offset in 0..count as usize {
+            let byte = *stream.get((at + offset) / 8)?;
+            value |= u32::from((byte >> ((at + offset) % 8)) & 1) << offset;
+        }
+        Some(value)
+    }
+
+    if take_bits(stream, 0, 1)? == 0 {
+        return Some(16);
+    }
+    let value = take_bits(stream, 1, 3)?;
+    if value != 0 {
+        return Some(17 + value);
+    }
+    let value = take_bits(stream, 4, 3)?;
+    if value == 1 {
+        // The Large-Window-Brotli marker: one bit, then six bits of window.
+        return match take_bits(stream, 7, 1)? {
+            0 => take_bits(stream, 8, 6),
+            _ => None,
+        };
+    }
+    if value != 0 {
+        return Some(8 + value);
+    }
+    Some(17)
+}
+
 impl CertDecompressor for Brotli {
     fn decompress(&self, input: &[u8], output: &mut [u8]) -> Result<(), DecompressionFailed> {
+        if !matches!(stream_window_bits(input), Some(bits) if bits <= MAX_BROTLI_WINDOW_BITS) {
+            return Err(DecompressionFailed);
+        }
+
         let mut input = Cursor::new(input);
         let mut output = Cursor::new(output);
         brotli_decompressor::BrotliDecompress(&mut input, &mut output)
@@ -199,6 +266,28 @@ mod tests {
     fn brotli_compress(plain: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut encoder = brotli::CompressorWriter::new(&mut out, 4096, 9, 22);
+        encoder.write_all(plain).expect("encode");
+        encoder.flush().expect("encode");
+        drop(encoder);
+        out
+    }
+
+    /// `plain` as brotli wrote it with the Large-Window-Brotli extension on.
+    ///
+    /// `CompressorWriter::new` never sets `large_window`, and its `lgwin` is
+    /// clamped to 24 without it, so a stream declaring a window above the ceiling
+    /// can only be had through the parameter struct. The encoder's own ring buffer
+    /// is `1 << (1 + lgwin)` bytes, so the one call that asks for `lgwin = 25`
+    /// costs 64 MiB for as long as it runs.
+    fn brotli_compress_large_window(plain: &[u8], lgwin: i32) -> Vec<u8> {
+        let params = brotli::enc::BrotliEncoderParams {
+            lgwin,
+            large_window: true,
+            quality: 9,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        let mut encoder = brotli::CompressorWriter::with_params(&mut out, 4096, &params);
         encoder.write_all(plain).expect("encode");
         encoder.flush().expect("encode");
         drop(encoder);
@@ -318,5 +407,59 @@ mod tests {
         assert_eq!(frame_window_size(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]), None);
         assert_eq!(frame_window_size(&[0x28, 0xb5, 0x2f, 0xfd, 0x08, 0x00]), None);
         assert_eq!(frame_window_size(&[0x28, 0xb5]), None);
+    }
+
+    /// A stream that declares a window bigger than this build will allocate for
+    /// is refused from its header, before any decoder state exists.
+    ///
+    /// The stream is real: the encoder wrote it with the Large-Window-Brotli
+    /// extension at `lgwin = 25`, the smallest window above the ceiling, and the
+    /// decoder in the tree reads it back byte for byte — its window is the only
+    /// reason this module says no. `BrotliState::new` sets `large_window = true`,
+    /// so nothing else stands between such a header and `1 << 25` bytes of ring
+    /// buffer, or `1 << 30` for the thirty the extension allows.
+    #[test]
+    fn a_stream_that_declares_a_window_above_the_ceiling_is_refused() {
+        let plain = payload();
+        let stream = brotli_compress_large_window(&plain, 25);
+        assert_eq!(stream_window_bits(&stream), Some(25));
+        assert!(stream_window_bits(&stream).expect("a readable header") > MAX_BROTLI_WINDOW_BITS);
+
+        let mut decoded = vec![0u8; plain.len()];
+        brotli_decompressor::BrotliDecompress(
+            &mut Cursor::new(&stream),
+            &mut Cursor::new(&mut decoded[..]),
+        )
+        .expect("the decoder reads a large-window stream");
+        assert_eq!(decoded, plain, "the stream is the payload, compressed");
+
+        let mut out = vec![0u8; plain.len()];
+        assert!(BROTLI.decompress(&stream, &mut out).is_err());
+    }
+
+    /// The window a stream declares is read from its header alone, in both forms
+    /// the decoder in the tree accepts: RFC 7932's, and the six-bit window of the
+    /// Large-Window-Brotli extension.
+    #[test]
+    fn the_declared_window_is_read_from_the_stream_header() {
+        // WBITS 16 is one zero bit, 17 seven bits, 18..=24 four bits, and 10..=15
+        // seven bits — the codes brotli's own `EncodeWindowBits` writes.
+        assert_eq!(stream_window_bits(&[0x00]), Some(16));
+        assert_eq!(stream_window_bits(&[0x01]), Some(17));
+        for lgwin in 18..=24 {
+            let header = ((lgwin - 17) << 1) | 1;
+            assert_eq!(stream_window_bits(&[header as u8]), Some(lgwin));
+        }
+        for lgwin in 10..=15 {
+            let header = ((lgwin - 8) << 4) | 1;
+            assert_eq!(stream_window_bits(&[header as u8]), Some(lgwin));
+        }
+        // `11` is the extension's marker, and the six bits after it the window.
+        assert_eq!(stream_window_bits(&[0x11, 0x0a]), Some(10));
+        assert_eq!(stream_window_bits(&[0x11, 0x18]), Some(24));
+        assert_eq!(stream_window_bits(&[0x11, 0x1e]), Some(30));
+        // Not a header at all: nothing there, or a window that has not arrived.
+        assert_eq!(stream_window_bits(&[]), None);
+        assert_eq!(stream_window_bits(&[0x11]), None);
     }
 }

@@ -10,13 +10,17 @@ use crate::net::fingerprint::{HelloVariant, TlsFingerprint};
 use crate::net::hpke;
 
 /// Returns the shared pure-Rust RustCrypto provider.
-pub fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
+///
+/// Crate-private: no caller outside `dpi-core` picks a provider — the config
+/// builders do ([`create_tls_config`]) — so this stays a detail of how a
+/// `ClientConfig` is assembled.
+pub(crate) fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
     static PROVIDER: LazyLock<Arc<rustls::crypto::CryptoProvider>> = LazyLock::new(|| {
         let p = Arc::new(rustls_rustcrypto::provider());
         let _ = rustls_rustcrypto::provider().install_default();
         p
     });
-    PROVIDER.clone()
+    Arc::clone(&PROVIDER)
 }
 
 /// The provider plus our pure-Rust `X25519MLKEM768` group, offered first.
@@ -25,7 +29,7 @@ pub fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
 /// the shared provider would change the ClientHello (and the cost) of *every*
 /// connection, including the DNS truth probes that must stay comparable. Only
 /// fingerprint profiles and PQ-requiring probes use this one.
-pub fn crypto_provider_with_pq() -> Arc<rustls::crypto::CryptoProvider> {
+pub(crate) fn crypto_provider_with_pq() -> Arc<rustls::crypto::CryptoProvider> {
     static PROVIDER: LazyLock<Arc<rustls::crypto::CryptoProvider>> = LazyLock::new(|| {
         let base = crypto_provider();
         let mut groups: Vec<&'static dyn rustls::crypto::SupportedKxGroup> =
@@ -41,7 +45,7 @@ pub fn crypto_provider_with_pq() -> Arc<rustls::crypto::CryptoProvider> {
             ..(*base).clone()
         })
     });
-    PROVIDER.clone()
+    Arc::clone(&PROVIDER)
 }
 
 /// The protocol versions a profile offers.
@@ -226,8 +230,12 @@ pub fn create_tls_config(profile: &TlsProfile) -> Arc<ClientConfig> {
 /// A verifying profile's config is cached and shared, so an edit copies it into
 /// an owned one: a variant is private to the run that asked for it and must not
 /// reach the next connection that presents the same shape.
+///
+/// Crate-private: applying a variant means writing `config.hello_profile`, the
+/// patched rustls's field (`vendor/rustls/README-PATCH.md`), so the function
+/// exists only while `vendor/rustls` is the rustls this crate builds against.
 #[must_use = "the returned config is the shape every connection built from it presents"]
-pub fn create_tls_config_variant(
+pub(crate) fn create_tls_config_variant(
     profile: &TlsProfile,
     variant: Option<&HelloVariant>,
 ) -> Arc<ClientConfig> {
@@ -384,10 +392,10 @@ fn verifying_config(profile: &TlsProfile) -> Arc<ClientConfig> {
 
     let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some((_, config)) = cache.iter().find(|(shape, _)| shape == profile) {
-        return config.clone();
+        return Arc::clone(config);
     }
     let config = Arc::new(build_config(profile));
-    cache.push((profile.clone(), config.clone()));
+    cache.push((profile.clone(), Arc::clone(&config)));
     config
 }
 
@@ -675,7 +683,7 @@ mod tests {
     /// client would be accepting anything and would prove nothing.
     fn handshake(leaf: &'static [u8], key: &'static [u8], trust_ca: bool) -> Result<(), String> {
         let provider = crypto_provider();
-        let server_config = ServerConfig::builder_with_provider(provider.clone())
+        let server_config = ServerConfig::builder_with_provider(Arc::clone(&provider))
             .with_safe_default_protocol_versions()
             .expect("the provider serves TLS 1.2 and 1.3")
             .with_no_client_auth()

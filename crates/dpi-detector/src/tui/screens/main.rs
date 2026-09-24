@@ -398,8 +398,15 @@ fn radio_btn(selected: bool) -> &'static str {
     }
 }
 
+/// The menu's box, borders and rows included: what `draw_menu` paints between the
+/// banner and the footer. Pure, so the layout it is responsible for — no row wider
+/// than `BOX_WIDTH`, whatever the language, the interface name or the row the
+/// cursor is on — is measurable without a terminal.
+///
+/// Takes the same positional order as `draw_menu` (see there), minus the banner,
+/// the footer, the notice and the two frame counters.
 #[allow(clippy::too_many_arguments, reason = "the menu's whole state comes from the input loop; a bundle struct would exist for this one call")]
-fn draw_menu(
+fn menu_rows(
     cursor: usize,
     current_lang: Language,
     ip_version: &str,
@@ -410,17 +417,8 @@ fn draw_menu(
     test_options: &[(char, &str)],
     selected_tests: &HashSet<char>,
     msg: &Messages,
-    iface_value: String,
-    profile: RegionProfile,
-    badge: &str,
-    notice: Option<&str>,
-    prev_max: &mut usize,
-    drawn: &mut u16,
-) {
-    let mut rows: Vec<String> = Vec::with_capacity(24);
-    for row in render_banner(msg, profile, badge).split('\n') {
-        rows.push(clean_output(row));
-    }
+    iface_value: &str,
+) -> Vec<String> {
     let mut lines = Vec::new();
     let offset = 5;
 
@@ -507,11 +505,48 @@ fn draw_menu(
     // The box comes from the shared panel helper: border glyphs, title padding
     // and the per-row pad to the right edge live in one place, the same one the
     // legend and netinfo panels are drawn with.
-    rows.extend(
-        panel_to_string(&format_bidi(msg.menu_title, current_lang), &lines)
-            .lines()
-            .map(clean_output),
-    );
+    panel_to_string(&format_bidi(msg.menu_title, current_lang), &lines)
+        .lines()
+        .map(clean_output)
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments, reason = "the menu's whole state comes from the input loop; a bundle struct would exist for this one call")]
+fn draw_menu(
+    cursor: usize,
+    current_lang: Language,
+    ip_version: &str,
+    concurrency: usize,
+    presets: &[usize],
+    fingerprint: TlsFingerprint,
+    v6_supported: bool,
+    test_options: &[(char, &str)],
+    selected_tests: &HashSet<char>,
+    msg: &Messages,
+    iface_value: String,
+    profile: RegionProfile,
+    badge: &str,
+    notice: Option<&str>,
+    prev_max: &mut usize,
+    drawn: &mut u16,
+) {
+    let mut rows: Vec<String> = Vec::with_capacity(24);
+    for row in render_banner(msg, profile, badge).split('\n') {
+        rows.push(clean_output(row));
+    }
+    rows.extend(menu_rows(
+        cursor,
+        current_lang,
+        ip_version,
+        concurrency,
+        presets,
+        fingerprint,
+        v6_supported,
+        test_options,
+        selected_tests,
+        msg,
+        &iface_value,
+    ));
 
     rows.push(clean_output(&asc(&hotkey_row(msg, current_lang, plain_mode()))));
 
@@ -725,67 +760,86 @@ mod tests {
         assert!(bind::target().is_none(), "a name that resolves to nothing binds nothing");
     }
 
+    /// The menu is a fixed-width box and every row in it is exactly that wide. The
+    /// panel helper pads a line to the right edge, so a row *wider* than the box
+    /// keeps its length and the border loses its shape instead of wrapping.
+    ///
+    /// Measured on the rows `draw_menu` paints — `menu_rows` is the whole box — and
+    /// not on a copy of them: the label column is 16 wide, the row the cursor is on
+    /// draws a `►`, the fingerprint row prints one of thirty labels, the IPv6 row
+    /// has two forms, and the interface line carries a name that comes from the OS.
+    ///
+    /// The one thing this cannot measure is `--ascii`, whose glyph set is a
+    /// `OnceLock` set once per process: `panel_with` applies `asc` before it pads,
+    /// so that mode's wider `(x)`/`( )` are accounted for there, and the footer test
+    /// above is the one that measures it.
     #[test]
     fn test_menu_rows_fit_in_box_for_all_languages() {
+        let presets = [1usize, 5, 20, 50, 100];
         for lang in Language::ALL {
             let msg = get_messages(lang);
             let test_options = get_test_options(&msg);
-
-            // Title
-            let title_clean = format!(" {} ", asc(&format_bidi(msg.menu_title, lang)));
-            let title_len = strip_ansi_len(&title_clean);
-            assert!(title_len + 3 <= BOX_WIDTH, "title for {:?} overflows box: {}", lang, title_len);
-
-            let lang_opts = Language::ALL
-                .iter()
-                .map(|&l| {
-                    let lbl = l.label();
-                    if l == lang {
-                        format!("\x1b[1;32m(x)\x1b[0m {}", lbl)
-                    } else {
-                        format!("\x1b[2m( )\x1b[0m {}", lbl)
+            let selected: HashSet<char> = ['1', '3'].into_iter().collect();
+            // 0..=12 is every row the cursor can be on: the five fixed rows, then
+            // the eight test rows `menu_rows` numbers from its own `offset`.
+            for cursor in 0..=12 {
+                for ip_version in ["ipv4", "ipv6"] {
+                    for v6_supported in [true, false] {
+                        for iface in [
+                            msg.menu_interface_auto,
+                            // 37 columns: an adapter name plus an address is what
+                            // the menu shows, and the row holds 43 of them.
+                            "Realtek PCIe GbE Controller (10.0.0.1)",
+                        ] {
+                            let rows = menu_rows(
+                                cursor,
+                                lang,
+                                ip_version,
+                                50,
+                                &presets,
+                                TlsFingerprint::Chrome146,
+                                v6_supported,
+                                &test_options,
+                                &selected,
+                                &msg,
+                                iface,
+                            );
+                            for row in &rows {
+                                assert_eq!(
+                                    strip_ansi_len(row),
+                                    BOX_WIDTH,
+                                    "cursor {cursor} ip {ip_version} v6 {v6_supported} iface {iface:?} {lang:?}: {row:?}"
+                                );
+                            }
+                        }
                     }
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            let lang_lbl = format_bidi(msg.menu_language, lang);
-            let lang_line = format!("  ► {} {}", pad_width(&lang_lbl, 8), lang_opts);
-            let w = strip_ansi_len(&lang_line);
-            assert!(w + 3 <= BOX_WIDTH, "language row for {:?} overflows box: w={}", lang, w);
-
-            let ip_lbl = format_bidi(msg.menu_ip_version, lang);
-            let ip_line = format!("    {} (x) IPv4   ( ) IPv6", pad_width(&ip_lbl, 15));
-            let w = strip_ansi_len(&ip_line);
-            assert!(w + 3 <= BOX_WIDTH, "ip row for {:?} overflows box: w={}", lang, w);
-
-            let conc_lbl = format_bidi(msg.menu_concurrency, lang);
-            let conc_line = format!("    {} (x) 50   ( ) 100", pad_width(&conc_lbl, 15));
-            let w = strip_ansi_len(&conc_line);
-            assert!(w + 3 <= BOX_WIDTH, "conc row for {:?} overflows box: w={}", lang, w);
+                }
+            }
 
             // Every profile, since the row shows one label at a time and a longer
             // label must not push the box border out.
-            for (i, fp) in TlsFingerprint::ALL.iter().enumerate() {
-                let fp_line = format!(
-                    "  ► {} {} [{}/{}]",
-                    pad_width(msg.fingerprint_label.trim_end_matches(':'), 16),
-                    fingerprint_label(*fp, lang),
-                    i + 1,
-                    TlsFingerprint::ALL.len()
-                );
-                let w = strip_ansi_len(&fp_line);
-                assert!(
-                    w + 3 <= BOX_WIDTH,
-                    "fingerprint row {} for {:?} overflows box: w={}",
-                    fp.code(),
+            for fingerprint in TlsFingerprint::ALL {
+                let rows = menu_rows(
+                    4,
                     lang,
-                    w
+                    "ipv4",
+                    100,
+                    &presets,
+                    fingerprint,
+                    true,
+                    &test_options,
+                    &selected,
+                    &msg,
+                    "eth0",
                 );
-            }
-            for (digit, label) in test_options {
-                let test_line = format!("  ► [ ] {}. {}", digit, format_bidi(label, lang));
-                let w = strip_ansi_len(&test_line);
-                assert!(w + 3 <= BOX_WIDTH, "test row {} for {:?} overflows box: w={}", digit, lang, w);
+                for row in &rows {
+                    assert_eq!(
+                        strip_ansi_len(row),
+                        BOX_WIDTH,
+                        "{} {lang:?}: {row:?}",
+                        fingerprint.code()
+                    );
+                }
             }
         }
     }

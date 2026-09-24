@@ -17,8 +17,14 @@ use super::shapes::TlsShape;
 /// shape: no `match` on a variant decides a setting. `h2_fingerprint` hands the
 /// baseline `None`, which is hyper's own defaults — the shape every earlier
 /// measurement used.
+///
+/// Crate-private: `pseudo_order` is [`PseudoOrder`], a type the patched `h2`
+/// adds and no published `h2` has (`vendor/h2/README-PATCH.md`), so a caller
+/// outside this crate could not name this struct's field type. The preface
+/// reaches the wire through [`crate::probe::http::HttpSender`], which takes only
+/// the fingerprint.
 #[derive(Debug, Clone, Copy)]
-pub struct H2Fingerprint {
+pub(crate) struct H2Fingerprint {
     /// `SETTINGS_HEADER_TABLE_SIZE`; `None` omits the setting.
     pub header_table_size: Option<u32>,
     /// `SETTINGS_MAX_CONCURRENT_STREAMS`; `None` omits the setting.
@@ -67,7 +73,10 @@ impl TlsShape {
 
 /// The HTTP/2 preface of `fingerprint`, `None` for the baseline profile
 /// (hyper's own defaults, the shape every earlier measurement used).
-pub fn h2_fingerprint(fingerprint: super::TlsFingerprint) -> Option<H2Fingerprint> {
+///
+/// Crate-private for the same reason [`H2Fingerprint`] is: the shape it returns
+/// carries the patched `h2`'s [`PseudoOrder`].
+pub(crate) fn h2_fingerprint(fingerprint: super::TlsFingerprint) -> Option<H2Fingerprint> {
     fingerprint.spec().preface()
 }
 

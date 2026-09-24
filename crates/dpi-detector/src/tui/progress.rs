@@ -2,6 +2,7 @@
 //! clock moving, and the spinner for phases without a total.
 
 use dpi_core::ProgressBlock;
+use std::fmt::Write as _;
 use std::io::{IsTerminal, Write};
 use std::sync::{Arc, Mutex, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,19 +24,25 @@ struct ProgressState {
     /// Width of the last drawn line, so a shrinking counter cannot leave
     /// digits behind on the terminal.
     drawn: usize,
+    /// The line itself, kept between draws: a tick changes the counters and the
+    /// clock, not the description or the tokens, and the buffer holds the
+    /// capacity it grew to instead of being built again from scratch.
+    line: String,
 }
 
 /// How often the line is redrawn while nothing finishes, so the elapsed clock
 /// keeps moving and a slow unit does not make the phase look hung.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
-/// `mm:ss`, or `h:mm:ss` past the hour.
-fn fmt_dur(d: Duration) -> String {
+/// `mm:ss`, or `h:mm:ss` past the hour, appended to `out`. Written rather than
+/// returned: the clock is redrawn on every tick, and a fresh `String` per tick
+/// is an allocation per probe.
+fn write_dur(out: &mut String, d: Duration) {
     let s = d.as_secs();
     if s >= 3600 {
-        format!("{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+        let _ = write!(out, "{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60);
     } else {
-        format!("{:02}:{:02}", s / 60, s % 60)
+        let _ = write!(out, "{:02}:{:02}", s / 60, s % 60);
     }
 }
 
@@ -47,20 +54,26 @@ fn fmt_dur(d: Duration) -> String {
 /// of magnitude across blocks, so a projected rate would lie. The trailing
 /// ellipsis of the phase descriptions is dropped, the live numbers already say
 /// "running".
-fn progress_line(desc: &str, blocks: &[BlockState], elapsed: Duration) -> String {
-    let mut line = desc.trim_end_matches(['.', ' ']).to_string();
+///
+/// Rewritten into `out` instead of built as a new `String`: the description and
+/// the tokens are the same on every draw of a phase, so only the counters and
+/// the clock change, and the buffer keeps its capacity between ticks.
+fn write_line(out: &mut String, desc: &str, blocks: &[BlockState], elapsed: Duration) {
+    out.clear();
+    out.push_str(desc.trim_end_matches(['.', ' ']));
     if blocks.len() == 1 && blocks[0].token.is_empty() {
-        line.push_str(&format!("  {}/{}", blocks[0].done, blocks[0].total));
+        let _ = write!(out, "  {}/{}", blocks[0].done, blocks[0].total);
     } else if !blocks.is_empty() {
-        let counters: Vec<String> = blocks
-            .iter()
-            .map(|b| format!("{} {}/{}", b.token, b.done, b.total))
-            .collect();
-        line.push_str("  ");
-        line.push_str(&counters.join(" · "));
+        out.push_str("  ");
+        for (i, b) in blocks.iter().enumerate() {
+            if i > 0 {
+                out.push_str(" · ");
+            }
+            let _ = write!(out, "{} {}/{}", b.token, b.done, b.total);
+        }
     }
-    line.push_str(&format!(" · {}", fmt_dur(elapsed)));
-    line
+    out.push_str(" · ");
+    write_dur(out, elapsed);
 }
 
 /// A timer that redraws the line while a phase runs.
@@ -94,6 +107,7 @@ impl LiveProgress {
                 blocks: Vec::new(),
                 started: Instant::now(),
                 drawn: 0,
+                line: String::new(),
             }),
             me: Mutex::new(Weak::new()),
             refresher: Mutex::new(Refresher::idle()),
@@ -260,14 +274,20 @@ impl LiveProgress {
         }
         if let Ok(mut st) = self.state.lock() {
             let elapsed = st.started.elapsed();
-            let text = progress_line(&st.desc, &st.blocks, elapsed);
+            // The buffer leaves the state for the length of the write and comes
+            // back holding its capacity, so a tick rewrites the line instead of
+            // allocating a new one.
+            let mut line = std::mem::take(&mut st.line);
+            write_line(&mut line, &st.desc, &st.blocks, elapsed);
             // Pad over the tail of a longer previous line before parking the
             // cursor: `\r` alone only moves it, it does not erase.
-            let width = text.chars().count();
+            let width = line.chars().count();
             let pad = st.drawn.saturating_sub(width);
-            eprint!("\r  {}{}", text, " ".repeat(pad));
+            line.extend(std::iter::repeat_n(' ', pad));
+            eprint!("\r  {}", line);
             let _ = std::io::stderr().flush();
             st.drawn = width;
+            st.line = line;
         }
     }
 }
@@ -322,6 +342,21 @@ impl Spinner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The line as text: the live path writes into a buffer it keeps between
+    /// draws, so the test supplies a buffer of its own.
+    fn progress_line(desc: &str, blocks: &[BlockState], elapsed: Duration) -> String {
+        let mut line = String::new();
+        write_line(&mut line, desc, blocks, elapsed);
+        line
+    }
+
+    /// `write_dur` as text, for the same reason.
+    fn fmt_dur(d: Duration) -> String {
+        let mut out = String::new();
+        write_dur(&mut out, d);
+        out
+    }
+
     /// The live line is what the user watches during a run: a single-counter
     /// phase names the unit and estimates the remainder while there is one, and
     /// a multi-block phase shows every counter that is running at once.

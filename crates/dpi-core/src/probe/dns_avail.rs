@@ -585,54 +585,71 @@ pub async fn check_dns_availability(
                 {
                     let _g = crate::probe::permit(&gate).await;
 
-                    // Phase A: trusted domains, fanned out per server. Phase B
-                    // fires as soon as ANY trusted domain answers — liveness is
-                    // `any(l.is_some())`, so waiting for a silent sibling only
-                    // delays the substitution phase. Late phase-A results are
-                    // still collected for the latency table.
-                    let (a_tx, mut a_rx) = mpsc::channel::<UdpQueryResult>(allowed.len().max(1));
-                    let _ = spawn_udp_queries(
-                        server,
-                        &allowed,
-                        timeout_dur,
-                        &udp_gate,
-                        socks_proxy.as_deref(),
-                        Some(a_tx),
+                    // Outer cap, the same backstop the DoH and DoT probes carry:
+                    // the caller awaits this block unconditionally, so a query
+                    // task that never returns would freeze test 1. One UDP query
+                    // costs at most two windows — the SOCKS5 association, then
+                    // the answer wait — and the phases run in gate-wide waves,
+                    // so the legitimate worst case is `waves × 2 × timeout_dur`;
+                    // two more waves of slack cover scheduling and the egress
+                    // fingerprint. The body borrows `lat`/`answers` rather than
+                    // owning them, so reaching the cap keeps the answers already
+                    // collected instead of discarding them.
+                    let waves = allowed.len().div_ceil(dns_gate) + forbidden.len().div_ceil(dns_gate);
+                    let cap = Duration::from_secs_f64(
+                        timeout_dur.as_secs_f64() * 2.0 * (waves + 2) as f64 + 3.0,
                     );
+                    let probe = async {
+                        // Phase A: trusted domains, fanned out per server. Phase B
+                        // fires as soon as ANY trusted domain answers — liveness is
+                        // `any(l.is_some())`, so waiting for a silent sibling only
+                        // delays the substitution phase. Late phase-A results are
+                        // still collected for the latency table.
+                        let (a_tx, mut a_rx) = mpsc::channel::<UdpQueryResult>(allowed.len().max(1));
+                        let _ = spawn_udp_queries(
+                            server,
+                            &allowed,
+                            timeout_dur,
+                            &udp_gate,
+                            socks_proxy.as_deref(),
+                            Some(a_tx),
+                        );
 
-                    let mut alive = false;
-                    let mut b_handles = Vec::new();
-                    for _ in 0..allowed.len() {
-                        let Some((d, r)) = a_rx.recv().await else { break };
-                        let (l, a) = answer_of(r);
-                        if l.is_some() {
-                            alive = true;
-                        }
-                        if let Some(ans) = a {
-                            answers.push(((key.clone(), d.clone()), ans));
-                        }
-                        lat.insert(d, l);
-                        // Phase B: forbidden domains on live servers only.
-                        if alive && b_handles.is_empty() && !forbidden.is_empty() {
-                            b_handles = spawn_udp_queries(
-                                server,
-                                &forbidden,
-                                timeout_dur,
-                                &udp_gate,
-                                socks_proxy.as_deref(),
-                                None,
-                            );
-                        }
-                    }
-                    for h in b_handles {
-                        if let Ok(Some((d, r))) = h.await {
+                        let mut alive = false;
+                        let mut b_handles = Vec::new();
+                        for _ in 0..allowed.len() {
+                            let Some((d, r)) = a_rx.recv().await else { break };
                             let (l, a) = answer_of(r);
+                            if l.is_some() {
+                                alive = true;
+                            }
                             if let Some(ans) = a {
                                 answers.push(((key.clone(), d.clone()), ans));
                             }
                             lat.insert(d, l);
+                            // Phase B: forbidden domains on live servers only.
+                            if alive && b_handles.is_empty() && !forbidden.is_empty() {
+                                b_handles = spawn_udp_queries(
+                                    server,
+                                    &forbidden,
+                                    timeout_dur,
+                                    &udp_gate,
+                                    socks_proxy.as_deref(),
+                                    None,
+                                );
+                            }
                         }
-                    }
+                        for h in b_handles {
+                            if let Ok(Some((d, r))) = h.await {
+                                let (l, a) = answer_of(r);
+                                if let Some(ans) = a {
+                                    answers.push(((key.clone(), d.clone()), ans));
+                                }
+                                lat.insert(d, l);
+                            }
+                        }
+                    };
+                    let _ = tokio::time::timeout(cap, probe).await;
                 }
 
                 // The server's own probes are done here (and its gate slot is
@@ -848,12 +865,16 @@ pub async fn check_dns_availability(
     let org_handles: Vec<_> = {
         let unique: HashSet<IpAddr> = report.egress.values().filter_map(|v| *v).collect();
         let asn_sem = Arc::new(Semaphore::new(auto_gate(cfg.dns_asn_concurrency.max(1))));
+        // Shared, not copied: the Cymru server list is constant for the whole
+        // run, so each lookup task takes one `Arc` refcount bump instead of a
+        // deep copy of the list.
+        let cymru: Arc<[String]> = cfg.cymru_doh_servers.clone().into();
         unique
             .into_iter()
             .map(|ip| {
                 let asn_sem = Arc::clone(&asn_sem);
                 let budget = Arc::clone(&probe_gate);
-                let cymru = cfg.cymru_doh_servers.clone();
+                let cymru = Arc::clone(&cymru);
                 tokio::spawn(async move {
                     let _p = crate::probe::permit(&asn_sem).await;
                     let _b = crate::probe::permit(&budget).await;

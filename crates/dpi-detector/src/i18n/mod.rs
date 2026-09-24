@@ -76,12 +76,15 @@ impl Language {
     }
 }
 
-/// Returns the text as-is. Kept for backwards compatibility with UI rendering callsites.
+/// Returns the text as-is. Every callsite hands the result to something that owns
+/// a `String` (`Cell::new`, `format!`), so the wrapper is a name for a seam, not
+/// work: `_lang` is the parameter a direction-aware transform would take, unused
+/// because no language in the interface set needs one today.
 pub(crate) fn format_bidi(text: &str, _lang: Language) -> String {
     text.to_string()
 }
 
-/// Returns the text as-is. Kept for backwards compatibility with UI rendering callsites.
+/// As [`format_bidi`], for the callsites that have no `Language` at hand.
 pub(crate) fn format_bidi_str(text: &str) -> String {
     text.to_string()
 }

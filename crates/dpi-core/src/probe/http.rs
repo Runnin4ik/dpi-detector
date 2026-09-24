@@ -9,7 +9,7 @@
 //!
 //! A probe also presents the profile's HTTP identity — its `User-Agent` and
 //! header set ([`crate::net::fingerprint::http_identity`]) and its HTTP/2 preface
-//! ([`h2_fingerprint`]),
+//! (`h2_fingerprint`),
 //! both taken from the `curl-impersonate` wrapper the ClientHello is pinned to.
 //! The request itself comes from the call site: which headers a test sends is a
 //! property of the test, the profile only decides what the client looks like.
@@ -18,6 +18,7 @@
 //! judgement, the body read and the verdicts they produce — so tests 2 and 6 send
 //! the same thing and mean the same status when they report one.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -73,7 +74,11 @@ pub struct HttpRequest<'a> {
     pub host: &'a str,
     pub path: &'a str,
     /// Sent in this order, minus the connection-specific ones HTTP/2 rejects.
-    pub headers: Vec<(&'a str, String)>,
+    ///
+    /// Every value but a test's own extras is a constant the profile carries or
+    /// a borrow of the configured `USER_AGENT`, so the list is a `Cow` per value
+    /// and a request copies nothing it did not build.
+    pub headers: Vec<(&'a str, Cow<'a, str>)>,
     /// Whether the client the profile copies sends `priority` over HTTP/1.1 as
     /// well ([`HttpIdentity::priority_on_h1`]); HTTP/2 always carries it.
     pub priority_on_h1: bool,
@@ -87,22 +92,27 @@ pub struct HttpRequest<'a> {
 /// that count the bytes a connection carries before it is cut. A negotiated
 /// `Content-Encoding` would make those numbers depend on how well the response
 /// compresses; the fingerprint tests send what the impersonated client sends.
+///
+/// The list borrows its constants: the profile's header set and the configured
+/// `USER_AGENT` are the same bytes on every request, and only the extras arrive
+/// owned (`Cow::Owned`), so a probe that sends ten identity headers allocates
+/// nothing for them.
 pub fn request_headers<'a>(
     identity: &HttpIdentity,
     user_agent: &'a str,
-    extras: impl IntoIterator<Item = (&'a str, String)>,
+    extras: impl IntoIterator<Item = (&'a str, Cow<'a, str>)>,
     identity_encoding: bool,
-) -> Vec<(&'a str, String)> {
-    let mut headers: Vec<(&'a str, String)> = identity
+) -> Vec<(&'a str, Cow<'a, str>)> {
+    let mut headers: Vec<(&'a str, Cow<'a, str>)> = identity
         .headers
         .iter()
         .map(|(name, value)| {
             // The profile's own UA comes from the identity; everything else is a
             // constant. `name` is `&'static str`, which outlives `'a`.
             let value = if name.eq_ignore_ascii_case("user-agent") {
-                user_agent.to_string()
+                Cow::Borrowed(user_agent)
             } else {
-                (*value).to_string()
+                Cow::Borrowed(*value)
             };
             (*name, value)
         })
@@ -110,7 +120,7 @@ pub fn request_headers<'a>(
     if identity_encoding {
         for (name, value) in &mut headers {
             if name.eq_ignore_ascii_case("accept-encoding") {
-                *value = "identity".to_string();
+                *value = Cow::Borrowed("identity");
             }
         }
     }
@@ -120,12 +130,19 @@ pub fn request_headers<'a>(
 
 /// A hyper sender for whichever protocol the connection agreed on.
 ///
-/// The HTTP/2 arm carries the request shape its profile pinned (pseudo-header
-/// order and whether a request's `HEADERS` frame takes the PRIORITY flag): a
-/// shape belongs to the connection's identity, not to one request, and the
-/// patched `h2` reads it from the request's extensions
-/// (`vendor/h2/README-PATCH.md`).
-pub enum HttpSender {
+/// Opaque on purpose: the HTTP/2 arm carries the request shape its profile
+/// pinned (pseudo-header order and whether a request's `HEADERS` frame takes the
+/// PRIORITY flag), and that shape is [`RequestShape`] — a type the patched `h2`
+/// adds (`vendor/h2/README-PATCH.md`) and no published `h2` has. A caller names
+/// the sender and its methods, never the variant, so replacing the fork stays a
+/// change inside this crate.
+pub struct HttpSender(Sender);
+
+/// The two client connections, one per protocol.
+///
+/// Private: both arms carry hyper's own `SendRequest`, and the h2 one carries
+/// the fork-only request shape beside it.
+enum Sender {
     H1(hyper::client::conn::http1::SendRequest<Full<Bytes>>),
     H2 {
         sender: hyper::client::conn::http2::SendRequest<Full<Bytes>>,
@@ -169,26 +186,26 @@ impl HttpSender {
                 pseudo_order: h2.pseudo_order,
                 priority: h2.priority,
             });
-            Ok(Self::H2 { sender, shape })
+            Ok(Self(Sender::H2 { sender, shape }))
         } else {
             let (sender, connection) = hyper::client::conn::http1::handshake(io).await?;
             tokio::spawn(async move {
                 let _ = connection.await;
             });
-            Ok(Self::H1(sender))
+            Ok(Self(Sender::H1(sender)))
         }
     }
 
     /// True when the connection speaks HTTP/2.
     pub fn is_h2(&self) -> bool {
-        matches!(self, Self::H2 { .. })
+        matches!(self.0, Sender::H2 { .. })
     }
 
     /// True once the peer closed the connection or the driver stopped.
     pub fn is_closed(&self) -> bool {
-        match self {
-            Self::H1(sender) => sender.is_closed(),
-            Self::H2 { sender, .. } => sender.is_closed(),
+        match &self.0 {
+            Sender::H1(sender) => sender.is_closed(),
+            Sender::H2 { sender, .. } => sender.is_closed(),
         }
     }
 
@@ -200,13 +217,13 @@ impl HttpSender {
     /// validate their identity first, and under `panic = "abort"` an `expect`
     /// here would kill the whole run.
     pub async fn send(&mut self, req: HttpRequest<'_>) -> hyper::Result<Response<Incoming>> {
-        match self {
-            Self::H1(sender) => {
+        match &mut self.0 {
+            Sender::H1(sender) => {
                 let request =
                     build_request(&req, false).unwrap_or_else(|_| build_request_lenient(&req));
                 sender.send_request(request).await
             }
-            Self::H2 { sender, shape } => {
+            Sender::H2 { sender, shape } => {
                 let mut request = build_request(&req, true).unwrap_or_else(|_| rejected_h2_request());
                 if let Some(shape) = *shape {
                     request.extensions_mut().insert(shape);
@@ -313,12 +330,12 @@ fn add_headers(
             continue;
         }
         if drop_invalid {
-            if let Ok(value) = HeaderValue::from_str(value) {
+            if let Ok(value) = HeaderValue::from_str(value.as_ref()) {
                 builder = builder.header(*name, value);
             }
             continue;
         }
-        builder = builder.header(*name, value);
+        builder = builder.header(*name, value.as_ref());
     }
     Ok(builder)
 }
@@ -357,7 +374,7 @@ fn is_connection_specific(name: &str) -> bool {
 
 /// The protocol a TLS stream negotiated, as the flag [`HttpSender::handshake`]
 /// wants.
-pub fn negotiated_h2<S>(tls: &tokio_rustls::client::TlsStream<S>) -> bool {
+pub(crate) fn negotiated_h2<S>(tls: &tokio_rustls::client::TlsStream<S>) -> bool {
     tls.get_ref().1.alpn_protocol() == Some(b"h2")
 }
 
@@ -595,7 +612,7 @@ pub(crate) async fn check_http(
         let headers = request_headers(
             &identity,
             user_agent,
-            [("Connection", "close".to_string())],
+            [("Connection", "close".into())],
             identity_encoding,
         );
         // Every value but the user-agent is the profile's own constant, and the
@@ -605,7 +622,7 @@ pub(crate) async fn check_http(
         // a configuration error, not something the network did, so the probe
         // reports it instead of a verdict — and it never reaches the request
         // builder, where under `panic = "abort"` it would kill the run.
-        if let Some((name, _)) = headers.iter().find(|(_, value)| HeaderValue::from_str(value).is_err()) {
+        if let Some((name, _)) = headers.iter().find(|(_, value)| HeaderValue::from_str(value.as_ref()).is_err()) {
             let detail = if name.eq_ignore_ascii_case("user-agent") {
                 Detail::Other("invalid USER_AGENT in config.yml".to_string())
             } else {
@@ -720,9 +737,9 @@ mod tests {
             host: "example.com",
             path: "/x",
             headers: vec![
-                ("user-agent", "ua".to_string()),
-                ("accept-encoding", "identity".to_string()),
-                ("connection", "close".to_string()),
+                ("user-agent", "ua".into()),
+                ("accept-encoding", "identity".into()),
+                ("connection", "close".into()),
             ],
             priority_on_h1: false,
         }
@@ -755,10 +772,10 @@ mod tests {
     #[test]
     fn only_the_h1_request_carries_the_name_spellings() {
         let mut chrome = request();
-        chrome.headers.push(("Sec-Fetch-Site", "none".to_string()));
+        chrome.headers.push(("Sec-Fetch-Site", "none".into()));
         assert!(build_request(&chrome, false).expect("builds").extensions().get::<HeaderCaseMap>().is_some());
         let mut chrome = request();
-        chrome.headers.push(("Sec-Fetch-Site", "none".to_string()));
+        chrome.headers.push(("Sec-Fetch-Site", "none".into()));
         assert!(build_request(&chrome, true).expect("builds").extensions().get::<HeaderCaseMap>().is_none());
     }
 
@@ -770,7 +787,7 @@ mod tests {
         let with_priority = |on_h1: bool| {
             let mut req = request();
             req.priority_on_h1 = on_h1;
-            req.headers.push(("Priority", "u=0, i".to_string()));
+            req.headers.push(("Priority", "u=0, i".into()));
             req
         };
         let kept = build_request(&with_priority(true), false).expect("builds");
@@ -788,7 +805,7 @@ mod tests {
     fn te_keeps_its_spelling_on_h1_and_normalizes_on_h2() {
         let with_te = || {
             let mut req = request();
-            req.headers.push(("TE", "Trailers".to_string()));
+            req.headers.push(("TE", "Trailers".into()));
             req
         };
         let h1 = build_request(&with_te(), false).expect("builds");

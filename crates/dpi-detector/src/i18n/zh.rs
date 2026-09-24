@@ -264,6 +264,7 @@ pub(crate) fn messages() -> Messages {
         cli_trace: "测试 6 追踪: 每次尝试一行（轮次、指纹、域名、状态、详情、毫秒）；无路径写入 stderr，有路径写入该文件 [默认: 关闭]",
         trace_open_failed: "无法打开追踪文件 {}",
         domains_load_failed: "无法读取 --domains 列表 {} — 没有目标的测试不会测得任何结果，因此中止",
+        domains_list_empty: "{}（其中没有可用的域名）",
         whitelist_load_failed: "无法读取白名单 SNI 文件 {}: 改用内置列表",
         tcp16_load_failed: "无法读取 --tcp16 列表 {} — 改用内置目标会测到并非指定的主机，因此中止",
         cli_domains: "自定义域名列表文件路径",

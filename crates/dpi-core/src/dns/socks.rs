@@ -1,6 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::timeout;
 use url::Url;
 
 use super::types::DnsError;
@@ -40,6 +42,27 @@ pub fn parse_socks_proxy(proxy_url: &str) -> Result<SocksProxyConfig, DnsError> 
         None
     };
     let password = parsed.password().map(urlencoding_decode);
+
+    // RFC 1929 carries ULEN and PLEN in one byte each, and the association
+    // writes them with `as u8`: a longer credential would wrap to a length
+    // that disagrees with the body sent to the proxy, so reject it here rather
+    // than send a desynchronised USER/PASS exchange.
+    if let Some(u) = &username {
+        if u.len() > usize::from(u8::MAX) {
+            return Err(DnsError::Socks5(format!(
+                "proxy username is {} bytes, RFC 1929 allows at most 255",
+                u.len()
+            )));
+        }
+    }
+    if let Some(p) = &password {
+        if p.len() > usize::from(u8::MAX) {
+            return Err(DnsError::Socks5(format!(
+                "proxy password is {} bytes, RFC 1929 allows at most 255",
+                p.len()
+            )));
+        }
+    }
 
     Ok(SocksProxyConfig {
         host,
@@ -104,7 +127,25 @@ pub fn unwrap_socks_udp(data: &[u8]) -> Result<&[u8], DnsError> {
 }
 
 /// Establishes SOCKS5 UDP association and returns the UDP relay endpoint address.
+///
+/// The whole association — TCP connect, greeting, optional USER/PASS exchange
+/// and the ASSOCIATE reply — runs under a single `timeout_dur` deadline. That
+/// is the connect plus eight writes and reads on one TCP stream, so a proxy
+/// that accepts the connection and then goes silent would otherwise leave
+/// `read_exact` pending forever; `probe_udp_dns` times only its own
+/// `recv_from`, so nothing else in the chain would cut that hang. One deadline
+/// around the whole association rather than one per step: what matters to the
+/// caller is that its answer comes back, not which round-trip was slow.
 pub async fn associate_socks5_udp(
+    proxy: &SocksProxyConfig,
+    timeout_dur: Duration,
+) -> Result<(SocketAddr, TcpStream), DnsError> {
+    timeout(timeout_dur, associate_socks5_udp_inner(proxy))
+        .await
+        .map_err(|_| DnsError::Timeout)?
+}
+
+async fn associate_socks5_udp_inner(
     proxy: &SocksProxyConfig,
 ) -> Result<(SocketAddr, TcpStream), DnsError> {
     let addr = format!("{}:{}", proxy.host, proxy.port);
@@ -248,6 +289,26 @@ mod tests {
         assert_eq!(p2.port, 9050);
         assert_eq!(p2.username, Some("user".to_string()));
         assert_eq!(p2.password, Some("pass".to_string()));
+    }
+
+    #[test]
+    fn test_parse_socks_proxy_rejects_overlong_credentials() {
+        // RFC 1929 gives ULEN and PLEN one byte each. A 256-byte credential
+        // would wrap to length 0 in the `as u8` at the write site and send the
+        // proxy an exchange whose declared length disagrees with its body.
+        let long = "u".repeat(256);
+        let url = format!("socks5://{}:pass@127.0.0.1:1080", long);
+        assert!(matches!(parse_socks_proxy(&url), Err(DnsError::Socks5(_))));
+
+        let long = "p".repeat(256);
+        let url = format!("socks5://user:{}@127.0.0.1:1080", long);
+        assert!(matches!(parse_socks_proxy(&url), Err(DnsError::Socks5(_))));
+
+        // 255 bytes is the last length the wire field can carry.
+        let max = "u".repeat(255);
+        let url = format!("socks5://{}:pass@127.0.0.1:1080", max);
+        let parsed = parse_socks_proxy(&url).unwrap();
+        assert_eq!(parsed.username.as_deref(), Some(max.as_str()));
     }
 
     #[test]

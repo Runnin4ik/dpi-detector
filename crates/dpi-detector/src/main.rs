@@ -93,6 +93,15 @@ pub(crate) fn println_out(s: &str) {
     text.push_str("\r\n");
     output_str(&text);
 }
+
+/// Operator-facing text under `--json`: stdout carries the machine-readable
+/// document, and nothing else may reach it (`.omp/rules/stdout-is-machine-channel.md`),
+/// so a config diagnostic or the legend goes to stderr instead. Escape codes are
+/// stripped on the way — stderr has no Win32 console translation behind it, and
+/// what reads it is a log.
+fn diagnostic_to_stderr(text: &str) {
+    eprintln!("{}", strip_ansi(&clean_output(text)));
+}
 pub(crate) struct Emitter {
     pub(crate) report: String,
     pub(crate) json_mode: bool,
@@ -235,7 +244,6 @@ async fn main() {
     #[cfg(not(windows))]
     let plain = legacy_console || no_color;
     set_plain_mode(plain);
-    let profile = RegionProfile::from_code(&args.profile).unwrap_or_default();
     let mut lang = if args.lang == "auto" {
         Language::autodetect()
     } else {
@@ -252,6 +260,29 @@ async fn main() {
     };
     let mut msg = get_messages(lang);
     PANIC_LANG.store(lang_code(lang), std::sync::atomic::Ordering::Relaxed);
+    // A `--profile` that matches nothing used to pick the default region in
+    // silence, and the region is not cosmetic: it names the target lists a run
+    // falls back to and it is the `profile` field of the `--json` document, so a
+    // typo measured the wrong hosts and reported the wrong region. Reported the
+    // way an unknown `--lang`/`--fingerprint` is — the same kind of recoverable
+    // value: the default stands and the operator is told. stderr in every mode,
+    // `--json` included: stdout is the document, and a consumer cannot tell a
+    // rejected flag from a correct one. `warn_unknown_burst_axis` is the tree's
+    // generic "unknown flag value" wording (three `{}`: flag, value, what is used
+    // instead), already shared by the test 6 axis flags.
+    let profile = match RegionProfile::from_code(&args.profile) {
+        Some(profile) => profile,
+        None => {
+            eprintln!(
+                "{}",
+                msg.warn_unknown_burst_axis
+                    .replacen("{}", "--profile", 1)
+                    .replacen("{}", &args.profile, 1)
+                    .replacen("{}", RegionProfile::default().code(), 1)
+            );
+            RegionProfile::default()
+        }
+    };
 
     // Validators: an invalid flag prints its message and exits with status 2.
     if let Some(ref t) = args.tests {
@@ -308,7 +339,7 @@ async fn main() {
         .try_init();
 
     // Domains / TCP targets / whitelist, loaded from the CLI args and the config.
-    let domains = targets_or_exit(load_domains(&args, &cfg, profile), msg.domains_load_failed);
+    let domains = targets_or_exit(load_domains(&args, &cfg, profile, &msg), msg.domains_load_failed);
     let tcp_items = targets_or_exit(load_tcp16_targets(&args, &cfg), msg.tcp16_load_failed);
     let whitelist_sni = load_whitelist_sni_list(&cfg, &msg);
     // Test 4 is unavailable without an SNI list, so warn when the list is empty.
@@ -316,19 +347,36 @@ async fn main() {
         print_out(&format!("\x1b[33m{}\x1b[0m", msg.whitelist_skipped));
     }
 
-    if let Some(ref e) = cfg.config_load_error {
-        println_out(&format!("\x1b[1;33m{}\x1b[0m {}", msg.config_load_error_label, e));
+    // A config error or warning is operator text, like the legend below: under
+    // `--json` it goes to stderr, so a consumer's parser sees the document alone.
+    if let Some(e) = &cfg.config_load_error {
+        let line = format!("\x1b[1;33m{}\x1b[0m {}", msg.config_load_error_label, e);
+        if args.json {
+            diagnostic_to_stderr(&line);
+        } else {
+            println_out(&line);
+        }
     }
     for w in &cfg.config_warnings {
-        println_out(&format!(
+        let line = format!(
             "\x1b[33m{}\x1b[0m {}",
             msg.config_warning_label,
             msg.config_warning(w)
-        ));
+        );
+        if args.json {
+            diagnostic_to_stderr(&line);
+        } else {
+            println_out(&line);
+        }
     }
 
     if args.legend {
-        print_out(&legend_text(lang, &msg));
+        let legend = legend_text(lang, &msg);
+        if args.json {
+            diagnostic_to_stderr(&legend);
+        } else {
+            print_out(&legend);
+        }
         return;
     }
 
@@ -502,7 +550,14 @@ async fn main() {
     if only_legend {
         // Only `-t 7`, or the menu picking the legend and nothing else, gets
         // here. The screen's menu key leads back into the menu; without a
-        // terminal to answer it, the legend is the whole program.
+        // terminal to answer it, the legend is the whole program. That loop
+        // writes the legend to stdout, which `--json` has spoken for: there the
+        // legend goes to the diagnostic channel and the run stops where the loop
+        // would have started.
+        if args.json {
+            diagnostic_to_stderr(&legend_text(lang, &msg));
+            return;
+        }
         match legend_loop(lang, &msg) {
             MenuAction::Menu if is_interactive => {
                 match menu_until_something_to_run(lang, profile, &cfg, &badge, &version_slot).await {
@@ -523,8 +578,17 @@ async fn main() {
     }
 
     if ip_version == "ipv6" && !dpi_core::net::netinfo::ipv6_supported() {
-        println_out(&format!("\x1b[31m{}\x1b[0m", msg.ipv6_not_configured));
-        println_out(&format!("\x1b[2m{}\x1b[0m", msg.ipv6_switch_hint));
+        // The refusal and its hint are operator text too: under `--json` they go
+        // to stderr rather than into the document's stream.
+        let error = format!("\x1b[31m{}\x1b[0m", msg.ipv6_not_configured);
+        let hint = format!("\x1b[2m{}\x1b[0m", msg.ipv6_switch_hint);
+        if args.json {
+            diagnostic_to_stderr(&error);
+            diagnostic_to_stderr(&hint);
+        } else {
+            println_out(&error);
+            println_out(&hint);
+        }
         return;
     }
     cfg.ip_version = ip_version.clone();
@@ -552,7 +616,7 @@ async fn main() {
     // Test 6 fires at its own shipped hosts: the two tests ask opposite questions
     // of a domain, and a site that is already blocked cannot tell whether the
     // connecting is what broke it.
-    let burst_plan_domains = targets_or_exit(load_burst_domains(&args, profile), msg.domains_load_failed);
+    let burst_plan_domains = targets_or_exit(load_burst_domains(&args, profile, &msg), msg.domains_load_failed);
     let mut burst_plan = burst_plan_from_cli(&args, &burst_plan_domains, &msg);
     // The configured list, kept apart from what a run actually probes: the
     // settings screen shows its size as the meaning of an empty box, and an
@@ -742,10 +806,11 @@ mod tests {
     #[test]
     fn burst_targets_come_from_their_own_list() {
         let args = CliArgs::default();
-        let burst = load_burst_domains(&args, RegionProfile::Ru).unwrap();
+        let msg = get_messages(Language::En);
+        let burst = load_burst_domains(&args, RegionProfile::Ru, &msg).unwrap();
         assert!(burst.contains(&"ezgame.su".to_string()), "{burst:?}");
         assert!(burst.contains(&"www.smartape.ru".to_string()), "{burst:?}");
-        let shared = load_domains(&args, &AppConfig::default(), RegionProfile::Ru).unwrap();
+        let shared = load_domains(&args, &AppConfig::default(), RegionProfile::Ru, &msg).unwrap();
         assert!(!burst.is_empty() && !shared.is_empty());
         assert!(!burst.iter().any(|d| shared.contains(d)), "the two lists ask different questions");
         // `-d` still picks the hosts for a run, and picks them for this test too.
@@ -753,7 +818,10 @@ mod tests {
             domain: vec!["https://info.paymaster.ru/x?y=1".to_string()],
             ..CliArgs::default()
         };
-        assert_eq!(load_burst_domains(&picked, RegionProfile::Ru).unwrap(), vec!["info.paymaster.ru"]);
+        assert_eq!(
+            load_burst_domains(&picked, RegionProfile::Ru, &msg).unwrap(),
+            vec!["info.paymaster.ru"]
+        );
     }
 
     /// `-d` reaches test 6 through the same cleaner as everything else: a pasted

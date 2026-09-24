@@ -291,10 +291,10 @@ pub async fn check_http_injection(
         for (name, value) in request_headers(
             &identity,
             cfg.user_agent_for(cfg.fingerprint()),
-            [("Connection", "close".to_string())],
+            [("Connection", "close".into())],
             true,
         ) {
-            builder = builder.header(name, value);
+            builder = builder.header(name, value.as_ref());
         }
         // The header list carries the profile's identity and the configured
         // `USER_AGENT`, and `http` refuses a value holding a control byte (a

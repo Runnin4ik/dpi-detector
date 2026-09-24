@@ -262,6 +262,7 @@ pub(crate) fn messages() -> Messages {
         cli_trace: "Trace baraye test 6: yek khat baraye har talash (dore, fingerPrint, domain, vaziyat, joz'yat, ms); bedun-e masir be stderr, ba masir be an file [pishfarz: khamush]",
         trace_open_failed: "File-e trace baz nashod {}",
         domains_load_failed: "List-e --domains {} khande nashod - run-e bedun-e target chizi ra andaze-giri nemikonad, pas motevaqef mishavad",
+        domains_list_empty: "{} (hich domain-e ghabele estefade dar an nist)",
         whitelist_load_failed: "File-e whitelist SNI {} khande nashod: list-e dakheli estefade mishavad",
         tcp16_load_failed: "List-e --tcp16 {} khande nashod - target haye dakheli host haye na-khaste ra andaze-giri mikonand, pas motevaqef mishavad",
         cli_domains: "Masir-e file-e list-e domain ha",

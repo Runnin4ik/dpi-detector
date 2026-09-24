@@ -23,6 +23,15 @@
 //! (`net::tcp::dial_tcp`, `net::http_client`, `dns::doh`, `dns::dot`,
 //! `dns::udp`, `probe::telegram`) do not carry a config they could read it from.
 
+// The interface list comes from OS calls — `getifaddrs` on unix,
+// `GetAdaptersAddresses` and a Win32 wide-string read on Windows — so `unsafe`
+// is the FFI boundary here rather than an escape hatch; every block names the
+// invariant it holds in a SAFETY note.
+#![allow(
+    unsafe_code,
+    reason = "OS FFI: getifaddrs/GetAdaptersAddresses and the Win32 string read, each guarded by a SAFETY note"
+)]
+
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::LazyLock;
 
@@ -85,11 +94,15 @@ impl BindTarget {
 /// The address to bind `dest` from — `None` when nothing was chosen, or when the
 /// choice has no address of the destination's family.
 pub fn local_for(dest: &SocketAddr) -> Option<SocketAddr> {
-    target().and_then(|t| t.local(dest))
+    // Read through the guard: `local` only borrows, and this is the call every
+    // dial and every UDP socket makes, so an owned copy of the target would be
+    // two `String` allocations per probe for nothing.
+    TARGET.read().as_ref().and_then(|t| t.local(dest))
 }
 
 /// The interface every socket should leave through, or `None` for the routing
-/// table.
+/// table. The menu and the tests want the value, not a borrow of it; the dial
+/// path reads the guard directly ([`local_for`]).
 pub fn target() -> Option<BindTarget> {
     TARGET.read().clone()
 }
@@ -140,10 +153,7 @@ mod platform {
                 let up = flags_up(entry);
                 let slot = match out.iter_mut().find(|i| i.name == name) {
                     Some(slot) => slot,
-                    None => {
-                        out.push(Interface { name, v4: Vec::new(), v6: Vec::new(), up });
-                        out.last_mut().expect("just pushed")
-                    }
+                    None => out.push_mut(Interface { name, v4: Vec::new(), v6: Vec::new(), up }),
                 };
                 match family {
                     // SAFETY: the family was just read from this same sockaddr.
@@ -366,7 +376,9 @@ pub async fn tcp_connect(addr: &SocketAddr) -> std::io::Result<TcpStream> {
 /// resolves first and binds each candidate, which is the only way the bind can
 /// happen before the connect.
 pub async fn connect_host(host: &str, port: u16) -> std::io::Result<TcpStream> {
-    if target().is_none() {
+    // The guard answers the only question here — is an interface chosen — so
+    // the target is not copied out of it.
+    if TARGET.read().is_none() {
         return TcpStream::connect((host, port)).await;
     }
     let mut last: Option<std::io::Error> = None;

@@ -9,7 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, Limited};
 
 use hyper::Method;
 use hyper_util::rt::TokioIo;
@@ -20,7 +20,7 @@ use tokio_rustls::TlsConnector;
 
 use crate::classify::{
     classify_connect_error_full, classify_connect_error_icmp, classify_read_error, Detail,
-    DpiStatus, ProbeMetrics, ProbeStage,
+    DpiStatus, ProbeStage,
 };
 use crate::config::AppConfig;
 use crate::net::fingerprint::http_identity;
@@ -169,6 +169,12 @@ fn kb_sent(chunks_sent: usize, chunk_size: usize) -> usize {
     (chunks_sent * chunk_size).div_ceil(1024)
 }
 
+/// The fat probe reads a response only so the connection completes the
+/// round-trip: a HEAD reply carries no body. `Limited` is here because a peer
+/// that streams frames anyway must not make the tool buffer them, and the cap
+/// is the same value `probe::http` uses.
+const BODY_CAP: usize = 64 * 1024;
+
 /// Raw FAT probe. Returns (status, detail, rtt_secs).
 pub async fn probe_tcp_16_20(
     ip: &str,
@@ -208,6 +214,12 @@ pub async fn probe_tcp_16_20(
         format!("{}:{}", target_ip, port)
     };
 
+    // Read once per target instead of once per chunk (and again on the retry):
+    // the identity is a `Copy` view of a static table, and the user agent comes
+    // from the config.
+    let identity = http_identity(cfg.fingerprint());
+    let user_agent = cfg.user_agent_for(cfg.fingerprint());
+
     let mut sender = match connect_fat_target(addr, target_ip, sni, use_tls, cfg).await {
         Ok(s) => s,
         Err((s, d)) => return (s, d, measured_rtt),
@@ -236,32 +248,30 @@ pub async fn probe_tcp_16_20(
         let pad_str = if i > 0 {
             let max_start = pool.len().saturating_sub(chunk_size);
             let start_idx = pad_offset(max_start, i, conn);
-            Some(String::from_utf8_lossy(&pool[start_idx..start_idx + chunk_size]).into_owned())
+            // Borrowed from the pool, not owned: the pool is ASCII alphanumerics
+            // by construction (`random_pool`, pinned by `test_random_pool_ascii`),
+            // so the slice is already valid UTF-8 and the one owned copy of these
+            // bytes happens below, where the header value is built.
+            std::str::from_utf8(&pool[start_idx..start_idx + chunk_size]).ok()
         } else {
             None
         };
 
         let make_req = |pad: Option<&str>| -> HttpRequest<'_> {
-            let mut extras = vec![("Connection", "keep-alive".to_string())];
+            let mut extras = vec![("Connection", "keep-alive".into())];
             if let Some(p) = pad {
-                extras.push(("X-Pad", p.to_string()));
+                extras.push(("X-Pad", p.to_string().into()));
             }
-            let identity = http_identity(cfg.fingerprint());
             HttpRequest {
                 method: Method::HEAD,
                 host: &host_val,
                 path: "/",
-                headers: request_headers(
-                    &identity,
-                    cfg.user_agent_for(cfg.fingerprint()),
-                    extras,
-                    true,
-                ),
+                headers: request_headers(&identity, user_agent, extras, true),
                 priority_on_h1: identity.priority_on_h1,
             }
         };
 
-        let req = make_req(pad_str.as_deref());
+        let req = make_req(pad_str);
         let read_timeout = dynamic_timeout.unwrap_or(cfg.fat_read_timeout);
         let t0 = Instant::now();
 
@@ -273,7 +283,7 @@ pub async fn probe_tcp_16_20(
             if e.is_canceled() || emsg.contains("canceled") || sender.is_closed() {
                 if let Ok(new_sender) = connect_fat_target(addr, target_ip, sni, use_tls, cfg).await {
                     sender = new_sender;
-                    let retry_req = make_req(pad_str.as_deref());
+                    let retry_req = make_req(pad_str);
                     res = timeout(Duration::from_secs_f64(read_timeout), sender.send(retry_req)).await;
                 }
             }
@@ -281,7 +291,17 @@ pub async fn probe_tcp_16_20(
 
         match res {
             Ok(Ok(resp)) => {
-                let _ = resp.into_body().collect().await;
+                // The body is dropped, but the await is not free: hyper answers
+                // a HEAD over h1 with an empty body, while over h2 the stream
+                // ends only on END_STREAM, so a peer that sends headers and then
+                // goes quiet would leave this pending for good — `runner.rs` has
+                // no outer cap on the fat probe, so that would hang the phase.
+                // The deadline is the read timeout the request itself used.
+                let _ = timeout(
+                    Duration::from_secs_f64(read_timeout),
+                    Limited::new(resp.into_body(), BODY_CAP).collect(),
+                )
+                .await;
                 let elapsed = t0.elapsed().as_secs_f64();
                 if i == 0 && measured_rtt.is_none() {
                     measured_rtt = Some(elapsed);
@@ -372,24 +392,6 @@ pub async fn check_tcp_16_20(
 ) -> (DpiStatus, Detail, Option<f64>) {
     let _permit = crate::probe::permit(sem).await;
     probe_tcp_16_20(ip, port, sni, cfg, hint_rtt).await
-}
-
-/// Legacy single-shot probe kept for callers that only need ProbeMetrics.
-/// Maps keepalive verdicts onto the metrics contract.
-pub async fn probe_tcp16(target: SocketAddr, _payload_size: usize, timeout_dur: Duration) -> ProbeMetrics {
-    let mut metrics = ProbeMetrics::default();
-    let start = Instant::now();
-    let cfg = AppConfig {
-        fat_connect_timeout: timeout_dur.as_secs_f64(),
-        fat_read_timeout: timeout_dur.as_secs_f64(),
-        ..AppConfig::default()
-    };
-    let (status, detail, _rtt) =
-        probe_tcp_16_20(&target.ip().to_string(), target.port(), &cfg.fat_default_sni.clone(), &cfg, None).await;
-    metrics.duration_ms = start.elapsed().as_millis() as u64;
-    metrics.status = status;
-    metrics.detail = detail;
-    metrics
 }
 
 #[cfg(test)]

@@ -60,12 +60,15 @@ const UTLS_REFERENCED: [TlsFingerprint; 9] = [
 /// for the clients that send it there, which the second column pins.
 #[test]
 fn every_identity_is_spelled_the_way_its_client_writes_it() {
-    let expected: [(TlsFingerprint, &str, bool); 29] = [
+    let expected: [(TlsFingerprint, &str, bool); 30] = [
         (TlsFingerprint::Rustls, "accept-encoding", false),
         (TlsFingerprint::Firefox133, "Accept-Encoding", true),
         (TlsFingerprint::Chrome107, "Accept-Encoding", false),
         (TlsFingerprint::Safari155, "Accept-Encoding", false),
         (TlsFingerprint::Chrome146, "Accept-Encoding", false),
+        // Chrome 133 sends the 146 header block under the 133 brand list and UA,
+        // so its spelling is the same one — see `CHROME133_HEADERS`.
+        (TlsFingerprint::Chrome133, "Accept-Encoding", false),
         (TlsFingerprint::Safari180, "accept-encoding", false),
         (TlsFingerprint::Edge101, "Accept-Encoding", false),
         (TlsFingerprint::Chrome99Android, "Accept-Encoding", false),
@@ -97,6 +100,15 @@ fn every_identity_is_spelled_the_way_its_client_writes_it() {
         (TlsFingerprint::Firefox65, "Accept-Encoding", false),
         (TlsFingerprint::Go127, "Accept-Encoding", false),
     ];
+
+    // The table is total, and stays total: a new profile added to `ALL` without a
+    // row here is an identity nothing pins, and the loop below would skip it
+    // silently.
+    assert_eq!(
+        expected.len(),
+        TlsFingerprint::ALL.len(),
+        "every profile needs a row: one is missing from this table"
+    );
 
     for (fingerprint, spelling, priority_on_h1) in expected {
         let code = fingerprint.code();
@@ -605,7 +617,9 @@ fn every_h2_preface_matches_the_wrapper_it_copies() {
         (TlsFingerprint::Chrome131, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Chrome131Android, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Chrome146, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
-        (TlsFingerprint::Chrome146, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        // Chrome 133's hello is the 146 one (see the shape's own comment), so this
+        // row pins the shared preface instead of naming 146 a second time.
+        (TlsFingerprint::Chrome133, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Safari155, "4:4194304;3:100", 10_485_760, MethodSchemePathAuthority, Some((255, false))),
         (TlsFingerprint::Safari153, "4:4194304;3:100", 10_485_760, MethodSchemePathAuthority, Some((255, false))),
         (TlsFingerprint::Safari170, "2:0;4:4194304;3:100", 10_485_760, MethodSchemePathAuthority, Some((255, false))),

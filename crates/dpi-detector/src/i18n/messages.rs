@@ -318,6 +318,11 @@ pub(crate) struct Messages {
     /// `<path>: <error>`; the run stops, because a run with no targets would
     /// report an empty table as if it were a result.
     pub domains_load_failed: &'static str,
+    /// The reason `domains_load_failed` prints when the list the operator named
+    /// holds nothing to probe: `{}` is the source (`<path>` or `-d`), and the
+    /// text is a parenthetical on it, because it lands in the middle of that
+    /// notice's sentence — Farsi puts the slot before the verb.
+    pub domains_list_empty: &'static str,
     /// Shown when the configured whitelist file is there but cannot be read.
     /// `{}` is `<path>: <error>`; the embedded list is used instead, and this is
     /// what tells an unreadable file from an absent one.

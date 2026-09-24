@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper::header::{ACCEPT, CONTENT_TYPE, HOST, USER_AGENT};
 use hyper::{Method, Request};
@@ -150,6 +150,13 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
     Ok((sender, host, url.path().to_string()))
 }
 
+/// A DoH response body *is* one DNS message, and a DNS message is at most
+/// 65 535 bytes on the wire (the 16-bit length prefix of RFC 1035 §4.2.2), so
+/// 64 KiB is the whole of it and anything past that is a broken or hostile
+/// resolver. The cap stops such a server from making the tool buffer an
+/// arbitrary stream; same shape as `net::http_client`'s `MAX_BODY`.
+const MAX_BODY: usize = 1 << 16;
+
 async fn send_doh(
     sender: &mut DohSender,
     host: &str,
@@ -182,8 +189,7 @@ async fn send_doh(
         .map_err(|e| DnsError::Io(e.to_string()))?;
 
     if resp.status().is_success() {
-        let body = resp
-            .into_body()
+        let body = Limited::new(resp.into_body(), MAX_BODY)
             .collect()
             .await
             .map_err(|e| DnsError::Io(e.to_string()))?
@@ -220,8 +226,7 @@ async fn send_doh(
     if !resp.status().is_success() {
         return Err(DnsError::DohHttp(post_status));
     }
-    let body = resp
-        .into_body()
+    let body = Limited::new(resp.into_body(), MAX_BODY)
         .collect()
         .await
         .map_err(|e| DnsError::Io(e.to_string()))?

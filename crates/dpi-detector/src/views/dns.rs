@@ -2,6 +2,7 @@
 //! substitution.
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
+use dpi_core::classify::DpiStatus;
 use dpi_core::config::AppConfig;
 use crate::i18n::{Messages, format_bidi};
 use dpi_core::probe::dns_avail::{
@@ -86,10 +87,13 @@ pub(crate) fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> S
     out
 }
 
-fn fail_color(token: &str) -> Color {
-    // Label color: DNS FAIL is yellow, every other fail token is red.
-    match token {
-        "DNS FAIL" => Color::Yellow,
+/// Fail-token color, chosen by verdict rather than by the badge text: a DNS
+/// failure is yellow, every other fail token red. `DpiStatus` is in hand at
+/// every call site, so the color no longer follows a string a rename or a new
+/// status could silently move.
+fn fail_color(status: DpiStatus) -> Color {
+    match status {
+        DpiStatus::DnsFail => Color::Yellow,
         _ => Color::Red,
     }
 }
@@ -131,16 +135,14 @@ fn dns_latency_lines(
             .collect();
         if vals.is_empty() {
             // A UDP miss reads TIMEOUT; DoH/DoT show the recorded fail token.
-            let token = if udp {
-                "TIMEOUT".to_string()
+            // The token is the verdict's own badge and the color is the
+            // verdict's, so the two cannot drift apart.
+            let status = if udp {
+                DpiStatus::Timeout
             } else {
-                report
-                    .fail_reasons
-                    .get(&key)
-                    .map(|reason| reason.label().to_string())
-                    .unwrap_or_else(|| "TIMEOUT".to_string())
+                report.fail_reasons.get(&key).map_or(DpiStatus::Timeout, |reason| reason.status)
             };
-            lines.push((token.clone(), fail_color(&token)));
+            lines.push((status.display_label().to_string(), fail_color(status)));
             continue;
         }
         let min = vals.iter().cloned().reduce(f64::min).unwrap_or(0.0);
@@ -205,35 +207,36 @@ pub(crate) fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, 
     let mut partial_endpoints = Vec::new();
 
     for name in &report.all_names {
-        // DoH cell: one line per endpoint.
-        let doh_addrs = doh_by_name.get(name).cloned().unwrap_or_default();
+        // DoH cell: one line per endpoint. The endpoints are borrowed from the
+        // map, not copied out of it: the lines only read them.
+        let doh_addrs: &[String] = doh_by_name.get(name).map_or(&[], Vec::as_slice);
         let doh_lines: Vec<(String, Color)> = if doh_addrs.is_empty() {
             vec![("—".to_string(), Color::DarkGrey)]
         } else {
-            dns_latency_lines(report, ProbeKind::DohWire, name, &doh_addrs, &report.forbidden, false, &mut partial_endpoints, msg.ms_unit.trim())
+            dns_latency_lines(report, ProbeKind::DohWire, name, doh_addrs, &report.forbidden, false, &mut partial_endpoints, msg.ms_unit.trim())
         };
 
         // DoT cell: one line per endpoint.
         let mut dot_lines: Vec<(String, Color)> = Vec::new();
         if has_dot {
-            let dot_addrs = dot_by_name.get(name).cloned().unwrap_or_default();
+            let dot_addrs: &[String] = dot_by_name.get(name).map_or(&[], Vec::as_slice);
             if dot_addrs.is_empty() {
                 dot_lines.push(("—".to_string(), Color::DarkGrey));
             } else {
-                dot_lines = dns_latency_lines(report, ProbeKind::Dot, name, &dot_addrs, &report.forbidden, false, &mut partial_endpoints, msg.ms_unit.trim());
+                dot_lines = dns_latency_lines(report, ProbeKind::Dot, name, dot_addrs, &report.forbidden, false, &mut partial_endpoints, msg.ms_unit.trim());
             }
         }
 
         // UDP cell (trusted-domain ping): one line per endpoint.
-        let udp_addrs = udp_by_name.get(name).cloned().unwrap_or_default();
+        let udp_addrs: &[String] = udp_by_name.get(name).map_or(&[], Vec::as_slice);
         let udp_lines: Vec<(String, Color)> = if udp_addrs.is_empty() {
             vec![("—".to_string(), Color::DarkGrey)]
         } else {
-            dns_latency_lines(report, ProbeKind::Udp, name, &udp_addrs, &report.allowed, true, &mut partial_endpoints, msg.ms_unit.trim())
+            dns_latency_lines(report, ProbeKind::Udp, name, udp_addrs, &report.allowed, true, &mut partial_endpoints, msg.ms_unit.trim())
         };
         // Egress cell
         let mut egress_lines: Vec<(String, Option<Color>)> = Vec::new();
-        for a in &udp_addrs {
+        for a in udp_addrs {
             let key = dpi_core::probe::dns_avail::ProbeKey { kind: ProbeKind::Udp, addr: a.clone(), name: name.clone() };
             let alive = report.raw.get(&key).map(|dm| {
                 report.allowed.iter().any(|d| dm.get(d).copied().flatten().is_some())
@@ -282,7 +285,7 @@ pub(crate) fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, 
         // Substitution cell
         let mut subst_lines: Vec<(String, Color)> = Vec::new();
         if !udp_addrs.is_empty() && !report.forbidden.is_empty() {
-            for a in &udp_addrs {
+            for a in udp_addrs {
                 let (judged, sub) = subst_counts(report, a, name);
                 if judged == 0 {
                     subst_lines.push(("—".to_string(), Color::DarkGrey));

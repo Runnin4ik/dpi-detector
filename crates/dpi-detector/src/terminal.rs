@@ -1,7 +1,12 @@
-//! Console capability probe. The crate's only `unsafe` lives here: the Win32
+//! Console capability probe. This file and `tui::backend` are the crate's only
+//! `unsafe` sites — the two halves of the Win32 console surface: here the
 //! console-mode and code-page calls that decide whether the terminal can render
 //! the ANSI the renderer emits. The answer is taken once, before anything is
 //! printed, because it also decides the glyph set.
+#![allow(
+    unsafe_code,
+    reason = "Win32 console FFI: GetStdHandle/GetConsoleMode/SetConsoleMode read and write a mode word through a handle, and SetConsoleOutputCP/SetConsoleCP take a constant code page. The single out-parameter (`out_mode`) is a live local `u32`, and the calls are reached only on the `windows` arm of the cfg_select below, so no pointer this code owns outlives the call."
+)]
 
 cfg_select! {
     windows => {

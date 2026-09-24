@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, Limited};
 use hyper::body::{Body, Bytes, Frame};
 use hyper::header::{HOST, USER_AGENT};
 use hyper::{Method, Request};
@@ -390,6 +390,11 @@ impl Body for UploadBody {
     }
 }
 
+/// The upload response is never read, only awaited to completion, so `Limited`
+/// is here purely to bound what a hostile or broken peer can make the tool
+/// buffer while that await runs; the same value as `probe::http`'s `BODY_CAP`.
+const BODY_CAP: usize = 64 * 1024;
+
 /// Upload with stall detection: POSTs `telegram_upload_size_mb` MB of filler to the
 /// configured IP/port over TLS (8 s connect/handshake), sampling the sent counter
 /// every 500 ms until the whole size is out, the stall gap hits, or the total cap does.
@@ -492,7 +497,17 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
             res = &mut post_fut => {
                 match res {
                     Ok(resp) => {
-                        let _ = resp.into_body().collect().await;
+                        // The loop's `total_timeout`/`stall_timeout` are checked
+                        // before the `select!`, so neither can fire while this
+                        // arm is awaiting: without the deadline here a peer that
+                        // returns headers and then stalls the body would hang
+                        // `run_upload` (and the run — `runner.rs` has no outer
+                        // cap on it). `Limited` bounds the same read from above.
+                        let _ = timeout(
+                            Duration::from_secs_f64(stall_timeout),
+                            Limited::new(resp.into_body(), BODY_CAP).collect(),
+                        )
+                        .await;
                         post_done = true;
                     }
                     Err(_) => {

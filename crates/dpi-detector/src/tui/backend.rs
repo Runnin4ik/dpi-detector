@@ -109,6 +109,10 @@ struct CONSOLE_SCREEN_BUFFER_INFO {
 const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Win32 console FFI (GetStdHandle/GetConsoleScreenBufferInfo/SetConsoleTextAttribute/WriteConsoleW): the handle is checked against 0 and -1 before any call, the out-parameter `info` and the `written` counter are live locals, and `utf16` is a local Vec that outlives the write. The block writes to this process's own stdout and reads nothing back."
+)]
 fn write_win32_ansi(s: &str) {
     extern "system" {
         fn GetStdHandle(nStdHandle: u32) -> isize;
@@ -210,6 +214,10 @@ pub(crate) fn frame_home(drawn: u16) {
 }
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Win32 console FFI (GetStdHandle/GetConsoleScreenBufferInfo/SetConsoleCursorPosition): the handle is checked against 0 and -1 first, and `info` is a live local the call fills. The cursor row is clamped to the buffer, so the coordinates handed back are inside it."
+)]
 fn win32_frame_home(drawn: u16) {
     extern "system" {
         fn GetStdHandle(nStdHandle: u32) -> isize;

@@ -45,13 +45,15 @@ use crate::render::{
 use crate::{print_out, tcp16_detail, Emitter};
 
 /// The domains to probe: `-d` names first, then `--domains`/the configured file,
-/// then the embedded list, then the profile's own. A file that parses to nothing
-/// falls through rather than shrinking the run to zero.
+/// then the embedded list, then the profile's own.
 ///
-/// The one error that comes back is the list `--domains` named: that file *is*
-/// the run's target set, so the caller reports it instead of probing nothing.
-pub(crate) fn load_domains(args: &CliArgs, cfg: &AppConfig, profile: RegionProfile) -> io::Result<Vec<String>> {
-    load_domain_set(args, profile, &cfg.domains_file, embedded_domains())
+/// A list the user named *is* the run's target set, so it either yields targets
+/// or comes back as an error: `--domains /typo.txt`, a `--domains` file that
+/// parses to nothing and a `-d` list whose every entry `clean_domain` filtered
+/// away all used to end as a "successful" run that probed nothing. The
+/// configured and embedded lists are preferences, so those still fall through.
+pub(crate) fn load_domains(args: &CliArgs, cfg: &AppConfig, profile: RegionProfile, msg: &Messages) -> io::Result<Vec<String>> {
+    load_domain_set(args, profile, &cfg.domains_file, embedded_domains(), msg)
 }
 
 /// Test 6's shipped target file. Deliberately not the configured `domains_file`:
@@ -65,8 +67,8 @@ const BURST_DOMAINS_FILE: &str = "burst-domains.txt";
 /// list out means it. What this does not do is fall back to the censored sites
 /// test 2 measures: a host that is already blocked cannot say whether connecting
 /// to it N times is what broke it.
-pub(crate) fn load_burst_domains(args: &CliArgs, profile: RegionProfile) -> io::Result<Vec<String>> {
-    load_domain_set(args, profile, BURST_DOMAINS_FILE, embedded_burst_domains())
+pub(crate) fn load_burst_domains(args: &CliArgs, profile: RegionProfile, msg: &Messages) -> io::Result<Vec<String>> {
+    load_domain_set(args, profile, BURST_DOMAINS_FILE, embedded_burst_domains(), msg)
 }
 
 fn load_domain_set(
@@ -74,9 +76,18 @@ fn load_domain_set(
     profile: RegionProfile,
     file_name: &str,
     embedded: Vec<String>,
+    msg: &Messages,
 ) -> io::Result<Vec<String>> {
+    // The two ways a list the operator named can come back empty are refused
+    // here rather than turned into a run with no targets: `empty_named_list` is
+    // the reason the caller's notice (`domains_load_failed`) prints in its `{}`
+    // slot, and it names the source the notice cannot tell apart by itself.
     if !args.domain.is_empty() {
-        return Ok(args.domain.iter().filter_map(|d| clean_domain(d)).collect());
+        let named: Vec<String> = args.domain.iter().filter_map(|d| clean_domain(d)).collect();
+        if named.is_empty() {
+            return Err(empty_named_list(msg, "-d"));
+        }
+        return Ok(named);
     }
     if let Some(path) = &args.domains {
         // A file the user named is the run's target list, so a path that cannot
@@ -84,8 +95,14 @@ fn load_domain_set(
         // /typo.txt` used to end as a "successful" run that probed nothing. The
         // path is folded into the error because the OS message alone does not
         // say which file it was.
-        return load_domains_from_file(path)
-            .map_err(|err| io::Error::new(err.kind(), format!("{path}: {err}")));
+        let from_file = load_domains_from_file(path)
+            .map_err(|err| io::Error::new(err.kind(), format!("{path}: {err}")))?;
+        // A file that reads but holds no domain (blank lines and `#` comments
+        // only) is the same empty run, so it is refused the same way.
+        if from_file.is_empty() {
+            return Err(empty_named_list(msg, path));
+        }
+        return Ok(from_file);
     }
     let from_file = load_domains_from_file(resource_path(file_name)).unwrap_or_default();
     if !from_file.is_empty() {
@@ -95,6 +112,19 @@ fn load_domain_set(
         return Ok(embedded);
     }
     Ok(profile.default_domains().iter().map(|s| s.to_string()).collect())
+}
+
+/// The error for a list the operator named that holds nothing to probe.
+///
+/// An `io::Error` — and so exit code 2 at the caller — rather than an empty
+/// `Ok`: a run with no targets prints a report of nothing and exits zero, which
+/// reads as "nothing was blocked". The source is folded in because the notice
+/// alone does not say whether it was `-d` or the `--domains` file.
+fn empty_named_list(msg: &Messages, source: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        msg.domains_list_empty.replace("{}", source),
+    )
 }
 
 /// The 16 KB-test targets: `--tcp16`, then the configured file, then the
@@ -169,39 +199,35 @@ pub(crate) fn mask_proxy(url: &str) -> String {
     }
 }
 
-/// Builds one per-family fact; missing Cymru fields become red "timeout".
+/// Builds one per-family fact. A Cymru field the lookup did not answer stays
+/// `None`, which is what the panel renders as its red localized timeout cell —
+/// "not measured" is a state of the value, not a value of its own, so it must
+/// not be spelled out here.
 pub(crate) fn family_info(ip: Option<(IpAddr, u64)>, extra: Option<IpCymruInfo>) -> Option<NetFamilyInfo> {
     let (addr, ms) = ip?;
-    let missing = || "timeout".to_string();
-    match extra {
-        Some(e) => Some(NetFamilyInfo {
-            ip: addr.to_string(),
-            ttlb: NetTtlb::Ms(ms),
-            subnet: e.subnet.unwrap_or_else(missing),
-            org: e.org.unwrap_or_else(missing),
-            asn: e.asn,
-            cc: e.country.unwrap_or_else(missing),
-        }),
-        None => Some(NetFamilyInfo {
-            ip: addr.to_string(),
-            ttlb: NetTtlb::Ms(ms),
-            subnet: missing(),
-            org: missing(),
-            asn: missing(),
-            cc: missing(),
-        }),
-    }
+    let (subnet, org, asn, cc) = match extra {
+        Some(e) => (e.subnet, e.org, Some(e.asn), e.country),
+        None => (None, None, None, None),
+    };
+    Some(NetFamilyInfo {
+        ip: Some(addr.to_string()),
+        ttlb: NetTtlb::Ms(ms),
+        subnet,
+        org,
+        asn,
+        cc,
+    })
 }
 
-/// Both lookups dead: red "timeout" rows.
+/// Both lookups dead: every cell of both families is the panel's timeout cell.
 pub(crate) fn timeout_family() -> NetFamilyInfo {
     NetFamilyInfo {
-        ip: "timeout".to_string(),
+        ip: None,
         ttlb: NetTtlb::Timeout,
-        subnet: "timeout".to_string(),
-        org: "timeout".to_string(),
-        asn: "timeout".to_string(),
-        cc: "timeout".to_string(),
+        subnet: None,
+        org: None,
+        asn: None,
+        cc: None,
     }
 }
 
@@ -282,7 +308,7 @@ pub(crate) fn burst_plan_from_cli(args: &CliArgs, domains: &[String], msg: &Mess
             Err(reason) => {
                 eprintln!(
                     "{}",
-                    msg.burst_variant_bad.replacen("{}", value, 1).replacen("{}", &reason, 1)
+                    msg.burst_variant_bad.replacen("{}", value, 1).replacen("{}", &reason.to_string(), 1)
                 );
                 std::process::exit(2);
             }
@@ -607,16 +633,20 @@ pub(crate) async fn run_test_suite(
         None
     };
     let family = IpFamily::from_config(&cfg.ip_version);
-    let socks_proxy = match cfg.effective_proxy() {
-        Some(url) => match parse_socks_proxy(url) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                emitter.emit(&msg.invalid_proxy_err.replacen("{}", url, 1).replacen("{}", &e.to_string(), 1));
-                None
+    // The proxy is validated here, not carried further: test 1's DNS path parses
+    // the same URL itself (`check_dns_availability`) and no other probe speaks
+    // SOCKS. A URL the SOCKS5 code cannot use is a rejected input, so it has to
+    // be readable in `--json` too, where the emitter writes nothing — the notice
+    // goes to stderr there and stdout stays the machine document.
+    if let Some(url) = cfg.effective_proxy() {
+        if let Err(e) = parse_socks_proxy(url) {
+            let notice = msg.invalid_proxy_err.replacen("{}", url, 1).replacen("{}", &e.to_string(), 1);
+            emitter.emit(&notice);
+            if args.json {
+                eprint!("{}", notice);
             }
-        },
-        None => None,
-    };
+        }
+    }
 
     let mut dns_stats = None;
     let mut dom_stats = None;
@@ -723,7 +753,8 @@ pub(crate) async fn run_test_suite(
             let v4 = family_info(ips.v4.map(|(ip, ms)| (IpAddr::V4(ip), ms)), v4_extra.clone());
             let v6 = ips.v6.map(|(ip, ms)| (IpAddr::V6(ip), ms));
             let v6 = family_info(v6, v6_extra);
-            // Both lookups dead: red "timeout" rows.
+            // Both lookups dead: both families render as the panel's red
+            // timeout cells.
             let (v4, v6) = match (&v4, &v6) {
                 (None, None) => (Some(timeout_family()), Some(timeout_family())),
                 _ => (v4, v6),
@@ -918,34 +949,37 @@ pub(crate) async fn run_test_suite(
                 (item.id, asn_str, item.provider, status, detail)
             }));
         }
-        let mut ok = 0;
-        let mut blocked = 0;
-        let mut mixed = 0;
         for h in handles {
             let done = h.await;
             if let Some(t) = tcp_tick.as_ref() {
                 t();
             }
             if let Ok((id, asn, provider, status, detail)) = done {
-                let label = status.display_label();
-                if label.contains("OK") {
-                    ok += 1;
-                } else if label.contains("DETECTED") {
-                    blocked += 1;
-                } else if label.contains("MIXED") {
-                    mixed += 1;
-                }
                 rows.push(TcpRow { id, asn, provider, status, detail });
             }
         }
-        tcp_summary = Some((ok, blocked, mixed, rows.len()));
+        // The verdict tally, by the classifier's own predicates: the badge is a
+        // Latin label, not a contract, and no status spells "mixed". Mixed is a
+        // property of the run — part of the list answered, part was cut — so it
+        // is read off the two totals and drives the warning under the table. A
+        // timeout is neither: the probe never learned what happened there.
+        let mut ok = 0usize;
+        let mut blocked = 0usize;
+        for row in &rows {
+            if row.status.is_ok_status() {
+                ok += 1;
+            } else if row.status.is_blocked() {
+                blocked += 1;
+            }
+        }
+        let mixed = ok > 0 && blocked > 0;
+        tcp_summary = Some((ok, blocked, usize::from(mixed), rows.len()));
         live.finish();
         if !args.json {
-            emitter.emit(&render_tcp_table(&rows, msg));
+            emitter.emit(&render_tcp_table(&rows, mixed, msg));
         } else {
             results.tcp16 = Some(rows.clone());
         }
-        let _ = socks_proxy;
     }
 
     // ── Test 4: white SNI ──
@@ -1123,6 +1157,60 @@ pub(crate) async fn run_test_suite(
                 eprintln!("{}", msg.report_save_fail.replace("{}", &err.to_string()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::get_messages;
+
+    fn targets_arg(domain: &[&str], domains: Option<&std::path::Path>) -> CliArgs {
+        CliArgs {
+            domain: domain.iter().map(|d| d.to_string()).collect(),
+            domains: domains.map(|p| p.to_string_lossy().into_owned()),
+            ..CliArgs::default()
+        }
+    }
+
+    /// A list the operator named *is* the run's target set, so an empty one is
+    /// refused. It used to come back as `Ok(vec![])`: the run then probed
+    /// nothing, printed a report of nothing and exited zero — which an operator
+    /// reads as "nothing was blocked".
+    #[test]
+    fn an_empty_named_target_list_is_an_error() {
+        let msg = get_messages(Language::En);
+        let cfg = AppConfig::default();
+        let profile = RegionProfile::Ru;
+
+        // `-d ""` and `-d "   "`: `clean_domain` keeps neither.
+        let err = load_domains(&targets_arg(&["", "   "], None), &cfg, profile, &msg).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
+        assert!(err.to_string().contains("-d"), "the failed flag is named: {err}");
+
+        // `--domains` on a file that reads but holds no domain (comments and
+        // blank lines only) is the same empty run.
+        let path = std::env::temp_dir().join("dpi-detector-empty-domains.txt");
+        std::fs::write(&path, "# only a comment\n\n").unwrap();
+        let err = load_domains(&targets_arg(&[], Some(&path)), &cfg, profile, &msg).unwrap_err();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
+        assert!(
+            err.to_string().contains("dpi-detector-empty-domains.txt"),
+            "the failed file is named: {err}"
+        );
+
+        // A path that cannot be read keeps the OS error kind — the path is
+        // folded into the message, and `main.rs` maps the kind to exit code 2.
+        let missing = std::path::Path::new("/no/such/domains.txt");
+        let err = load_domains(&targets_arg(&[], Some(missing)), &cfg, profile, &msg).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err}");
+        assert!(err.to_string().contains("/no/such/domains.txt"), "the failed file is named: {err}");
+
+        // An entry that does clean is still the run's list: the check rejects an
+        // empty result, not a list with anything left in it.
+        let kept = load_domains(&targets_arg(&["Example.COM/some/path", "   "], None), &cfg, profile, &msg).unwrap();
+        assert_eq!(kept, vec!["example.com".to_string()]);
     }
 }
 

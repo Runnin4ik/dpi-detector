@@ -51,7 +51,7 @@ const N_TAG: usize = 16;
 pub static SUITES: &[&dyn Hpke] = &[&AES_128_GCM, &AES_256_GCM, &CHACHA20_POLY1305];
 
 /// DHKEM(X25519, HKDF-SHA256) with HKDF-SHA256 and AES-128-GCM.
-pub static AES_128_GCM: X25519HkdfSha256 = X25519HkdfSha256::new(AeadSuite::Aes128Gcm);
+pub(crate) static AES_128_GCM: X25519HkdfSha256 = X25519HkdfSha256::new(AeadSuite::Aes128Gcm);
 /// DHKEM(X25519, HKDF-SHA256) with HKDF-SHA256 and AES-256-GCM.
 pub static AES_256_GCM: X25519HkdfSha256 = X25519HkdfSha256::new(AeadSuite::Aes256Gcm);
 /// DHKEM(X25519, HKDF-SHA256) with HKDF-SHA256 and ChaCha20-Poly1305.

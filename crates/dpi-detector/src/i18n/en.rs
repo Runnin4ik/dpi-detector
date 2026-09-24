@@ -268,6 +268,7 @@ pub(crate) fn messages() -> Messages {
         cli_trace: "Test 6 trace: one line per attempt (round, shape, host, status, detail, ms); without a path to stderr, with one to that file [default: off]",
         trace_open_failed: "Could not open the trace file {}",
         domains_load_failed: "Could not read the --domains list {} — a run with no targets measures nothing, so it stops",
+        domains_list_empty: "{} (no usable domain in it)",
         whitelist_load_failed: "Could not read the whitelist SNI file {}: using the embedded list instead",
         tcp16_load_failed: "Could not read the --tcp16 list {} — the shipped targets would measure hosts that were not asked for, so it stops",
         cli_domains: "Path to custom domain list file",

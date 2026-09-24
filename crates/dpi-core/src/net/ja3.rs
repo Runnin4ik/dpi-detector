@@ -280,4 +280,79 @@ mod tests {
         assert_eq!(hello.record_version, [0x03, 0x01], "the record opens at TLS 1.0");
         assert_eq!(hello.legacy_version, [0x03, 0x03], "the body's legacy version is TLS 1.2");
     }
+
+    /// A bare ClientHello handshake message with the lengths the caller asks for:
+    /// header, legacy version, random, session id, cipher list, compression
+    /// methods, extension list. The declared cipher and extension lengths are
+    /// arguments rather than `len()`s, so a test can declare more than it appends.
+    fn hello_with(cipher_len: u16, ciphers: &[u8], extensions: &[u8]) -> Vec<u8> {
+        let mut m = vec![0x01, 0x00, 0x00, 0x00]; // handshake type + 3-byte length
+        m.extend_from_slice(&[0x03, 0x03]); // legacy version
+        m.extend_from_slice(&[0u8; 32]); // random
+        m.push(0x00); // session id length
+        m.extend_from_slice(&cipher_len.to_be_bytes());
+        m.extend_from_slice(ciphers);
+        m.push(0x01); // one compression method
+        m.push(0x00); // ... null
+        m.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
+        m.extend_from_slice(extensions);
+        m
+    }
+
+    /// The record that carries `message`: the functions that take a record strip
+    /// these five bytes before parsing.
+    fn record_of(message: &[u8]) -> Vec<u8> {
+        let mut r = vec![0x16, 0x03, 0x01, (message.len() >> 8) as u8, (message.len() & 0xFF) as u8];
+        r.extend_from_slice(message);
+        r
+    }
+
+    /// A length in a hello is the peer's claim, not a fact. Every walk over one
+    /// stops where the message does: without that, `u16_at` reads two bytes blind
+    /// and the slice past the end is an index out of bounds — a panic, and under
+    /// the release profile's `panic = "abort"` the whole process rather than one
+    /// parse. The bytes here are what a hostile or broken server answers with.
+    #[test]
+    fn a_truncated_hello_stops_at_the_message() {
+        // Cipher list: two suites carried, 65535 declared.
+        let truncated = hello_with(0xFFFF, &[0x13, 0x01, 0xC0, 0x2F], &[]);
+        assert!(
+            cipher_suites(&truncated).is_empty(),
+            "a cipher list longer than the message carries no suite"
+        );
+
+        // The same hello with the honest length is what the bound must not break.
+        let honest = hello_with(4, &[0x13, 0x01, 0xC0, 0x2F], &[]);
+        assert_eq!(cipher_suites(&honest), vec![0x1301, 0xC02F]);
+
+        // Extension list: one `key_share` extension declaring 65535 bytes with four
+        // present.
+        let truncated =
+            hello_with(2, &[0x13, 0x01], &[0x00, 0x33, 0xFF, 0xFF, 0x00, 0x1D, 0x00, 0x01]);
+        assert!(extensions(&truncated).is_empty(), "the walk ends where the message does");
+        assert_eq!(key_share_groups(&record_of(&truncated)), "-");
+
+        // And the honest form of that one still parses, so the bound is not simply
+        // refusing every extension list: a six-byte list holding x25519 (29) with a
+        // two-byte key.
+        let honest = hello_with(
+            2,
+            &[0x13, 0x01],
+            &[0x00, 0x33, 0x00, 0x08, 0x00, 0x06, 0x00, 0x1D, 0x00, 0x02, 0x00, 0x01],
+        );
+        assert_eq!(extensions(&honest).len(), 1);
+        assert_eq!(key_share_groups(&record_of(&honest)), "29");
+    }
+
+    /// One level down from the list length: a `key_share` body too short to hold
+    /// its own two-byte list length carries no group. Reading it with `u16_at`
+    /// would be an index out of bounds on a one-byte body.
+    #[test]
+    fn a_short_key_share_body_carries_no_group() {
+        // Extension 51, declared length 1, one byte present: the list length itself
+        // is missing.
+        let message = hello_with(2, &[0x13, 0x01], &[0x00, 0x33, 0x00, 0x01, 0x00]);
+        assert_eq!(extensions(&message).len(), 1, "the extension itself is well formed");
+        assert_eq!(key_share_groups(&record_of(&message)), "-");
+    }
 }

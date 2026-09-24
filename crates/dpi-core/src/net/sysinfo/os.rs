@@ -17,7 +17,7 @@ use winreg::RegKey;
 
 #[cfg(target_os = "windows")]
 use super::run_cmd;
-use super::SystemDnsInfo;
+use super::{DnsSource, SystemDnsInfo};
 
 /// Registry bases: IPv4 and IPv6 interface keys, plus the network-class GUID map.
 #[cfg(target_os = "windows")]
@@ -161,10 +161,10 @@ fn split_list(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// DNS of one interface: [(server, "static"|"dhcp")], from its IPv4 and IPv6 keys.
+/// DNS of one interface: [(server, source)], from its IPv4 and IPv6 keys.
 #[cfg(target_os = "windows")]
-fn read_dns_entries(guid: &str) -> Vec<(String, String)> {
-    let mut entries: Vec<(String, String)> = Vec::new();
+fn read_dns_entries(guid: &str) -> Vec<(String, DnsSource)> {
+    let mut entries: Vec<(String, DnsSource)> = Vec::new();
     for base in [TCPIP_BASE, TCPIP6_BASE] {
         let path = format!("{}\\{}", base, guid);
         let key = match hklm().open_subkey(&path) {
@@ -172,10 +172,10 @@ fn read_dns_entries(guid: &str) -> Vec<(String, String)> {
             Err(_) => continue,
         };
         for (val, src) in [
-            ("NameServer", "static"),
-            ("DhcpNameServer", "dhcp"),
-            ("Dhcpv6DNSServers", "dhcp"),
-            ("ProfileNameServer", "dhcp"),
+            ("NameServer", DnsSource::Static),
+            ("DhcpNameServer", DnsSource::Dhcp),
+            ("Dhcpv6DNSServers", DnsSource::Dhcp),
+            ("ProfileNameServer", DnsSource::Dhcp),
         ] {
             let mut cand: Vec<String> =
                 reg_strings(&key, val).iter().flat_map(|s| split_list(s)).collect();
@@ -194,7 +194,7 @@ fn read_dns_entries(guid: &str) -> Vec<(String, String)> {
             }
             for s in cand {
                 if !s.is_empty() && !entries.iter().any(|e| e.0 == s) {
-                    entries.push((s, src.to_string()));
+                    entries.push((s, src));
                 }
             }
         }
@@ -319,7 +319,12 @@ fn interface_gateway(guid: &str) -> String {
 /// Flat display/JSON nameserver list: active + other_static, deduped.
 fn flat_nameservers(info: &SystemDnsInfo) -> Vec<IpAddr> {
     let mut out = Vec::new();
-    for (ip, _) in info.active.iter().chain(info.other_static.iter()) {
+    for ip in info
+        .active
+        .iter()
+        .map(|(ip, _)| ip)
+        .chain(info.other_static.iter().map(|(ip, _)| ip))
+    {
         if let Ok(addr) = ip.parse::<IpAddr>() {
             if !out.contains(&addr) {
                 out.push(addr);
@@ -406,8 +411,12 @@ pub(super) fn system_dns() -> SystemDnsInfo {
         for line in content.lines() {
             let p: Vec<&str> = line.split_whitespace().collect();
             if p.len() >= 2 && p[0] == "nameserver" && !info.active.iter().any(|e| e.0 == p[1]) {
-                let src = if is_wsl && p[1] == "10.255.255.254" { "wsl" } else { "static" };
-                info.active.push((p[1].to_string(), src.to_string()));
+                let src = if is_wsl && p[1] == "10.255.255.254" {
+                    DnsSource::Wsl
+                } else {
+                    DnsSource::Static
+                };
+                info.active.push((p[1].to_string(), src));
             }
         }
     }

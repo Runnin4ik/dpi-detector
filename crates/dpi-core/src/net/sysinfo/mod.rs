@@ -3,7 +3,7 @@
 //! `/etc/resolv.conf`, `/proc/net/route` and `.wslconfig`.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 #[cfg(target_os = "windows")]
 use std::time::Duration;
 
@@ -13,13 +13,29 @@ mod os;
 
 pub use bypass::detect_bypass_tools;
 
+/// Where the nameservers of the active adapter came from. This is the closed set
+/// the panel branches on: a source the producers cannot name is a source the
+/// panel cannot render, and a token spelled by hand in two files was a typo away
+/// from silently dropping that branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DnsSource {
+    /// Written into the resolver configuration: registry `NameServer`, or a
+    /// `nameserver` line in `/etc/resolv.conf`.
+    Static,
+    /// Handed out by DHCP: registry `DhcpNameServer`, `Dhcpv6DNSServers` or
+    /// `ProfileNameServer`.
+    Dhcp,
+    /// The WSL host resolver (`10.255.255.254` under WSL2 NAT).
+    Wsl,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SystemDnsInfo {
     /// Flat active + other_static list (machine JSON contract), active entries first.
     pub nameservers: Vec<IpAddr>,
     pub gateway: Option<IpAddr>,
-    /// (server, "static"|"dhcp"|"wsl") on the active interface.
-    pub active: Vec<(String, String)>,
+    /// (server, where it came from) on the active interface.
+    pub active: Vec<(String, DnsSource)>,
     pub active_name: Option<String>,
     pub active_ip: Option<String>,
     /// (server, adapter name) static entries on other live adapters.
@@ -55,6 +71,14 @@ pub fn is_tun_name(name: &str) -> bool {
         .any(|m| n.contains(m))
 }
 
+/// True when the first 16-bit segment of an address is in `2000::/3` — the
+/// global-unicast block, as opposed to link-local, unique-local or loopback.
+/// Split out of [`ipv6_supported`] so the predicate itself is testable without
+/// a socket, a route or a network.
+fn is_global_unicast(v6: Ipv6Addr) -> bool {
+    v6.segments()[0] & 0xe000 == 0x2000
+}
+
 /// Returns true if the system has a globally routable IPv6 address (2000::/3).
 pub fn ipv6_supported() -> bool {
     let targets = [
@@ -68,9 +92,7 @@ pub fn ipv6_supported() -> bool {
                 if socket.connect(addr).is_ok() {
                     if let Ok(local_addr) = socket.local_addr() {
                         if let std::net::IpAddr::V6(v6) = local_addr.ip() {
-                            let first = v6.segments()[0];
-                            // Check 2000::/3 (global unicast)
-                            if (first & 0xe000) == 0x2000 {
+                            if is_global_unicast(v6) {
                                 return true;
                             }
                         }
@@ -112,12 +134,36 @@ pub fn get_system_dns() -> SystemDnsInfo {
 mod tests {
     use super::*;
 
+    /// The flat list is the machine JSON contract (`runner.rs` copies it into
+    /// the report): active entries first, deduped. A host without DNS makes the
+    /// assertions vacuous, which is right — what is pinned is the shape of the
+    /// report, not this machine's configuration.
     #[test]
     fn test_get_system_dns() {
         let info = get_system_dns();
-        println!("Discovered nameservers: {:?}", info.nameservers);
-        println!("Discovered gateway: {:?}", info.gateway);
-        println!("Active adapters: {:?}", info.active);
+        let mut active: Vec<IpAddr> = Vec::new();
+        for (ip, _) in &info.active {
+            if let Ok(addr) = ip.parse::<IpAddr>() {
+                if !active.contains(&addr) {
+                    active.push(addr);
+                }
+            }
+        }
+        assert!(
+            info.nameservers.starts_with(&active),
+            "active nameservers {:?} do not open the flat list {:?}",
+            active,
+            info.nameservers
+        );
+        let mut unique = info.nameservers.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            info.nameservers.len(),
+            "the flat nameserver list repeats an address: {:?}",
+            info.nameservers
+        );
     }
 
     #[test]
@@ -129,9 +175,22 @@ mod tests {
         assert!(!is_tun_name("Ethernet0"));
     }
 
+    /// The verdict `ipv6_supported` reports rests on this predicate alone: the
+    /// socket only says which source address the host would use, and the mask
+    /// decides whether that address is global. Link-local, unique-local and
+    /// loopback must all read as "no global IPv6", or the panel claims a
+    /// globally routable address the host cannot reach.
     #[test]
-    fn test_ipv6_supported() {
-        let supported = ipv6_supported();
-        println!("IPv6 globally supported: {}", supported);
+    fn test_global_unicast_prefix() {
+        let global = |s: &str| {
+            is_global_unicast(s.parse::<Ipv6Addr>().expect("documentation address"))
+        };
+        assert!(global("2001:4860:4860::8888"));
+        assert!(global("2606:4700:4700::1111"));
+        assert!(global("3fff::1"));
+        assert!(!global("fe80::1"));
+        assert!(!global("fd00::1"));
+        assert!(!global("::1"));
+        assert!(!global("::ffff:192.0.2.1"));
     }
 }

@@ -20,7 +20,19 @@
 //! The reader is Linux-only; the parser is plain byte arithmetic and is compiled
 //! everywhere so its tests run on every host, which is why dead-code analysis is
 //! told about the platform that does not read it.
-#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#![cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "the parser is compiled on every host so its tests run there, but only Linux opens the raw socket that feeds it"
+    )
+)]
+// The raw ICMP socket and its receive loop are OS calls; `unsafe` is the FFI
+// boundary, and the blocks that use it carry SAFETY notes.
+#![allow(
+    unsafe_code,
+    reason = "OS FFI: socket(2)/recvfrom(2) on a raw ICMP socket, guarded by a SAFETY note"
+)]
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};

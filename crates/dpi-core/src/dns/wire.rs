@@ -3,11 +3,16 @@ use url::Host;
 
 use super::types::{DnsError, DnsRecord, DnsResponse};
 
+/// DNS resource record type A: an IPv4 host address (RFC 1035).
 pub const QTYPE_A: u16 = 1;
+/// DNS resource record type CNAME: the canonical name of an alias (RFC 1035).
 pub const QTYPE_CNAME: u16 = 5;
+/// DNS resource record type TXT: one or more character strings (RFC 1035).
 pub const QTYPE_TXT: u16 = 16;
+/// DNS resource record type AAAA: an IPv6 host address (RFC 3596).
 pub const QTYPE_AAAA: u16 = 28;
 
+/// DNS class IN: the Internet class (RFC 1035).
 pub const CLASS_IN: u16 = 1;
 
 /// Encode domain name labels to RFC 1035 wire format with length prefixes.
@@ -347,6 +352,29 @@ mod tests {
         response.extend_from_slice(&[0x11, 0x22, 0x81, 0x83, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         let err = parse_dns_response(&response, Some(0x1122)).unwrap_err();
         assert_eq!(err, DnsError::NxDomain);
+    }
+
+    #[test]
+    fn test_parse_dns_response_ancount_is_bounded_by_packet() {
+        // `ancount` is a 16-bit field straight off the wire, so a 12-byte
+        // datagram may claim 65535 answers — reserving for them would be ~2 MiB
+        // on the live UDP/DoH/DoT path, which is the whole memory budget of the
+        // routers this build targets. The reservation is capped by what the
+        // packet can hold, and the parse must reject the truncated claim
+        // instead of panicking or allocating for it.
+        let mut response = Vec::new();
+        response.extend_from_slice(&[0x00, 0x01]); // ID
+        response.extend_from_slice(&[0x81, 0x80]); // Flags: QR=1, RD=1, RA=1
+        response.extend_from_slice(&[0x00, 0x00]); // QDCOUNT = 0
+        response.extend_from_slice(&[0xFF, 0xFF]); // ANCOUNT = 65535
+        response.extend_from_slice(&[0x00, 0x00]); // NSCOUNT = 0
+        response.extend_from_slice(&[0x00, 0x00]); // ARCOUNT = 0
+        assert_eq!(response.len(), 12);
+
+        assert!(matches!(
+            parse_dns_response(&response, None),
+            Err(DnsError::Truncated(12))
+        ));
     }
 
     #[test]
