@@ -26,13 +26,13 @@ fn numeric_version() -> String {
 }
 
 fn main() {
-    // A router is a role, and the target triple is what declares it: the four
-    // router rows of the release matrix, and nothing else. `main.rs` reads this
-    // for its runtime policy (`docs/OPTIMIZATIONS.md` §2.5). Derived here rather
-    // than passed in on the command line, so a hand-built router binary gets it
-    // too: `cross build --release --target mipsel-unknown-linux-musl` is how the
-    // router is measured, and a flag that has to be remembered would silently
-    // produce a binary on the desktop policy.
+    // A router is a role, and the target triple is what declares it. The four
+    // router rows of the release matrix are what this exists for, and any
+    // hand-built binary on the same triples gets it too — `cross build --release
+    // --target mipsel-unknown-linux-musl` is how the router is measured, and a
+    // flag that had to be remembered would silently produce a binary on the
+    // desktop policy. `main.rs` reads it for the runtime policy
+    // (`docs/OPTIMIZATIONS.md` §2.5).
     //
     // The arch list is what separates a router from the rest: `aarch64` with musl
     // is a router or an SBC, while `x86_64` with musl is the desktop artifact and
