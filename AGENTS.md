@@ -27,7 +27,7 @@ Flow: `main.rs` (clap, `AppConfig`, `Messages`, panic hook) → `runner::run_tes
 (concurrency gate `Arc<Semaphore>` via `probe::permit`) → `dpi_core::probe::*` per test →
 `views::render_*` table or `json::Results` → `json::Report` to stdout/`--output`.
 
-Runtime: `#[tokio::main(flavor = "current_thread")]`; blocking work ⇒ `spawn_blocking`.
+Runtime: a multi-thread tokio builder — two workers on the router targets (`--cfg dpi_router`) and one per core elsewhere, `DPI_WORKERS` overrides (`main.rs::worker_threads`); blocking work ⇒ `spawn_blocking`.
 Locks: `parking_lot`; `tokio::sync::Mutex` ONLY across `.await`. Errors: `thiserror` in
 core, no `anyhow`, no `unwrap()` outside tests. Logs: `tracing` (`WARN`; `-v` ⇒ `DEBUG`).
 

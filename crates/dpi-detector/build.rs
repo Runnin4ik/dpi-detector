@@ -26,6 +26,10 @@ fn numeric_version() -> String {
 }
 
 fn main() {
+    // The four router rows of `.github/workflows/release.yml` set this and
+    // `main.rs` branches on it; declaring it keeps `unexpected_cfgs` quiet in
+    // every other build, where it is legitimately absent.
+    println!("cargo:rustc-check-cfg=cfg(dpi_router)");
     #[cfg(windows)]
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
         let version = numeric_version();

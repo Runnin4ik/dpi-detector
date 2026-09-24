@@ -212,12 +212,16 @@ fn intercept_for(slot: &InterceptSlot, ip_version: &str) -> Option<Intercept> {
 
 /// How many worker threads the runtime gets, or `None` for tokio's own default.
 ///
-/// Two on the embedded targets this project ships to a router, which is where it
-/// was measured (`docs/OPTIMIZATIONS.md` §2.5): there the CPU work (X25519,
-/// ML-KEM-768, certificate verification) is serialized behind one executor, two
-/// threads take the whole gain on the burst test and most of it elsewhere, and
-/// four take nothing further while costing a peak of ~3.9 cores out of 4 — the
-/// half of a router that has to keep routing.
+/// Two on the router targets, which is where it was measured
+/// (`docs/OPTIMIZATIONS.md` §2.5): there the CPU work (X25519, ML-KEM-768,
+/// certificate verification) is serialized behind one executor, two threads take
+/// the whole gain on the burst test and most of it elsewhere, and four take
+/// nothing further while costing a peak of ~3.9 cores out of 4 — the half of a
+/// router that has to keep routing. Which targets those are is decided by the
+/// build, through `--cfg dpi_router` on the four router rows of the release
+/// matrix, not inferred from the target: `target_env = "musl"` would also catch
+/// `x86_64-unknown-linux-musl`, the desktop artifact, and a router is a role, not
+/// a libc.
 ///
 /// A desktop is not that machine. The same code there is network-bound — measured
 /// on a 12-thread box, tests run at 1–9% of a single core — so it gets tokio's
@@ -225,15 +229,21 @@ fn intercept_for(slot: &InterceptSlot, ip_version: &str) -> Option<Intercept> {
 /// for a workload whose bottleneck is the network.
 ///
 /// `DPI_WORKERS` overrides both, for measuring and for anyone who knows better.
+/// A value that cannot be a worker count is ignored rather than fatal: this runs
+/// before `run()` installs the panic hook, so a bad one would otherwise end the
+/// process with nothing on screen but tokio's own message.
 fn worker_threads() -> Option<usize> {
     if let Some(n) = std::env::var("DPI_WORKERS")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|n| *n > 0)
     {
-        return Some(n);
+        return Some(n.min(threads_ceiling()));
     }
-    if cfg!(target_env = "musl") {
+    // tokio reads `TOKIO_WORKER_THREADS` itself when the builder says nothing.
+    // Setting a count here would overrule it in silence, and only on the router
+    // targets, where this branch is the one that runs.
+    if std::env::var_os("TOKIO_WORKER_THREADS").is_none() && cfg!(dpi_router) {
         return Some(
             std::thread::available_parallelism()
                 .map(|n| n.get())
@@ -244,6 +254,16 @@ fn worker_threads() -> Option<usize> {
     None
 }
 
+/// The most workers `DPI_WORKERS` may ask for: four per core, well above the
+/// measured optimum and well below the count the OS refuses to spawn — a value
+/// past that fails inside tokio's `build()`, where nothing of ours is watching.
+fn threads_ceiling() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .saturating_mul(4)
+}
+
 fn main() {
     let mut builder = tokio::runtime::Builder::new_multi_thread();
     builder.enable_all();
@@ -252,7 +272,7 @@ fn main() {
     }
     let runtime = builder
         .build()
-        .expect("the runtime is built once, from a constant configuration");
+        .expect("the runtime is built from a fixed configuration and a checked thread count");
     runtime.block_on(run());
 }
 

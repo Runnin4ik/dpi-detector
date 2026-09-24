@@ -47,12 +47,14 @@ This document records the architectural decisions and compilation profiles appli
 | `"s"` | 5.81 MB | 7384 / 8816 / 8876 kB | 2.4–3.0 s / 31.2 s |
 | `3` | 7.64 MB | 8672 / 10020 / 10208 kB | 1.7–2.7 s / 27.6 s |
 
-* The two axes point opposite ways, and the exchange rate is steady: each
-  megabyte of code costs about 0.85 MB of resident memory and buys back 13%
-  (`"s"`) to 30% (`3`) of the processor time. The tool is a diagnostic on a
-  router that is routing at the same time, and the constraint recorded in §3.2 is
-  memory, so `"z"` is the right end of that trade. Re-open this only if the
-  router-side goal changes from memory to time.
+* The two axes point opposite ways, and the exchange is close to one for one.
+  Peak-RSS deltas against file deltas: `"z"` → `"s"` is +264/+472/+632 kB for
+  +0.44 MB of file (mean 1.04), `"s"` → `3` is +1288/+1204/+1332 kB for +1.83 MB
+  (mean 0.70) — so 0.6–1.4 MB of resident memory per MB of code, test by test.
+  §2.6's flag lands in the same band (0.35 MB of file, ~0.34 MB of steady RSS).
+  The tool is a diagnostic on a router that is routing at the same time, and the
+  constraint recorded in §3.2 is memory, so `"z"` is the right end of that trade.
+  Re-open this only if the router-side goal changes from memory to time.
 * The RSS tracks the file because the ELF is demand-paged (§3.1): what becomes
   resident is the pages the run touches, and a larger file leaves more of them
   touched. That is also why the file-size knobs below are memory knobs.
@@ -69,7 +71,7 @@ This document records the architectural decisions and compilation profiles appli
 * **Mechanics:** Disabled the heavy fuzzy typo-search algorithms (Levenshtein distance tables in `suggestions`), contextual error formatting and versioning macros.
 * **Result:** Savings of **~35 KB** in `clap_builder` machine code.
 
-### 2.5. Runtime: one worker thread per core, capped at two
+### 2.5. Runtime: two workers on a router, one per core elsewhere
 
 * **Files:** `Cargo.toml`, `crates/dpi-detector/src/main.rs`
 * **History:** `rt-multi-thread` was replaced with `current_thread`
@@ -91,9 +93,11 @@ This document records the architectural decisions and compilation profiles appli
   that has to keep routing and serving Wi-Fi.
 * The RSS claim above is **not** supported: the thread stacks are virtual, and
   resident memory measured the same at one, two and four workers.
-* **Choice:** the count is a platform decision, not a constant
-  (`crates/dpi-detector/src/main.rs::worker_threads`). On the embedded targets —
-  `cfg!(target_env = "musl")`, which is what all four router rows build — it is
+* **Choice:** the count is a build decision, not a constant
+  (`crates/dpi-detector/src/main.rs::worker_threads`). On the router targets —
+  the four rows the release matrix builds with `--cfg dpi_router`, which is a
+  role the build declares rather than a libc it infers: `target_env = "musl"`
+  would also catch the `x86_64-unknown-linux-musl` desktop artifact — it is
   `min(2, available_parallelism())`: derived, so the one-core routers this section
   was about keep one worker and their measured behaviour is unchanged, which a
   fixed `worker_threads = 2` would not give (the attribute takes a constant and
@@ -108,13 +112,18 @@ This document records the architectural decisions and compilation profiles appli
   17.3–17.5 MB at twelve, ~150 KB per thread, consistently across all three
   passes. Two is what a fast machine needs; twelve is what it can afford.
 * `DPI_WORKERS=<n>` overrides both rules. That is how the numbers above were
-  taken, and how a user pins the count on an unusual device.
+  taken, and how a user pins the count on an unusual device. A value that cannot
+  be a worker count is ignored rather than fatal, and the value is capped at four
+  per core — this runs before the panic hook exists, so a large one would
+  otherwise abort inside tokio's `build()` with nothing of ours on screen. When
+  `TOKIO_WORKER_THREADS` is set, tokio's own variable is left to decide, because
+  a count set here would overrule it in silence.
 
 ### 2.6. Cutting Stack Unwind Tables on Linux (`-C force-unwind-tables=no`)
-* **File:** `.github/workflows/release.yml`
-* **Mechanics:** With `panic = "abort"` the stack unwind tables (`.eh_frame` and `.eh_frame_hdr`) are not used while the program runs, so the flag stops codegen from emitting them. All Linux/musl rows now set it: the four router rows (aarch64, armv7, mipsel, mips) were added to it, having been missing while this section already claimed them.
-* **Result:** measured on the target for `mipsel-unknown-linux-musl`: the file drops from 5 370 720 to 5 018 392 bytes (**−352 KB**), and the resident memory with it — three interleaved passes against the same build without the flag: steady RSS −216, −408 and −388 KB, peak RSS −180, −456 and −696 KB. Processor time unchanged, as it must be for tables that are never executed.
-* The Windows and macOS rows deliberately do not set it: their exception handling is not the Itanium unwinder, and `panic = "abort"` does not make those tables unused there.
+* **File:** `.github/workflows/release.yml` — the `Build with cross` step, whose `RUSTFLAGS` is `--cfg rustix_use_libc -C force-unwind-tables=no ${{ matrix.rustflags }}`. Every `use_cross` row gets it, the four router rows and the two Android ones alike, and `Cross.toml` passes `RUSTFLAGS` into the container. It came in with 2597cc2 and is in the released tag; the x86_64-musl row sets the same flag by itself, because that row does not go through `cross`.
+* **Mechanics:** With `panic = "abort"` the stack unwind tables (`.eh_frame` and `.eh_frame_hdr`) are not used while the program runs, so the flag stops codegen from emitting them.
+* **What it is worth:** measured on the target for `mipsel-unknown-linux-musl` as a local A/B — one tree, built and run with and without the flag, three interleaved passes: the file drops from 5 370 720 to 5 018 392 bytes (**−352 KB**), and the resident memory with it — steady RSS −216, −408 and −388 KB, peak RSS −180, −456 and −696 KB. Processor time unchanged, as it must be for tables that are never executed. No shipped row changed here; the measurement is what the flag is worth.
+* The Windows and macOS rows do not set it, and nothing measured says they should: their tables are the platform's own (SEH on MSVC), produced from the target's CFI rather than by this flag.
 
 ### 2.7. Keeping the `config.yml` Format (YAML)
 * The YAML format was deliberately kept for user convenience: comment support (`#`), no strict restrictions on trailing commas, as well as 100% compatibility with already existing configuration files.
@@ -123,8 +132,8 @@ This document records the architectural decisions and compilation profiles appli
 
 Measured on the target (MT7621, musl, `--release`). §2.5's two guesses about where the RSS goes — a stack per thread, a worker per core — were both wrong, and this is what replaced them.
 
-* **The code mapping is 5096 kB on every test; the RSS is 6.4–9.4 MB.** Peak / steady RSS and processor time per test: 0 — 7308/6632 kB, 3.4 s; 2 — 8628/6812 kB, 5.9 s; 4 — 9368/6652 kB, 11.7 s; 1 — 8264/7704 kB, 35.3 s.
-* **The resident memory tracks the file at ~0.85.** §2.2's matrix moves the file by 0.44 MB and the peak RSS by 0.37 MB (`"z"` → `"s"`), then by 1.83 MB and 1.6 MB (`"s"` → `3`). §2.6's flag moves the file by 0.35 MB and the steady RSS by ~0.34 MB. The file is the lever, the profile and the linker flags are its two knobs, and both now sit at their memory-best setting.
+* **The code mapping is 5096 kB on every test; the RSS is 6.4–9.4 MB.** Peak / steady RSS and processor time per test: 0 — 7308/6632 kB, 3.4 s; 2 — 8628/6812 kB, 5.9 s; 4 — 9368/6652 kB, 11.7 s; 1 — 8264/7704 kB, 35.3 s. These are one run of the shipping build; §2.2's `"z"` row is another on the same box, and the shared tests differ by up to 3.4% (+188/+284/+20 kB) — the spread to expect from a single sample.
+* **The resident memory tracks the file, close to one for one.** §2.2's matrix moves the file by 0.44 MB and the peak RSS by 0.26–0.63 MB (`"z"` → `"s"`, mean 0.46), then by 1.83 MB and 1.20–1.33 MB (`"s"` → `3`, mean 1.28). §2.6's flag moves the file by 0.35 MB and the steady RSS by ~0.34 MB. The file is the lever, the profile and the linker flags are its two knobs, and both now sit at their memory-best setting.
 * **Threads are not the lever.** tokio's default stack is 2 MiB per thread and test 2 runs 38 of them, so `thread_stack_size(128 * 1024)` was measured: 8364 vs 8388 kB (test 2), 8020 vs 7980 kB (test 1) — inside the noise. On musl the stacks are mapped lazily and only a shallow frame is ever touched. The setting is not in the tree.
 * **`/proc/<pid>/smaps` does not exist on this target** (`CONFIG_PROC_PAGE_MONITOR=n`), so the file/anon split could not be read directly; every number above comes from changing one thing and measuring the total.
 * **`VmData` is virtual, not resident:** 19–79 MB per test, and reading it as memory use would overstate the tool by an order of magnitude. `VmExe` is likewise the size of the mapping, not what is resident.
