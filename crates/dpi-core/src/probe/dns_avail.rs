@@ -17,12 +17,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Semaphore};
 
-use crate::classify::{classify_connect_error_full, Detail, DpiStatus};
+use crate::classify::{classify_connect_error_full, Detail, DpiStatus, ProbeStage};
 use crate::dns::doh::DohSession;
 use crate::dns::dot::DotSession;
 use crate::dns::socks::SocksProxyConfig;
 use crate::dns::types::DnsError;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, DnsAvailServerKind};
 use crate::{PhaseProgress, ProgressBlock};
 use crate::probe::cymru::fetch_ip_cymru;
 use crate::probe::domains::fake_ip_type;
@@ -126,12 +126,17 @@ pub fn connect_fail(err: &DnsError) -> FailReason {
             if *stage == "resolve" {
                 return FailReason { status: DpiStatus::DnsFail, detail: Detail::DnsError };
             }
-            let norm_stage = match *stage {
-                "connected" => "tls_connected",
-                s => s,
+            // The third vocabulary — `DnsError::ConnectFault::stage` — maps onto
+            // the classifier's own stages only where it names the same place:
+            // `connected` is `tls_connected`, and a word this enum does not have
+            // is no longer interpolated into a verdict. Unreachable with today's
+            // three producers (doh.rs/dot.rs/resolve.rs write only resolve,
+            // tcp_connect, tls_handshake, connected), and `resolve` returned above.
+            let Some(stage) = ProbeStage::of_fault_stage(stage) else {
+                return FailReason { status: DpiStatus::Unknown, detail: Detail::Other(detail.clone()) };
             };
             let (status, classified) =
-                classify_connect_error_full(detail, None, None, 0, norm_stage);
+                classify_connect_error_full(detail, None, None, 0, stage);
             FailReason { status, detail: classified }
         }
         // Non-staged errors (bad URL/SNI/length; HTTP status is handled by
@@ -436,14 +441,21 @@ pub async fn check_dns_availability(
     let mut doh_servers = Vec::new();
     let mut dot_servers = Vec::new();
     for s in servers {
-        match s.kind.as_str() {
-            "udp" => udp_servers.push((s.addr, s.name, s.port)),
-            "doh_wire" | "doh_json" => doh_servers.push((s.addr, s.name, s.port)),
-            "dot" => dot_servers.push((s.addr, s.name, s.port)),
-            _ => {}
+        // Exhaustive over the config vocabulary: the wildcard this replaces let
+        // a kind the parser did not know fall out of all three lists, so the
+        // server ran nowhere and the report never said so.
+        match s.kind {
+            DnsAvailServerKind::Udp => udp_servers.push((s.addr, s.name, s.port)),
+            DnsAvailServerKind::DohJson | DnsAvailServerKind::DohWire => {
+                doh_servers.push((s.addr, s.name, s.port))
+            }
+            DnsAvailServerKind::Dot => dot_servers.push((s.addr, s.name, s.port)),
         }
     }
 
+    // Every field is spelled out: this report is what the TUI and `--json`
+    // render, so adding a measurement field must be a compile error here rather
+    // than a silent default that asserts a value the run never measured.
     let mut report = DnsAvailReport {
         allowed: allowed.clone(),
         forbidden: forbidden.clone(),
@@ -451,7 +463,19 @@ pub async fn check_dns_availability(
         udp_servers: udp_servers.clone(),
         doh_servers: doh_servers.clone(),
         dot_servers: dot_servers.clone(),
-        ..Default::default()
+        raw: HashMap::new(),
+        fail_reasons: HashMap::new(),
+        udp_answers: HashMap::new(),
+        doh_answers: HashMap::new(),
+        dot_answers: HashMap::new(),
+        egress: HashMap::new(),
+        org_names: HashMap::new(),
+        truth_fallback: HashMap::new(),
+        truth_fallback_used: false,
+        all_names: Vec::new(),
+        non_socks_proxy_warn: false,
+        stats: DnsAvailStats::default(),
+        skipped_no_servers: false,
     };
 
     if udp_servers.is_empty() && doh_servers.is_empty() && dot_servers.is_empty() {
@@ -479,12 +503,19 @@ pub async fn check_dns_availability(
     // Proxy: only SOCKS5 supports UDP relay
     let proxy_raw = cfg.effective_proxy().map(|s| s.to_string());
     let mut socks_proxy: Option<SocksProxyConfig> = None;
-    if let Some(ref p) = proxy_raw {
+    if let Some(p) = &proxy_raw {
         match crate::dns::socks::parse_socks_proxy(p) {
             Ok(c) => socks_proxy = Some(c),
             Err(_) => report.non_socks_proxy_warn = true,
         }
     }
+
+    // Shared, not copied: the domain lists and the SOCKS config are constant
+    // for the whole run, so each of the 122 spawned servers takes one `Arc`
+    // refcount bump instead of a deep copy (~700 String clones otherwise).
+    let allowed: Arc<[String]> = allowed.into();
+    let forbidden: Arc<[String]> = forbidden.into();
+    let socks_proxy = socks_proxy.map(Arc::new);
 
 
     // One budget for every probe in flight: UDP, DoH, DoT and the Cymru ASN
@@ -503,8 +534,8 @@ pub async fn check_dns_availability(
         let mut handles = Vec::new();
         for (addr, name, port) in &udp_servers {
             let (addr, name, port) = (addr.clone(), name.clone(), *port);
-            let allowed = allowed.clone();
-            let forbidden = forbidden.clone();
+            let allowed = Arc::clone(&allowed);
+            let forbidden = Arc::clone(&forbidden);
             let gate = Arc::clone(&probe_gate);
             let egress_sem = Arc::clone(&egress_sem);
             let socks_proxy = socks_proxy.clone();
@@ -516,7 +547,9 @@ pub async fn check_dns_availability(
                 let server: SocketAddr = format!("{}:{}", addr, port)
                     .parse()
                     .unwrap_or(SocketAddr::from(([0, 0, 0, 0], port)));
-                let key = ProbeKey { kind: ProbeKind::Udp, addr: addr.clone(), name: name.clone() };
+                // `addr` and `name` are dead after this point, so they move into
+                // the key instead of being cloned a second time per server.
+                let key = ProbeKey { kind: ProbeKind::Udp, addr, name };
 
                 // Egress fingerprint runs concurrently with phases A/B under its
                 // own gate: a silent resolver must not hold a probe slot for its
@@ -527,7 +560,7 @@ pub async fn check_dns_availability(
                     let tick = block_tick.clone();
                     tokio::spawn(async move {
                         let _e = crate::probe::permit(&egress_sem).await;
-                        let ip = probe_egress(server, timeout_dur, socks_proxy.as_ref()).await;
+                        let ip = probe_egress(server, timeout_dur, socks_proxy.as_deref()).await;
                         if let Some(t) = &tick {
                             t(ProgressBlock::Egress);
                         }
@@ -551,7 +584,7 @@ pub async fn check_dns_availability(
                         &allowed,
                         timeout_dur,
                         &udp_gate,
-                        socks_proxy.as_ref(),
+                        socks_proxy.as_deref(),
                         Some(a_tx),
                     );
 
@@ -574,7 +607,7 @@ pub async fn check_dns_availability(
                                 &forbidden,
                                 timeout_dur,
                                 &udp_gate,
-                                socks_proxy.as_ref(),
+                                socks_proxy.as_deref(),
                                 None,
                             );
                         }
@@ -609,7 +642,7 @@ pub async fn check_dns_availability(
         let mut handles = Vec::new();
         for (addr, name, port) in &doh_servers {
             let (addr, name, _port) = (addr.clone(), name.clone(), *port);
-            let forbidden = forbidden.clone();
+            let forbidden = Arc::clone(&forbidden);
             let gate = Arc::clone(&probe_gate);
             // Per-server query gate: queries are sequential on this server's
             // single connection, so bounding them per server (instead of
@@ -619,7 +652,9 @@ pub async fn check_dns_availability(
             let block_tick = block_tick.clone();
             handles.push(tokio::spawn(async move {
                 let _g = crate::probe::permit(&gate).await;
-                let key = ProbeKey { kind: ProbeKind::DohWire, addr: addr.clone(), name: name.clone() };
+                // `name` is dead after this point, so it moves into the key;
+                // `addr` is still needed for the connection below.
+                let key = ProbeKey { kind: ProbeKind::DohWire, addr: addr.clone(), name };
                 // Outer cap: twice the query window plus 3 s of slack.
                 let cap = Duration::from_secs_f64(timeout_dur.as_secs_f64() * 2.0 + 3.0);
                 let cap_secs = cap.as_secs_f64();
@@ -652,7 +687,7 @@ pub async fn check_dns_availability(
                     // `is_closed`. Retrying there only burns the jitter sleep,
                     // so the remaining domains are recorded as failures.
                     let mut dead = false;
-                    for d in &forbidden {
+                    for d in forbidden.iter() {
                         if dead {
                             lat.insert(d.clone(), None);
                             continue;
@@ -711,12 +746,14 @@ pub async fn check_dns_availability(
         let mut handles = Vec::new();
         for (addr, name, port) in &dot_servers {
             let (addr, name, port) = (addr.clone(), name.clone(), *port);
-            let forbidden = forbidden.clone();
+            let forbidden = Arc::clone(&forbidden);
             let gate = Arc::clone(&probe_gate);
             let block_tick = block_tick.clone();
             handles.push(tokio::spawn(async move {
                 let _g = crate::probe::permit(&gate).await;
-                let key = ProbeKey { kind: ProbeKind::Dot, addr: addr.clone(), name: name.clone() };
+                // `name` is dead after this point, so it moves into the key;
+                // `addr` is still needed for the endpoint split below.
+                let key = ProbeKey { kind: ProbeKind::Dot, addr: addr.clone(), name };
                 // Outer cap: twice the query window plus 3 s of slack.
                 let cap = Duration::from_secs_f64(timeout_dur.as_secs_f64() * 2.0 + 3.0);
                 let cap_secs = cap.as_secs_f64();
@@ -748,7 +785,7 @@ pub async fn check_dns_availability(
                     // unanswered, but a stream-level I/O error is terminal: the
                     // peer is gone, so the remaining domains can only fail.
                     let mut dead = false;
-                    for d in &forbidden {
+                    for d in forbidden.iter() {
                         if dead {
                             lat.insert(d.clone(), None);
                             continue;
@@ -1005,14 +1042,18 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
     }
     let is_hijacked = |ip: &IpAddr| net_brands.get(&net24(ip)).map(|s| s.len() >= 2).unwrap_or(false);
 
+    // Built once and walked three times below: the map is derived from
+    // `report.udp_servers`, which cannot change inside this function.
+    let by_name = udp_by_name(report);
+
     let mut hi = HashSet::new();
-    for (name, addrs) in udp_by_name(report) {
+    for (name, addrs) in &by_name {
         // MSK-IX and НСДИ are the stand-in itself: the /24 a run meets them on
         // is the host other brands' answers come back from, which is what the
         // check below notices — but they are the ones doing the answering, not
         // brands whose answers were replaced. The list is config data
         // (`DNS_HIJACK_EXEMPT_RESOLVERS`), so it changes without a rebuild.
-        if known_resolver(&brand(&name), &cfg.dns_hijack_exempt_resolvers) {
+        if known_resolver(&brand(name), &cfg.dns_hijack_exempt_resolvers) {
             continue;
         }
         for a in addrs {
@@ -1022,17 +1063,13 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
                 if is_hijacked(&eip)
                     && !known_resolver(&org_label(&org), &cfg.dns_known_resolver_names)
                 {
-                    hi.insert(brand(&name));
+                    hi.insert(brand(name));
                 }
             }
         }
     }
 
-    let resolvers_total = udp_by_name(report)
-        .keys()
-        .map(|n| brand(n))
-        .collect::<HashSet<_>>()
-        .len();
+    let resolvers_total = by_name.keys().map(|n| brand(n)).collect::<HashSet<_>>().len();
 
     // One walk over the live UDP servers fills the substitution, fake-IP and
     // stub-IP tallies; the truth map is built once instead of per server.
@@ -1041,12 +1078,12 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
     let mut subst_total = 0;
     let mut fakeip_count = 0;
     let mut stub_counts: HashMap<IpAddr, usize> = HashMap::new();
-    for (name, addrs) in udp_by_name(report) {
+    for (name, addrs) in &by_name {
         for a in addrs {
-            if !udp_alive(report, &a, &name) {
+            if !udp_alive(report, a, name) {
                 continue;
             }
-            let (judged, sub) = subst_counts_with(report, &truth, &a, &name);
+            let (judged, sub) = subst_counts_with(report, &truth, a, name);
             if judged == 0 {
                 continue;
             }
@@ -1054,7 +1091,7 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
             if sub > 0 {
                 subst_sub += 1;
             }
-            if fakeip_sub(report, &a, &name) > 0 {
+            if fakeip_sub(report, a, name) > 0 {
                 fakeip_count += 1;
             }
             for d in &report.forbidden {
@@ -1062,7 +1099,7 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
                     Some(t) if !t.is_empty() => t,
                     _ => continue,
                 };
-                let uips = udp_ips(report, &a, &name, d);
+                let uips = udp_ips(report, a, name, d);
                 if !uips.is_empty() && uips.intersection(t).next().is_none() {
                     for ip in uips {
                         *stub_counts.entry(ip).or_insert(0) += 1;

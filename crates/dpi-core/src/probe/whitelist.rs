@@ -167,9 +167,12 @@ pub async fn run_whitelist_sni(
     let mut detected: Vec<AsCandidate> = candidates.into_values().collect();
     detected.sort_by_key(|a| a.provider.to_lowercase());
 
+    // Every field spelled out: a field added to the report must be a compile
+    // error here, not a silently defaulted claim the TUI renders as measured.
     let mut report = WhitelistReport {
+        rows: Vec::new(),
         detected_as: detected.len(),
-        ..Default::default()
+        found_as: 0,
     };
     if detected.is_empty() {
         return report;

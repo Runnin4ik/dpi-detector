@@ -46,7 +46,7 @@ use tokio::time::timeout;
 
 use crate::classify::{
     classify_connect_error_full, classify_connect_error_icmp, classify_ssl_error, ConnectionStage,
-    DpiProbeStream, DpiProbeTracker, Detail, DpiStatus,
+    DpiProbeStream, DpiProbeTracker, Detail, DpiStatus, ProbeStage,
 };
 use crate::config::AppConfig;
 use crate::net::fingerprint::{HelloVariant, TlsFingerprint};
@@ -201,6 +201,9 @@ impl BurstAlpn {
 /// TLS version and ALPN they offer, and with which ClientHello shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BurstSettings {
+    /// Never zero: `clamped` raises it to `BURST_MIN_ATTEMPTS`, and a round with
+    /// a hand-built zero fires that minimum rather than reporting an empty
+    /// result set as if it were a measurement.
     pub attempts: usize,
     pub timeout: Duration,
     /// Delay between the starts of two consecutive attempts of one round: the
@@ -288,7 +291,11 @@ impl BurstSettings {
 struct Round {
     fingerprint: TlsFingerprint,
     axis: BurstTlsVersion,
-    cfg: AppConfig,
+    /// Shared, never copied: an `AppConfig` carries the whole DNS server list,
+    /// and a deep clone per profile × target piles up hundreds of thousands of
+    /// allocations per run while the tasks wait on the gate — the same reason
+    /// `probe/whitelist.rs` holds one `Arc<AppConfig>` for every probe task.
+    cfg: Arc<AppConfig>,
 }
 
 /// One attempt — handshake then `GET /`: its verdict, why, and how long it took.
@@ -429,7 +436,11 @@ pub async fn burst_targets(
     observer: &dyn BurstObserver,
 ) -> Vec<BurstReport> {
     let gate = Arc::new(Semaphore::new(concurrency.max(1)));
-    let addresses = resolve_targets(cfg, targets, &gate).await;
+    // One config for every profile × target task instead of one per task: each
+    // deep clone carries the whole DNS server list, and the clones pile up
+    // while the tasks wait on the gate.
+    let cfg = Arc::new(cfg.clone());
+    let addresses = resolve_targets(&cfg, targets, &gate).await;
     let mut reports: Vec<BurstReport> = targets
         .iter()
         .zip(&addresses)
@@ -453,7 +464,7 @@ pub async fn burst_targets(
             let domain = target.domain.clone();
             let settings = settings.clone();
             let gate = Arc::clone(&gate);
-            let cfg = cfg.clone();
+            let cfg = Arc::clone(&cfg);
             rounds.spawn(async move {
                 let _permit = gate.acquire().await;
                 let report = burst_profile(&address, &domain, fingerprint, &settings, &cfg).await;
@@ -475,7 +486,7 @@ pub async fn burst_targets(
 /// Resolves every target that came without an address, so the profile rounds
 /// share one lookup per host instead of repeating it for every shape.
 async fn resolve_targets(
-    cfg: &AppConfig,
+    cfg: &Arc<AppConfig>,
     targets: &[BurstTarget],
     gate: &Arc<Semaphore>,
 ) -> Vec<Option<SocketAddr>> {
@@ -487,7 +498,7 @@ async fn resolve_targets(
             continue;
         }
         let domain = target.domain.clone();
-        let cfg = cfg.clone();
+        let cfg = Arc::clone(cfg);
         let gate = Arc::clone(gate);
         lookups.spawn(async move {
             let _permit = gate.acquire().await;
@@ -520,16 +531,21 @@ pub async fn burst_profile(
     domain: &str,
     fingerprint: TlsFingerprint,
     settings: &BurstSettings,
-    cfg: &AppConfig,
+    cfg: &Arc<AppConfig>,
 ) -> BurstProfileReport {
     let mut profile = offer_for(settings.tls, fingerprint);
     if let Some(alpn) = settings.alpn.offered() {
         profile = profile.alpn(alpn);
     }
-    let round = Arc::new(Round { fingerprint, axis: settings.tls, cfg: cfg.clone() });
+    // The fields are public, so a hand-built `BurstSettings { attempts: 0 }`
+    // reaches here without passing through `clamped`; a zero-attempt round
+    // would report an empty result set that reads like a measurement. Fire the
+    // round `clamped` would have produced instead.
+    let round_attempts = if settings.attempts == 0 { BURST_MIN_ATTEMPTS } else { settings.attempts };
+    let round = Arc::new(Round { fingerprint, axis: settings.tls, cfg: Arc::clone(cfg) });
 
     let mut launches = JoinSet::new();
-    for index in 0..settings.attempts {
+    for index in 0..round_attempts {
         let addr = *addr;
         let domain = domain.to_string();
         // A connector per attempt, not per round. The `ClientConfig` owns the
@@ -565,7 +581,7 @@ pub async fn burst_profile(
     // Collected by launch order, which is the order the report prints them in:
     // the k-th line is the k-th connection that went out, not the k-th that
     // finished.
-    let mut slots: Vec<Option<BurstAttempt>> = (0..settings.attempts).map(|_| None).collect();
+    let mut slots: Vec<Option<BurstAttempt>> = (0..round_attempts).map(|_| None).collect();
     while let Some(joined) = launches.join_next().await {
         if let Ok((index, attempt)) = joined {
             slots[index] = Some(attempt);
@@ -597,7 +613,7 @@ async fn connect_attempt(
             Ok((DpiProbeStream::new(stream, tracker.clone()), tracker))
         }
         Err(DialError::Io { error, icmp }) => {
-            let (status, detail) = classify_connect_error_icmp(&error, icmp, 0, "tcp_connect");
+            let (status, detail) = classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect);
             Err(BurstAttempt { status, detail, ms: ms(started) })
         }
         Err(DialError::Timeout) => Err(BurstAttempt {
@@ -679,7 +695,7 @@ async fn handshake_attempt(
     match timeout(limit, connector.connect(server_name, stream)).await {
         Ok(Ok(stream)) => {
             let negotiated = stream.get_ref().1.protocol_version();
-            let stage = Arc::new(Mutex::new("tls_connected".to_string()));
+            let stage = Arc::new(Mutex::new(ProbeStage::TlsConnected));
             // The request is the second half of the attempt. A shape can be
             // answered and then cut, redirected or blocked the moment the
             // request goes out, and that is exactly what the test is for.
@@ -716,7 +732,7 @@ async fn handshake_attempt(
             }
             drop(st);
             let msg = e.to_string();
-            let (status, detail) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tls_handshake");
+            let (status, detail) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, ProbeStage::TlsHandshake);
             if status != DpiStatus::Unknown {
                 return BurstAttempt { status, detail, ms: elapsed(started) };
             }
@@ -763,7 +779,7 @@ mod tests {
             }
         });
 
-        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(3, 3000, vec![]), &AppConfig::default()).await;
+        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(3, 3000, vec![]), &Arc::new(AppConfig::default())).await;
         let _ = accept.await;
 
         assert_eq!(report.attempts.len(), 3);
@@ -785,7 +801,7 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
 
         let started = Instant::now();
-        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(2, 400, vec![]), &AppConfig::default()).await;
+        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(2, 400, vec![]), &Arc::new(AppConfig::default())).await;
         let elapsed = started.elapsed();
         drop(listener);
 
@@ -815,13 +831,13 @@ mod tests {
         let mut spread = settings(3, 300, vec![]);
         spread.launch_gap = Duration::from_millis(400);
         let started = Instant::now();
-        let spread_report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &spread, &AppConfig::default()).await;
+        let spread_report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &spread, &Arc::new(AppConfig::default())).await;
         let spread_elapsed = started.elapsed();
 
         let mut instant = settings(3, 300, vec![]);
         instant.launch_gap = Duration::ZERO;
         let started = Instant::now();
-        let instant_report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &instant, &AppConfig::default()).await;
+        let instant_report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &instant, &Arc::new(AppConfig::default())).await;
         let instant_elapsed = started.elapsed();
         drop(listener);
 
@@ -853,7 +869,7 @@ mod tests {
         drop(listener);
 
         let started = Instant::now();
-        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(2, 2000, vec![]), &AppConfig::default()).await;
+        let report = burst_profile(&addr, "example.com", TlsFingerprint::Rustls, &settings(2, 2000, vec![]), &Arc::new(AppConfig::default())).await;
         let elapsed = started.elapsed();
 
         assert_eq!(report.attempts.len(), 2);

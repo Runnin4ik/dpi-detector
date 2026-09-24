@@ -84,6 +84,7 @@ impl TlsProfile {
     /// general HTTPS traffic — the certificate is the DPI signal here, not a
     /// trust decision. Use [`TlsProfile::verifying`] for traffic that has to be
     /// trusted.
+    #[must_use = "the profile is the shape the connection presents"]
     pub fn insecure(fingerprint: TlsFingerprint) -> Self {
         Self { fingerprint, ..Self::default() }
     }
@@ -103,6 +104,7 @@ impl TlsProfile {
     /// all they hash), but a middlebox that reads the body can, which is why
     /// `net::fingerprint::tests::grease_version_leads_supported_versions` pins
     /// both lists for both phases.
+    #[must_use = "the change is in the returned profile; the receiver is consumed"]
     pub fn tls13(mut self) -> Self {
         self.version = TlsVersion::Tls13;
         self
@@ -111,12 +113,14 @@ impl TlsProfile {
     /// Offer TLS 1.2 only. Pinned the same way, and the same deviation:
     /// `[GREASE, 0x0303]` instead of a browser's `[GREASE, 0x0304, 0x0303]` —
     /// see [`TlsProfile::tls13`].
+    #[must_use = "the change is in the returned profile; the receiver is consumed"]
     pub fn tls12(mut self) -> Self {
         self.version = TlsVersion::Tls12;
         self
     }
 
     /// Offer `alpn` instead of the profile's own list.
+    #[must_use = "the change is in the returned profile; the receiver is consumed"]
     pub fn alpn(mut self, alpn: Vec<Vec<u8>>) -> Self {
         self.alpn = Some(alpn);
         self
@@ -131,6 +135,7 @@ impl TlsProfile {
     /// root installed on the machine (an antivirus web-shield, a proxy) signed
     /// the certificate in the middle, because that root is in the OS store and
     /// not here.
+    #[must_use = "the profile is the shape the connection presents"]
     pub fn verifying() -> Self {
         Self { verify: true, ..Self::default() }
     }
@@ -206,6 +211,7 @@ impl ServerCertVerifier for InsecureDpiCertVerifier {
 /// insecure ones are built per call, because they cost no root store and a
 /// private resumption store per config is what keeps one probe's session ticket
 /// out of the next probe's ClientHello.
+#[must_use = "the returned config is the shape every connection built from it presents"]
 pub fn create_tls_config(profile: &TlsProfile) -> Arc<ClientConfig> {
     if profile.verify {
         verifying_config(profile)
@@ -220,6 +226,7 @@ pub fn create_tls_config(profile: &TlsProfile) -> Arc<ClientConfig> {
 /// A verifying profile's config is cached and shared, so an edit copies it into
 /// an owned one: a variant is private to the run that asked for it and must not
 /// reach the next connection that presents the same shape.
+#[must_use = "the returned config is the shape every connection built from it presents"]
 pub fn create_tls_config_variant(
     profile: &TlsProfile,
     variant: Option<&HelloVariant>,
@@ -243,6 +250,7 @@ pub fn create_tls_config_variant(
 /// The SNI is a fixed name (`example.com`), the same one the harness uses when
 /// it captures bytes: it is the only field a profile takes from the domain, and
 /// its length moves the padding.
+#[must_use = "the returned bytes are the ClientHello a caller hashes or dials with"]
 pub fn hello_record(profile: &TlsProfile) -> Vec<u8> {
     hello_record_with(profile, None)
 }
@@ -253,6 +261,7 @@ pub fn hello_record(profile: &TlsProfile) -> Vec<u8> {
 /// What [`hello_record`] is for the shape as it stands, this is for the shape
 /// with one field moved: the bytes a variant actually sends, so a caller can
 /// assert the edit landed rather than trust that it did.
+#[must_use = "the returned bytes are the ClientHello a caller hashes or dials with"]
 pub fn hello_record_with(profile: &TlsProfile, variant: Option<&HelloVariant>) -> Vec<u8> {
     hello_record_for(profile, variant, "example.com")
 }
@@ -265,8 +274,13 @@ pub fn hello_record_with(profile: &TlsProfile, variant: Option<&HelloVariant>) -
 /// against one host is not the capture another host would see. A replay has to
 /// carry the name of the host it is dialled at, or it is answering a different
 /// question than the run it is compared with.
+#[must_use = "the returned bytes are the ClientHello a caller hashes or dials with"]
 pub fn hello_record_for(profile: &TlsProfile, variant: Option<&HelloVariant>, sni: &str) -> Vec<u8> {
     let config = create_tls_config_variant(profile, variant);
+    // Every product caller reaches this through `hello_record`/`hello_record_with`,
+    // whose SNI is the constant `example.com`; only the `examples` harness passes
+    // a name from its own argv. A name that cannot be dialled is therefore a
+    // caller bug the harness hits first, not an input this tool can receive.
     let name = ServerName::try_from(sni.to_string()).expect("a name to dial");
     let mut conn = rustls::ClientConnection::new(config, name).expect("a client connection");
     let mut buf = Vec::new();
@@ -284,15 +298,18 @@ pub fn hello_record_for(profile: &TlsProfile, variant: Option<&HelloVariant>, sn
 /// hello below the floor, so the padding extension is there on some connections
 /// and not on others (measured: `t13d1517h2_…b1ff8ab2d16f` padded,
 /// `t13d1516h2_…02713d6af862` not). The draw is per connection, so the list is
-/// collected by building the hello until both appear or [`JA4_BUILDS`] samples
-/// have run; for every other shape the first build is the whole answer.
+/// collected by building the hello until both appear or `JA4_BUILDS` samples
+/// have run; for every other shape the first build is the whole answer, which is
+/// what `hello_can_vary` decides — the loop's own exit tests the strings, so
+/// on its own it would build the same hello `JA4_BUILDS` times over.
 ///
 /// JA3 is deliberately not reported: a shape that shuffles its extension order
 /// has no single JA3 by construction (see `TlsShape::permute_extensions`).
 pub fn hello_ja4_variants(fingerprint: TlsFingerprint) -> Vec<String> {
     let profile = TlsProfile::insecure(fingerprint);
+    let builds = if hello_can_vary(fingerprint) { JA4_BUILDS } else { 1 };
     let mut seen: Vec<String> = Vec::new();
-    for _ in 0..JA4_BUILDS {
+    for _ in 0..builds {
         let ja4 = crate::net::ja4::client_hello_ja4(&hello_record(&profile));
         if !seen.contains(&ja4) {
             seen.push(ja4);
@@ -305,12 +322,41 @@ pub fn hello_ja4_variants(fingerprint: TlsFingerprint) -> Vec<String> {
     seen
 }
 
+/// Whether two connections presenting `fingerprint` can put different JA4s on
+/// the wire, i.e. whether [`hello_ja4_variants`] has to sample at all.
+///
+/// Only the padding extension can enter or leave a hello: JA4 hashes the sorted
+/// extension *set* (and its count) with the GREASE values filtered out, so the
+/// extension order, the GREASE slots, the random and the ECH body's own bytes
+/// move without reaching it, and the encoder emits padding only when the message
+/// would otherwise land under the shape's declared floor (`padding_to`; `None`
+/// for every shape that never pads, and the field is inert unless the order
+/// names extension 21). A shape therefore needs both halves — a floor to fall
+/// under, and a hello whose *length* is drawn per connection. The only such draw
+/// in this build is the GREASE ECH body (four lengths, 128–224 bytes; see
+/// `fingerprint::sends_ech`), which is exactly why `chrome123` and
+/// `chrome131android`, the two shapes that declare a floor *and* carry ECH, are
+/// the two the doc comment above names.
+///
+/// Both halves are necessary, so the gate cannot miss a variant; it can only
+/// over-approximate, and then the samples are the price. Neither half alone is
+/// enough: `sends_ech` is true for nine shapes, and seven of them declare no
+/// floor, so their drawn body length never reaches JA4.
+fn hello_can_vary(fingerprint: TlsFingerprint) -> bool {
+    if !crate::net::fingerprint::sends_ech(fingerprint) {
+        return false;
+    }
+    crate::net::fingerprint::hello_profile(fingerprint)
+        .is_some_and(|hello| hello.padding_to.is_some())
+}
+
 /// How many hellos [`hello_ja4_variants`] may build before it settles for what it
 /// has seen. A varied shape needs both of its strings, and the rarer one is the
 /// padded hello — one connection in four — so 32 samples miss it with
 /// probability below 2·10⁻⁴; no shape has more than two (only the padding
 /// extension can appear and disappear, and JA4 ignores everything else that
-/// moves).
+/// moves). Only the shapes `hello_can_vary` names spend it; every other shape
+/// builds one hello.
 const JA4_BUILDS: usize = 32;
 
 /// Providers for a fingerprint: the hybrid group is offered only where the
