@@ -228,10 +228,9 @@ fn intercept_for(slot: &InterceptSlot, ip_version: &str) -> Option<Intercept> {
 /// default, one worker per core, which is what "use as many as it needs" means
 /// for a workload whose bottleneck is the network.
 ///
-/// `DPI_WORKERS` overrides both, for measuring and for anyone who knows better.
-/// A value that cannot be a worker count is ignored rather than fatal: this runs
-/// before `run()` installs the panic hook, so a bad one would otherwise end the
-/// process with nothing on screen but tokio's own message.
+/// `DPI_WORKERS` overrides both, for measuring and for anyone who knows better,
+/// and is the only override on a router — `TOKIO_WORKER_THREADS` is ignored
+/// there on purpose, see the body.
 fn worker_threads() -> Option<usize> {
     if let Some(n) = std::env::var("DPI_WORKERS")
         .ok()
@@ -240,10 +239,14 @@ fn worker_threads() -> Option<usize> {
     {
         return Some(n.min(threads_ceiling()));
     }
-    // tokio reads `TOKIO_WORKER_THREADS` itself when the builder says nothing.
-    // Setting a count here would overrule it in silence, and only on the router
-    // targets, where this branch is the one that runs.
-    if std::env::var_os("TOKIO_WORKER_THREADS").is_none() && cfg!(dpi_router) {
+    // On a router the two-worker policy is the point of the build, so it is set
+    // even when `TOKIO_WORKER_THREADS` is: tokio reads that variable only when the
+    // builder says nothing, and it checks the value for nothing but `> 0`, so a
+    // count from it would fail inside `build()` — before `run()` installs the
+    // panic hook — the way `threads_ceiling` exists to prevent. A desktop is
+    // unaffected: this branch returns `None` there and tokio reads its variable
+    // as it always has.
+    if cfg!(dpi_router) {
         return Some(
             std::thread::available_parallelism()
                 .map(|n| n.get())

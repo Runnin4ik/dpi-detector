@@ -73,7 +73,7 @@ This document records the architectural decisions and compilation profiles appli
 
 ### 2.5. Runtime: two workers on a router, one per core elsewhere
 
-* **Files:** `Cargo.toml`, `crates/dpi-detector/src/main.rs`
+* **Files:** `crates/dpi-detector/src/main.rs` (the policy), `crates/dpi-detector/build.rs` (which target is a router — `cargo:rustc-cfg=dpi_router` for the four router triples, so a hand-built router binary gets it too), `.github/workflows/release.yml` (the rows that build them)
 * **History:** `rt-multi-thread` was replaced with `current_thread`
   (`features = ["rt"]`) on the argument that one thread is what the 1–2 core
   routers this targets can afford: it cuts **~50–120 KB** of machine code, and it
@@ -111,13 +111,14 @@ This document records the architectural decisions and compilation profiles appli
   free: the peak working set was 15.7–16.0 MB at one and two workers against
   17.3–17.5 MB at twelve, ~150 KB per thread, consistently across all three
   passes. Two is what a fast machine needs; twelve is what it can afford.
-* `DPI_WORKERS=<n>` overrides both rules. That is how the numbers above were
-  taken, and how a user pins the count on an unusual device. A value that cannot
-  be a worker count is ignored rather than fatal, and the value is capped at four
-  per core — this runs before the panic hook exists, so a large one would
-  otherwise abort inside tokio's `build()` with nothing of ours on screen. When
-  `TOKIO_WORKER_THREADS` is set, tokio's own variable is left to decide, because
-  a count set here would overrule it in silence.
+* `DPI_WORKERS=<n>` overrides both rules, and is the only override: a value that
+  cannot be a worker count is ignored rather than fatal, and the value is capped
+  at four per core — this runs before the panic hook exists, so a large one would
+  otherwise abort inside tokio's `build()` with nothing of ours on screen. On a
+  router `TOKIO_WORKER_THREADS` is deliberately ignored, for the same reason: that
+  variable is read by tokio only when the builder says nothing, and it checks the
+  value for nothing but `> 0`. A desktop still gets tokio's own reading of it,
+  because the router branch is the one that returns a count.
 
 ### 2.6. Cutting Stack Unwind Tables on Linux (`-C force-unwind-tables=no`)
 * **File:** `.github/workflows/release.yml` — the `Build with cross` step, whose `RUSTFLAGS` is `--cfg rustix_use_libc -C force-unwind-tables=no ${{ matrix.rustflags }}`. Every `use_cross` row gets it, the four router rows and the two Android ones alike, and `Cross.toml` passes `RUSTFLAGS` into the container. It came in with 2597cc2 and is in the released tag; the x86_64-musl row sets the same flag by itself, because that row does not go through `cross`.
