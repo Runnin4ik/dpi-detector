@@ -140,6 +140,11 @@ jobs:
             name: dpi-detector-linux-arm64
             use_cross: true
             qemu: aarch64
+            # `panic = "abort"` leaves our own code without unwind tables; this
+            # drops the ones codegen still emits. Measured on the router (mipsel,
+            # same flag, same code): -352 KB of file, and since the resident
+            # memory tracks the file at ~85%, about -0.3 MB of RSS.
+            rustflags: "-C force-unwind-tables=no"
           # 4. ARM32 Routers (Keenetic Titan 1, Hero, ASUS RT-AX58U, MikroTik ac)
           - os: ubuntu-26.04
             target: armv7-unknown-linux-musleabihf
@@ -147,6 +152,7 @@ jobs:
             use_cross: true
             has_upx: true
             qemu: arm
+            rustflags: "-C force-unwind-tables=no"
 
           # 5. MIPS Little-Endian Routers (Keenetic Giga KN-1011, Viva, Xiaomi 3G/4A, MikroTik hEX)
           - os: ubuntu-26.04
@@ -162,7 +168,7 @@ jobs:
             cross_args: "+nightly-2026-09-17"
             # `-L` names the alias step's directory as the cross container sees
             # it (the host's `target/` is the container's `/target/`).
-            rustflags: "-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-mipsel-unknown-linux-musl"
+            rustflags: "-C target-feature=+crt-static -C force-unwind-tables=no -C link-self-contained=no -L /target/static-unwind-mipsel-unknown-linux-musl"
 
           # 6. MIPS Big-Endian Routers (TP-Link Archer C7, MikroTik hAP ac lite)
           - os: ubuntu-26.04
@@ -173,7 +179,7 @@ jobs:
             qemu: mips
             use_nightly: true
             cross_args: "+nightly-2026-09-17"
-            rustflags: "-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-mips-unknown-linux-musl"
+            rustflags: "-C target-feature=+crt-static -C force-unwind-tables=no -C link-self-contained=no -L /target/static-unwind-mips-unknown-linux-musl"
           # 7. macOS Intel. `macos-26-intel` is the x64 image, and building here
           # rather than on the arm64 one is a deliberate trade: measured, the
           # cross-compiled x86_64 build on `macos-26` takes 118–141 s against

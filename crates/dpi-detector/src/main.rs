@@ -210,30 +210,47 @@ fn intercept_for(slot: &InterceptSlot, ip_version: &str) -> Option<Intercept> {
     }
 }
 
-/// One or two worker threads, never more.
+/// How many worker threads the runtime gets, or `None` for tokio's own default.
 ///
-/// The runtime used to be `current_thread`, on the argument in
-/// `docs/OPTIMIZATIONS.md` §2.5 that one thread is what the 1–2 core routers this
-/// targets can afford. Measured on the target — MT7621, four hardware threads,
-/// musl — that argument holds for one core and costs real time above it: the CPU
-/// work (X25519, ML-KEM-768, certificate verification) is serialized behind a
-/// single executor, and spreading it over two threads took test 6 from 21 s to
-/// 13 s and test 1 from 43 s to 25 s for +3–8% processor time. Four threads
-/// bought nothing further (13.2 s, unchanged) and cost +33–45% plus a peak of
-/// ~3.9 cores against ~2 — the half of a router that has to keep routing.
+/// Two on the embedded targets this project ships to a router, which is where it
+/// was measured (`docs/OPTIMIZATIONS.md` §2.5): there the CPU work (X25519,
+/// ML-KEM-768, certificate verification) is serialized behind one executor, two
+/// threads take the whole gain on the burst test and most of it elsewhere, and
+/// four take nothing further while costing a peak of ~3.9 cores out of 4 — the
+/// half of a router that has to keep routing.
 ///
-/// So the count is derived, not fixed: `min(2, available_parallelism())`. On the
-/// one-core routers §2.5 was about, that is one worker and the measured behaviour
-/// is unchanged, which a fixed `worker_threads = 2` would not give: the attribute
-/// takes a constant, and would put two workers on a single core.
+/// A desktop is not that machine. The same code there is network-bound — measured
+/// on a 12-thread box, tests run at 1–9% of a single core — so it gets tokio's
+/// default, one worker per core, which is what "use as many as it needs" means
+/// for a workload whose bottleneck is the network.
+///
+/// `DPI_WORKERS` overrides both, for measuring and for anyone who knows better.
+fn worker_threads() -> Option<usize> {
+    if let Some(n) = std::env::var("DPI_WORKERS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+    {
+        return Some(n);
+    }
+    if cfg!(target_env = "musl") {
+        return Some(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+                .min(2),
+        );
+    }
+    None
+}
+
 fn main() {
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(2);
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(workers)
-        .enable_all()
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    if let Some(workers) = worker_threads() {
+        builder.worker_threads(workers);
+    }
+    let runtime = builder
         .build()
         .expect("the runtime is built once, from a constant configuration");
     runtime.block_on(run());
