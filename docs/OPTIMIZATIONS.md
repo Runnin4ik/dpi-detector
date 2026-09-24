@@ -1,30 +1,30 @@
-# Оптимизация размера бинарника (Binary Size Optimization)
+# Binary Size Optimization
 
-В данном документе зафиксированы архитектурные решения и профили компиляции, примененные для минимизации размера исполняемого файла `dpi-detector` на десктопных и встраиваемых платформах (Windows, Linux x86_64, ARM, MIPS / OpenWrt / Keenetic).
+This document records the architectural decisions and compilation profiles applied to minimize the size of the `dpi-detector` executable on desktop and embedded platforms (Windows, Linux x86_64, ARM, MIPS / OpenWrt / Keenetic).
 
 ---
 
-## 1. Сводные результаты (Windows x86_64)
+## 1. Summary Results (Windows x86_64)
 
-| Метрика | До оптимизации | После оптимизации | Разница |
+| Metric | Before optimization | After optimization | Difference |
 |---|---|---|---|
-| **Полный размер файла `.exe`** | **4 662 784 байт (4.45 МБ)** | **3 333 632 байт (3.17 МБ)** | **-1 329 152 байт (-28.5%)** |
-| **Секция кода `.text`** | 2 772 480 байт | 2 248 192 байт | **-524 288 байт (-18.9%)** |
-| **Секция данных `.rdata`** | 861 184 байт | 798 208 байт | **-62 976 байт (-7.3%)** |
-| **Секция ресурсов `.rsrc` (иконка)** | 944 128 байт | 198 144 байт | **-745 984 байт (-79.0%)** |
+| **Total `.exe` file size** | **4 662 784 bytes (4.45 MB)** | **3 333 632 bytes (3.17 MB)** | **-1 329 152 bytes (-28.5%)** |
+| **Code section `.text`** | 2 772 480 bytes | 2 248 192 bytes | **-524 288 bytes (-18.9%)** |
+| **Data section `.rdata`** | 861 184 bytes | 798 208 bytes | **-62 976 bytes (-7.3%)** |
+| **Resource section `.rsrc` (icon)** | 944 128 bytes | 198 144 bytes | **-745 984 bytes (-79.0%)** |
 
 ---
 
-## 2. Примененные меры
+## 2. Applied Measures
 
-### 2.1. Оптимизация ресурсов Windows (`crates/dpi-detector/assets/icon.ico`)
-* **Проблема:** В `.ico` файле находился несжатый BMP 256x256 (270 КБ) и фрейм 512x512 (531 КБ), который не используется Windows Shell. Иконка занимала 920 КБ (20% всего бинарника).
-* **Решение:** Файл пересобран со стандартной матрицей четких разрешений: `16x16, 24x24, 32x32, 48x48, 64x64, 128x128, 256x256` со сжатием PNG.
-* **Результат:** Размер `.ico` снижен с 920 КБ до 191 КБ, экономия в секции `.rsrc` составила **~746 КБ**.
+### 2.1. Windows Resource Optimization (`crates/dpi-detector/assets/icon.ico`)
+* **Problem:** The `.ico` file contained an uncompressed 256x256 BMP (270 KB) and a 512x512 frame (531 KB) that is not used by the Windows Shell. The icon occupied 920 KB (20% of the entire binary).
+* **Solution:** The file was rebuilt with the standard matrix of crisp resolutions: `16x16, 24x24, 32x32, 48x48, 64x64, 128x128, 256x256` with PNG compression.
+* **Result:** The `.ico` size was reduced from 920 KB to 191 KB; the savings in the `.rsrc` section amounted to **~746 KB**.
 
-### 2.2. Профиль компилятора: `opt-level = "z"`
-* **Файл:** `Cargo.toml`
-* **Настройка:**
+### 2.2. Compiler Profile: `opt-level = "z"`
+* **File:** `Cargo.toml`
+* **Setting:**
   ```toml
   [profile.release]
   opt-level = "z"
@@ -33,45 +33,46 @@
   panic = "abort"
   strip = true
   ```
-* **Механика:** Режим `"z"` заставляет LLVM агрессивно отсекать раздувание кода (loop unrolling, векторизацию, избыточный inlining функций), ориентируясь на минимальный вес инструкций.
-* **Результат:** Сжатие секции машинного кода `.text` на **~500 КБ**.
+* **Mechanics:** The `"z"` mode makes LLVM aggressively cut code bloat (loop unrolling, vectorization, excessive function inlining), targeting the minimum instruction weight.
+* **Result:** Compression of the machine code section `.text` by **~500 KB**.
+* **Rejected:** `opt-level = "s"` — the previous variant, superseded by `"z"`. In `docs/REFACTORING.md` it is still named as the active one; `"z"` is what gets built, do not revert.
 
-### 2.3. Устранение дубликатов зависимостей в `Cargo.lock`
-* **`crossterm`:** Обновлен до `0.29` в корневом `Cargo.toml`. Устранена двойная компиляция версий `0.28.1` (из `dpi-detector`) и `0.29.0` (из `comfy-table`).
-* **`webpki-roots`:** Переключен на версию `1.0`. Устранена зависимость-переходник `0.26.11`.
-* **Результат:** Уменьшение объема дублирующегося кода, ускорение времени сборки.
+### 2.3. Eliminating Duplicate Dependencies in `Cargo.lock`
+* **`crossterm`:** Updated to `0.29` in the root `Cargo.toml`. Double compilation of versions `0.28.1` (from `dpi-detector`) and `0.29.0` (from `comfy-table`) has been eliminated.
+* **`webpki-roots`:** Switched to version `1.0`. The `0.26.11` shim dependency has been eliminated.
+* **Result:** Reduced volume of duplicated code, faster build times.
 
-### 2.4. Минимизация фичей CLI-парсера (`clap`)
-* **Файл:** `Cargo.toml`
-* **Было:** `clap = { version = "4.5", features = ["derive", "cargo"] }`
-* **Стало:** `clap = { version = "4.5", default-features = false, features = ["std", "derive", "help", "usage"] }`
-* **Механика:** Отключены тяжелые алгоритмы нечеткого поиска опечаток (таблицы расстояния Левенштейна в `suggestions`), контекстное форматирование ошибок и макросы версионирования.
-* **Результат:** Экономия **~35 КБ** в машинном коде `clap_builder`.
+### 2.4. Minimizing CLI Parser Features (`clap`)
+* **File:** `Cargo.toml`
+* **Before:** `clap = { version = "4.5", features = ["derive", "cargo"] }`
+* **After:** `clap = { version = "4.5", default-features = false, features = ["std", "derive", "help", "usage"] }`
+* **Mechanics:** Disabled the heavy fuzzy typo-search algorithms (Levenshtein distance tables in `suggestions`), contextual error formatting and versioning macros.
+* **Result:** Savings of **~35 KB** in `clap_builder` machine code.
 
-### 2.5. Однопоточный рантайм Tokio (`current_thread`)
-* **Файлы:** `Cargo.toml`, `crates/dpi-detector/src/main.rs`
-* **Механика:** Заменен многопоточный планировщик `rt-multi-thread` на легковесный однопоточный `current_thread` (`features = ["rt"]`). Для сетевого I/O на epoll/IOCP один поток эффективно обслуживает десятки одновременных сокетов.
-* **Результат:**
-  * Срезает **~50–120 КБ** машинного кода (удален work-stealing шедулер, потоковый пул и межпоточные очереди).
-  * Значительно снижает потребление оперативной памяти (RSS) на 1–2 ядерных роутерах (каждому потоку ОС не выделяется отдельный стек 1–2 МБ).
+### 2.5. Single-Threaded Tokio Runtime (`current_thread`)
+* **Files:** `Cargo.toml`, `crates/dpi-detector/src/main.rs`
+* **Mechanics:** The multi-threaded `rt-multi-thread` scheduler was replaced with the lightweight single-threaded `current_thread` (`features = ["rt"]`). For network I/O on epoll/IOCP a single thread efficiently serves dozens of simultaneous sockets.
+* **Result:**
+  * Cuts **~50–120 KB** of machine code (the work-stealing scheduler, thread pool and inter-thread queues are removed).
+  * Significantly reduces RAM consumption (RSS) on 1–2 core routers (no separate 1–2 MB OS stack is allocated per thread).
 
-### 2.6. Вырезание таблиц раскрутки стека на Linux (`-C force-unwind-tables=no`)
-* **Файл:** `.github/workflows/release.yml`
-* **Механика:** При `panic = "abort"` таблицы раскрутки стека (`.eh_frame` и `.eh_frame_hdr`) не используются во время работы программы. Флаг полностью отключает их генерацию для всех Linux/MIPS/ARM таргетов.
-* **Результат:** Экономия **~300 КБ** в ELF-бинарниках для MIPS и ARM.
+### 2.6. Cutting Stack Unwind Tables on Linux (`-C force-unwind-tables=no`)
+* **File:** `.github/workflows/release.yml`
+* **Mechanics:** With `panic = "abort"` the stack unwind tables (`.eh_frame` and `.eh_frame_hdr`) are not used while the program runs. The flag completely disables their generation for all Linux/MIPS/ARM targets.
+* **Result:** Savings of **~300 KB** in ELF binaries for MIPS and ARM.
 
-### 2.7. Сохранение формата `config.yml` (YAML)
-* Формат YAML сознательно сохранен ради удобства пользователя: поддержка комментариев (`#`), отсутствие жестких ограничений на завершающие запятые, а также 100% совместимость с уже существующими файлами конфигурации.
+### 2.7. Keeping the `config.yml` Format (YAML)
+* The YAML format was deliberately kept for user convenience: comment support (`#`), no strict restrictions on trailing commas, as well as 100% compatibility with already existing configuration files.
 
 ---
 
-## 3. Специфика для роутеров (MIPS, ARM, OpenWrt, Keenetic, Entware)
+## 3. Router Specifics (MIPS, ARM, OpenWrt, Keenetic, Entware)
 
-1. **Почему НЕ используется упаковщик UPX:**
-   * На роутерах файловая система SquashFS сжимает бинарники по алгоритму **XZ / LZMA** непосредственно на Flash-памяти.
-   * Обычный Linux ELF подгружается ядром постранично (4 КБ demand-paging через `mmap`).
-   * UPX-бинарник при запуске обязан полностью распаковать себя в оперативную память (RAM). На роутерах с 64–128 МБ RAM это мгновенно раздувает RSS на несколько мегабайт и провоцирует OOM-killer.
-2. **100% автономность (Static Musl):**
-   * Сборки под `mipsel-unknown-linux-musl`, `mips-unknown-linux-musl` и `armv7-unknown-linux-musleabihf` собираются со статическим Musl libc (`+crt-static`), что позволяет запускать утилиту на любых прошивках без установки внешних библиотек в `/opt/lib`.
-3. **Сохранение DoH HTTP/2 (`h2`):**
-   * Стек HTTP/2 сохранен для аутентичной эмуляции запросов современных браузеров к DoH-резолверам (Cloudflare, Google, AdGuard, Quad9).
+1. **UPX is a fallback, not the default:**
+   * The plain binary is what the installer prefers. Three router targets (`armv7`, `mipsel`, `mips`) additionally ship a `-upx` variant, and `install.sh` switches to it only when the target has less than 200 MB free (`DPI_UPX=1` forces it, `DPI_UPX=0` forbids it).
+   * On routers the SquashFS filesystem compresses binaries with the **XZ / LZMA** algorithm directly on the Flash memory, so the plain ELF is already stored compactly.
+   * A normal Linux ELF is loaded by the kernel page by page (4 KB demand-paging via `mmap`), while a UPX binary must fully unpack itself into RAM on startup. On routers with 64–128 MB RAM this instantly inflates RSS by several megabytes and provokes the OOM-killer — which is why UPX is reserved for flash-tight devices, where the trade is deliberate.
+2. **100% self-containment (Static Musl):**
+   * Builds for `mipsel-unknown-linux-musl`, `mips-unknown-linux-musl` and `armv7-unknown-linux-musleabihf` are built with static Musl libc (`+crt-static`), which allows running the utility on any firmware without installing external libraries into `/opt/lib`.
+3. **Keeping DoH HTTP/2 (`h2`):**
+   * The HTTP/2 stack is kept for authentic emulation of modern browser requests to DoH resolvers (Cloudflare, Google, AdGuard, Quad9).

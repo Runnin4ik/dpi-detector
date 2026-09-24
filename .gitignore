@@ -5,7 +5,6 @@
 /dpi_detector_crash.log
 .idea/
 .vscode/
-AGENTS.md
 /vendor/*/target/
 /vendor/*/Cargo.lock
 /dist/

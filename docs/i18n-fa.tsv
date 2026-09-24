@@ -2,7 +2,7 @@
 #
 # Как редактировать:
 #   * Меняйте ТОЛЬКО третью колонку (fa). Колонку key не трогайте: по ней
-#     правки вернутся в Rust-исходники (crates/dpi-core/src/i18n/).
+#     правки вернутся в Rust-исходники (crates/dpi-detector/src/i18n/).
 #   * Колонка en — эталонный английский текст, не менять.
 #   * Колонки разделены ОДНИМ символом табуляции (TAB). Табуляции внутри
 #     текста быть не должно. Строки не переносить.
@@ -20,8 +20,8 @@
 #     и верстку таблиц (RTL). Допустимы только символы: ✓ × ⚠ ↑
 #   * Не удаляйте и не добавляйте строки; пустые значения недопустимы.
 #
-# Источник: crates/dpi-core/src/i18n/mod.rs (Messages, legend_sections_fa),
-#           crates/dpi-core/src/i18n/details.rs (detail.DET_*).
+# Источник: crates/dpi-detector/src/i18n/mod.rs (Messages, legend_sections_fa),
+#           crates/dpi-detector/src/i18n/details.rs (detail.DET_*).
 # Формат: key <TAB> en <TAB> fa
 
 key	en	fa

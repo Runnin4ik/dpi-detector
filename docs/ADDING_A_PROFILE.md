@@ -1,277 +1,284 @@
-# Добавление профиля отпечатка
+# Adding a fingerprint profile
 
-Как в репозиторий попадает новая форма: новая версия браузера, новый клиент, новая
-платформа. Откуда берутся числа, чем они проверяются и что должно упасть само, если
-форма перестанет соответствовать источнику.
+How a new shape gets into the repository: a new browser version, a new client, a new
+platform. Where the numbers come from, what checks them, and what must fail on its own
+if a shape stops matching its source.
 
-Профиль — это **данные**, а не код. Одна запись в таблице, и всё остальное —
-билдер, парсеры, `--legend`, JSON, конфиг, тест 6 — читает её.
+A profile is **data**, not code. One record in a table, and everything else — the
+builder, the parsers, `--legend`, JSON, the config, test 6 — reads it.
 
 ---
 
-## 1. Что такое профиль
+## 1. What a profile is
 
-| Элемент | Где | Что описывает |
+| Element | Where | What it describes |
 |---|---|---|
-| `TlsShape` + `SHAPES` | `crates/dpi-core/src/net/fingerprint/shapes/` (`mod.rs` — структура и таблица, по файлу на семейство клиента) | форма: имена, `source`, шифры, группы, схемы подписи, порядок расширений, `raw_exts`, `suppress`, `drop13`/`drop12`, ALPN, `padding_to`, сжатие сертификата, доли ключа, GREASE/ECH/перемешивание |
-| `HttpIdentity` | `.../fingerprint/identity.rs` | `User-Agent`, набор, порядок и **регистр** имён заголовков |
-| `H2Fingerprint` | `.../fingerprint/h2.rs` | преамбула: SETTINGS с порядком, окно соединения, порядок псевдозаголовков, приоритет |
-| `TlsFingerprint` | `.../fingerprint/mod.rs` | вариант, `code` (JSON и конфиг), `token` (бейдж, латиница), `label` («CHROME 133»), `parse`, `ALL`, `DEFAULT_SET` |
-| Пины и структурные тесты | `.../fingerprint/tests.rs` | JA3/JA4 против источника и гейты §4 |
-| Строка стенда | `tools/fingerprint/fingerprint.py` (`PROFILES`) | код, обёртка бандла и файл-захват форка — или `utls:HelloX` на месте обёртки, если бандл этого клиента не оборачивает |
+| `TlsShape` + `SHAPES` | `crates/dpi-core/src/net/fingerprint/shapes/` (`mod.rs` — the struct and the table, one file per client family) | the shape: names, `source`, ciphers, groups, signature schemes, extension order, `raw_exts`, `suppress`, `drop13`/`drop12`, ALPN, `padding_to`, certificate compression, key shares, GREASE/ECH/shuffling |
+| `HttpIdentity` | `.../fingerprint/identity.rs` | `User-Agent`, the set, the order and the **case** of header names |
+| `H2Fingerprint` | `.../fingerprint/h2.rs` | the preface: SETTINGS with order, connection window, pseudo-header order, priority |
+| `TlsFingerprint` | `.../fingerprint/mod.rs` | the variant, `code` (JSON and config), `token` (badge, Latin), `label` ("CHROME 133"), `parse`, `ALL`, `DEFAULT_SET` |
+| Pins and structural tests | `.../fingerprint/tests.rs` | JA3/JA4 against the source and the §4 gates |
+| The harness row | `tools/fingerprint/fingerprint.py` (`PROFILES`) | the code, the bundle wrapper and the fork's capture file — or `utls:HelloX` in place of the wrapper when the bundle does not wrap this client |
 
-Правила, на которых это держится:
+The rules this rests on:
 
-* **Вариант без записи — ошибка.** `spec()` паникует, `fingerprint_table_is_total`
-  сверяет `ALL` и `SHAPES` в обе стороны.
-* **`ALL` — единственный рукописный список.** Новый профиль добавляется туда, а не
-  в `match`-ветки по всему коду.
-* **Имя = версия клиента.** `chrome146`, `firefox147`, `tor145`; версии нет только
-  у `rustls` — это контрольная форма, а не клиент. Имена обёрток (`curl_*`) и имена
-  без версии отвергаются: имя, разрешающееся не в ту версию, чем называется, молча
-  измеряет другого клиента.
-* **Один профиль на форму.** Из нескольких версий, чьи hello совпадают (проверяется
-  через `tls.peet.ws` по каждой обёртке), остаётся самая новая: у Chrome 133–146
-  совпадают JA4, peetprint, akamai-отпечаток h2, кадры преамбулы и имена заголовков
-  — отличается только версия в `User-Agent` и `sec-ch-ua`. Запись, отличающаяся от
-  существующей только UA, — это не профиль, а вторая строка с тем же ключом.
-  **Единственное исключение — `chrome133`.** Он добавлен намеренно и повторяет
-  hello `chrome146`: две записи, у которых совпадает всё, кроме `sec-ch-ua` и
-  `User-Agent`, дают прогону способ спросить, читает ли цензор идентичность.
-  Одинаковый вердикт говорит, что не читает; разошедшийся — что читает, и это
-  было бы первое различие между формами, которое видно не в hello. Второй такой
-  записи быть не должно: исключение ценно ровно потому, что оно одно.
-* **i18n не трогается.** Токены латиницей (Rule 4), список профилей печатает
-  `--legend` из таблицы, ключ JA4 — из того же билдера, что и проба
-  (`hello_ja4_variants`), поэтому добавить язык или профиль не значит править
-  строки.
+* **A variant without a record is an error.** `spec()` panics, and
+  `fingerprint_table_is_total` checks `ALL` and `SHAPES` against each other in both
+  directions.
+* **`ALL` is the only hand-written list.** A new profile is added there, not into
+  `match` arms all over the code.
+* **The name = the client version.** `chrome146`, `firefox147`, `tor145`; only
+  `rustls` has no version — it is the baseline shape, not a client. Wrapper names
+  (`curl_*`) and names without a version are rejected: a name that resolves to a
+  version other than the one it claims silently measures a different client.
+* **One profile per shape.** Of several versions whose hellos coincide (checked
+  through `tls.peet.ws` for each wrapper), the newest is kept: Chrome 133–146 share
+  JA4, peetprint, the akamai h2 fingerprint, the preface frames and the header names
+  — only the version in `User-Agent` and `sec-ch-ua` differs. A record that differs
+  from an existing one only in UA is not a profile but a second row with the same
+  key. **The single exception is `chrome133`.** It was added deliberately and repeats
+  the hello of `chrome146`: two records that agree on everything except `sec-ch-ua`
+  and `User-Agent` give the run a way to ask whether the censor reads identity. An
+  identical verdict says it does not; a diverging one says it does, and that would be
+  the first difference between shapes that shows up outside the hello. There must be
+  no second such record: the exception is valuable precisely because it is the only
+  one.
+* **i18n is not touched.** The tokens are Latin (Rule 4), the profile list is printed
+  by `--legend` from the table, and the JA4 key comes from the same builder as the
+  probe (`hello_ja4_variants`), so adding a language or a profile does not mean
+  editing strings.
 
-## 2. Откуда брать числа
+## 2. Where to get the numbers
 
-| Источник | Что даёт | Чем является |
+| Source | What it gives | What it is |
 |---|---|---|
-| Бандл `curl-impersonate` (обёртка) | флаги обёртки: преамбула h2, набор заголовков, TLS-списки, `--ech`, `--tls-permute-extensions`, `--tls-key-shares-limit` | **источник истины**: обёртка и есть клиент |
-| Его же захваты (`tests/signatures/*.yaml` на теге бандла) | шифры, набор и порядок расширений, группы, доли, JA3/JA4 | пруф (чужая запись клиента) |
-| uTLS (пин `v1.8.2`, `tools/fingerprint/utls`) | эталонные спеки hello: списки, порядок, кривые, схемы, ALPN, тела расширений (ALPS, сжатие сертификата, `psk_key_exchange_modes`, `record_size_limit`, delegated credentials, заготовка channel ID) | **источник спеки, не пруф**: у uTLS нет того, что шлёт обёртка, — и **источник истины вместо обёртки**, когда обёртки нет вовсе |
-| Та же спека, снятая нашим дампером (`go run . dump <HelloSpec> -o capture.hex`; `HelloGolang` библиотека собирает через `crypto/tls`, ему нужен `-handshake`) | байты hello: тела расширений, порядок, доли ключа, ALPN, объявленные длины | **пруф** для клиента без обёртки: спека модуля на закреплённой версии, прочитанная против нашего дампа (`hello capture.hex`, `diff a.hex b.hex`) |
-| Живой клиент (`hello <file.hex>`, mitmproxy/Wireshark) | «как реально шлёт» версия, под которую библиотек ещё нет | пруф, когда есть захват |
-| `bogdanfinn/tls-client`, базы JA4 (ja4db, FoxIO) | «есть ли вообще такой профиль» и сверка JA4 | кросс-проверка |
+| The `curl-impersonate` bundle (the wrapper) | wrapper flags: h2 preface, header set, TLS lists, `--ech`, `--tls-permute-extensions`, `--tls-key-shares-limit` | **the source of truth**: the wrapper is the client |
+| Its own captures (`tests/signatures/*.yaml` at the bundle tag) | ciphers, extension set and order, groups, shares, JA3/JA4 | proof (someone else's recording of the client) |
+| uTLS (pinned to `v1.8.2`, `tools/fingerprint/utls`) | reference hello specs: lists, order, curves, schemes, ALPN, extension bodies (ALPS, certificate compression, `psk_key_exchange_modes`, `record_size_limit`, delegated credentials, channel ID stub) | **the source of the spec, not proof**: uTLS lacks what the wrapper sends — and **the source of truth instead of the wrapper** when there is no wrapper at all |
+| The same spec, captured by our dumper (`go run . dump <HelloSpec> -o capture.hex`; the `HelloGolang` library builds through `crypto/tls`, so it needs `-handshake`) | the hello bytes: extension bodies, order, key shares, ALPN, declared lengths | **proof** for a client without a wrapper: the module's spec at the pinned version, read against our dump (`hello capture.hex`, `diff a.hex b.hex`) |
+| A live client (`hello <file.hex>`, mitmproxy/Wireshark) | "how it really sends" for a version no library covers yet | proof, when a capture exists |
+| `bogdanfinn/tls-client`, JA4 databases (ja4db, FoxIO) | "does such a profile exist at all" and JA4 cross-checking | cross-check |
 
-Когда обёртки в бандле нет — так обстоит с девятью записями (`chrome87`, `chrome72`,
-`chrome70`, `chrome115pq`, `firefox120`, `firefox105`, `firefox99`, `firefox65`,
-`go127`), — эталоном становится сама спека uTLS: литерал в модуле на закреплённой
-версии `v1.8.2`, прочитанный против захвата, который снимает наш дампер. Два
-следствия видны прямо в записи. HTTP-идентичность у такой записи — **минимум**:
-у библиотеки нет HTTP-слоя, поэтому там ровно `User-Agent` своей версии и
-`accept-encoding`, без `sec-ch-*` и без приоритета на h1, — и это не замер, а
-объявленная граница. Преамбула h2 остаётся гиперовской по умолчанию: своей у
-спеки нет, а выдумывать её значило бы уже не транскрибировать. В стенде такие
-строки помечены `utls:HelloX` в `PROFILES`, и применяются к ним только `hello` и
-`hello-diff` — байты против байтов; `captures`, `echo`, `echo-diff`, `headers`,
-`headers-diff` и `flags` их пропускают, потому что сравнивать не с чем и флагов
-обёртки у них нет.
+When the bundle has no wrapper — which is the case for nine records (`chrome87`,
+`chrome72`, `chrome70`, `chrome115pq`, `firefox120`, `firefox105`, `firefox99`,
+`firefox65`, `go127`) — the reference becomes the uTLS spec itself: the literal in
+the module at the pinned version `v1.8.2`, read against a capture taken by our
+dumper. Two consequences are visible right in the record. The HTTP identity of such a
+record is a **minimum**: the library has no HTTP layer, so there is exactly the
+`User-Agent` of its version and `accept-encoding`, with no `sec-ch-*` and no h1
+priority — and that is not a measurement but a declared boundary. The h2 preface
+stays hyper's default: the spec has none of its own, and inventing one would already
+stop being transcription. In the harness such rows are marked `utls:HelloX` in
+`PROFILES`, and only `hello` and `hello-diff` apply to them — bytes against bytes;
+`captures`, `echo`, `echo-diff`, `headers`, `headers-diff` and `flags` skip them,
+because there is nothing to compare against and they have no wrapper flags.
 
-Инструменты: `python tools/fingerprint/fingerprint.py flags <код>` (флаги обёртки),
-`... versions` (JA4 и подвижность каждой версии бандла: где тасуется JA3, где
-монетка padding'а), `... utls` (все профили библиотеки uTLS против ближайшей
-обёртки бандла — что именно шлёт клиент на uTLS), `go run . dump <HelloSpec> -o
-capture.hex` в `tools/fingerprint/utls` (спека uTLS), `cargo run --release
---example tls_fingerprint -- hello capture.hex` (чтение любого захвата),
-`... -- diff a.hex b.hex` (сравнение двух любых захватов по полям, без сети) и
-`--legend` (что мы шлём сейчас). У строк `utls:<HelloX>` в `PROFILES` пара в
-таблице `UTLS_PAIRS` — это `ours:<код>`, то есть сверка спеки с нашей записью.
+Tools: `python tools/fingerprint/fingerprint.py flags <code>` (wrapper flags),
+`... versions` (JA4 and the mobility of each bundle version: where JA3 shuffles,
+where the padding coin lands), `... utls` (all profiles of the uTLS library against
+the nearest bundle wrapper — what exactly the uTLS client sends), `go run . dump
+<HelloSpec> -o capture.hex` in `tools/fingerprint/utls` (the uTLS spec), `cargo run
+--release --example tls_fingerprint -- hello capture.hex` (reading any capture),
+`... -- diff a.hex b.hex` (comparing any two captures field by field, without the
+network) and `--legend` (what we send right now). The `utls:<HelloX>` rows in
+`PROFILES` have a counterpart in the `UTLS_PAIRS` table — it is `ours:<code>`, that
+is, a check of the spec against our record.
 
-Бандл ищется по `$CURL_IMPERSONATE_DIR`, затем в `~/Downloads`; путь можно задать
-`--bundle DIR`. Имя каталога бандла несёт версию (`curl-impersonate-v2.2.2.x86_64-win32`)
-— из него `capture_ref()` берёт тег форка, поэтому каталог не переименовывается.
+The bundle is looked up through `$CURL_IMPERSONATE_DIR`, then in `~/Downloads`; the
+path can be set with `--bundle DIR`. The bundle directory name carries the version
+(`curl-impersonate-v2.2.2.x86_64-win32`) — `capture_ref()` takes the fork tag from
+it, which is why the directory is not renamed.
 
-В записи `source` называет релиз источника: обновление источника = осознанный
-пересмотр пинов, а не молчаливая смена формы.
+In a record, `source` names the release of the source: updating the source is a
+deliberate revision of the pins, not a silent change of the shape.
 
-## 3. Процедура
+## 3. Procedure
 
-1. **Выбрать клиента и поколение.** Сверить, что форма новая: `--legend` и
-   `fingerprint.py all` показывают ключ каждой существующей записи, и запись с тем
-   же JA4 — это тот же клиент.
-2. **Добыть источник.** `flags <код>` → преамбула, заголовки, флаги; захват форка,
-   если он есть; спека uTLS, если обёртки мало, — а если обёртки у клиента нет
-   вовсе, то спека и есть эталон: литерал на закреплённой версии читается против
-   захвата, который снимает дампер (§2), и запись транскрибируется с этой пары;
-   живой захват, если версии нет ни у кого. Проверить, что форма совпадает у двух
-   источников там, где они пересекаются.
-3. **Написать запись** в файл своего семейства (`shapes/chrome.rs`, `shapes/firefox.rs`, …)
-   и добавить её имя в таблицу `SHAPES` в `shapes/mod.rs` — порядок там и в `ALL`
-   один и тот же. Списки — сырые IANA-идентификаторы в порядке
-   провода, чтобы запись читалась прямо из захвата. Если форма совпадает с
-   существующей (Edge — это Chromium, Safari 18.0 — hello 15.5), **ссылаться на её
-   списки**, а не копировать: отличаться должны идентичность и преамбула.
-   Поведенческие признаки (`grease`, `ech`, `permute_extensions`, `priority_on_h1`,
-   `pq`, `key_share_groups`, `padding_to`) — тоже данные записи, а не правило по
-   семейству.
-4. **Зарегистрировать**: вариант в `TlsFingerprint`, строка в `ALL`, `code`,
-   `token`, `label`, при необходимости `parse`. Решить про `DEFAULT_SET` — семь
-   слотов, каждый отвечает на свой вопрос (контрольная форма, новейший в каждой
-   семье, пара на границе поколений, по одной закрытой форме на семейство ключей).
-5. **Прибить ожидания** в `tests.rs`: JA3 **и** JA4 обоих пиннутых билдеров (1.3 и
-   1.2), взятые **из источника** — константа, скопированная из нашего же дампа,
-   закрепляет нашу ошибку и прячет ровно то различие, ради которого тест есть.
-   Дописать строку в таблицы, которые перечисляют все профили (идентичности, доли
-   ключа, преамбулы h2, метки, токены). Если форма заявляет кодпоинт, которого
-   провайдер не умеет, — назвать его в `UNIMPLEMENTED` с причиной.
-   Если профилю нужно расширение, которого rustls не умеет, — патч в `vendor/rustls`
-   плюс строка в `vendor/rustls/README-PATCH.md` и перегенерированный `PATCH.diff`
-   (то же для `h2`/`hyper`, если дело в преамбуле).
-6. **Прогнать лестницу** (§3.1) и закоммитить код, тесты и документацию одним
-   куском: `README.md` (список профилей), этот документ, `tools/fingerprint/README.md`
-   (если появилось новое расхождение). Запись без обёртки — `utls:HelloX` в
-   `PROFILES` и строка `ours:<код>` в `UTLS_PAIRS` — добавляется тем же куском,
-   иначе сверять спеку будет не с чем.
+1. **Pick the client and the generation.** Verify that the shape is new: `--legend`
+   and `fingerprint.py all` show the key of every existing record, and a record with
+   the same JA4 is the same client.
+2. **Obtain the source.** `flags <code>` → preface, headers, flags; the fork's
+   capture, if there is one; the uTLS spec, if the wrapper is not enough — and if the
+   client has no wrapper at all, then the spec is the reference: the literal at the
+   pinned version is read against a capture taken by the dumper (§2), and the record
+   is transcribed from that pair; a live capture, if no one has the version. Check
+   that the shape agrees across the two sources where they overlap.
+3. **Write the record** in the file of its family (`shapes/chrome.rs`, `shapes/firefox.rs`, …)
+   and add its name to the `SHAPES` table in `shapes/mod.rs` — the order there and in
+   `ALL` is the same. The lists are raw IANA identifiers in wire order, so that the
+   record can be read straight out of a capture. If the shape coincides with an
+   existing one (Edge is Chromium, Safari 18.0 is the 15.5 hello), **reference its
+   lists** rather than copy them: what must differ is the identity and the preface.
+   Behavioural traits (`grease`, `ech`, `permute_extensions`, `priority_on_h1`,
+   `pq`, `key_share_groups`, `padding_to`) are record data too, not a per-family
+   rule.
+4. **Register it**: a variant in `TlsFingerprint`, a row in `ALL`, `code`,
+   `token`, `label`, and `parse` if needed. Decide about `DEFAULT_SET` — seven
+   slots, each answering its own question (the baseline shape, the newest in each
+   family, a pair at a generation boundary, one closed shape per key family).
+5. **Nail down the expectations** in `tests.rs`: JA3 **and** JA4 of both pinned
+   builders (1.3 and 1.2), taken **from the source** — a constant copied from our own
+   dump pins our own mistake and hides exactly the difference the test exists for.
+   Add a row to the tables that enumerate all profiles (identities, key shares, h2
+   prefaces, labels, tokens). If a shape advertises a code point the provider cannot
+   do, name it in `UNIMPLEMENTED` with a reason.
+   If a profile needs an extension rustls cannot do, that is a patch in `vendor/rustls`
+   plus a row in `vendor/rustls/README-PATCH.md` and a regenerated `PATCH.diff`
+   (the same for `h2`/`hyper` if the preface is what is at stake).
+6. **Run the ladder** (§3.1) and commit the code, tests and documentation as one
+   piece: `README.md` (the profile list), this document, `tools/fingerprint/README.md`
+   (if a new divergence appeared). A record without a wrapper — `utls:HelloX` in
+   `PROFILES` and an `ours:<code>` row in `UTLS_PAIRS` — is added in the same piece,
+   otherwise there will be nothing to check the spec against.
 
-### 3.1 Лестница проверок
+### 3.1 The verification ladder
 
-| Ступень | Что проверяет | Чего не видит |
+| Step | What it checks | What it does not see |
 |---|---|---|
-| `cargo test --workspace` + `clippy` | гейты §4 и пины JA3/JA4 | ничего про провод |
-| `fingerprint.py captures <код>` | дамп против собственной записи форка: шифры, набор и порядок расширений, группы, доли, JA4 | что бандл шлёт сегодня; захват — чужая выборка |
-| `fingerprint.py echo-diff <код>` | оба клиента против `tls.peet.ws`: хеши, akamai-строка, каждый кадр преамбулы, порядок псевдозаголовков, каждый заголовок | тела расширений и регистр имён; это мнение сервиса о прочитанном |
-| `fingerprint.py hello-diff <код>` | **байты обоих клиентов** через один локальный слушатель: тела расширений, длина padding, список сжатия, доли ключа; у записи без обёртки (`utls:` в `PROFILES`) противник — байты спеки, снятые дампером | что сервер с ними делает |
-| `fingerprint.py headers-diff <код>` | блок запроса HTTP/1.1: имена с регистром, порядок, значения | ничего про TLS и h2 |
-| `live` / `liveany <код>` | настоящие рукопожатия: базовые хосты, `hub.docker.com` и `danbooru.donmai.us` (SCT в certificate entry), `standby-rezka.tv` | — |
-| `peet <код>` | akamai-отпечаток преамбулы | — |
-| `diff <a.hex> <b.hex>` | два любых захвата — наш, бандла, uTLS, живого браузера — по полям, без сети | что сервер с ними делает |
+| `cargo test --workspace` + `clippy` | the §4 gates and the JA3/JA4 pins | anything about the wire |
+| `fingerprint.py captures <code>` | the dump against the fork's own record: ciphers, extension set and order, groups, shares, JA4 | what the bundle sends today; the capture is someone else's sample |
+| `fingerprint.py echo-diff <code>` | both clients against `tls.peet.ws`: hashes, akamai string, every preface frame, pseudo-header order, every header | extension bodies and the case of names; it is the service's opinion of what it read |
+| `fingerprint.py hello-diff <code>` | **the bytes of both clients** through one local listener: extension bodies, padding length, compression list, key shares; for a record without a wrapper (`utls:` in `PROFILES`) the opponent is the spec bytes taken by the dumper | what the server does with them |
+| `fingerprint.py headers-diff <code>` | the HTTP/1.1 request block: names with case, order, values | anything about TLS and h2 |
+| `live` / `liveany <code>` | real handshakes: base hosts, `hub.docker.com` and `danbooru.donmai.us` (SCT in the certificate entry), `standby-rezka.tv` | — |
+| `peet <code>` | the akamai fingerprint of the preface | — |
+| `diff <a.hex> <b.hex>` | any two captures — ours, the bundle's, uTLS, a live browser — field by field, without the network | what the server does with them |
 
-`fingerprint.py all` заканчивается **таблицей вердикта**: строка на профиль,
-какие сравнения расходились и что из этого объясняет сам клиент записи. Судит
-она по замеру, а не по объявлению: hello профиля снимается 24 раза, поэтому
-уезжающий *порядок* расширений отмечает тасующую форму, а уезжающий *набор* —
-монетку padding'а; обёртка с `--tls-key-shares-limit` объясняет свои доли ключа.
-Всё остальное печатается как `to look at` — судить о нём может только список
-намеренных расхождений в `tools/fingerprint/README.md`. Полный прогон идёт по
-двадцати восьми профилям: девятнадцать строк бандла дают по себе те же `13 clean,
-6 explained by their own client, 0 to look at`, что и раньше, а девять строк из
-uTLS судятся одним сравнением `hello` — флагов обёртки у них нет, объяснять там
-нечего, и всё, что прощает список, — это длина GREASE-тела у `firefox120` и
-вторая доля ключа `chrome115pq` (§5).
+`fingerprint.py all` ends with a **verdict table**: one row per profile, which
+comparisons diverged and which of them the record's own client explains. It judges by
+measurement, not by declaration: a profile's hello is taken 24 times, so a drifting
+extension *order* marks a shuffling shape, while a drifting *set* marks the padding
+coin; a wrapper with `--tls-key-shares-limit` explains its own key shares. Everything
+else is printed as `to look at` — only the list of intentional divergences in
+`tools/fingerprint/README.md` can rule on it. A full run goes over twenty-eight
+profiles: the nineteen bundle rows produce the same `13 clean, 6 explained by their
+own client, 0 to look at` as before, while the nine uTLS rows are judged by a single
+`hello` comparison — they have no wrapper flags, there is nothing to explain there,
+and all the list forgives is the GREASE body length in `firefox120` and the second
+key share of `chrome115pq` (§5).
 
-Профиль считается сделанным, когда `hello-diff` говорит `SAME`, либо когда каждое
-оставшееся различие названо в `tools/fingerprint/README.md` и в §5 этого документа.
+A profile is considered done when `hello-diff` says `SAME`, or when every remaining
+difference is named in `tools/fingerprint/README.md` and in §5 of this document.
 
-Про `standby-rezka.tv`: хост отвечает `fatal alert: IllegalParameter` **всем**
-формам, которые гласят GREASE, и `OK` тем, которые не гласят. Это поведение хоста,
-а не регрессия записи: набор падающих форм в точности совпадает с набором гласящих,
-и байты этих записей не менялись. Хост остаётся в живом свипе именно поэтому.
+About `standby-rezka.tv`: the host answers `fatal alert: IllegalParameter` to **all**
+shapes that advertise GREASE, and `OK` to those that do not. This is host behaviour,
+not a regression of the records: the set of failing shapes exactly matches the set of
+advertising ones, and the bytes of those records have not changed. That is precisely
+why the host stays in the live sweep.
 
-## 4. Гейты, которые падают сами
+## 4. Gates that fail on their own
 
-| Тест | Что ловит |
+| Test | What it catches |
 |---|---|
-| `fingerprint_table_is_total` | вариант без записи и запись без варианта, порядок таблицы |
-| `profile_names_are_unique_lowercase_and_versioned` | дубль имени, имя без версии, имя не в нижнем регистре |
-| `fingerprint_parses_known_values_and_rejects_others` | приём нового имени и отказ именам обёрток и без версии |
-| `default_set_is_a_subset_of_all` | набор по умолчанию: непустой, без дублей, из `ALL` |
-| `the_baseline_is_the_only_shape_that_impersonates_nobody` | запись, которая ничего не изображает, но не `rustls` |
-| `every_advertised_code_point_is_served_or_named` | профиль ⊆ провайдер: каждый шифр, группа и схема либо обслуживается, либо названа в `UNIMPLEMENTED` с причиной; устаревшая запись тоже валит тест |
-| `the_advertised_group_list_opens_with_the_group_we_share` | список групп, открывающийся не той группой, которой шлётся шар |
-| `only_the_chromium_profiles_shuffle_their_extension_order` | перемешивание там, где его нет, и его отсутствие там, где есть; неперемешивающие формы обязаны быть байт-в-байт воспроизводимы |
-| `the_ech_shapes_carry_the_grease_extension_and_the_others_do_not` | ECH у тех, чья обёртка называет `--ech true`, и у `firefox120` из спеки uTLS; длина тела — из четырёх значений BoringSSL, а у `firefox120` источник пиннует одну (записано в §5) |
-| `every_identity_is_spelled_the_way_its_client_writes_it` | `User-Agent` и написание имён заголовков |
-| `every_profile_sends_the_key_shares_its_wrapper_asks_for` | доли ключа против `--tls-key-shares-limit` |
-| `every_h2_preface_matches_the_wrapper_it_copies` | SETTINGS с порядком, окно, порядок псевдозаголовков, приоритет |
-| `display_labels_name_the_pinned_version`, `fingerprint_tokens_are_stable` | метка без версии, изменение токена (Rule 4) |
-| `bundle_versions_match_their_ja3` / `_ja4`, `chrome_146_matches_the_utls_list_it_is_derived_from` | пины: любое изменение формы — расширение добавлено/убрано, шифр переставлен, padding потерян |
-| `utls_shapes_match_their_ja3` | пины девяти записей из uTLS: JA3 (у тасующей `chrome115pq` — с сортированным порядком расширений) и JA4, взятые с захватов в `target/fingerprint/utls-ladder/`; шифр переставлен, расширение добавлено/убрано, группа потеряна — тест падает |
-| `profiles_that_share_a_tls_shape_send_the_same_hello` | запись, которая утверждает общие списки, а шлёт своё |
+| `fingerprint_table_is_total` | a variant without a record and a record without a variant, the order of the table |
+| `profile_names_are_unique_lowercase_and_versioned` | a duplicate name, a name without a version, a name that is not lowercase |
+| `fingerprint_parses_known_values_and_rejects_others` | acceptance of a new name and rejection of wrapper names and names without a version |
+| `default_set_is_a_subset_of_all` | the default set: non-empty, without duplicates, drawn from `ALL` |
+| `the_baseline_is_the_only_shape_that_impersonates_nobody` | a record that impersonates nothing but is not `rustls` |
+| `every_advertised_code_point_is_served_or_named` | profile ⊆ provider: every cipher, group and scheme is either served or named in `UNIMPLEMENTED` with a reason; a stale record fails the test too |
+| `the_advertised_group_list_opens_with_the_group_we_share` | a group list that opens with a group other than the one the share is sent for |
+| `only_the_chromium_profiles_shuffle_their_extension_order` | shuffling where there is none, and its absence where there is; non-shuffling shapes must be reproducible byte for byte |
+| `the_ech_shapes_carry_the_grease_extension_and_the_others_do_not` | ECH in those whose wrapper names `--ech true`, and in `firefox120` from the uTLS spec; the body length comes from four BoringSSL values, while for `firefox120` the source pins one (recorded in §5) |
+| `every_identity_is_spelled_the_way_its_client_writes_it` | `User-Agent` and the spelling of header names |
+| `every_profile_sends_the_key_shares_its_wrapper_asks_for` | key shares against `--tls-key-shares-limit` |
+| `every_h2_preface_matches_the_wrapper_it_copies` | SETTINGS with order, window, pseudo-header order, priority |
+| `display_labels_name_the_pinned_version`, `fingerprint_tokens_are_stable` | a label without a version, a change of a token (Rule 4) |
+| `bundle_versions_match_their_ja3` / `_ja4`, `chrome_146_matches_the_utls_list_it_is_derived_from` | the pins: any change of a shape — an extension added/removed, a cipher reordered, padding lost |
+| `utls_shapes_match_their_ja3` | the pins of the nine uTLS records: JA3 (for the shuffling `chrome115pq`, with the extension order sorted) and JA4, taken from the captures in `target/fingerprint/utls-ladder/`; a cipher reordered, an extension added/removed, a group lost — the test fails |
+| `profiles_that_share_a_tls_shape_send_the_same_hello` | a record that claims shared lists but sends its own |
 
-## 5. Намеренные расхождения
+## 5. Intentional divergences
 
-Список и причины — в `tools/fingerprint/README.md`, раздел «Differences the tool
-will keep reporting». Коротко: тело GREASE-ECH пересобирается каждое соединение
-(сравнивается объявленная длина), padding у `chrome123`/`chrome131android` —
-монетка на соединение (у формы два ключа), порядок расширений у Chrome 110+
-тасуется (JA4 совпадает, JA3 нет), у `tor145` на одну долю ключа больше, чем у
-браузера в захвате форка, — запись следует своей обёртке.
+The list and the reasons are in `tools/fingerprint/README.md`, section "Differences the tool
+will keep reporting". In short: the GREASE-ECH body is rebuilt on every connection
+(the declared length is what gets compared), padding in `chrome123`/`chrome131android` is a
+per-connection coin (the shape has two keys), the extension order of Chrome 110+
+shuffles (JA4 matches, JA3 does not), and `tor145` has one key share more than the
+browser in the fork's capture — the record follows its own wrapper.
 
-У девяти записей, транскрибированных из спек uTLS, расхождения свои, и все четыре
-названы здесь, чтобы читатель не искал их в другом месте:
+The nine records transcribed from uTLS specs have divergences of their own, and all four
+are named here so the reader does not have to look for them elsewhere:
 
-* **`firefox120` и длина GREASE-ECH.** Спека пиннует длину тела
-  `encrypted_client_hello` (`CandidatePayloadLens = {223}`, то есть 239 байт
-  payload'а и 281-байтовое тело расширения на проводе), а наш билдер, как и во
-  всех остальных записях, тянет её из четырёх значений BoringSSL (тела
-  186/218/250/282). Хеши от этого не двигаются, а `hello-diff` против захвата
-  спеки печатает расхождение длины на каждом броске — это и есть то, что список
-  намеренных расхождений в `tools/fingerprint/README.md` прощает.
-* **`chrome115pq` и вторая доля ключа.** Спека шлёт шары по
-  `X25519Kyber768Draft00` (25497) и X25519, а у провайдера группы для этого
-  черновика нет (§6), поэтому запись объявляет 25497 ради списка групп, а шар
-  шлёт только по X25519. `hello-diff` печатает одну долю там, где в захвате их
-  две, — это расхождение создал провайдер, а не транскрипция, и JA3/JA4 (они
-  читают список групп, а не доли) от него не двигаются. Второе следствие той же
-  дыры — длина: без тела гибридной доли наш hello короче исходных 1524 байт и
-  попадает под 512-байтовый порог padding'а, под который настоящий Chrome 115
-  никогда не попадает, поэтому и слота padding в записи нет (тела расширений и
-  набор остаются захвата, а отличается только тело доли ключа).
-* **Никакой преамбулы h2.** Все девять шлют HTTP/2 с гиперовскими настройками по
-  умолчанию: своей преамбулы в спеке нет, а выдумывать её — уже не транскрипция.
-  У остальных записей преамбула снята с обёртки, и различие это видно только на
-  проводе: `hello` преамбулу не несёт, а `echo` для девяти не запускается.
-* **HTTP-идентичность — минимум, а не замер.** У библиотеки нет HTTP-слоя, поэтому
-  в записи ровно `User-Agent` своей версии и `accept-encoding` (`gzip, deflate, br`
-  у браузеров, `gzip` у `go127`) в написании самого клиента: Chromium'овы имена —
-  в нижнем регистре, Firefox'овы и `go127` — с большой буквы. Приоритет на h1 не
-  объявляет ни одна из девяти.
+* **`firefox120` and the GREASE-ECH length.** The spec pins the length of the
+  `encrypted_client_hello` body (`CandidatePayloadLens = {223}`, that is 239 bytes
+  of payload and a 281-byte extension body on the wire), while our builder, as in
+  all the other records, draws it from four BoringSSL values (bodies
+  186/218/250/282). The hashes do not move because of this, but `hello-diff` against
+  the spec's capture prints a length divergence on every throw — and that is what
+  the list of intentional divergences in `tools/fingerprint/README.md` forgives.
+* **`chrome115pq` and the second key share.** The spec sends shares for
+  `X25519Kyber768Draft00` (25497) and X25519, while the provider has no group for
+  that draft (§6), so the record advertises 25497 for the sake of the group list but
+  sends a share only for X25519. `hello-diff` prints one share where the capture has
+  two — the provider created this divergence, not the transcription, and JA3/JA4
+  (they read the group list, not the shares) do not move because of it. The second
+  consequence of the same hole is the length: without the hybrid share's body our
+  hello is shorter than the original 1524 bytes and falls under the 512-byte padding
+  threshold, which a real Chrome 115 never falls under, which is also why the record
+  has no padding slot (the extension bodies and the set remain the capture's, and
+  only the key share body differs).
+* **No h2 preface at all.** All nine send HTTP/2 with hyper's default settings: the
+  spec has no preface of its own, and inventing one is no longer transcription. The
+  other records have their preface taken from the wrapper, and the difference is
+  visible only on the wire: `hello` does not carry the preface, and `echo` is not
+  run for the nine.
+* **The HTTP identity is a minimum, not a measurement.** The library has no HTTP
+  layer, so the record holds exactly the `User-Agent` of its version and
+  `accept-encoding` (`gzip, deflate, br` for the browsers, `gzip` for `go127`) in the
+  client's own spelling: Chromium's names are lowercase, Firefox's and `go127`'s are
+  capitalized. None of the nine advertises an h1 priority.
 
-Отдельно: `chrome87` отвечает и за Chrome 83 — спеки этих версий совпадают
-целиком, — а `chrome70` за 360Browser 11.0, где совпадают тела расширений и JA4,
-а отличается порядок. Это тот же случай «одна запись на форму», что и Chrome
-133–146 в §1, а не расхождение с источником.
+Separately: `chrome87` also covers Chrome 83 — the specs of those versions coincide
+entirely — while `chrome70` covers 360Browser 11.0, where the extension bodies and
+JA4 coincide and only the order differs. This is the same "one record per shape" case
+as Chrome 133–146 in §1, not a divergence from the source.
 
-## 6. Что вне области
+## 6. What is out of scope
 
-* **QUIC/HTTP-3.** В `vendor/rustls-rustcrypto/src/quic.rs` заглушки, у всех
-  TLS 1.3-сьютов `quic: None`. Пока это так, ни один h3-профиль невозможен,
-  независимо от `quinn`/`h3`. Порядок работ, если за это браться: header
-  protection по RFC 9001 §5.4 с тест-векторами §A.2, `quinn` без дефолтного
-  `rustls-ring`, патч transport parameters, фича `http3` (по умолчанию выключена —
-  Rule 2).
-* **Настоящий ECH по конфигурации из DNS.** Сознательно не делается: он делает
-  hello зависимым от *хоста*, тогда как остальные поля записи — от клиента, и
-  обёртка его не шлёт. Для диагностики он ничего не даёт (цензор не отличает
-  GREASE-ECH от настоящего по построению), а стоит DNS-запроса в классифицируемом
-  пути. Форма — GREASE, как у обёрток.
-* **Запись-уровневые трюки** (дробление ClientHello по records, record size limit,
-  middlebox CCS) — известное расхождение, не воспроизводится.
-* **Delegated credentials (34)** — не заявлять как обслуживаемый кодпоинт:
-  провайдер подписывать ими не умеет. Расширение в записи — другое дело, и три
-  записи Firefox из uTLS (`firefox99`, `firefox105`, `firefox120`) его объявляют:
-  так написана спека, а тело — её собственные байты.
-* **Пробелы провайдера** (P-521, DHE, SHA-1, CBC, `X25519Kyber768Draft00`
-  `0x6399`, который объявляет `chrome115pq`) — не ошибка записи, а строка в
-  `UNIMPLEMENTED` с причиной: гейт §4 проверяет и обратное, что названное больше
-  не является устаревшим.
+* **QUIC/HTTP-3.** In `vendor/rustls-rustcrypto/src/quic.rs` there are stubs, and
+  every TLS 1.3 suite has `quic: None`. As long as that is so, no h3 profile is
+  possible, regardless of `quinn`/`h3`. The order of work, if one takes this on:
+  header protection per RFC 9001 §5.4 with the §A.2 test vectors, `quinn` without the
+  default `rustls-ring`, a transport parameters patch, and an `http3` feature
+  (off by default — Rule 2).
+* **Real ECH configured from DNS.** Deliberately not done: it makes the hello depend
+  on the *host*, whereas the rest of a record's fields depend on the client, and the
+  wrapper does not send it. It adds nothing for diagnostics (a censor cannot tell
+  GREASE-ECH from a real one by construction), while it costs a DNS request in the
+  classified path. The shape is GREASE, as in the wrappers.
+* **Record-level tricks** (splitting the ClientHello across records, record size limit,
+  middlebox CCS) — a known divergence, not reproduced.
+* **Delegated credentials (34)** — do not advertise it as a served code point: the
+  provider cannot sign with them. The extension in a record is another matter, and three
+  Firefox records from uTLS (`firefox99`, `firefox105`, `firefox120`) do advertise it:
+  that is how the spec is written, and the body is its own bytes.
+* **Provider gaps** (P-521, DHE, SHA-1, CBC, `X25519Kyber768Draft00`
+  `0x6399`, which `chrome115pq` advertises) — not a record error but a row in
+  `UNIMPLEMENTED` with a reason: the §4 gate checks the converse too, that what is named
+  is no longer stale.
 
-## 7. Решения, которые стоит знать
+## 7. Decisions worth knowing
 
-* **Данные вместо кода.** Билдеры на каждый профиль (~100 строк каждый) заменены
-  таблицей: ошибка в одной константе была двадцатью местами, где её можно
-  сделать, — стало одним.
-* **Ключ, а не байты.** Цензор несёт таблицу JA4-ключей, поэтому форма попадает
-  под блок по ключу, а не по порядку расширений: выход из таблицы — другое
-  *поколение*, а не другая перестановка.
-* **GREASE-ECH, а не настоящий.** Настоящий `ECHConfigList` curl берёт только через
-  DoH или `--ecl:`, и ни одна обёртка их не передаёт; самодельное тело заставляло
-  Google и Cloudflare отвечать `DecodeError`, а путь rustls (`EchMode::Grease` через
-  `net::hpke`) принят всеми хостами свипа.
-* **Padding — частота, а не форма.** `chrome123` и `chrome131android` паддят на
-  одном соединении из четырёх (самое короткое тело ECH), и это воспроизведено;
-  остальные три длины уходят без padding'а — ровно как клиент.
-* **Перемешивание — распределение.** Побайтового равенства с настоящим Chrome 110+
-  не будет никогда: у него форма новая на каждом соединении. Сравнивать можно JA4
-  и множество расширений.
-* **Спека вместо обёртки, когда обёртки нет.** Обёртка остаётся источником истины,
-  но её отсутствие — не повод не иметь профиля: девять записей транскрибированы со
-  спек uTLS и сверяются с байтами, которые снимает с них наш дампер (§2). Что при
-  этом приходится объявить, а не измерить, — HTTP-слой: он у библиотеки
-  отсутствует, поэтому идентичность у этих записей минимальная, а преамбула h2
-  гиперовская. Такая граница названа в самой записи и в §5, чтобы никто позже не
-  принял её за замер.
+* **Data instead of code.** Per-profile builders (~100 lines each) have been replaced
+  by a table: an error in one constant used to be twenty places to make it — now it
+  is one.
+* **Key, not bytes.** A censor carries a table of JA4 keys, so a shape falls under a
+  block by key rather than by extension order: leaving the table means a different
+  *generation*, not a different permutation.
+* **GREASE-ECH, not real.** curl obtains a real `ECHConfigList` only via DoH or
+  `--ecl:`, and no wrapper passes either; a hand-made body made Google and Cloudflare
+  answer `DecodeError`, whereas rustls's path (`EchMode::Grease` through `net::hpke`)
+  is accepted by every host in the sweep.
+* **Padding is a frequency, not a shape.** `chrome123` and `chrome131android` pad on
+  one connection in four (the shortest ECH body), and this is reproduced; the other
+  three lengths go out without padding — exactly like the client.
+* **Shuffling is a distribution.** Byte-for-byte equality with a real Chrome 110+
+  will never happen: its shape is new on every connection. What can be compared is
+  JA4 and the set of extensions.
+* **A spec instead of a wrapper when there is no wrapper.** The wrapper remains the
+  source of truth, but its absence is no reason not to have a profile: nine records
+  are transcribed from uTLS specs and are checked against the bytes our dumper takes
+  from them (§2). What has to be declared rather than measured in that case is the
+  HTTP layer: the library lacks it, so the identity of these records is minimal and
+  the h2 preface is hyper's. Such a boundary is named in the record itself and in
+  §5, so that no one later mistakes it for a measurement.
