@@ -67,7 +67,7 @@ pub(crate) fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) 
     for e in entries {
         if e.t13.status == DpiStatus::DnsFail || e.t12.status == DpiStatus::DnsFail || e.http.status == DpiStatus::DnsFail {
             dns_fail += 1;
-            if e.t13.detail == Detail::Ipv6Unsupported || e.t13.detail == Detail::Ipv6NotSupportedShort {
+            if e.t13.detail == Detail::Ipv6Unsupported {
                 no_ipv6 += 1;
             }
         }

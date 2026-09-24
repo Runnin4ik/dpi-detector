@@ -310,11 +310,11 @@ mod tests {
     fn test_detected_predicate_covers_tls_kills() {
         assert!(is_detected(
             DpiStatus::Tcp16Detected,
-            &Detail::at_kb(Detail::ReadTimeoutWordCaps, 16.0)
+            &Detail::at_kb(Detail::ReadTimeoutWord, 16.0)
         ));
         assert!(is_detected(
             DpiStatus::Tcp16Range,
-            &Detail::Kb { head: Box::new(Detail::TimeoutWord), kb: 20.0 }
+            &Detail::at_kb(Detail::TimeoutWord, 20.0)
         ));
         assert!(is_detected(DpiStatus::TlsRst, &Detail::RstHello));
         assert!(is_detected(DpiStatus::TlsDropped, &Detail::TlsHandshakeTimeout));

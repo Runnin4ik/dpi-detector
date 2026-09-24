@@ -328,7 +328,7 @@ pub async fn check_http_injection(
                         detail: if kind == DpiStatus::SendTimeout {
                             Detail::at_kb(Detail::WriteTimeoutWord, 0.0)
                         } else {
-                            Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0)
+                            Detail::at_kb(Detail::ReadTimeoutWord, 0.0)
                         },
                     };
                 }
@@ -338,7 +338,7 @@ pub async fn check_http_injection(
             Err(_) => {
                 return HttpCheck {
                     status: DpiStatus::ReadTimeout,
-                    detail: Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0),
+                    detail: Detail::at_kb(Detail::ReadTimeoutWord, 0.0),
                 };
             }
         };
@@ -368,7 +368,7 @@ pub async fn check_http_injection(
         Ok(r) => r,
         Err(_) => HttpCheck {
             status: DpiStatus::ReadTimeout,
-            detail: Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0),
+            detail: Detail::at_kb(Detail::ReadTimeoutWord, 0.0),
         },
     }
 }
@@ -675,10 +675,7 @@ fn is_timeout_detail(detail: &Detail) -> bool {
         detail,
         Detail::TimeoutWord
             | Detail::ReadTimeoutWord
-            | Detail::ReadTimeoutWordCaps
-            | Detail::ReadTimeout
             | Detail::TimeoutStage { .. }
-            | Detail::Kb { .. }
             | Detail::AtKb { .. }
     )
 }

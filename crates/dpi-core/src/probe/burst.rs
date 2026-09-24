@@ -708,7 +708,7 @@ async fn handshake_attempt(
                 Ok(result) => result,
                 Err(_) => (
                     DpiStatus::ReadTimeout,
-                    Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0),
+                    Detail::at_kb(Detail::ReadTimeoutWord, 0.0),
                     0,
                 ),
             };

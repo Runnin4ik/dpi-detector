@@ -541,7 +541,7 @@ pub(crate) fn classify_redirect(
 ///
 /// Inside the fat window the badge is `16KB DROP` — the same one in every test but
 /// the 16 KB test, which sends rather than reads and calls it `DETECTED` — and the
-/// detail names the offset (`READ TIMEOUT at N KB`). Before the window opens it is
+/// detail names the offset (`Read timeout at N KB`). Before the window opens it is
 /// a plain read timeout that still says the offset, because where it died is the
 /// useful part either way. One function for the h1 and h2 paths, which asked the
 /// same question and used to answer it with two copies of the same eight lines.
@@ -550,7 +550,7 @@ pub(crate) fn fat_read_verdict(bytes: usize, min_kb: u64, max_kb: u64) -> (DpiSt
     if kb >= min_kb as f64 && kb <= max_kb as f64 {
         return (
             DpiStatus::Tcp16Range,
-            Detail::at_kb(Detail::ReadTimeoutWordCaps, kb),
+            Detail::at_kb(Detail::ReadTimeoutWord, kb),
         );
     }
     if bytes > 0 {
@@ -559,7 +559,7 @@ pub(crate) fn fat_read_verdict(bytes: usize, min_kb: u64, max_kb: u64) -> (DpiSt
             Detail::at_kb(Detail::ReadTimeoutWord, kb),
         );
     }
-    (DpiStatus::ReadTimeout, Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0))
+    (DpiStatus::ReadTimeout, Detail::at_kb(Detail::ReadTimeoutWord, 0.0))
 }
 
 pub(crate) fn inner_hyper(
@@ -656,7 +656,7 @@ pub(crate) async fn check_http(
                 return (s, d, 0usize);
             }
             Err(_) => {
-                return (DpiStatus::ReadTimeout, Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0), 0usize);
+                return (DpiStatus::ReadTimeout, Detail::at_kb(Detail::ReadTimeoutWord, 0.0), 0usize);
             }
         };
 

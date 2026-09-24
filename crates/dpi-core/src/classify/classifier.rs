@@ -197,7 +197,7 @@ fn timeout_at_stage(stage: ProbeStage, bytes_read: usize) -> (DpiStatus, Detail)
         ),
         ProbeStage::ReadingData => (
             DpiStatus::ReadTimeout,
-            Detail::at_kb(Detail::ReadTimeoutWordCaps, kb),
+            Detail::at_kb(Detail::ReadTimeoutWord, kb),
         ),
         // The handshake is done and the answer never came. Nothing short of a
         // reset or an alert says which side went quiet, so this keeps the bare

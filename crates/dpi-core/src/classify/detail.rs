@@ -7,8 +7,8 @@
 //! `match` (a missing translation is a compile error, not a test failure).
 //!
 //! Codes are snake_case, and the composed details keep their shape:
-//! `read_timeout_at_24kb`, `timeout_20kb`, `timeout_reading_data`, `http_403`,
-//! `elapsed_300ms`. Free text from the OS or the TLS stack keeps its own words
+//! `read_timeout_at_24kb`, `timeout_reading_data`, `http_403`, `elapsed_300ms`.
+//! Free text from the OS or the TLS stack keeps its own words
 //! ([`Detail::Other`]) — it is appended after an already-localized label.
 
 use std::borrow::Cow;
@@ -72,14 +72,10 @@ pub enum Detail {
     TcpSynTimeout,
     /// Short form used by the Telegram DC ping column.
     SynTimeoutShort,
-    SendTimeout,
-    ReadTimeout,
     /// `Timeout` used as a word inside a composed detail.
     TimeoutWord,
     /// `Read timeout` used as a word inside a composed detail.
     ReadTimeoutWord,
-    /// The same word in the 16–20 KB table, which heads columns in title case.
-    ReadTimeoutWordCaps,
     /// `Write Timeout` used as a word inside a composed detail.
     WriteTimeoutWord,
 
@@ -103,13 +99,11 @@ pub enum Detail {
     IcmpAdminProhibited,
     UnknownConnectionFailure,
     Ipv6Unsupported,
-    Ipv6NotSupportedShort,
 
     // ─── Composed ───
-    /// `<head> at <n>KB`: the offset the transfer died at (16–20 KB test).
+    /// `<head> at <n>KB`: how far the transfer got — the whole kilobytes the
+    /// 16–20 KB test counts, the measured ones test 2 reports.
     AtKb { head: Box<Detail>, kb: f64 },
-    /// `<head> <n>KB`: how much got through before the timeout (test 2).
-    Kb { head: Box<Detail>, kb: f64 },
     /// `Timeout (<stage>)` for a stage with no dedicated variant.
     TimeoutStage { stage: String },
     /// The resolver answered with an ISP blockpage (`-> <ip>`).
@@ -307,10 +301,8 @@ impl Detail {
             TlsHandshakeTimeout => Cow::Borrowed("tls_handshake_timeout"),
             TcpSynTimeout => Cow::Borrowed("tcp_syn_timeout"),
             SynTimeoutShort => Cow::Borrowed("syn_timeout"),
-            SendTimeout => Cow::Borrowed("send_timeout"),
-            ReadTimeout => Cow::Borrowed("read_timeout"),
             TimeoutWord => Cow::Borrowed("timeout"),
-            ReadTimeoutWord | ReadTimeoutWordCaps => Cow::Borrowed("read_timeout_word"),
+            ReadTimeoutWord => Cow::Borrowed("read_timeout_word"),
             WriteTimeoutWord => Cow::Borrowed("write_timeout_word"),
             DomainNotFound => Cow::Borrowed("domain_not_found"),
             DnsTimeoutUnavailable => Cow::Borrowed("dns_timeout_unavailable"),
@@ -325,9 +317,7 @@ impl Detail {
             IcmpAdminProhibited => Cow::Borrowed("icmp_admin_prohibited"),
             UnknownConnectionFailure => Cow::Borrowed("unknown_connection_failure"),
             Ipv6Unsupported => Cow::Borrowed("ipv6_unsupported"),
-            Ipv6NotSupportedShort => Cow::Borrowed("ipv6_not_supported"),
             AtKb { head, kb } => Cow::Owned(format!("{}_at_{}", head.code(), kb_token(*kb))),
-            Kb { head, kb } => Cow::Owned(format!("{}_{}", head.code(), kb_token(*kb))),
             TimeoutStage { stage } => Cow::Owned(format!("timeout_{}", stage)),
             IspBlockpage { .. } => Cow::Borrowed("isp_blockpage"),
             LocalIp { .. } => Cow::Borrowed("local_ip"),
@@ -405,7 +395,6 @@ mod tests {
             Detail::StreamEofHello,
             Detail::TlsDropHandshake,
             Detail::TlsHandshakeTimeout,
-            Detail::ReadTimeout,
             Detail::ReadTimeoutWord,
             Detail::WriteTimeoutWord,
             Detail::TimeoutWord,
@@ -443,8 +432,8 @@ mod tests {
         // Whole kilobytes from the 16–20 KB test, measured ones from test 2.
         let at = Detail::at_kb(Detail::TcpAborted, 16.0);
         assert_eq!(at.code(), "tcp_connection_aborted_at_16kb");
-        let measured = Detail::Kb { head: Box::new(Detail::TimeoutWord), kb: 20.4 };
-        assert_eq!(measured.code(), "timeout_20.4kb");
+        let measured = Detail::at_kb(Detail::TimeoutWord, 20.4);
+        assert_eq!(measured.code(), "timeout_at_20.4kb");
         assert_eq!(Detail::TimeoutStage { stage: "reading_data".into() }.code(), "timeout_reading_data");
     }
 

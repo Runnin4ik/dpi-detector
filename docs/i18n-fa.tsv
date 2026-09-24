@@ -20,30 +20,23 @@
 #     и верстку таблиц (RTL). Допустимы только символы: ✓ × ⚠ ↑
 #   * Не удаляйте и не добавляйте строки; пустые значения недопустимы.
 #
-# Источник: crates/dpi-detector/src/i18n/mod.rs (Messages, legend_sections_fa),
-#           crates/dpi-detector/src/i18n/details.rs (detail.DET_*).
+# Источник: crates/dpi-detector/src/i18n/messages.rs (Messages),
+#           en.rs / fa.rs (legend_sections), details.rs (тексты detail_text).
 # Формат: key <TAB> en <TAB> fa
 
 key	en	fa
 
 # ===== messages — интерфейс (Messages) =====
-messages.banner_subtitle	Rust Native DPI & Censorship Diagnostic Engine	Motore boomi-e tashkhis-e filtering va barresi-e amigh-e packet ha (DPI)
 messages.netinfo_title	Network & System Information	Ettela'ate shabake va system
-messages.dns_title	DNS Resolver Availability:	Vaziyat-e dastrasi be kargozarhaye DNS:
 messages.domain_title	TLS / SNI Domain Inspection Results:	Natayej-e barresi-e domain ha (TLS / SNI):
 messages.summary_title	Summary	Kholase-ye natayej
 messages.status	Status	Vaziyat
 messages.available	AVAILABLE	AVAILABLE
 messages.blocked	BLOCKED	BLOCKED
 messages.domain	Domain	Domain
-messages.stage	Stage	Marhale
-messages.bytes	Bytes (Tx/Rx)	Byte ha (ersal/daryaft)
-messages.duration	Duration	Moddat-e zaman
 messages.detail	Detail	Joz'iyat
 messages.provider	Provider	Ara'e-dahande
 messages.region	Region	Mantaghe
-messages.bypass_tools	DPI Bypass Tools	Abarhaye door zadan-e filtering
-messages.gateway	Default Gateway	Darvaze-ye pishfarz
 messages.menu_title	Parameters & test selection	Tanzimat va entekhab-e test ha
 messages.menu_language	Language	Zaban
 messages.menu_ip_version	IP version	IP version
@@ -53,8 +46,6 @@ messages.menu_hw_change	change	Taghir
 messages.menu_hw_tests	tests	Test ha
 messages.menu_hw_start	start	Shoroo
 messages.menu_hw_quit	quit	Khorooj
-messages.menu_line_prompt	Enter selection [123]: 	Entekhab-e khod ra vared konid [123]: 
-messages.menu_invalid_line	Invalid input, running tests 1, 2, 3.	Voroodi-e na-motabar; test haye 1, 2, 3 ejra mishavand.
 messages.menu_need_one	Select at least one test	Hadaghal yek test ra entekhab konid
 messages.menu_test_netinfo	Network & system information	Ettela'ate shabake va system
 messages.menu_test_dns	DNS server availability	DNS server haye dar dastras
@@ -69,7 +60,6 @@ messages.replies_label	replies	pasokh ha
 messages.blocked_short	blocked	masdood
 messages.mixed_short	mixed	tarkibi
 messages.legend_title	\nStatus legend:\n	\nRahnemaye vaziyat ha:\n
-messages.latest_version	✓ Latest version	✓ Akharin noskhe
 messages.author	Author:	Nivisande:
 messages.chat	Chat:	Goruh:
 messages.update_failed	× Failed to check for updates	× Khata dar barresi-e update ha
@@ -201,9 +191,6 @@ messages.press_enter_to_exit	Press Enter to exit...	Baraye khorooj Enter ra fesh
 messages.invalid_proxy_err	Invalid proxy {}: {}\n	Proxy-e na-motabar {}: {}\n
 messages.dns_servers_empty_skip	DNS_AVAILABILITY_SERVERS not set in config.yml — test skipped.\n	Meghdar-e DNS_AVAILABILITY_SERVERS dar config.yml taeen nashode ast - test nadide gerefte shod.\n
 messages.no_sni_label	(no SNI)	(bedoone SNI)
-messages.detail_timeout_word	Timeout	Mohlat
-messages.detail_read_timeout	Read timeout	Mohlat-e khandan
-messages.detail_write_timeout	Write timeout	Mohlat-e neveshtan
 messages.detail_at	at	dar
 messages.detail_isp_stub	ISP blockpage	Blockpage-e ISP
 messages.detail_local_ip	Local IP	IP-e mahalli

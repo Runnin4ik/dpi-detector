@@ -322,7 +322,11 @@ pub async fn probe_tcp_16_20(
                 let lower = msg.to_ascii_lowercase();
                 let is_read_timeout = e.is_timeout() || lower.contains("timed out");
                 if is_read_timeout {
-                    let err_type = if lower.contains("write") { Detail::WriteTimeoutWord } else { Detail::ReadTimeoutWordCaps };
+                    let err_type = if lower.contains("write") {
+                        Detail::WriteTimeoutWord
+                    } else {
+                        Detail::ReadTimeoutWord
+                    };
                     if i == 0 {
                         return (DpiStatus::ReadTimeout, Detail::at_kb(err_type, 0.0), measured_rtt);
                     }
@@ -360,18 +364,18 @@ pub async fn probe_tcp_16_20(
             }
             Err(_) => {
                 if i == 0 {
-                    return (DpiStatus::ReadTimeout, Detail::at_kb(Detail::ReadTimeoutWordCaps, 0.0), measured_rtt);
+                    return (DpiStatus::ReadTimeout, Detail::at_kb(Detail::ReadTimeoutWord, 0.0), measured_rtt);
                 }
                 if i < min_detect_chunk {
                     return (
                         DpiStatus::Timeout,
-                        Detail::at_kb(Detail::ReadTimeoutWordCaps, kb_sent(i, chunk_size) as f64),
+                        Detail::at_kb(Detail::ReadTimeoutWord, kb_sent(i, chunk_size) as f64),
                         measured_rtt,
                     );
                 }
                 return (
                     DpiStatus::Tcp16Detected,
-                    Detail::at_kb(Detail::ReadTimeoutWordCaps, kb_sent(i, chunk_size) as f64),
+                    Detail::at_kb(Detail::ReadTimeoutWord, kb_sent(i, chunk_size) as f64),
                     measured_rtt,
                 );
             }
