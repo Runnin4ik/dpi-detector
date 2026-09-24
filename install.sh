@@ -3,7 +3,7 @@ set -e
 
 main() {
   REPO="Runnin4ik/dpi-detector"
-  VERSION="${DPI_VERSION:-v5.0.0-alpha.19}"
+  VERSION="${DPI_VERSION:-v5.0.0-alpha.20}"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -745,8 +745,8 @@ try_download_and_verify() {
 }
 
 # The version in the last word of a `--version` line. `VERSION` is written with
-# its `v` (`v5.0.0-alpha.19`) and the binary prints without it
-# (`dpi-detector 5.0.0-alpha.19`), so the `v` is dropped and what is compared is
+# its `v` (`v5.0.0-alpha.20`) and the binary prints without it
+# (`dpi-detector 5.0.0-alpha.20`), so the `v` is dropped and what is compared is
 # plain text. The version flag is `--version` (`-V`); `-v` is the detector's
 # `--verbose`.
 version_word() {

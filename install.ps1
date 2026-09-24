@@ -20,7 +20,7 @@ if ($sp -ne 0 -and ($sp -band 3072) -eq 0) {
 }
 
 $repo = "Runnin4ik/dpi-detector"
-$version = if ($env:DPI_VERSION) { $env:DPI_VERSION } else { "v5.0.0-alpha.19" }
+$version = if ($env:DPI_VERSION) { $env:DPI_VERSION } else { "v5.0.0-alpha.20" }
 
 # Architecture detection with 32-bit WoW64 fallback protection. The release
 # carries one x86_64 build per Windows generation and nothing for a 32-bit host,
@@ -127,8 +127,8 @@ function Get-FileSha256([string]$path) {
 }
 
 # The version an executable reports, "" when it cannot be run or says nothing.
-# `VERSION` is written with its `v` (`v5.0.0-alpha.19`) and the binary prints
-# without it (`dpi-detector 5.0.0-alpha.19`), so the `v` is dropped and what is
+# `VERSION` is written with its `v` (`v5.0.0-alpha.20`) and the binary prints
+# without it (`dpi-detector 5.0.0-alpha.20`), so the `v` is dropped and what is
 # compared is plain text.
 function Get-ReportedVersion([string]$path) {
     $reported = ""

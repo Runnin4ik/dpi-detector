@@ -309,7 +309,7 @@ jobs:
           rm -rf target/install-busybox
           fixture=target/install-busybox/releases/latest/download
           mkdir -p "$fixture"
-          printf '#!/bin/sh\necho "dpi-detector 5.0.0-alpha.19"\n' > "$fixture/dpi-detector-linux-x86_64"
+          printf '#!/bin/sh\necho "dpi-detector 5.0.0-alpha.20"\n' > "$fixture/dpi-detector-linux-x86_64"
           chmod +x "$fixture/dpi-detector-linux-x86_64"
           (cd "$fixture" && sha256sum dpi-detector-linux-x86_64 > SHA256SUMS.txt)
           python3 -m http.server 8931 --directory target/install-busybox \
