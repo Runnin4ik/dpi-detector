@@ -1311,7 +1311,7 @@ mod tests {
             "TLS ERR"
         );
         assert_eq!(
-            label(&fault(ConnectStage::TlsHandshake, "certificate verify failed: unable to get local issuer certificate")),
+            label(&fault(ConnectStage::TlsHandshake, "invalid peer certificate: UnknownIssuer")),
             "NO CA BUNDLE"
         );
 
@@ -1321,7 +1321,7 @@ mod tests {
         let status = |e: &DnsError| connect_fail(e).status.as_str();
         let no_ca = fault(
             ConnectStage::TlsHandshake,
-            "certificate verify failed: unable to get local issuer certificate",
+            "invalid peer certificate: UnknownIssuer",
         );
         assert_eq!((status(&no_ca), code(&no_ca).as_str()), ("no_ca_bundle", "no_root_certificates"));
         assert_eq!(code(&DnsError::Timeout), "timeout");
@@ -1363,7 +1363,7 @@ mod tests {
             key(ProbeKind::Dot, "aborted"),
             connect_fail(&DnsError::ConnectFault {
                 stage: ConnectStage::TlsHandshake,
-                detail: "certificate verify failed: unable to get local issuer certificate".to_string(),
+                detail: "invalid peer certificate: UnknownIssuer".to_string(),
             }),
         );
 

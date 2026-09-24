@@ -79,10 +79,10 @@ pub fn classify_ssl_error(
 ) -> (DpiStatus, Detail) {
     let msg = err_msg.to_ascii_lowercase();
 
-    if msg.contains("wrong version number") || msg.contains("wrong_version_number") {
+    if msg.contains("wrong version number") {
         return (DpiStatus::TlsSpoof, Detail::WrongVersion);
     }
-    if ["record overflow", "oversized", "record layer failure", "decode error", "decoding error", "illegal parameter", "bad record", "invalid record"]
+    if ["record overflow", "oversized", "decode error", "decoding error", "illegal parameter", "bad record", "invalid record"]
         .iter()
         .any(|m| msg.contains(m))
     {
@@ -117,7 +117,7 @@ pub fn classify_ssl_error(
     }
 
     if msg.contains("certificate") || msg.contains("unknown ca") || msg.contains("self-signed") || msg.contains("self signed") {
-        if msg.contains("unable to get local issuer certificate") || msg.contains("unknownissuer") {
+        if msg.contains("unknownissuer") {
             return (DpiStatus::NoCa, Detail::NoRootCa);
         }
         if msg.contains("expired") {
@@ -132,7 +132,7 @@ pub fn classify_ssl_error(
         return (DpiStatus::TlsErr, Detail::FakeCert);
     }
 
-    if ["eof", "unexpected eof", "eof occurred", "operation did not complete", "want_read", "want read", "connection closed", "closed connection", "incomplete"]
+    if ["eof", "unexpected eof", "eof occurred", "connection closed", "closed connection", "incomplete"]
         .iter()
         .any(|m| msg.contains(m))
     {
@@ -152,8 +152,6 @@ pub fn classify_ssl_error(
         || msg.contains("no tls1.3")
         || msg.contains("server has no tls 1.3")
         || msg.contains("servertlsversion")
-        || msg.contains("server_tls_version")
-        || msg.contains("tls_version_is_different")
         || msg.contains("peer is incompatible")
     {
         return (DpiStatus::NoTls13, Detail::NoTls13);
@@ -627,7 +625,7 @@ mod tests {
         assert_eq!(s, DpiStatus::TlsErr);
 
         let (s, _) = classify_ssl_error(
-            "certificate verify failed: unable to get local issuer certificate",
+            "invalid peer certificate: UnknownIssuer",
             0,
             ConnectionStage::TlsClientHelloSent,
         );
