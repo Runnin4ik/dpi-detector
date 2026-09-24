@@ -158,7 +158,7 @@ use std::time::Instant;
 use dpi_core::net::fingerprint::{http_identity, HelloVariant, TlsFingerprint};
 use dpi_core::net::tls::{create_tls_config, hello_record, hello_record_for, hello_record_with, TlsProfile, TlsVersion};
 use dpi_core::net::{ja3, ja4};
-use dpi_core::probe::http::{request_headers, HttpRequest, HttpSender};
+use dpi_core::net::http::{request_headers, HttpRequest, HttpSender};
 use http_body_util::BodyExt;
 use hyper::Method;
 use hyper_util::rt::TokioIo;

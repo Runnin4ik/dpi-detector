@@ -7,6 +7,9 @@
 pub use crate::net::http_client::http_get_text;
 pub use crate::net::public_ip::fetch_public_ips;
 pub use crate::net::sysinfo::{
-    detect_bypass_tools, flag_emoji, get_system_dns, ipv6_supported, is_tun_name, SystemDnsInfo,
+    detect_bypass_tools, flag_emoji, get_system_dns, ipv6_supported, is_tun_name, DnsSource,
+    SystemDnsInfo,
 };
-pub use crate::net::sysinfo::intercept::{nfqws2, Family, Intercept, Problem, Unchecked};
+pub use crate::net::sysinfo::intercept::{
+    nfqws2, Family, Intercept, ListFix, Missing, Problem, Unchecked,
+};

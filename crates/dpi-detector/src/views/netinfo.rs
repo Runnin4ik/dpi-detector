@@ -1,8 +1,7 @@
 //! Test 0: network and system - public IP, TTLB, ASN/org, system DNS, bypass tools.
 
 use crate::i18n::Messages;
-use dpi_core::net::netinfo::{SystemDnsInfo, is_tun_name};
-use dpi_core::net::sysinfo::DnsSource;
+use dpi_core::net::netinfo::{DnsSource, SystemDnsInfo, is_tun_name};
 use dpi_core::probe::domains::{FakeIpType, fake_ip_type};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;

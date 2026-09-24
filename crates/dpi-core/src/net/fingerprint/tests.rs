@@ -56,7 +56,7 @@ const UTLS_REFERENCED: [TlsFingerprint; 9] = [
 /// `Accept-Encoding`, `Sec-Fetch-Site` and `TE` capitalized, and `curl_firefox147`
 /// — a `--impersonate` one-liner — writes `Te`. HTTP/2 lowercases both (RFC 9113
 /// §8.2.1), so the spelling only reaches the wire through the h1 case map
-/// (`probe::http::header_case_map`); the `priority` header reaches it on h1 only
+/// (`net::http::header_case_map`); the `priority` header reaches it on h1 only
 /// for the clients that send it there, which the second column pins.
 #[test]
 fn every_identity_is_spelled_the_way_its_client_writes_it() {

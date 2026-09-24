@@ -50,9 +50,9 @@ use crate::classify::{
 };
 use crate::config::AppConfig;
 use crate::net::fingerprint::{HelloVariant, TlsFingerprint};
-use crate::probe::connector::{DpiTlsConnector, RustlsConnector};
+use crate::net::connector::{DpiTlsConnector, RustlsConnector};
 use crate::probe::domains::{resolve_ip, IpFamily};
-use crate::probe::http::check_http;
+use crate::net::http::check_http;
 use parking_lot::Mutex;
 use crate::net::tcp::{dial_tcp, DialError};
 use crate::net::tls::TlsProfile;

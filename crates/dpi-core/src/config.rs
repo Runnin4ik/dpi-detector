@@ -564,7 +564,7 @@ const KNOWN_KEYS: &[&str] = &[
 /// Cyrillic user agent is not rejected.
 ///
 /// The user agent is the only config string that reaches a request header, and
-/// `probe/http.rs` builds that request with an `expect`: one control byte from
+/// `net/http.rs` builds that request with an `expect`: one control byte from
 /// a `USER_AGENT: |` block scalar would abort the whole run. The request
 /// boundary keeps its own guard as a backstop; this is what names the key the
 /// operator has to fix.

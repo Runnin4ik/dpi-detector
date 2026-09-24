@@ -24,7 +24,7 @@ use crate::classify::{
 };
 use crate::config::AppConfig;
 use crate::net::fingerprint::http_identity;
-use crate::probe::http::{
+use crate::net::http::{
     hyper_err_info, negotiated_h2, request_headers, HttpRequest, HttpSender,
 };
 use crate::net::tcp::{dial_tcp, DialError};
@@ -172,7 +172,7 @@ fn kb_sent(chunks_sent: usize, chunk_size: usize) -> usize {
 /// The fat probe reads a response only so the connection completes the
 /// round-trip: a HEAD reply carries no body. `Limited` is here because a peer
 /// that streams frames anyway must not make the tool buffer them, and the cap
-/// is the same value `probe::http` uses.
+/// is the same value `net::http` uses.
 const BODY_CAP: usize = 64 * 1024;
 
 /// Raw FAT probe. Returns (status, detail, rtt_secs).

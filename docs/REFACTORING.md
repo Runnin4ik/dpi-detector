@@ -134,7 +134,7 @@ protection against recurrence:
   (called only from its own test), 27 unused re-exports of `dns/mod.rs:10-17`
   (exactly one is live through a re-export, `parse_socks_proxy`),
   `net/tls.rs` `create_insecure_dpi_tls_config_tls13/tls12`,
-  `probe/connector.rs` `new_insecure_tls13`/`new_insecure_tls12`/`new_verifying`,
+  `net/connector.rs` `new_insecure_tls13`/`new_insecure_tls12`/`new_verifying`,
   `classify/stream.rs` `ProbeState` and `DpiProbeStream::{into_inner,get_ref,get_mut}`,
   `dns/wire.rs` `QTYPE_NS/SOA/PTR/MX`, `net/cert_compression.rs` `covers` (tests only),
   `i18n` `Language::{code,name,is_rtl}`,
@@ -282,6 +282,24 @@ refusing to accept configs that work today. Decision made 2026-09-14: no typing.
 | Move `probe/connector.rs` into `net/` | The trait takes and returns `DpiProbeStream`, and `net/` today knows nothing about `classify` (zero references) — the move would create a new bottom-up edge |
 | Move `probe/http.rs` into `protocols/` | There are no consumers outside the probes, and the move would spread probe support across two layers |
 | `enum DiagnosticVerdict` instead of `DpiStatus` | `DpiStatus` is already an enum; it was `detail` that needed typing — done in P2.5 (`classify::Detail`) |
+
+**Superseded 2026-09-24.** The first two rows above were acted on, and the second
+of them only partly as written:
+
+* The premise of the `connector.rs` row was already stale when it was read:
+  `net/tcp.rs` and `net/icmp_err.rs` both `use crate::classify::IcmpCode`, so the
+  edge it feared existed. `connector.rs` and `http.rs` now live in `net/`, which
+  also retires the five doc comments in `net/fingerprint/` that pointed *up* into
+  `probe/`.
+* `http.rs` went to `net/`, not to the `protocols/` layer that row rejects — that
+  layer does not exist, and the objection ("no consumers outside the probes") is
+  the reason it belongs beside them in `net/` rather than above them.
+* `probe/cymru.rs` moved to `dns/cymru.rs` in the same pass. The phase log above
+  records Cymru being moved *into* `probe/` to break a `net → dns` cycle; nothing
+  in `net/` uses it now (`probe/dns_avail.rs` and the binary do), and it calls
+  `dns::query_doh_txt` itself, so `dns/` is the layer it can live in. The cycle
+  stays broken only as long as `net/` keeps its hands off `dns/` — the rule
+  `AGENTS.md` states.
 
 ## 6. How to verify each phase
 

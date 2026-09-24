@@ -43,11 +43,12 @@ winresource = "0.1"
 unreachable_pub = "warn"
 # Kept in step with the workspace table by hand for the same reason.
 dead_code_pub_in_binary = "warn"
-# §11: `unsafe` is a decision. Two of the tree's four FFI modules are in this
-# crate: `src/terminal.rs` carries a module-level
-# `#![allow(unsafe_code, reason = "...")]`, and `src/tui/backend.rs` one on each
-# of its two `#[cfg(windows)]` Win32 functions, since the rest of that file is
-# safe code. A block anywhere else in the binary now fails the build.
+# §11: `unsafe` is a decision. The crate's only FFI module is
+# `src/tui/backend.rs`, which carries one
+# `#[allow(unsafe_code, reason = "...")]` per `#[cfg(windows)]` Win32 function —
+# `write_win32_ansi`, `win32_frame_home` and `detect_vt`, which moved here from
+# `src/terminal.rs` — since the rest of that file is safe code. A block anywhere
+# else in the binary now fails the build.
 unsafe_code = "deny"
 
 [lints.clippy]

@@ -392,7 +392,7 @@ impl Body for UploadBody {
 
 /// The upload response is never read, only awaited to completion, so `Limited`
 /// is here purely to bound what a hostile or broken peer can make the tool
-/// buffer while that await runs; the same value as `probe::http`'s `BODY_CAP`.
+/// buffer while that await runs; the same value as `net::http`'s `BODY_CAP`.
 const BODY_CAP: usize = 64 * 1024;
 
 /// Upload with stall detection: POSTs `telegram_upload_size_mb` MB of filler to the

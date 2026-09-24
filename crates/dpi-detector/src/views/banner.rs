@@ -2,7 +2,7 @@
 
 use crate::i18n::{Messages, fingerprint_label};
 use dpi_core::net::fingerprint::TlsFingerprint;
-use dpi_core::net::sysinfo::intercept::{Intercept, ListFix, Missing, Problem, Unchecked};
+use dpi_core::net::netinfo::{Intercept, ListFix, Missing, Problem, Unchecked};
 use dpi_core::profile::RegionProfile;
 
 use crate::tui::widgets::{asc, panel_with, BOX_WIDTH};
@@ -161,7 +161,7 @@ pub(crate) fn render_fingerprint_header(fp: TlsFingerprint, msg: &Messages) -> S
 mod tests {
     use super::*;
     use crate::i18n::{get_messages, Language};
-    use dpi_core::net::sysinfo::intercept::ListFix;
+    use dpi_core::net::netinfo::ListFix;
 
     fn found(problems: Vec<Problem>) -> Intercept {
         Intercept {

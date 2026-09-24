@@ -14,7 +14,7 @@
 //! field names by rule (RFC 9113 §8.2.1), but over HTTP/1.1 the client writes
 //! `Sec-Fetch-Site`, `TE` and `Accept-Encoding` in the case its `-H` list was
 //! written in — which the bundles of Safari 18 and later write lowercase
-//! throughout. [`header_case_map`](crate::probe::http) hands those spellings to
+//! throughout. [`header_case_map`](crate::net::http) hands those spellings to
 //! hyper's h1 encoder; the h2 encoder ignores them.
 //!
 //! One deviation, deliberate and opt-in:
@@ -23,7 +23,7 @@
 //!   (tests 2–4: `read_timeout_at_24kb`, `tcp_block_min_kb`/`max_kb`) override
 //!   `accept-encoding` to `identity`, because a negotiated `Content-Encoding`
 //!   would make those numbers depend on how well the response happens to
-//!   compress. [`request_headers`](crate::probe::http::request_headers) does the
+//!   compress. [`request_headers`](crate::net::http::request_headers) does the
 //!   override per call; everything else, the fingerprint tests included, sends
 //!   the `accept-encoding` the impersonated client sends.
 

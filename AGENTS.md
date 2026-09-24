@@ -34,9 +34,9 @@ core, no `anyhow`, no `unwrap()` outside tests. Logs: `tracing` (`WARN`; `-v` �
 ## Key Directories
 
 - `crates/dpi-core/src/classify/` — `types.rs` (`DpiStatus`, 33 variants, `ConnectionStage`), `detail.rs` (`Detail`, `AlertKind`, `StackKind`), `classifier.rs` (error ⇒ verdict), `stream.rs` (`DpiProbeStream`).
-- `crates/dpi-core/src/net/` — `tcp.rs`, `tls.rs` (`TlsProfile`, cert verifier), `fingerprint/` (30 profiles: `shapes/`, `identity.rs`, `h2.rs`, `variant.rs`), `ja3.rs`/`ja4.rs`, `pq_kx.rs`, `cert_compression.rs`, `hpke.rs`, `follow_up.rs`, `bind.rs`, `sysinfo/`, `netinfo.rs`.
-- `crates/dpi-core/src/dns/` — `wire.rs` (RFC 1035), `udp.rs`, `doh.rs`, `dot.rs`, `socks.rs`, `resolve.rs`.
-- `crates/dpi-core/src/probe/` — one module per test: `dns_avail.rs` (1), `domains.rs` (2), `tcp16.rs` (3), `whitelist.rs` (4), `telegram.rs` (5), `burst.rs` (6); plus `cymru.rs`, `connector.rs`, `http.rs`.
+- `crates/dpi-core/src/net/` — `tcp.rs`, `tls.rs` (`TlsProfile`, cert verifier), `fingerprint/` (30 profiles: `shapes/`, `identity.rs`, `h2.rs`, `variant.rs`), `http.rs` (the h1/h2 sender with the fingerprint on it), `connector.rs` (`DpiTlsConnector`), `ja3.rs`/`ja4.rs`, `pq_kx.rs`, `cert_compression.rs`, `hpke.rs`, `follow_up.rs`, `bind.rs`, `sysinfo/`, `netinfo.rs`.
+- `crates/dpi-core/src/dns/` — `wire.rs` (RFC 1035), `udp.rs`, `doh.rs`, `dot.rs`, `socks.rs`, `resolve.rs`, `cymru.rs` (Team Cymru ASN/org over DoH TXT).
+- `crates/dpi-core/src/probe/` — one module per test: `dns_avail.rs` (1), `domains.rs` (2), `tcp16.rs` (3), `whitelist.rs` (4), `telegram.rs` (5), `burst.rs` (6), and nothing else — the transport those tests drive lives in `net/` and `dns/`.
 - `crates/dpi-core/src/config.rs` — `AppConfig` (`config.yml` schema), `ConfigWarning`, embedded data lists.
 - `crates/dpi-detector/src/i18n/` — ONLY location for user-facing strings.
 - `crates/dpi-detector/src/tui/`, `views/` — terminal backend, width math, one renderer per test.

@@ -26,12 +26,12 @@ use crate::classify::{
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
 use crate::PhaseProgress;
-use crate::probe::connector::RustlsConnector;
+use crate::net::connector::RustlsConnector;
 use crate::net::fingerprint::http_identity;
-use crate::probe::http::{
+use crate::net::http::{
     check_http, classify_redirect, inner_hyper, parse_host, request_headers,
 };
-use crate::probe::connector::DpiTlsConnector;
+use crate::net::connector::DpiTlsConnector;
 use crate::net::tcp::{dial_tcp, DialError};
 use crate::net::tls::TlsProfile;
 

@@ -93,7 +93,7 @@ mod tests {
 
     /// The wording rustls puts on the wire for a received fatal alert, as the
     /// probes see it: `AlertReceived`'s `Debug` name, appended after hyper's own
-    /// text (see `probe::http::hyper_err_info`).
+    /// text (see `net::http::hyper_err_info`).
     #[test]
     fn the_rustls_spelling_names_the_description() {
         for (msg, kind) in [

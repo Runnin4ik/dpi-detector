@@ -16,7 +16,6 @@ mod json;
 mod menu;
 mod render;
 mod runner;
-mod terminal;
 mod tui;
 mod update;
 mod views;
@@ -234,7 +233,7 @@ async fn main() {
     }));
 
     let args = args::parse_cli(prescan_language());
-    let has_vt = terminal::detect_vt();
+    let has_vt = tui::backend::detect_vt();
     set_has_vt(has_vt);
     let no_color = std::env::var_os("NO_COLOR").is_some();
     let legacy_console = !has_vt || args.ascii;

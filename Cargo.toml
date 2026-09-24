@@ -102,13 +102,14 @@ unreachable_pub = "warn"
 # new block in ordinary code compiled everywhere without a word.
 #
 # `deny` rather than `forbid`, because the blocks are legitimate where they are:
-# `net/bind.rs` and `net/icmp_err.rs` in `dpi-core`, `src/terminal.rs` and
-# `src/tui/backend.rs` in `dpi-detector` are OS FFI, and each is allowed at the
+# `net/bind.rs` and `net/icmp_err.rs` in `dpi-core`, and `src/tui/backend.rs` in
+# `dpi-detector`, are OS FFI — three modules, not four: `src/terminal.rs` held
+# nothing but `detect_vt`, which moved into `backend.rs`. Each is allowed at the
 # scope that is FFI — a module-level `#![allow(unsafe_code, reason = "...")]`, or
 # one per Win32 function where the file also holds safe code. The `reason` names
-# the call and the invariant the scope holds, and the two `dpi-core` modules
-# carry a `// SAFETY:` note on every block besides. `forbid` would take that door
-# away and break all four at once.
+# the call and the invariant the scope holds, and every module carries a
+# `// SAFETY:` note on every block besides. `forbid` would take that door
+# away and break all three at once.
 #
 # `vendor/rustls-rustcrypto` is a workspace member but does not opt into this
 # table, so the patched provider is untouched — which is the point: it is

@@ -24,7 +24,7 @@ use crate::dns::socks::SocksProxyConfig;
 use crate::dns::types::DnsError;
 use crate::config::{AppConfig, DnsAvailServerKind};
 use crate::{PhaseProgress, ProgressBlock};
-use crate::probe::cymru::fetch_ip_cymru;
+use crate::dns::cymru::fetch_ip_cymru;
 use crate::probe::domains::fake_ip_type;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

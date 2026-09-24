@@ -8,3 +8,4 @@
 /vendor/*/target/
 /vendor/*/Cargo.lock
 /dist/
+tmp-commit-msg.txt

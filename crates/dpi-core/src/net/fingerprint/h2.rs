@@ -21,7 +21,7 @@ use super::shapes::TlsShape;
 /// Crate-private: `pseudo_order` is [`PseudoOrder`], a type the patched `h2`
 /// adds and no published `h2` has (`vendor/h2/README-PATCH.md`), so a caller
 /// outside this crate could not name this struct's field type. The preface
-/// reaches the wire through [`crate::probe::http::HttpSender`], which takes only
+/// reaches the wire through [`crate::net::http::HttpSender`], which takes only
 /// the fingerprint.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct H2Fingerprint {

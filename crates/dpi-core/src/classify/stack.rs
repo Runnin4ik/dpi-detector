@@ -61,7 +61,7 @@ mod tests {
 
     /// The wording rustls puts on the wire, as the probes see it: the stack's
     /// own text, appended after hyper's `connection error` (see
-    /// `probe::http::hyper_err_info`).
+    /// `net::http::hyper_err_info`).
     #[test]
     fn the_rustls_spelling_names_the_failure() {
         for (msg, kind) in [

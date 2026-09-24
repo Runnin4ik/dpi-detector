@@ -24,7 +24,7 @@ use dpi_core::probe::burst::{
     burst_targets, BurstAlpn, BurstObserver, BurstProfileReport, BurstSettings, BurstTarget,
     BurstTlsVersion, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_LAUNCH_GAP_MS, BURST_DEFAULT_TIMEOUT_SECS,
 };
-use dpi_core::probe::cymru::{fetch_ip_cymru, IpCymruInfo};
+use dpi_core::dns::cymru::{fetch_ip_cymru, IpCymruInfo};
 use dpi_core::probe::domains::{
     check_http_all, check_tls_all, collect_stub_ips, domain_stats, resolve_all, IpFamily,
 };
