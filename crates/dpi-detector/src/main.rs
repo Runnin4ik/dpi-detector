@@ -217,11 +217,11 @@ fn intercept_for(slot: &InterceptSlot, ip_version: &str) -> Option<Intercept> {
 /// certificate verification) is serialized behind one executor, two threads take
 /// the whole gain on the burst test and most of it elsewhere, and four take
 /// nothing further while costing a peak of ~3.9 cores out of 4 — the half of a
-/// router that has to keep routing. Which targets those are is decided by the
-/// build, through `--cfg dpi_router` on the four router rows of the release
-/// matrix, not inferred from the target: `target_env = "musl"` would also catch
-/// `x86_64-unknown-linux-musl`, the desktop artifact, and a router is a role, not
-/// a libc.
+/// router that has to keep routing. Which targets those are is decided by
+/// `build.rs`, which sets `--cfg dpi_router` for the triples that are routers:
+/// musl on mips, mips64, arm or aarch64. A role read off the target, but not off
+/// its libc alone — `target_env = "musl"` by itself would also catch
+/// `x86_64-unknown-linux-musl`, the desktop artifact.
 ///
 /// A desktop is not that machine. The same code there is network-bound — measured
 /// on a 12-thread box, tests run at 1–9% of a single core — so it gets tokio's

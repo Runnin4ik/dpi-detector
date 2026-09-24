@@ -95,9 +95,8 @@ This document records the architectural decisions and compilation profiles appli
   resident memory measured the same at one, two and four workers.
 * **Choice:** the count is a build decision, not a constant
   (`crates/dpi-detector/src/main.rs::worker_threads`). On the router targets —
-  the four rows the release matrix builds with `--cfg dpi_router`, which is a
-  role the build declares rather than a libc it infers: `target_env = "musl"`
-  would also catch the `x86_64-unknown-linux-musl` desktop artifact — it is
+  the triples `build.rs` marks with `--cfg dpi_router`: musl on mips, mips64, arm
+  or aarch64 — it is
   `min(2, available_parallelism())`: derived, so the one-core routers this section
   was about keep one worker and their measured behaviour is unchanged, which a
   fixed `worker_threads = 2` would not give (the attribute takes a constant and
