@@ -8,12 +8,12 @@ mod messages;
 mod ru;
 mod zh;
 
-pub use details::detail_text;
-pub use messages::Messages;
+pub(crate) use details::detail_text;
+pub(crate) use messages::Messages;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Language {
+pub(crate) enum Language {
     #[default]
     En,
     Ru,
@@ -22,14 +22,14 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 4] = [
         Self::En,
         Self::Ru,
         Self::Zh,
         Self::Fa,
     ];
 
-    pub fn label(&self) -> &'static str {
+    pub(crate) fn label(&self) -> &'static str {
         match self {
             Self::En => "English",
             Self::Ru => "Русский",
@@ -37,7 +37,7 @@ impl Language {
             Self::Fa => "Farsi",
         }
     }
-    pub fn label_ascii(&self) -> &'static str {
+    pub(crate) fn label_ascii(&self) -> &'static str {
         match self {
             Self::En => "English",
             Self::Ru => "Русский",
@@ -45,7 +45,7 @@ impl Language {
             Self::Fa => "Farsi",
         }
     }
-    pub fn from_code(code: &str) -> Option<Self> {
+    pub(crate) fn from_code(code: &str) -> Option<Self> {
         match code.trim().to_lowercase().as_str() {
             "en" | "en_us" | "en_gb" | "english" => Some(Self::En),
             "ru" | "ru_ru" | "russian" => Some(Self::Ru),
@@ -56,7 +56,7 @@ impl Language {
     }
 
     /// Autodetects system language from environment variables (LANG, LC_ALL, LC_MESSAGES).
-    pub fn autodetect() -> Self {
+    pub(crate) fn autodetect() -> Self {
         for var in &["LC_ALL", "LANG", "LC_MESSAGES"] {
             if let Ok(val) = env::var(var) {
                 let code = val.split('.').next().unwrap_or(&val);
@@ -77,12 +77,12 @@ impl Language {
 }
 
 /// Returns the text as-is. Kept for backwards compatibility with UI rendering callsites.
-pub fn format_bidi(text: &str, _lang: Language) -> String {
+pub(crate) fn format_bidi(text: &str, _lang: Language) -> String {
     text.to_string()
 }
 
 /// Returns the text as-is. Kept for backwards compatibility with UI rendering callsites.
-pub fn format_bidi_str(text: &str) -> String {
+pub(crate) fn format_bidi_str(text: &str) -> String {
     text.to_string()
 }
 
@@ -98,7 +98,7 @@ fn detect_windows_language() -> Option<Language> {
     Language::from_code(prefix)
 }
 
-pub fn get_messages(lang: Language) -> Messages {
+pub(crate) fn get_messages(lang: Language) -> Messages {
     match lang {
         Language::En => en::messages(),
         Language::Ru => ru::messages(),
@@ -115,7 +115,7 @@ pub fn get_messages(lang: Language) -> Messages {
 /// a legacy (non-VT) Windows console raw `println!` bytes land on screen as
 /// `?[36m` garbage — the SGR has to go through the binary's output writer, which
 /// translates it into console attributes.
-pub fn legend_text(lang: Language, msg: &Messages) -> String {
+pub(crate) fn legend_text(lang: Language, msg: &Messages) -> String {
     let mut out = format!("{}\n", format_bidi(msg.legend_title, lang));
     let sections = match lang {
         Language::Ru => ru::legend_sections(),
@@ -146,7 +146,7 @@ pub fn legend_text(lang: Language, msg: &Messages) -> String {
 /// The list of profiles is not spelled out here: `--legend` builds its table
 /// from the profile table ([`profile_section`]), so a profile added to the
 /// probe needs no new text in any language.
-pub fn fingerprint_label(fp: dpi_core::net::fingerprint::TlsFingerprint, lang: Language) -> String {
+pub(crate) fn fingerprint_label(fp: dpi_core::net::fingerprint::TlsFingerprint, lang: Language) -> String {
     use dpi_core::net::fingerprint::TlsFingerprint as F;
     if fp != F::Rustls {
         return fp.display_label().to_string();
@@ -202,7 +202,7 @@ fn profile_section(msg: &Messages, lang: Language) -> String {
 }
 
 /// Transfer rate in the interface's speed units (Ru uses Cyrillic units).
-pub fn fmt_speed(bps: f64, lang: Language) -> String {
+pub(crate) fn fmt_speed(bps: f64, lang: Language) -> String {
     let msg = get_messages(lang);
     if bps >= 1024.0 * 1024.0 {
         format!("{:>6.2} {}", bps / (1024.0 * 1024.0), msg.unit_mb_s)
@@ -214,7 +214,7 @@ pub fn fmt_speed(bps: f64, lang: Language) -> String {
 }
 
 /// Byte count in the interface's size units.
-pub fn fmt_size(bytes: u64, lang: Language) -> String {
+pub(crate) fn fmt_size(bytes: u64, lang: Language) -> String {
     let msg = get_messages(lang);
     if bytes >= 1024 * 1024 {
         format!("{:.2} {}", bytes as f64 / (1024.0 * 1024.0), msg.unit_mb)

@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use dpi_core::net::netinfo::http_get_text;
 
-pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const GITHUB_REPO: &str = "Runnin4ik/dpi-detector";
+pub(crate) const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const GITHUB_REPO: &str = "Runnin4ik/dpi-detector";
 
 /// The part of a GitHub release the update check cares about: its version with
 /// the `v` prefix stripped, which is what `is_newer` compares.
 #[derive(Debug, Clone, Default)]
-pub struct ReleaseInfo {
+pub(crate) struct ReleaseInfo {
     pub version: String,
 }
 
@@ -74,7 +74,14 @@ impl Ver {
 impl Ord for Ver {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         use std::cmp::Ordering;
-        self.nums.cmp(&other.nums).then_with(|| match (&self.pre, &other.pre) {
+        // Destructured instead of read field by field: `PartialEq` is derived, so
+        // it compares every field, and a field added later (build metadata is the
+        // obvious candidate) would silently make `cmp` disagree with `==` — an
+        // `Ord` contract violation the derive cannot catch. Naming the fields here
+        // makes that a compile error.
+        let Ver { nums, pre } = self;
+        let Ver { nums: other_nums, pre: other_pre } = other;
+        nums.cmp(other_nums).then_with(|| match (pre, other_pre) {
             (None, None) => Ordering::Equal,
             // A prerelease precedes its own release: 5.0.0-alpha.8 < 5.0.0.
             (None, Some(_)) => Ordering::Greater,
@@ -93,7 +100,7 @@ impl PartialOrd for Ver {
 /// Semver compare: `latest > current`. Tolerant of `v`,
 /// build metadata and junk; prereleases order per semver, so a beta beats an
 /// alpha, `alpha.10` beats `alpha.9`, and the release beats its prereleases.
-pub fn is_newer(latest: &str, current: &str) -> bool {
+pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
     match (Ver::parse(latest), Ver::parse(current)) {
         (Some(l), Some(c)) => {
             if l.nums == (0, 0, 0) || c.nums == (0, 0, 0) {
@@ -112,7 +119,7 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 /// defined as the latest non-draft, non-prerelease release. A prerelease build
 /// (alpha/beta/rc) would never see its own successors there, so it lists the
 /// recent releases and takes the highest version, prereleases included.
-pub async fn fetch_latest_version() -> Option<ReleaseInfo> {
+pub(crate) async fn fetch_latest_version() -> Option<ReleaseInfo> {
     let base = format!("https://api.github.com/repos/{}", GITHUB_REPO);
     let prerelease = is_prerelease(CURRENT_VERSION);
     let url = if prerelease {
@@ -151,7 +158,7 @@ fn newest_release(releases: &[serde_json::Value]) -> Option<ReleaseInfo> {
 }
 
 /// Localized banner badge text.
-pub fn version_badge_lang(latest: Option<&ReleaseInfo>, lang: Language) -> String {
+pub(crate) fn version_badge_lang(latest: Option<&ReleaseInfo>, lang: Language) -> String {
     let msg = crate::i18n::get_messages(lang);
     match latest {
         None => msg.update_failed.to_string(),

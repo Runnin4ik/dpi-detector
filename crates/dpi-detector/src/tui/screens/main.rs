@@ -24,9 +24,8 @@ use crate::tui::screens::legend::{MenuAction, legend_loop};
 use crate::update::{ReleaseInfo, version_badge_lang};
 
 #[derive(Debug, Clone)]
-pub struct MenuSelection {
+pub(crate) struct MenuSelection {
     pub selected_tests: String,
-    #[allow(dead_code)]
     pub ip_version: String, // "ipv4" or "ipv6"
     pub concurrency: usize,
     pub language: Language,
@@ -42,23 +41,23 @@ pub struct MenuSelection {
 /// takes a `MenuSelection` has to call this: a run that returned to the menu with
 /// `M` and picked another interface kept the first one, because the second
 /// selection only updated the locals beside it.
-pub fn apply_interface(selection: &MenuSelection) {
+pub(crate) fn apply_interface(selection: &MenuSelection) {
     match &selection.interface {
         Some(name) => dpi_core::net::bind::set_target(dpi_core::net::bind::resolve(name)),
         None => dpi_core::net::bind::set_target(None),
     }
 }
 
-pub enum MenuResult {
+pub(crate) enum MenuResult {
     Run(MenuSelection),
     Quit,
 }
 
 /// Shared slot for the background version check: None = pending.
-pub type VersionSlot = Arc<Mutex<Option<Option<ReleaseInfo>>>>;
+pub(crate) type VersionSlot = Arc<Mutex<Option<Option<ReleaseInfo>>>>;
 
 /// Probes whether this terminal supports raw mode (TUI) without visible side effects.
-pub fn tui_available() -> bool {
+pub(crate) fn tui_available() -> bool {
     if enable_raw_mode().is_err() {
         return false;
     }
@@ -66,7 +65,7 @@ pub fn tui_available() -> bool {
     true
 }
 
-pub async fn run_interactive_menu(
+pub(crate) async fn run_interactive_menu(
     initial_lang: Language,
     profile: RegionProfile,
     cfg: &AppConfig,
@@ -399,7 +398,7 @@ fn radio_btn(selected: bool) -> &'static str {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "the menu's whole state comes from the input loop; a bundle struct would exist for this one call")]
 fn draw_menu(
     cursor: usize,
     current_lang: Language,
@@ -570,14 +569,14 @@ pub(crate) fn pad_width(s: &str, target_width: usize) -> String {
 
 
 /// Toggles a test checkbox: the digit is added if absent, removed if present.
-pub fn toggle_test(selected: &mut HashSet<char>, digit: char) {
+pub(crate) fn toggle_test(selected: &mut HashSet<char>, digit: char) {
     if !selected.remove(&digit) {
         selected.insert(digit);
     }
 }
 
 /// Sorted selection string, e.g. {'3','1'} → "13".
-pub fn sorted_selection(selected: &HashSet<char>) -> String {
+pub(crate) fn sorted_selection(selected: &HashSet<char>) -> String {
     let mut v: Vec<char> = selected.iter().copied().collect();
     v.sort_unstable();
     v.into_iter().collect()

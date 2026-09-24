@@ -4,7 +4,7 @@
 use super::Language;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Messages {
+pub(crate) struct Messages {
     pub netinfo_title: &'static str,
     pub domain_title: &'static str,
     pub summary_title: &'static str,
@@ -255,6 +255,10 @@ pub struct Messages {
     pub config_warning_label: &'static str,
     pub cfg_warn_unknown_key: &'static str,
     pub cfg_warn_invalid_value: &'static str,
+    /// A row-list key that kept its valid rows and dropped the rest. One `{}`:
+    /// the key. Distinct from `cfg_warn_invalid_value`, whose "using default"
+    /// tail is false when 119 of 120 rows survived.
+    pub cfg_warn_skipped_rows: &'static str,
     pub cfg_warn_max_concurrent: &'static str,
     pub cfg_warn_ip_version: &'static str,
     pub cfg_warn_fingerprint: &'static str,
@@ -310,6 +314,18 @@ pub struct Messages {
     pub cli_trace: &'static str,
     /// Shown when the `--trace` path cannot be opened; `{}` is `<path>: <error>`.
     pub trace_open_failed: &'static str,
+    /// Fatal: the list `--domains` named cannot be read. `{}` is
+    /// `<path>: <error>`; the run stops, because a run with no targets would
+    /// report an empty table as if it were a result.
+    pub domains_load_failed: &'static str,
+    /// Shown when the configured whitelist file is there but cannot be read.
+    /// `{}` is `<path>: <error>`; the embedded list is used instead, and this is
+    /// what tells an unreadable file from an absent one.
+    pub whitelist_load_failed: &'static str,
+    /// Fatal: the list `--tcp16` named cannot be read. `{}` is
+    /// `<path>: <error>`; the run stops, because the shipped targets would
+    /// measure hosts the operator never asked for.
+    pub tcp16_load_failed: &'static str,
     pub cli_domains: &'static str,
     pub cli_tcp16: &'static str,
     pub cli_ascii: &'static str,
@@ -318,7 +334,7 @@ pub struct Messages {
 }
 
 impl Messages {
-    pub fn phase_text(&self, phase: dpi_core::PhaseId) -> String {
+    pub(crate) fn phase_text(&self, phase: dpi_core::PhaseId) -> String {
         match phase {
             // Test 1 labels itself with the block tokens UDP/DoH/DoT/EGRESS,
             // which say more than any translation of "checking" would.
@@ -343,7 +359,7 @@ impl Messages {
 }
 impl Messages {
     /// Checkbox label for test digit '0'..='6' in the interactive menu.
-    pub fn menu_test_label(&self, digit: char) -> &'static str {
+    pub(crate) fn menu_test_label(&self, digit: char) -> &'static str {
         match digit {
             '0' => self.menu_test_netinfo,
             '1' => self.menu_test_dns,
@@ -360,17 +376,44 @@ impl Messages {
 
 impl Messages {
     /// Text for a recoverable configuration problem (see [`dpi_core::config::ConfigWarning`]).
-    pub fn config_warning(&self, warning: &dpi_core::config::ConfigWarning) -> String {
+    pub(crate) fn config_warning(&self, warning: &dpi_core::config::ConfigWarning) -> String {
         use dpi_core::config::ConfigWarning as W;
         match warning {
             W::UnknownKey { key } => self.cfg_warn_unknown_key.replace("{}", key),
             W::InvalidValue { key } => self.cfg_warn_invalid_value.replace("{}", key),
+            W::SkippedRows { key } => self.cfg_warn_skipped_rows.replace("{}", key),
             W::UnknownFingerprint { value } => self.cfg_warn_fingerprint.replace("{}", value),
             W::MaxConcurrentReset => self.cfg_warn_max_concurrent.to_string(),
             W::IpVersionReset => self.cfg_warn_ip_version.to_string(),
             W::StubThresholdReset => self.cfg_warn_stub_threshold.to_string(),
             W::UploadPortReset => self.cfg_warn_upload_port.to_string(),
             W::DcPortReset => self.cfg_warn_dc_port.to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{get_messages, Language};
+    use dpi_core::config::ConfigWarning;
+
+    /// The skipped-rows notice must name the key in every language, and must not
+    /// be the scalar wording: "using default" is false when 119 of 120 rows
+    /// survived, and an operator reading it stops looking for the row that never
+    /// ran. A language whose text lost its `{}` prints the key nowhere.
+    #[test]
+    fn skipped_rows_notice_names_the_key_in_every_language() {
+        let key = "DNS_UDP_SERVERS";
+        for lang in Language::ALL {
+            let msg = get_messages(lang);
+            let text = msg.config_warning(&ConfigWarning::SkippedRows { key: key.to_string() });
+            assert!(text.contains(key), "{} does not name the key: {text}", lang.label());
+            assert_ne!(
+                text,
+                msg.config_warning(&ConfigWarning::InvalidValue { key: key.to_string() }),
+                "{} reuses the scalar wording",
+                lang.label()
+            );
         }
     }
 }

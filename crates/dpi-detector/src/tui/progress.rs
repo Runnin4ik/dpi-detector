@@ -78,7 +78,7 @@ impl Refresher {
 /// Live one-line progress on stderr, redrawn in place while a phase runs.
 /// Draws only when stderr is a TTY; silent otherwise so pipes and the report
 /// file stay byte-clean.
-pub struct LiveProgress {
+pub(crate) struct LiveProgress {
     state: Mutex<ProgressState>,
     /// Weak self-reference for the refresher thread (never a cycle).
     me: Mutex<Weak<LiveProgress>>,
@@ -87,7 +87,7 @@ pub struct LiveProgress {
 }
 
 impl LiveProgress {
-    pub fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         let live = Arc::new(Self {
             state: Mutex::new(ProgressState {
                 desc: String::new(),
@@ -106,7 +106,7 @@ impl LiveProgress {
     }
 
     /// Starts a single-counter phase: resets the counter and its clock.
-    pub fn set(&self, desc: String, total: usize) {
+    pub(crate) fn set(&self, desc: String, total: usize) {
         self.start(desc, vec![BlockState { token: "", done: 0, total }]);
     }
 
@@ -114,7 +114,7 @@ impl LiveProgress {
     /// TLS 1.3 → TLS 1.2 → HTTP): every stage keeps its own counter, the
     /// counters already finished stay on screen and the clock spans the whole
     /// run instead of restarting at each stage.
-    pub fn begin_stages(&self, desc: String, stages: &[(ProgressBlock, usize)]) {
+    pub(crate) fn begin_stages(&self, desc: String, stages: &[(ProgressBlock, usize)]) {
         self.start(
             desc,
             stages
@@ -126,7 +126,7 @@ impl LiveProgress {
 
     /// Corrects the total of a stage that is already on the line, for when its
     /// phase reports the count it actually iterates.
-    pub fn set_total(&self, block: ProgressBlock, total: usize) {
+    pub(crate) fn set_total(&self, block: ProgressBlock, total: usize) {
         let changed = match self.state.lock() {
             Ok(mut st) => match st.blocks.iter_mut().find(|b| b.token == block.token()) {
                 Some(b) if b.total != total => {
@@ -143,7 +143,7 @@ impl LiveProgress {
     }
 
     /// Starts a phase whose blocks run concurrently and are all reported.
-    pub fn set_blocks(&self, desc: String, blocks: &[(ProgressBlock, usize)]) {
+    pub(crate) fn set_blocks(&self, desc: String, blocks: &[(ProgressBlock, usize)]) {
         self.start(
             desc,
             blocks
@@ -164,14 +164,14 @@ impl LiveProgress {
     }
 
     /// Advances the single counter of the current phase.
-    pub fn tick(&self) {
+    pub(crate) fn tick(&self) {
         if self.bump_first() {
             self.draw();
         }
     }
 
     /// Advances the counter of `block` in a multi-block phase.
-    pub fn bump(&self, block: ProgressBlock) {
+    pub(crate) fn bump(&self, block: ProgressBlock) {
         let advanced = match self.state.lock() {
             Ok(mut st) => match st.blocks.iter_mut().find(|b| b.token == block.token()) {
                 Some(b) => {
@@ -201,7 +201,7 @@ impl LiveProgress {
     }
 
     /// Clears the line and stops redrawing (transient: nothing remains).
-    pub fn finish(&self) {
+    pub(crate) fn finish(&self) {
         self.stop_refresher();
         if !self.tty {
             return;
@@ -274,14 +274,14 @@ impl LiveProgress {
 
 /// Indeterminate spinner for phases without a total: frames `- \ | /`,
 /// redrawn on stderr every 120 ms.
-pub struct Spinner {
+pub(crate) struct Spinner {
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
     tty: bool,
 }
 
 impl Spinner {
-    pub fn start(desc: &str) -> Self {
+    pub(crate) fn start(desc: &str) -> Self {
         let tty = std::io::stderr().is_terminal();
         let stop = Arc::new(AtomicBool::new(false));
         let handle = if tty {
@@ -303,7 +303,7 @@ impl Spinner {
         Self { stop, handle, tty }
     }
 
-    pub fn finish(mut self) {
+    pub(crate) fn finish(mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(h) = self.handle.take() {
             let _ = h.join();

@@ -1,8 +1,8 @@
 //! Terminal layer: escape and console plumbing, the widgets and width math the
 //! screens draw with, and the live progress line.
 
-pub mod backend;
-pub mod input;
-pub mod progress;
-pub mod screens;
-pub mod widgets;
+pub(crate) mod backend;
+pub(crate) mod input;
+pub(crate) mod progress;
+pub(crate) mod screens;
+pub(crate) mod widgets;

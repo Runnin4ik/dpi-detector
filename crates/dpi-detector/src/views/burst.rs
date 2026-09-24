@@ -20,7 +20,7 @@ use crate::tui::widgets::{cell_color, status_color, table_preset};
 /// (rule 4: Latin, never translated), and the detail cell groups the failures
 /// that shape saw across every host by status, commonest first — the loudest one
 /// leads and gives the cell its colour.
-pub fn render_burst_table(reports: &[BurstReport], settings: &BurstSettings, msg: &Messages) -> String {
+pub(crate) fn render_burst_table(reports: &[BurstReport], settings: &BurstSettings, msg: &Messages) -> String {
     let profiles: &[TlsFingerprint] = &settings.profiles;
     let mut table = Table::new();
     let mut header = vec![Cell::new(format_bidi(msg.burst_field_profiles, msg.lang))];

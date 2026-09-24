@@ -5,7 +5,7 @@ use dpi_core::probe::whitelist::{AsVerdict, NO_SNI_TAG, WhitelistReport};
 
 use crate::tui::widgets::{asc, warn_mark};
 
-pub fn render_whitelist(report: &WhitelistReport, targets_total: usize, msg: &Messages) -> String {
+pub(crate) fn render_whitelist(report: &WhitelistReport, targets_total: usize, msg: &Messages) -> String {
     let mut out = String::new();
     if targets_total == 0 {
         out.push_str(msg.no_port_443_targets);

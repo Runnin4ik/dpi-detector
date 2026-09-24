@@ -8,15 +8,16 @@
 use std::collections::BTreeMap;
 
 use dpi_core::classify::Detail;
+use dpi_core::probe::telegram::TransferStatus;
 use serde::Serialize;
 
 use crate::render::TcpRow;
 
 /// Wire version of the payload; bump it when a key changes meaning.
-pub const SCHEMA_VERSION: u32 = 1;
+pub(crate) const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Serialize)]
-pub struct Report {
+pub(crate) struct Report {
     pub schema_version: u32,
     pub version: &'static str,
     pub profile: &'static str,
@@ -27,7 +28,7 @@ pub struct Report {
 /// One field per test, filled only when that test ran. The field order is the
 /// order the tests appear in the menu.
 #[derive(Serialize, Default)]
-pub struct Results {
+pub(crate) struct Results {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network_info: Option<NetworkInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,13 +46,13 @@ pub struct Results {
 }
 
 #[derive(Serialize)]
-pub struct Endpoint {
+pub(crate) struct Endpoint {
     pub ip: String,
     pub latency_ms: u64,
 }
 
 #[derive(Serialize)]
-pub struct NetworkInfo {
+pub(crate) struct NetworkInfo {
     pub ipv4: Option<Endpoint>,
     pub ipv6: Option<Endpoint>,
     pub v4_asn: Option<String>,
@@ -65,7 +66,7 @@ pub struct NetworkInfo {
 }
 
 #[derive(Serialize)]
-pub struct DnsAvailability {
+pub(crate) struct DnsAvailability {
     pub doh_ok: usize,
     pub doh_total: usize,
     pub dot_ok: usize,
@@ -89,7 +90,7 @@ pub struct DnsAvailability {
 
 /// One endpoint of test 1 that was not clean.
 #[derive(Serialize)]
-pub struct DnsEndpointFailure {
+pub(crate) struct DnsEndpointFailure {
     /// Provider as configured (`Google`, `AdGuard (F)`, …).
     pub provider: String,
     /// `ProbeKind::as_str()`: `udp`, `doh_wire` or `dot`.
@@ -112,7 +113,7 @@ pub struct DnsEndpointFailure {
 }
 
 #[derive(Serialize)]
-pub struct DomainRow {
+pub(crate) struct DomainRow {
     pub domain: String,
     pub resolved: Option<String>,
     pub http: &'static str,
@@ -124,14 +125,14 @@ pub struct DomainRow {
 }
 
 #[derive(Serialize)]
-pub struct WhitelistSni {
+pub(crate) struct WhitelistSni {
     pub detected_as: usize,
     pub found_as: usize,
 }
 
 #[derive(Serialize)]
-pub struct Transfer {
-    pub status: String,
+pub(crate) struct Transfer {
+    pub status: TransferStatus,
     pub avg_bps: f64,
     pub peak_bps: f64,
     pub bytes: u64,
@@ -139,7 +140,7 @@ pub struct Transfer {
 }
 
 #[derive(Serialize)]
-pub struct Telegram {
+pub(crate) struct Telegram {
     pub verdict: String,
     pub download: Transfer,
     pub upload: Transfer,
@@ -148,7 +149,7 @@ pub struct Telegram {
 }
 
 #[derive(Serialize)]
-pub struct BurstProfile {
+pub(crate) struct BurstProfile {
     pub answered: usize,
     pub attempts: usize,
     pub statuses: Vec<&'static str>,
@@ -157,7 +158,7 @@ pub struct BurstProfile {
 }
 
 #[derive(Serialize)]
-pub struct BurstDomain {
+pub(crate) struct BurstDomain {
     pub domain: String,
     pub resolved: Option<String>,
     /// Keyed by the fingerprint code, so the shape is readable on its own.
@@ -165,7 +166,7 @@ pub struct BurstDomain {
 }
 
 #[derive(Serialize)]
-pub struct FingerprintBurst {
+pub(crate) struct FingerprintBurst {
     pub attempts: usize,
     pub tls: String,
     pub alpn: String,

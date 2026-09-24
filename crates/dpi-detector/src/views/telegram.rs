@@ -2,11 +2,11 @@
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use crate::i18n::{Messages, detail_text, fmt_size, fmt_speed, format_bidi};
-use dpi_core::probe::telegram::TelegramFullReport;
+use dpi_core::probe::telegram::{TelegramFullReport, TransferStatus};
 
 use crate::tui::widgets::{cell_color, table_preset};
 
-pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
+pub(crate) fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
     
     let mut out = String::new();
     out.push_str(&format!("\n{}\n", msg.telegram_check_title));
@@ -48,12 +48,14 @@ pub fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
 
     // Download / upload verdict lines: label, status, peak, average, size, duration.
     for (label, t) in [(msg.download_label, &report.download), (msg.upload_label, &report.upload)] {
-        let (st_text, color) = match t.status.as_str() {
-            "ok" => ("OK", Color::Green),
-            "stalled" => ("STALL", Color::Yellow),
-            "slow" => ("SLOW", Color::Yellow),
-            "blocked" => ("BLOCKED", Color::Red),
-            _ => ("ERROR", Color::Red),
+        // Every state is named: the wildcard this replaced rendered any state it
+        // did not know as `ERROR` in red.
+        let (st_text, color) = match t.status {
+            TransferStatus::Ok => ("OK", Color::Green),
+            TransferStatus::Stalled => ("STALL", Color::Yellow),
+            TransferStatus::Slow => ("SLOW", Color::Yellow),
+            TransferStatus::Blocked => ("BLOCKED", Color::Red),
+            TransferStatus::Error => ("ERROR", Color::Red),
         };
         let mut line = format!(
             "  {}: {}  {} {}  {} {}  ({} / {:.0}s",

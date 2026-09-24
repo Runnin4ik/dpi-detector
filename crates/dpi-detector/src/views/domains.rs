@@ -7,7 +7,7 @@ use dpi_core::probe::domains::{DetailLine, DomainEntry};
 
 use crate::tui::widgets::{cell_color, status_color, table_preset};
 
-pub fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
+pub(crate) fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> String {
     let mut out = String::new();
     let mut table = Table::new();
     table
@@ -54,7 +54,7 @@ fn row_details(lines: &[DetailLine], lang: Language) -> String {
 }
 
 /// Post-table DNS resolve notes (stubs, fake-ip, DoH recommendation).
-pub fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) -> String {
+pub(crate) fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) -> String {
     use dpi_core::probe::domains::FakeIpType;
     let mut out = String::new();
 

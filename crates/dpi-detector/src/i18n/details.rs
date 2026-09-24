@@ -21,7 +21,7 @@ fn t4(lang: Language, ru: &str, en: &str, zh: &str, fa: &str) -> String {
 }
 
 /// Display text of one detail, in `lang`.
-pub fn detail_text(detail: &Detail, lang: Language) -> String {
+pub(crate) fn detail_text(detail: &Detail, lang: Language) -> String {
     let msg = get_messages(lang);
     match detail {
         Detail::None => String::new(),

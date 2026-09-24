@@ -12,37 +12,37 @@ static PLAIN_MODE: OnceLock<bool> = OnceLock::new();
 static HAS_VT: OnceLock<bool> = OnceLock::new();
 
 /// Enables ASCII-only output (font-safe glyphs, ASCII table borders).
-pub fn set_ascii_mode(v: bool) {
+pub(crate) fn set_ascii_mode(v: bool) {
     let _ = ASCII_MODE.set(v);
 }
 
 /// Whether ASCII-only output is on.
-pub fn ascii_mode() -> bool {
+pub(crate) fn ascii_mode() -> bool {
     *ASCII_MODE.get().unwrap_or(&false)
 }
 
 
 /// Enables plain (ANSI-free) output for terminals without color support.
-pub fn set_plain_mode(v: bool) {
+pub(crate) fn set_plain_mode(v: bool) {
     let _ = PLAIN_MODE.set(v);
 }
 
 /// Whether plain (ANSI-free) output is enabled.
-pub fn plain_mode() -> bool {
+pub(crate) fn plain_mode() -> bool {
     *PLAIN_MODE.get().unwrap_or(&false)
 }
 
 /// Sets whether the terminal supports native virtual terminal processing (VT100/ANSI).
-pub fn set_has_vt(v: bool) {
+pub(crate) fn set_has_vt(v: bool) {
     let _ = HAS_VT.set(v);
 }
 
 /// Whether native virtual terminal processing is supported.
-pub fn has_vt() -> bool {
+pub(crate) fn has_vt() -> bool {
     *HAS_VT.get().unwrap_or(&true)
 }
 /// Strips all ANSI SGR escape sequences (`\x1b[...m` and `\x1b[...K`) from a string.
-pub fn strip_ansi(s: &str) -> String {
+pub(crate) fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_escape = false;
     for c in s.chars() {
@@ -60,7 +60,7 @@ pub fn strip_ansi(s: &str) -> String {
 }
 
 /// Formats a string for terminal display, respecting plain and ASCII modes.
-pub fn clean_output(s: &str) -> String {
+pub(crate) fn clean_output(s: &str) -> String {
     if plain_mode() {
         strip_ansi(&asc(s))
     } else if ascii_mode() {
@@ -71,7 +71,7 @@ pub fn clean_output(s: &str) -> String {
 }
 /// Writes a string to stdout, transparently translating ANSI color codes to
 /// Win32 Console API calls (SetConsoleTextAttribute) on legacy consoles (Windows 7 / 8).
-pub fn output_str(s: &str) {
+pub(crate) fn output_str(s: &str) {
     #[cfg(windows)]
     {
         use std::io::IsTerminal;
@@ -86,7 +86,7 @@ pub fn output_str(s: &str) {
 }
 
 #[cfg(windows)]
-#[allow(clippy::upper_case_acronyms)]
+#[allow(clippy::upper_case_acronyms, reason = "the name is the Win32 COORD this struct is laid out against, not a Rust acronym")]
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct COORD { x: i16, y: i16 }
@@ -95,7 +95,7 @@ struct COORD { x: i16, y: i16 }
 #[derive(Clone, Copy, Default)]
 struct SMALL_RECT { left: i16, top: i16, right: i16, bottom: i16 }
 #[cfg(windows)]
-#[allow(clippy::upper_case_acronyms)]
+#[allow(clippy::upper_case_acronyms, reason = "the name is the Win32 CONSOLE_SCREEN_BUFFER_INFO this struct is laid out against")]
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct CONSOLE_SCREEN_BUFFER_INFO {
@@ -193,7 +193,7 @@ fn write_win32_ansi(s: &str) {
 /// Written straight to stdout rather than through `output_str`: the legacy
 /// translator below drops every escape that is not SGR, and on those consoles
 /// (Windows 7/8) the move is done through the console API instead.
-pub fn frame_home(drawn: u16) {
+pub(crate) fn frame_home(drawn: u16) {
     if drawn == 0 {
         return;
     }

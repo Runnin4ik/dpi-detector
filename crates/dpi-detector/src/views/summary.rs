@@ -2,7 +2,7 @@
 
 use crate::i18n::{Messages, fmt_size, fmt_speed};
 use dpi_core::probe::domains::DomainStats;
-use dpi_core::probe::telegram::TelegramFullReport;
+use dpi_core::probe::telegram::{TelegramFullReport, TransferStatus};
 
 use crate::tui::widgets::{BOX_WIDTH, asc, panel_to_string, strip_ansi_len, wrap_ansi};
 
@@ -16,7 +16,7 @@ fn frac_sgr(ok: usize, total: usize) -> &'static str {
     }
 }
 
-pub struct SummaryData<'a> {
+pub(crate) struct SummaryData<'a> {
     pub run_dns: bool,
     pub dns: Option<&'a dpi_core::probe::dns_avail::DnsAvailStats>,
     pub domains: Option<&'a DomainStats>,
@@ -25,7 +25,7 @@ pub struct SummaryData<'a> {
     pub telegram: Option<&'a TelegramFullReport>,
 }
 
-pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
+pub(crate) fn render_summary(data: &SummaryData, msg: &Messages) -> String {
     let mut items: Vec<(String, String)> = Vec::new();
 
     if data.run_dns {
@@ -105,12 +105,14 @@ pub fn render_summary(data: &SummaryData, msg: &Messages) -> String {
         if let Some(t) = data.telegram {
             
             let tg_row = |label: &str, st: &dpi_core::probe::telegram::TransferStats, speed: f64, size: u64| {
-                let (raw, sgr) = match st.status.as_str() {
-                    "ok" => ("OK", "32"),
-                    "stalled" => ("STALL", "33"),
-                    "slow" => ("SLOW", "33"),
-                    "blocked" => ("BLOCKED", "31"),
-                    _ => ("ERROR", "31"),
+                // Every state is named: the wildcard this replaced rendered any
+                // state it did not know as `ERROR` in red.
+                let (raw, sgr) = match st.status {
+                    TransferStatus::Ok => ("OK", "32"),
+                    TransferStatus::Stalled => ("STALL", "33"),
+                    TransferStatus::Slow => ("SLOW", "33"),
+                    TransferStatus::Blocked => ("BLOCKED", "31"),
+                    TransferStatus::Error => ("ERROR", "31"),
                 };
                 let mut metrics = format!("{} {}, {}", msg.avg_label, fmt_speed(speed, msg.lang), fmt_size(size, msg.lang));
                 if let Some(sec) = st.drop_at_sec {

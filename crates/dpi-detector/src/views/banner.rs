@@ -19,7 +19,7 @@ use crate::tui::widgets::{asc, panel_with, BOX_WIDTH};
 /// The bullet, the indent and the restart command are added here rather than
 /// stored per language: they are layout and one path, and they must read the
 /// same in all four.
-pub fn render_intercept_notice(msg: &Messages, found: Option<&Intercept>) -> Option<String> {
+pub(crate) fn render_intercept_notice(msg: &Messages, found: Option<&Intercept>) -> Option<String> {
     let found = found?;
     if found.problems.is_empty() && found.unchecked.is_empty() {
         return None;
@@ -121,7 +121,7 @@ fn unchecked_text(msg: &Messages, unchecked: Unchecked) -> String {
     }
 }
 
-pub fn render_banner(msg: &Messages, _profile: RegionProfile, badge: &str) -> String {
+pub(crate) fn render_banner(msg: &Messages, _profile: RegionProfile, badge: &str) -> String {
     let badge_colored = if badge.starts_with("✓") {
         format!("\x1b[38;2;90;247;142m{}\x1b[0m", badge)
     } else if badge.starts_with("↑") {
@@ -147,7 +147,7 @@ pub fn render_banner(msg: &Messages, _profile: RegionProfile, badge: &str) -> St
 /// and, for every non-default profile, the translated caveat on a second line.
 /// The `[!]` prefix and colors are added here, never stored in i18n; the
 /// profile list itself is generated into `--legend` from the profile table.
-pub fn render_fingerprint_header(fp: TlsFingerprint, msg: &Messages) -> String {
+pub(crate) fn render_fingerprint_header(fp: TlsFingerprint, msg: &Messages) -> String {
     let head = format!("{}: {}", msg.fingerprint_label, fingerprint_label(fp, msg.lang));
     if fp != TlsFingerprint::Rustls {
         let note = format!("\x1b[33m[!]\x1b[0m \x1b[2m{}\x1b[0m", msg.fingerprint_note);

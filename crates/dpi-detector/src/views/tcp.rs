@@ -7,7 +7,7 @@ use crate::i18n::{Messages, detail_text, format_bidi};
 use crate::tui::widgets::{cell_color, status_color, table_preset};
 
 #[derive(Clone, serde::Serialize)]
-pub struct TcpRow {
+pub(crate) struct TcpRow {
     pub id: String,
     pub asn: String,
     pub provider: String,
@@ -20,7 +20,7 @@ fn provider_group(provider: &str) -> String {
     clean.split_whitespace().next().unwrap_or(&clean).to_string()
 }
 
-pub fn render_tcp_table(rows: &[TcpRow], msg: &Messages) -> String {
+pub(crate) fn render_tcp_table(rows: &[TcpRow], msg: &Messages) -> String {
     let mut out = String::new();
     // Sort: provider group frequency desc, then group name, then id number.
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();

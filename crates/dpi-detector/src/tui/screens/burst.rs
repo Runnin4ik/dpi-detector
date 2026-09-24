@@ -23,7 +23,7 @@ use crate::tui::screens::main::pad_width;
 
 /// What the settings screen hands back to the runner.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BurstChoice {
+pub(crate) struct BurstChoice {
     pub settings: BurstSettings,
     /// `None` = the configured domain list (the same set test 2 uses).
     pub domain: Option<String>,
@@ -81,7 +81,7 @@ fn tail_of(text: &str, width: usize) -> String {
 /// `domain_count` is the size of the *configured* list — what an empty box means
 /// — not the size of the current selection, and `current_domain` is the host the
 /// caller probed last, drawn in the box.
-pub async fn burst_settings_menu(
+pub(crate) async fn burst_settings_menu(
     lang: Language,
     initial: &BurstSettings,
     domain_count: usize,
@@ -262,7 +262,16 @@ async fn burst_settings_loop(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Draws the settings screen from the editor's state. The arguments are
+/// positional and six of them are plain integers, so their order is the only
+/// thing keeping them apart: `cursor` (row) first, then `attempts` (requests per
+/// host), then the `u64`s `timeout_secs`/`gap_ms`, then `profile_index`
+/// (position in the fingerprint cycler) before `domain_count` (targets in the
+/// list). A swap compiles and moves the marker to a different row than the value
+/// it edits, which no test can catch — the call site passes the loop's locals in
+/// exactly this order, and `burst_settings_rows` takes the same one minus the
+/// two frame counters.
+#[allow(clippy::too_many_arguments, reason = "the editor's state is the input loop's locals, passed in the documented order")]
 fn draw_burst_settings(
     msg: &Messages,
     lang: Language,
@@ -290,8 +299,9 @@ fn draw_burst_settings(
 
 /// Builds the settings screen's rows, borders and footer included. Pure, so the
 /// layout (a row never wider than the box, the prompt under the input box) is
-/// testable without a terminal.
-#[allow(clippy::too_many_arguments)]
+/// testable without a terminal. Takes the same positional order as
+/// `draw_burst_settings` (see there), minus `prev_max`/`drawn`.
+#[allow(clippy::too_many_arguments, reason = "same positional editor state as draw_burst_settings, minus the two frame counters")]
 fn burst_settings_rows(
     msg: &Messages,
     lang: Language,

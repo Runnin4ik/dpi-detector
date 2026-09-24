@@ -7,7 +7,7 @@ use crate::i18n::{get_messages, Language, Messages};
 /// string lives in the i18n layer and must follow the language the user asked
 /// for on the very same command line.
 #[derive(Debug, Default)]
-pub struct CliArgs {
+pub(crate) struct CliArgs {
     pub tests: Option<String>,
     pub json: bool,
     pub verbose: bool,
@@ -47,7 +47,7 @@ pub struct CliArgs {
 
 /// Builds the CLI definition with `msg`'s language: `about`, per-argument help
 /// and value names all come from [`Messages`].
-pub fn command(msg: &Messages) -> Command {
+pub(crate) fn command(msg: &Messages) -> Command {
     Command::new("dpi-detector")
         .about(msg.cli_about)
         .version(env!("CARGO_PKG_VERSION"))
@@ -246,7 +246,7 @@ pub fn command(msg: &Messages) -> Command {
 }
 
 /// Parses the process arguments, printing help/errors in `lang`.
-pub fn parse_cli(lang: Language) -> CliArgs {
+pub(crate) fn parse_cli(lang: Language) -> CliArgs {
     let msg = get_messages(lang);
     let m = command(&msg).get_matches();
     CliArgs {

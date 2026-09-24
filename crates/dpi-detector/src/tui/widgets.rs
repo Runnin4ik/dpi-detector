@@ -12,7 +12,7 @@ use crate::tui::backend::{ascii_mode, plain_mode};
 ///
 /// Every box in the TUI takes its border from here, so `--ascii` can never be
 /// honoured by half the screens.
-pub fn box_chars() -> (
+pub(crate) fn box_chars() -> (
     &'static str,
     &'static str,
     &'static str,
@@ -28,7 +28,7 @@ pub fn box_chars() -> (
 }
 /// Replaces font-risky glyphs when ASCII mode is on; passthrough otherwise.
 /// Apply to content BEFORE width measurement (`[OK]`/`->` widen the text).
-pub fn asc_with(s: &str, ascii: bool) -> String {
+pub(crate) fn asc_with(s: &str, ascii: bool) -> String {
     if !ascii {
         return s.to_string();
     }
@@ -70,14 +70,14 @@ pub fn asc_with(s: &str, ascii: bool) -> String {
 }
 
 /// Glyph-safe string for the current output mode.
-pub fn asc(s: &str) -> String {
+pub(crate) fn asc(s: &str) -> String {
     asc_with(s, ascii_mode())
 }
 
 /// Single-line box drawing table preset fully compatible with hardware CP866:
 /// uses `│` (0xB3) instead of `┆` (U+2506) for column borders, eliminating
 /// `?` character corruption on Windows legacy consoles and raster fonts.
-pub const CP866_TABLE_PRESET: &str = "││──╞═╪╡│    ┬┴┌┐└┘";
+pub(crate) const CP866_TABLE_PRESET: &str = "││──╞═╪╡│    ┬┴┌┐└┘";
 
 pub(crate) fn table_preset() -> &'static str {
     CP866_TABLE_PRESET
@@ -87,7 +87,7 @@ pub(crate) fn table_preset() -> &'static str {
 /// Using inline ANSI escapes inside comfy-table cells instead of `Cell.fg(...)`
 /// avoids a crossterm bug on Windows without VT (Windows 7), where crossterm's
 /// `StyledContent` drops all text on non-VT consoles during string formatting.
-pub fn cell_color(text: &str, color: Color) -> String {
+pub(crate) fn cell_color(text: &str, color: Color) -> String {
     let sgr = match color {
         Color::Reset => "\x1b[0m",
         Color::Black => "\x1b[30m",
@@ -136,22 +136,54 @@ pub(crate) fn warn_mark() -> &'static str {
         "⚠"
     }
 }
-pub const BOX_WIDTH: usize = 71;
+pub(crate) const BOX_WIDTH: usize = 71;
 
 /// Maps a probe status to its table cell color: green for OK, yellow for the
 /// "no TLS 1.3 / no CA / local IP / DNS fail / NXDOMAIN" outcomes, dark grey
 /// for Err, and red for the rest.
-pub fn status_color(s: DpiStatus) -> Color {
+///
+/// Every variant is named rather than caught by a `_` arm. This is the only
+/// place a verdict's colour is decided, so the wildcard let a newly added
+/// `DpiStatus` render as red (= blocked) in every screen and in `--legend`
+/// without a single compile error. A new variant now fails to build here, which
+/// is the second net `DpiStatus::ALL` cannot give (a variant missing from that
+/// list is simply never checked).
+pub(crate) fn status_color(s: DpiStatus) -> Color {
     match s {
         DpiStatus::Ok => Color::Green,
         DpiStatus::NoTls13 | DpiStatus::NoCa => Color::Yellow,
         DpiStatus::LocalIp | DpiStatus::DnsFail | DpiStatus::NxDomain => Color::Yellow,
         DpiStatus::Err => Color::DarkGrey,
-        _ => Color::Red,
+        DpiStatus::RedirSuspect
+        | DpiStatus::Blocked
+        | DpiStatus::IspPage
+        | DpiStatus::Timeout
+        | DpiStatus::SendTimeout
+        | DpiStatus::ReadTimeout
+        | DpiStatus::PoolTimeout
+        | DpiStatus::Tcp16Detected
+        | DpiStatus::TcpRst
+        | DpiStatus::TcpAbort
+        | DpiStatus::TlsRst
+        | DpiStatus::TlsAbort
+        | DpiStatus::TlsDropped
+        | DpiStatus::TlsAlert
+        | DpiStatus::TlsBlock
+        | DpiStatus::TlsErr
+        | DpiStatus::TlsSpoof
+        | DpiStatus::TlsEof
+        | DpiStatus::Tcp16Range
+        | DpiStatus::SynDropped
+        | DpiStatus::Refused
+        | DpiStatus::NetUnreach
+        | DpiStatus::HostUnreach
+        | DpiStatus::OsErr
+        | DpiStatus::DnsFake
+        | DpiStatus::Unknown => Color::Red,
     }
 }
 
-pub fn strip_ansi_len(s: &str) -> usize {
+pub(crate) fn strip_ansi_len(s: &str) -> usize {
     let mut count = 0;
     let mut in_escape = false;
     for c in s.chars() {
@@ -296,7 +328,7 @@ fn erase_below() -> &'static str {
 /// escapes.
 ///
 /// `prev_max` is the widest row of the previous frame, updated in place.
-pub fn frame_repaint(rows: &[String], prev_max: &mut usize) -> String {
+pub(crate) fn frame_repaint(rows: &[String], prev_max: &mut usize) -> String {
     let widths: Vec<usize> = rows.iter().map(|r| strip_ansi_len(r)).collect();
     let widest = widths.iter().copied().max().unwrap_or(0);
     let target = widest.max(*prev_max);
@@ -312,13 +344,13 @@ pub fn frame_repaint(rows: &[String], prev_max: &mut usize) -> String {
     out
 }
 
-pub fn panel_to_string(title: &str, lines: &[String]) -> String {
+pub(crate) fn panel_to_string(title: &str, lines: &[String]) -> String {
     panel_with(title, lines, BOX_WIDTH, false, "1;36")
 }
 
 /// Panel with explicit width, title alignment and border SGR code.
 /// Banner titles are left-aligned cyan; the netinfo panel's is centered and dim.
-pub fn panel_with(title: &str, lines: &[String], width: usize, centered: bool, border: &str) -> String {
+pub(crate) fn panel_with(title: &str, lines: &[String], width: usize, centered: bool, border: &str) -> String {
     // Glyph-safe content first: widths are measured after replacement.
     let title_bidi = crate::i18n::format_bidi_str(title);
     let title_clean = format!(" {} ", asc(&title_bidi));

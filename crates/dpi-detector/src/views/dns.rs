@@ -11,7 +11,7 @@ use std::net::IpAddr;
 
 use crate::tui::widgets::{asc, cell_color, join_cell_colored, table_preset, warn_mark};
 
-pub fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> String {
+pub(crate) fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "\n{}  DoH: {} | DoT: {} | UDP: {} | {}: {} | {}: {} | {}: {}s\n\n",
@@ -97,7 +97,7 @@ fn fail_color(token: &str) -> Color {
 }
 
 #[derive(Debug, Clone)]
-pub struct PartialDnsEndpoint {
+pub(crate) struct PartialDnsEndpoint {
     pub provider: String,
     pub protocol: &'static str,
     pub endpoint: String,
@@ -108,7 +108,7 @@ pub struct PartialDnsEndpoint {
 
 /// One latency line per endpoint: per-domain minimum in green (or yellow on partial
 /// packet loss), per-addr fail label. Partial endpoints are recorded for post-table listing.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "the report, the endpoint's identity and the caller's partial-endpoint sink; grouping them would not shorten the call")]
 fn dns_latency_lines(
     report: &DnsAvailReport,
     kind: ProbeKind,
@@ -171,7 +171,7 @@ fn dns_latency_lines(
 }
 
 
-pub fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &Messages) -> String {
+pub(crate) fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &Messages) -> String {
     let mut out = String::new();
     let has_dot = !report.dot_servers.is_empty();
 

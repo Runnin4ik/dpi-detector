@@ -10,13 +10,13 @@ use crate::tui::widgets::{BOX_WIDTH, geo_country_ascii, panel_with, strip_ansi_l
 
 /// TTLB cell: the probe timed out, or a measured round-trip in milliseconds.
 #[derive(Debug, Clone)]
-pub enum NetTtlb {
+pub(crate) enum NetTtlb {
     Timeout,
     Ms(u64),
 }
 /// Per-family network fact: address, TTLB, subnet, org, ASN and country code.
 #[derive(Debug, Clone)]
-pub struct NetFamilyInfo {
+pub(crate) struct NetFamilyInfo {
     pub ip: String,
     pub ttlb: NetTtlb,
     pub subnet: String,
@@ -25,7 +25,7 @@ pub struct NetFamilyInfo {
     pub cc: String,
 }
 
-pub struct NetInfoData {
+pub(crate) struct NetInfoData {
     pub v4: Option<NetFamilyInfo>,
     pub v6: Option<NetFamilyInfo>,
     /// Legacy empty-dict branch: placeholder rows.
@@ -116,7 +116,7 @@ fn dns_block_lines(label: &str, ips: &[String], tail: &str) -> Vec<String> {
     out
 }
 
-pub fn render_netinfo_panel(
+pub(crate) fn render_netinfo_panel(
     data: &NetInfoData,
     dns_info: &SystemDnsInfo,
     bypass_tools: &[String],
@@ -382,46 +382,73 @@ mod tests {
         (data, dns, Vec::new())
     }
 
+    /// The panel is the product surface, so its vocabulary is pinned: every label
+    /// in the active language, next to the value it belongs to. What is NOT pinned
+    /// is the exact escape bytes or the width of the gap between the columns —
+    /// those fail on a harmless layout tweak and are not what a reader sees.
     #[test]
     fn netinfo_panel_matches_expected_rows() {
         use crate::i18n::get_messages;
         use crate::i18n::Language;
+        use crate::render::strip_ansi;
         let (data, dns, bypass) = netinfo_fixture();
         let out = render_netinfo_panel(&data, &dns, &bypass, &get_messages(Language::Ru));
-        assert!(out.contains("IPv4: \x1b[36m203.0.113.7\x1b[0m  Subnet: \x1b[36m203.0.113.0/24\x1b[0m  TTLB: \x1b[2m701 мс\x1b[0m"));
-        assert!(out.contains("IPv6: \x1b[2mнедоступен\x1b[0m"));
-        assert!(out.contains("Org: \x1b[36mEXAMPLE-AS (AS65001)\x1b[0m"));
-        assert!(out.contains("ОС: \x1b[36mWindows 11 (26200)\x1b[0m"));
-        assert!(out.contains("Системный DNS: \x1b[36m192.0.2.1\x1b[0m (DHCP)"));
-        assert!(out.contains("Активный интерфейс: \x1b[36m192.0.2.10\x1b[0m (Ethernet)"));
-        assert!(out.contains("Неактивные DNS: \x1b[36m198.51.100.2\x1b[0m (Wi-Fi)"));
-        assert!(out.contains("Резолвер роутера: \x1b[36m203.0.113.1 (EXAMPLE UP)\x1b[0m"));
-        assert!(out.contains("Локальный обход DPI на устройстве: \x1b[2mне обнаружен\x1b[0m"));
+        let text = strip_ansi(&out);
+        for row in [
+            "IPv4: 203.0.113.7",
+            "Subnet: 203.0.113.0/24",
+            "TTLB: 701 мс",
+            "IPv6: недоступен",
+            "Org: EXAMPLE-AS (AS65001)",
+            "ОС: Windows 11 (26200)",
+            "Системный DNS: 192.0.2.1 (DHCP)",
+            "Активный интерфейс: 192.0.2.10 (Ethernet)",
+            "Неактивные DNS: 198.51.100.2 (Wi-Fi)",
+            "Резолвер роутера: 203.0.113.1 (EXAMPLE UP)",
+            "Локальный обход DPI на устройстве: не обнаружен",
+        ] {
+            assert!(text.contains(row), "{row} missing from the panel: {text}");
+        }
+        // The colour role, separately: a measured value is cyan, a value that is
+        // simply not there is dim. Both are language-independent.
+        assert!(out.contains("\x1b[36m203.0.113.7\x1b[0m"), "IPv4 value is cyan");
+        assert!(out.contains("\x1b[2mнедоступен\x1b[0m"), "an unavailable value is dim");
     }
 
+    /// The same vocabulary contract in the other two languages. Only the words
+    /// are pinned, not the styling around them.
     #[test]
     fn netinfo_panel_renders_english_and_chinese() {
         use crate::i18n::get_messages;
         use crate::i18n::Language;
+        use crate::render::strip_ansi;
         let (data, dns, bypass) = netinfo_fixture();
 
-        let out_en = render_netinfo_panel(&data, &dns, &bypass, &get_messages(Language::En));
-        assert!(out_en.contains("IPv6: \x1b[2munavailable\x1b[0m"));
-        assert!(out_en.contains("OS: \x1b[36mWindows 11 (26200)\x1b[0m"));
-        assert!(out_en.contains("System DNS: \x1b[36m192.0.2.1\x1b[0m (DHCP)"));
-        assert!(out_en.contains("Active interface: \x1b[36m192.0.2.10\x1b[0m (Ethernet)"));
-        assert!(out_en.contains("Inactive DNS: \x1b[36m198.51.100.2\x1b[0m (Wi-Fi)"));
-        assert!(out_en.contains("Router resolver: \x1b[36m203.0.113.1 (EXAMPLE UP)\x1b[0m"));
-        assert!(out_en.contains("Local DPI bypass on device: \x1b[2mnot detected\x1b[0m"));
+        let out_en = strip_ansi(&render_netinfo_panel(&data, &dns, &bypass, &get_messages(Language::En)));
+        for row in [
+            "IPv6: unavailable",
+            "OS: Windows 11 (26200)",
+            "System DNS: 192.0.2.1 (DHCP)",
+            "Active interface: 192.0.2.10 (Ethernet)",
+            "Inactive DNS: 198.51.100.2 (Wi-Fi)",
+            "Router resolver: 203.0.113.1 (EXAMPLE UP)",
+            "Local DPI bypass on device: not detected",
+        ] {
+            assert!(out_en.contains(row), "{row} missing from the English panel: {out_en}");
+        }
 
-        let out_zh = render_netinfo_panel(&data, &dns, &bypass, &get_messages(Language::Zh));
-        assert!(out_zh.contains("IPv6: \x1b[2m不可用\x1b[0m"));
-        assert!(out_zh.contains("操作系统: \x1b[36mWindows 11 (26200)\x1b[0m"));
-        assert!(out_zh.contains("系统 DNS: \x1b[36m192.0.2.1\x1b[0m (DHCP)"));
-        assert!(out_zh.contains("活动接口: \x1b[36m192.0.2.10\x1b[0m (Ethernet)"));
-        assert!(out_zh.contains("非活动 DNS: \x1b[36m198.51.100.2\x1b[0m (Wi-Fi)"));
-        assert!(out_zh.contains("路由器解析器: \x1b[36m203.0.113.1 (EXAMPLE UP)\x1b[0m"));
-        assert!(out_zh.contains("设备本地 DPI 绕过: \x1b[2m未检测到\x1b[0m"));
+        let out_zh = strip_ansi(&render_netinfo_panel(&data, &dns, &bypass, &get_messages(Language::Zh)));
+        for row in [
+            "IPv6: 不可用",
+            "操作系统: Windows 11 (26200)",
+            "系统 DNS: 192.0.2.1 (DHCP)",
+            "活动接口: 192.0.2.10 (Ethernet)",
+            "非活动 DNS: 198.51.100.2 (Wi-Fi)",
+            "路由器解析器: 203.0.113.1 (EXAMPLE UP)",
+            "设备本地 DPI 绕过: 未检测到",
+        ] {
+            assert!(out_zh.contains(row), "{row} missing from the Chinese panel: {out_zh}");
+        }
     }
 
     #[test]

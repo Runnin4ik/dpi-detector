@@ -2,7 +2,7 @@
 //! resolves a key through, so the same key works on every layout.
 
 
-pub fn normalize_key_char(c: char) -> char {
+pub(crate) fn normalize_key_char(c: char) -> char {
     // Fullwidth ASCII (Chinese, Japanese, Korean IME 全角: ｑ -> q, １ -> 1, etc.)
     if ('\u{FF01}'..='\u{FF5E}').contains(&c) {
         return char::from_u32(c as u32 - 0xFEE0).unwrap_or(c);
@@ -65,7 +65,7 @@ pub(crate) fn latin_key(c: char) -> char {
 
 /// The character as key handling sees it: IME width folded to ASCII first, then
 /// [`latin_key`].
-pub fn nav_key(c: char) -> char {
+pub(crate) fn nav_key(c: char) -> char {
     latin_key(normalize_key_char(c))
 }
 

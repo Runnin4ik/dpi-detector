@@ -1,12 +1,12 @@
 //! Human-readable report screens: one module per test, plus the banner and the
 //! summary panel.
 
-pub mod banner;
-pub mod burst;
-pub mod dns;
-pub mod domains;
-pub mod netinfo;
-pub mod summary;
-pub mod tcp;
-pub mod telegram;
-pub mod whitelist;
+pub(crate) mod banner;
+pub(crate) mod burst;
+pub(crate) mod dns;
+pub(crate) mod domains;
+pub(crate) mod netinfo;
+pub(crate) mod summary;
+pub(crate) mod tcp;
+pub(crate) mod telegram;
+pub(crate) mod whitelist;
