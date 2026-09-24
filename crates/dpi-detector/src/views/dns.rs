@@ -59,11 +59,9 @@ pub(crate) fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> S
         let mut order: Vec<String> = Vec::new();
         let mut by_name: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
         for (addr, name, port) in servers {
-            let default_port = match kind {
-                ProbeKind::DohWire => 443,
-                ProbeKind::Dot => 853,
-                ProbeKind::Udp => 53,
-            };
+            // The probe vocabulary owns the table; this view only decides how to
+            // print a port that is not the kind's default.
+            let default_port = kind.default_port();
             let disp = if *port != default_port {
                 format!("{}:{}", addr, port)
             } else {
@@ -400,6 +398,42 @@ pub(crate) fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The endpoint table prints a port only when it is not the kind's default,
+    /// and that default comes from the probe vocabulary — the same table the
+    /// loader fills an absent port from. A copy of the table living here again
+    /// would print `host:853` for every DoT endpoint the probes reach on 853, or
+    /// `host` for one dialled on 8853.
+    #[test]
+    fn endpoint_table_hides_only_the_kinds_own_default_port() {
+        let report = DnsAvailReport {
+            udp_servers: vec![
+                ("9.9.9.9".to_string(), "UDP default".to_string(), 53),
+                ("9.9.9.10".to_string(), "UDP custom".to_string(), 5353),
+            ],
+            doh_servers: vec![
+                ("https://dns.google/dns-query".to_string(), "DoH default".to_string(), 443),
+                ("https://doh.example/dns-query".to_string(), "DoH custom".to_string(), 8443),
+            ],
+            dot_servers: vec![
+                ("dns.google".to_string(), "DoT default".to_string(), 853),
+                ("doh.example".to_string(), "DoT custom".to_string(), 8853),
+            ],
+            ..Default::default()
+        };
+        let out = render_dns_endpoints(&report, &crate::i18n::get_messages(crate::i18n::Language::Ru));
+        for (bare, named) in [
+            ("9.9.9.9", "9.9.9.10:5353"),
+            ("https://dns.google/dns-query", "https://doh.example/dns-query:8443"),
+            ("dns.google", "doh.example:8853"),
+        ] {
+            assert!(out.contains(bare), "{bare} prints without its default port: {out}");
+            assert!(out.contains(named), "{named} keeps a port that is not the default: {out}");
+        }
+        for hidden in ["9.9.9.9:53", "https://dns.google/dns-query:443", "dns.google:853"] {
+            assert!(!out.contains(hidden), "{hidden} is this kind's default, so it is not printed: {out}");
+        }
+    }
+
     /// Regression: latency cells aggregated addr counts against domain counts
     /// ("40.0мс 1/5"). Cells must carry one line per endpoint, with
     /// the name column spanning ("Google", "Google #2").

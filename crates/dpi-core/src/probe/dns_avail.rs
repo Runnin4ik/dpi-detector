@@ -193,6 +193,18 @@ impl ProbeKind {
             ProbeKind::Dot => "dot",
         }
     }
+
+    /// The port this transport listens on, for a `DNS_AVAILABILITY_SERVERS` row
+    /// that names none. This is the table's only owner: the config vocabulary
+    /// and the endpoint tables in the report both read it from here, so a
+    /// transport cannot be loaded with one default and displayed against another.
+    pub fn default_port(self) -> u16 {
+        match self {
+            ProbeKind::Udp => 53,
+            ProbeKind::DohWire => 443,
+            ProbeKind::Dot => 853,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

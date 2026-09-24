@@ -4,6 +4,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
+use crate::probe::dns_avail::ProbeKind;
+
 fn d_max_concurrent() -> usize { 50 }
 fn d_ip_version() -> String { "ipv4".to_string() }
 fn d_tls_fingerprint() -> String { "rustls".to_string() }
@@ -255,15 +257,17 @@ impl DnsAvailServerKind {
         }
     }
 
-    /// The port a row of this kind uses when it names none. Exhaustive on
-    /// purpose: the `_ => 443` it replaces handed every unrecognized spelling a
-    /// DoH port.
+    /// The port a row of this kind uses when it names none. Delegates to the
+    /// measurement vocabulary's table, which owns it: `doh_json` and `doh_wire`
+    /// are two input spellings of the same wire probe, and that collapse is
+    /// exactly what the delegation below spells out.
     pub fn default_port(self) -> u16 {
-        match self {
-            Self::Udp => 53,
-            Self::DohJson | Self::DohWire => 443,
-            Self::Dot => 853,
-        }
+        let probe = match self {
+            Self::Udp => ProbeKind::Udp,
+            Self::DohJson | Self::DohWire => ProbeKind::DohWire,
+            Self::Dot => ProbeKind::Dot,
+        };
+        probe.default_port()
     }
 }
 
@@ -277,9 +281,9 @@ fn yaml_str(v: &serde_yaml::Value) -> Option<String> {
 }
 
 /// One `DNS_AVAILABILITY_SERVERS` row: `[addr, name, kind, port?]`. `None` for
-/// a short row, a non-string column or a kind outside the four the probes know.
-/// The loader runs this same predicate to warn about the rows it skips, so the
-/// two cannot drift apart.
+/// a short row, a non-string column, a kind outside the four the probes know, or
+/// a port column that cannot be dialled. The loader runs this same predicate to
+/// warn about the rows it skips, so the two cannot drift apart.
 fn parse_availability_row(row: &[serde_yaml::Value]) -> Option<DnsAvailServer> {
     let [addr_v, name_v, kind_v, rest @ ..] = row else {
         return None;
@@ -287,12 +291,19 @@ fn parse_availability_row(row: &[serde_yaml::Value]) -> Option<DnsAvailServer> {
     let addr = yaml_str(addr_v)?;
     let name = yaml_str(name_v)?;
     let kind = DnsAvailServerKind::parse(&yaml_str(kind_v)?)?;
-    // A port that does not parse is not fatal: the kind's default applies.
-    let port = rest
-        .first()
-        .and_then(yaml_str)
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or_else(|| kind.default_port());
+    // Only an *absent* port column may mean "the default for this kind": that is
+    // the shipped shape, 120 rows of it. A column that is present but says
+    // something undiallable — not a number, past `u16`, or an explicit 0 — is a
+    // different thing: the row would run against a port the operator never
+    // wrote, and a `0` probe can only time out. Such a row is skipped rather
+    // than quietly given the default, and the loader names the key.
+    let port = match rest.first() {
+        None => kind.default_port(),
+        Some(v) => match yaml_str(v).and_then(|s| s.parse::<u16>().ok()) {
+            Some(p) if p != 0 => p,
+            _ => return None,
+        },
+    };
     Some(DnsAvailServer { addr, name, kind, port })
 }
 
@@ -1199,6 +1210,15 @@ mod tests {
                 .map(|t| DnsAvailServerKind::parse(t).unwrap().default_port()),
             [53, 443, 443, 853]
         );
+        // One owner for the table — the probe vocabulary, through the wire probe
+        // each input spelling stands for. A second copy here would load a row on
+        // one port while the endpoint table printed it against another.
+        assert_eq!(
+            ["udp", "doh_json", "doh_wire", "dot"]
+                .map(|t| DnsAvailServerKind::parse(t).unwrap().default_port()),
+            [ProbeKind::Udp, ProbeKind::DohWire, ProbeKind::DohWire, ProbeKind::Dot]
+                .map(ProbeKind::default_port)
+        );
         // Case-insensitive, as the string membership test it replaces was.
         assert_eq!(DnsAvailServerKind::parse("DOT"), Some(DnsAvailServerKind::Dot));
         assert_eq!(DnsAvailServerKind::parse("DoH_Json"), Some(DnsAvailServerKind::DohJson));
@@ -1207,6 +1227,30 @@ mod tests {
         for token in ["udp", "doh_json", "doh_wire", "dot"] {
             assert_eq!(DnsAvailServerKind::parse(token).map(|k| k.as_str()), Some(token));
         }
+    }
+
+    /// A port column is not the same as no port column. Absent means "the
+    /// default for this kind" — the shape every shipped row has — while a column
+    /// that says something undiallable would run the probe somewhere the
+    /// operator never wrote: `0` can only time out, and a mistyped port must not
+    /// become 53, 443 or 853 behind the operator's back. Those rows are skipped
+    /// and the loader names the key.
+    #[test]
+    fn test_availability_port_column_must_be_diallable() {
+        let yaml = concat!(
+            "DNS_AVAILABILITY_SERVERS:\n",
+            "  - [\"8.8.8.8\", \"absent\", \"udp\"]\n",
+            "  - [\"8.8.8.8\", \"named\", \"udp\", 5353]\n",
+            "  - [\"8.8.8.8\", \"zero\", \"udp\", 0]\n",
+            "  - [\"8.8.8.8\", \"past-u16\", \"udp\", 65536]\n",
+            "  - [\"8.8.8.8\", \"words\", \"udp\", \"fifty-three\"]\n",
+        );
+        let cfg = AppConfig::from_yaml_str(yaml);
+        let servers = cfg.availability_servers();
+        assert_eq!(servers.len(), 2, "{servers:?}");
+        assert_eq!(servers[0].port, 53, "an absent port is still the kind's default");
+        assert_eq!(servers[1].port, 5353, "a diallable port is kept as written");
+        assert!(cfg.config_warnings.contains(&ConfigWarning::SkippedRows { key: "DNS_AVAILABILITY_SERVERS".to_string() }));
     }
 
     /// A value that cannot become an HTTP header, and a list row the parser
