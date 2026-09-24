@@ -4,9 +4,10 @@
 # "stable" meant on the day a runner picked it up.
 #
 # `profile` and `components` are exactly what CI needs: clippy is a required
-# check (AGENTS.md §4). rustfmt is deliberately not here — the sources are
-# formatted by hand (§3.7) — and rust-analyzer, rust-docs and the extra targets
-# are a contributor's own business (`rustup component add`).
+# check (AGENTS.md, "Testing & QA"). rustfmt is deliberately not here — the
+# sources are formatted by hand (AGENTS.md, "Development Commands") — and
+# rust-analyzer, rust-docs and the extra targets are a contributor's own
+# business (`rustup component add`).
 #
 # Three rows of the release matrix cannot use this pin and name their toolchain
 # on the command line instead: win7 and the two MIPS targets build std from

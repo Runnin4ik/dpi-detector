@@ -12,3 +12,20 @@ linker = "rust-lld"
 # artifact still starts (`--version` and `--legend` both exit 0 on the runner).
 [target.x86_64-win7-windows-msvc]
 linker = "rust-lld"
+
+# Rejected here, with the reason, so nobody re-tries them:
+#
+#   embed-metadata = false  Cargo 1.98.1 reports the key as unused — `cargo
+#                           metadata` prints "unused config key" on every
+#                           invocation, and it is part of the CI cache key, so a
+#                           stray key would bust the runners' caches for nothing.
+#                           The real lever is the nightly-only
+#                           `-Z no-embed-metadata` (cargo 1.98.1 lists it, but
+#                           stable rejects every `-Z` and neither installed
+#                           nightly knows the rustc option). Measured for scale:
+#                           a clean dev build is 1078 MiB, of which 434 MiB is
+#                           `.rlib` and 165 MiB `.rmeta` — the win would be a
+#                           fraction of that, and it cannot ship on the pinned
+#                           toolchain.
+#   sccache, mold           no benefit at one codegen unit with fat LTO, and
+#                           mold is ELF-only while these rows link with rust-lld.
