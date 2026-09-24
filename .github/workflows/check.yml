@@ -139,6 +139,15 @@ jobs:
       - name: Install through install.sh into a temp prefix
         run: |
           set -eu
+          # The cargo cache carries `target`, so a previous run's leftovers come
+          # back with it. With the binary already at `install-prefix-current` and
+          # its version equal to the one this step asks for, the installer
+          # reports "already installed — nothing to download", the download never
+          # happens, and the checksum check below has nothing to find: the step
+          # fails on a tree that is correct. It exercises a fresh install, so it
+          # starts from one whatever the cache restored.
+          rm -rf target/install-smoke target/install-prefix \
+                 target/install-prefix-stale target/install-prefix-current
           fixture=target/install-smoke/releases/latest/download
           mkdir -p "$fixture" target/install-prefix
           cp target/debug/dpi-detector "$fixture/dpi-detector-linux-x86_64"
@@ -282,6 +291,9 @@ jobs:
       - name: Install through install.sh under BusyBox
         run: |
           set -eu
+          # Same reason as the step above: `target` is cached, and a leftover
+          # fixture from a previous run would be served instead of this one's.
+          rm -rf target/install-busybox
           fixture=target/install-busybox/releases/latest/download
           mkdir -p "$fixture"
           printf '#!/bin/sh\necho "dpi-detector 5.0.0-alpha.19"\n' > "$fixture/dpi-detector-linux-x86_64"
@@ -430,6 +442,18 @@ jobs:
       - name: Install through install.ps1 into a temp prefix
         shell: pwsh
         run: |
+          # `target` is cached (see the Cache cargo step), so a prefix left by a
+          # previous run comes back with it. A leftover binary whose version
+          # matches the one asked for makes the installer answer "already
+          # installed": a download that never happens where this step expects
+          # one, and an exit 0 where the stale-source check below expects a
+          # refusal. The step installs from scratch, so it starts from scratch.
+          $junk = 'target/install-smoke', 'target/install-prefix',
+                  'target/install-prefix-x86', 'target/install-prefix-nomanifest',
+                  'target/install-prefix-stale'
+          foreach ($d in $junk) {
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $PWD $d)
+          }
           $fixture = Join-Path $PWD 'target/install-smoke/releases/latest/download'
           $prefix = Join-Path $PWD 'target/install-prefix'
           New-Item -ItemType Directory -Force -Path $fixture, $prefix | Out-Null
