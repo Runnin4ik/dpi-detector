@@ -16,6 +16,7 @@ use hyper::header::{HOST, USER_AGENT};
 use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
+use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
@@ -146,10 +147,53 @@ pub async fn run_telegram_test(timeout_dur: Duration) -> TelegramReport {
 
 // ─── Transfer stats and outcome classification ───────────────────────────────
 
+/// Outcome of one transfer leg — the five tokens `--json` carries.
+///
+/// The state used to be a `String` compared against literals at each site, so a
+/// typo or a sixth state read as a silent `false` everywhere: a stalled leg
+/// counted as a clean one and the raw string reached the payload unvalidated.
+/// The spellings are unchanged — `as_str()` is the frozen `--json`/TUI token and
+/// serde writes the same one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferStatus {
+    Ok,
+    Slow,
+    Stalled,
+    Blocked,
+    /// The leg never ran — an unparsable URL or upload address, or a request
+    /// that could not be built. Says nothing about the network.
+    #[default]
+    Error,
+}
+
+impl TransferStatus {
+    /// The wire token, carried by `--json` and printed by the TUI.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Slow => "slow",
+            Self::Stalled => "stalled",
+            Self::Blocked => "blocked",
+            Self::Error => "error",
+        }
+    }
+
+    /// True only for a transfer that stopped short of its expected size with the
+    /// data gone quiet. It is the one state whose average is taken over the time
+    /// it actually moved and that records where it died, so a state added later
+    /// has to answer this before the crate compiles.
+    pub const fn is_stalled(self) -> bool {
+        match self {
+            Self::Stalled => true,
+            Self::Ok | Self::Slow | Self::Blocked | Self::Error => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TransferStats {
-    /// "ok" | "slow" | "stalled" | "blocked" | "error"
-    pub status: String,
+    pub status: TransferStatus,
     pub avg_bps: f64,
     pub peak_bps: f64,
     pub bytes_total: u64,
@@ -162,16 +206,16 @@ fn classify_transfer(
     stalled: bool,
     _duration: f64,
     last_active_sec: u64,
-) -> (String, Option<u64>) {
+) -> (TransferStatus, Option<u64>) {
     let fully = expected > 0 && total_bytes as f64 >= expected as f64 * 0.98;
     if total_bytes == 0 {
-        ("blocked".to_string(), None)
+        (TransferStatus::Blocked, None)
     } else if fully {
-        ("ok".to_string(), None)
+        (TransferStatus::Ok, None)
     } else if stalled {
-        ("stalled".to_string(), Some(last_active_sec))
+        (TransferStatus::Stalled, Some(last_active_sec))
     } else {
-        ("slow".to_string(), None)
+        (TransferStatus::Slow, None)
     }
 }
 
@@ -189,13 +233,18 @@ fn split_url(url: &str) -> Option<(String, String)> {
 
 async fn tls_get(host: &str, path: &str, user_agent: &str) -> Option<(impl Body<Data = Bytes, Error = hyper::Error> + Unpin, impl FnOnce() + Send)> {
     let addr = resolve_host(host, 443, Duration::from_secs(10)).await.ok()?.into_iter().next()?;
-    let tcp = crate::net::bind::tcp_connect(&addr).await.ok()?;
+    // Every network step below carries the same 8 s cap run_upload uses. A silently dropped
+    // ClientHello — exactly the DPI signature this probe exists to measure — never completes
+    // the handshake, and neither rustls nor tokio_rustls arms a handshake timer, so an
+    // unbounded await here would freeze run_download, run_telegram_full and the whole run
+    // (runner.rs has no outer cap on this). Timeout maps to None = the existing blocked verdict.
+    let tcp = timeout(Duration::from_secs_f64(8.0), crate::net::bind::tcp_connect(&addr)).await.ok()?.ok()?;
     set_no_delay(&tcp);
     let connector = TlsConnector::from(create_tls_config(&TlsProfile::default()));
     let server_name = ServerName::try_from(host.to_string()).ok()?;
-    let tls = connector.connect(server_name, tcp).await.ok()?;
+    let tls = timeout(Duration::from_secs_f64(8.0), connector.connect(server_name, tcp)).await.ok()?.ok()?;
     let io = TokioIo::new(tls);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.ok()?;
+    let (mut sender, conn) = timeout(Duration::from_secs_f64(8.0), hyper::client::conn::http1::handshake(io)).await.ok()?.ok()?;
     tokio::spawn(async move {
         let _ = conn.await;
     });
@@ -206,7 +255,7 @@ async fn tls_get(host: &str, path: &str, user_agent: &str) -> Option<(impl Body<
         .header(USER_AGENT, user_agent)
         .body(http_body_util::Empty::<Bytes>::new())
         .ok()?;
-    let resp = sender.send_request(req).await.ok()?;
+    let resp = timeout(Duration::from_secs_f64(8.0), sender.send_request(req)).await.ok()?.ok()?;
     let body = resp.into_body();
     // Keep the connection task alive via the body itself
     let noop = || {};
@@ -224,13 +273,13 @@ pub async fn run_download(cfg: &AppConfig) -> TransferStats {
     let (host, path) = match split_url(&cfg.telegram_media_url) {
         Some(v) => v,
         None => {
-            return TransferStats { status: "error".into(), ..Default::default() };
+            return TransferStats { status: TransferStatus::Error, ..Default::default() };
         }
     };
 
     let t_start = Instant::now();
     let Some((mut body, _keep)) = tls_get(&host, &path, &cfg.user_agent).await else {
-        return TransferStats { status: "blocked".into(), ..Default::default() };
+        return TransferStats { status: TransferStatus::Blocked, ..Default::default() };
     };
 
     let mut total: u64 = 0;
@@ -299,7 +348,7 @@ pub async fn run_download(cfg: &AppConfig) -> TransferStats {
     let duration = t_start.elapsed().as_secs_f64().max(0.001);
     let stalled = last_data.elapsed().as_secs_f64() >= stall_timeout && (total as f64) < expected as f64 * 0.98;
     let (status, drop_at) = classify_transfer(total, expected, stalled, duration, last_active_sec);
-    let denom = if status == "stalled" {
+    let denom = if status.is_stalled() {
         last_active_sec.max(1) as f64
     } else {
         duration
@@ -367,7 +416,7 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
         match cfg.telegram_upload_ip.parse() {
             Ok(ip) => ip,
             Err(_) => {
-                return TransferStats { status: "error".into(), ..Default::default() };
+                return TransferStats { status: TransferStatus::Error, ..Default::default() };
             }
         },
         cfg.telegram_upload_port,
@@ -378,7 +427,7 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
             s
         }
         _ => {
-            return TransferStats { status: "blocked".into(), duration: t0.elapsed().as_secs_f64(), ..Default::default() };
+            return TransferStats { status: TransferStatus::Blocked, duration: t0.elapsed().as_secs_f64(), ..Default::default() };
         }
     };
     // SNI = IP → rustls sends no SNI extension (raw TLS stall probe)
@@ -387,14 +436,14 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
     let tls = match timeout(Duration::from_secs_f64(8.0), connector.connect(server_name, tcp)).await {
         Ok(Ok(s)) => s,
         _ => {
-            return TransferStats { status: "blocked".into(), duration: t0.elapsed().as_secs_f64(), ..Default::default() };
+            return TransferStats { status: TransferStatus::Blocked, duration: t0.elapsed().as_secs_f64(), ..Default::default() };
         }
     };
     let io = TokioIo::new(tls);
     let (mut sender, conn) = match hyper::client::conn::http1::handshake(io).await {
         Ok(v) => v,
         Err(_) => {
-            return TransferStats { status: "blocked".into(), duration: t0.elapsed().as_secs_f64(), ..Default::default() };
+            return TransferStats { status: TransferStatus::Blocked, duration: t0.elapsed().as_secs_f64(), ..Default::default() };
         }
     };
     tokio::spawn(async move {
@@ -416,7 +465,7 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
     {
         Ok(r) => r,
         Err(_) => {
-            return TransferStats { status: "error".into(), ..Default::default() };
+            return TransferStats { status: TransferStatus::Error, ..Default::default() };
         }
     };
 
@@ -479,22 +528,22 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
     let avg = sent_total as f64 / duration;
 
     let status = if sent_total == 0 {
-        "blocked"
+        TransferStatus::Blocked
     } else if fully && (post_done || !post_err) {
-        "ok"
+        TransferStatus::Ok
     } else if last_data.elapsed().as_secs_f64() >= stall_timeout || post_err {
-        "stalled"
+        TransferStatus::Stalled
     } else {
-        "slow"
+        TransferStatus::Slow
     };
 
     TransferStats {
-        status: status.to_string(),
+        status,
         avg_bps: avg,
         peak_bps: peak.max(avg),
         bytes_total: sent_total,
         duration,
-        drop_at_sec: if status == "stalled" { Some(last_nonzero_sec) } else { None },
+        drop_at_sec: if status.is_stalled() { Some(last_nonzero_sec) } else { None },
     }
 }
 
@@ -507,6 +556,48 @@ pub struct TelegramFullReport {
     pub dc_total: usize,
     /// "blocked" | "slow" | "partial" | "ok" | "error"
     pub verdict: String,
+}
+
+/// The combined verdict for the two transfer legs and the reachable-DC count:
+/// `"blocked" | "slow" | "partial" | "ok" | "error"`.
+///
+/// Every pair of leg states is named, so a sixth [`TransferStatus`] cannot
+/// compile until this table says what it means. The order is the contract: a
+/// blocked leg outranks a stall, and a stall outranks the DC count.
+fn transfer_verdict(
+    download: TransferStatus,
+    upload: TransferStatus,
+    dc_reachable: usize,
+    dc_total: usize,
+) -> &'static str {
+    let some_dcs_missing = dc_reachable > 0 && dc_reachable < dc_total;
+    match (download, upload) {
+        // A leg that moved nothing is the network being closed only when the DC
+        // pings agree that nothing answers; with live DCs it is degradation.
+        (TransferStatus::Blocked, _) | (_, TransferStatus::Blocked) if dc_reachable == 0 => "blocked",
+        // A stall or a short transfer outranks everything below it.
+        (TransferStatus::Slow | TransferStatus::Stalled, _)
+        | (_, TransferStatus::Slow | TransferStatus::Stalled) => "slow",
+        // Both legs ran: with a DC gone the network is only partial, with all of
+        // them live the report is clean.
+        (TransferStatus::Ok, TransferStatus::Ok) => {
+            if some_dcs_missing {
+                "partial"
+            } else {
+                "ok"
+            }
+        }
+        // Neither leg is slow and none is blocked on a dead network: the DC count
+        // separates a partly filtered network from a run that failed outright.
+        (TransferStatus::Blocked | TransferStatus::Error, _)
+        | (_, TransferStatus::Blocked | TransferStatus::Error) => {
+            if some_dcs_missing {
+                "partial"
+            } else {
+                "error"
+            }
+        }
+    }
 }
 
 /// Full Telegram test: runs download, upload and the DC pings concurrently, then
@@ -545,17 +636,7 @@ pub async fn run_telegram_full(cfg: &AppConfig, phases: Option<PhaseProgress>) -
     let dc_reachable = dc.iter().filter(|d| d.available).count();
     let dc_total = dc.len();
 
-    let verdict = if (dl.status == "blocked" || ul.status == "blocked") && dc_reachable == 0 {
-        "blocked"
-    } else if dl.status == "stalled" || dl.status == "slow" || ul.status == "stalled" || ul.status == "slow" {
-        "slow"
-    } else if dc_reachable < dc_total && dc_reachable > 0 {
-        "partial"
-    } else if dl.status == "ok" && ul.status == "ok" {
-        "ok"
-    } else {
-        "error"
-    };
+    let verdict = transfer_verdict(dl.status, ul.status, dc_reachable, dc_total);
 
     TelegramFullReport {
         download: dl,
@@ -581,13 +662,62 @@ mod tests {
     #[test]
     fn test_classify_transfer() {
         let (s, _) = classify_transfer(0, 1000, false, 1.0, 0);
-        assert_eq!(s, "blocked");
+        assert_eq!(s.as_str(), "blocked");
         let (s, _) = classify_transfer(1000, 1000, false, 1.0, 0);
-        assert_eq!(s, "ok");
+        assert_eq!(s.as_str(), "ok");
         let (s, d) = classify_transfer(500, 1000, true, 10.0, 4);
-        assert_eq!(s, "stalled");
+        assert_eq!(s.as_str(), "stalled");
         assert_eq!(d, Some(4));
         let (s, _) = classify_transfer(500, 1000, false, 10.0, 4);
-        assert_eq!(s, "slow");
+        assert_eq!(s.as_str(), "slow");
+    }
+
+    /// The wire tokens are frozen: `--json` writes the state through serde and
+    /// the TUI prints `as_str()`, so the two spellings have to agree. A renamed
+    /// variant that keeps `as_str()` would otherwise change the payload silently.
+    #[test]
+    fn test_transfer_status_wire_tokens() {
+        for (status, token) in [
+            (TransferStatus::Ok, "ok"),
+            (TransferStatus::Slow, "slow"),
+            (TransferStatus::Stalled, "stalled"),
+            (TransferStatus::Blocked, "blocked"),
+            (TransferStatus::Error, "error"),
+        ] {
+            assert_eq!(status.as_str(), token);
+            assert_eq!(
+                serde_json::to_string(&status).expect("a status serializes"),
+                format!("\"{token}\"")
+            );
+        }
+    }
+
+    /// The verdict table, `dc_total = 5`. The guard order is the part a rewrite
+    /// gets wrong: a blocked leg with live DCs is not a block, a stall outranks
+    /// the DC count, and the DC count only downgrades a pair that ran.
+    #[test]
+    fn test_transfer_verdict_table() {
+        for (dl, ul, dc, want) in [
+            (TransferStatus::Blocked, TransferStatus::Blocked, 0, "blocked"),
+            (TransferStatus::Blocked, TransferStatus::Ok, 0, "blocked"),
+            (TransferStatus::Ok, TransferStatus::Blocked, 0, "blocked"),
+            (TransferStatus::Blocked, TransferStatus::Stalled, 3, "slow"),
+            (TransferStatus::Slow, TransferStatus::Ok, 5, "slow"),
+            (TransferStatus::Stalled, TransferStatus::Ok, 5, "slow"),
+            (TransferStatus::Ok, TransferStatus::Ok, 5, "ok"),
+            (TransferStatus::Ok, TransferStatus::Ok, 3, "partial"),
+            (TransferStatus::Ok, TransferStatus::Ok, 0, "ok"),
+            (TransferStatus::Blocked, TransferStatus::Ok, 3, "partial"),
+            (TransferStatus::Blocked, TransferStatus::Ok, 5, "error"),
+            (TransferStatus::Error, TransferStatus::Ok, 3, "partial"),
+            (TransferStatus::Error, TransferStatus::Ok, 5, "error"),
+            (TransferStatus::Ok, TransferStatus::Error, 0, "error"),
+        ] {
+            assert_eq!(
+                transfer_verdict(dl, ul, dc, 5),
+                want,
+                "{dl:?}/{ul:?} with {dc} of 5 DCs"
+            );
+        }
     }
 }

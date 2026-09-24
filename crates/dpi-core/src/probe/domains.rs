@@ -21,7 +21,7 @@ use tokio::time::timeout;
 
 use crate::classify::{
     classify_connect_error_full, classify_connect_error_icmp, classify_ssl_error, ConnectionStage,
-    Detail, DpiStatus,
+    Detail, DpiStatus, ProbeStage,
 };
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
@@ -142,14 +142,14 @@ pub async fn check_domain_tls(
 ) -> TlsCheck {
     let start = Instant::now();
     let total_timeout = Duration::from_secs_f64(cfg.connect_timeout + cfg.read_timeout);
-    let stage = Arc::new(Mutex::new("tcp_connect".to_string()));
+    let stage = Arc::new(Mutex::new(ProbeStage::TcpConnect));
     let addr = SocketAddr::new(target, 443);
 
     let fut = async {
         let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.connect_timeout)).await {
             Ok(s) => s,
             Err(DialError::Io { error, icmp }) => {
-                let (s, d) = classify_connect_error_icmp(&error, icmp, 0, "tcp_connect");
+                let (s, d) = classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect);
                 return (s, d, 0usize);
             }
             Err(DialError::Timeout) => {
@@ -158,7 +158,7 @@ pub async fn check_domain_tls(
         };
 
         // TLS handshake (version-pinned client)
-        *stage.lock() = "tls_handshake".to_string();
+        *stage.lock() = ProbeStage::TlsHandshake;
         let fingerprint = cfg.fingerprint();
         let profile = if tls12_only {
             TlsProfile::insecure(fingerprint).tls12()
@@ -189,7 +189,7 @@ pub async fn check_domain_tls(
                 }
                 drop(st);
                 let msg = e.to_string();
-                let (s, d) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, "tls_handshake");
+                let (s, d) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, ProbeStage::TlsHandshake);
                 if s != DpiStatus::Unknown {
                     return (s, d, 0usize);
                 }
@@ -201,7 +201,7 @@ pub async fn check_domain_tls(
             }
         };
 
-        *stage.lock() = "tls_connected".to_string();
+        *stage.lock() = ProbeStage::TlsConnected;
         // Test 2 counts the bytes a connection carries before it is cut, so it
         // never negotiates a Content-Encoding.
         check_http(tls_stream, domain, cfg, fingerprint, &stage, true).await
@@ -210,11 +210,17 @@ pub async fn check_domain_tls(
     match timeout(total_timeout, fut).await {
         Ok((s, d, _)) => TlsCheck { status: s, detail: d, elapsed: start.elapsed().as_secs_f64() },
         Err(_) => {
-            let st = stage.lock().clone();
-            let (s, d) = match st.as_str() {
-                "tls_handshake" => (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout),
-                "tcp_connect" => (DpiStatus::SynDropped, Detail::TcpSynTimeout),
-                _ => (DpiStatus::ReadTimeout, Detail::ReadTimeoutWord),
+            // An outer timeout is a failure of whatever stage the check had
+            // reached, read the same way the classifier reads it: the two dial
+            // stages have verdicts of their own, and everything past the
+            // handshake is the read that never finished. `ProbeStage` is `Copy`,
+            // so the guard is held only for the read.
+            let (s, d) = match *stage.lock() {
+                ProbeStage::TlsHandshake => (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout),
+                ProbeStage::TcpConnect => (DpiStatus::SynDropped, Detail::TcpSynTimeout),
+                ProbeStage::TlsConnected | ProbeStage::SendingData | ProbeStage::ReadingData => {
+                    (DpiStatus::ReadTimeout, Detail::ReadTimeoutWord)
+                }
             };
             TlsCheck { status: s, detail: d, elapsed: start.elapsed().as_secs_f64() }
         }
@@ -255,7 +261,7 @@ pub async fn check_http_injection(
         let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.connect_timeout)).await {
             Ok(s) => s,
             Err(DialError::Io { error, icmp }) => {
-                let (s, d) = classify_connect_error_icmp(&error, icmp, 0, "tcp_connect");
+                let (s, d) = classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect);
                 return HttpCheck { status: s, detail: d };
             }
             Err(DialError::Timeout) => {
@@ -267,7 +273,7 @@ pub async fn check_http_injection(
         let (mut sender, conn) = match hyper::client::conn::http1::handshake(io).await {
             Ok(v) => v,
             Err(e) => {
-                let (s, d) = inner_hyper(&e, "tcp_connect", 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                let (s, d) = inner_hyper(&e, ProbeStage::TcpConnect, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
                 return HttpCheck { status: s, detail: d };
             }
         };
@@ -290,11 +296,20 @@ pub async fn check_http_injection(
         ) {
             builder = builder.header(name, value);
         }
-        let req = builder
-            .body(http_body_util::Full::new(Bytes::new()))
-            // The method, URI, headers and body above are all constant: this
-            // request cannot fail to build.
-            .expect("constant HEAD request");
+        // The header list carries the profile's identity and the configured
+        // `USER_AGENT`, and `http` refuses a value holding a control byte (a
+        // `USER_AGENT: |` block scalar ends in a newline); the URI comes from a
+        // domain that is only trimmed, never validated. `panic = "abort"` would
+        // take the whole run down, so report the failure instead.
+        let req = match builder.body(http_body_util::Full::new(Bytes::new())) {
+            Ok(req) => req,
+            Err(e) => {
+                return HttpCheck {
+                    status: DpiStatus::Err,
+                    detail: Detail::Other(format!("bad request: {}", e)),
+                };
+            }
+        };
 
         let resp = match timeout(Duration::from_secs_f64(cfg.read_timeout), sender.send_request(req)).await {
             Ok(Ok(r)) => r,
@@ -317,7 +332,7 @@ pub async fn check_http_injection(
                         },
                     };
                 }
-                let (s, d) = inner_hyper(&e, "reading_data", 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                let (s, d) = inner_hyper(&e, ProbeStage::ReadingData, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
                 return HttpCheck { status: s, detail: d };
             }
             Err(_) => {
@@ -395,11 +410,14 @@ pub async fn resolve_all(
     let tick = phases
         .as_ref()
         .map(|p| (p.on_phase)(crate::PhaseId::DomainDns, domains.len()));
+    // The stub set is read-only for the whole phase, so share it instead of
+    // deep-cloning a `HashSet` per domain while the tasks wait on the gate.
+    let stub_ips = Arc::new(stub_ips.clone());
     let mut handles = Vec::new();
     for domain in domains {
         let domain = domain.clone();
         let sem = Arc::clone(sem);
-        let stub_ips = stub_ips.clone();
+        let stub_ips = Arc::clone(&stub_ips);
         handles.push(tokio::spawn(async move {
             let _permit = crate::probe::permit(&sem).await;
             let clean_domain = parse_host(&domain);
@@ -474,6 +492,10 @@ pub async fn check_tls_all(
     let total = entries.iter().filter(|e| e.dns_fake == Some(false)).count();
     let pid = if tls12_only { crate::PhaseId::DomainTls12 } else { crate::PhaseId::DomainTls13 };
     let tick = phases.as_ref().map(|p| (p.on_phase)(pid, total));
+    // One config for every task instead of one per domain: each deep clone
+    // carries the whole DNS server list, and the clones pile up while the tasks
+    // wait on the gate (`probe/whitelist.rs` shares it the same way).
+    let cfg = Arc::new(cfg.clone());
     let mut handles = Vec::new();
     for (idx, e) in entries.iter().enumerate() {
         if e.dns_fake != Some(false) {
@@ -482,7 +504,7 @@ pub async fn check_tls_all(
         let domain = e.domain.clone();
         // The loop above skips every entry whose DNS answer is missing or fake.
         let Some(target) = e.resolved else { continue };
-        let cfg = cfg.clone();
+        let cfg = Arc::clone(&cfg);
         let sem = Arc::clone(sem);
         handles.push(tokio::spawn(async move {
             let _permit = crate::probe::permit(&sem).await;
@@ -518,6 +540,10 @@ pub async fn check_http_all(
     let tick = phases
         .as_ref()
         .map(|p| (p.on_phase)(crate::PhaseId::DomainHttp, total));
+    // Same as `check_tls_all`: the config and the stub set are read-only for
+    // the whole phase, so one `Arc` serves every task.
+    let cfg = Arc::new(cfg.clone());
+    let stub_ips = Arc::new(stub_ips.clone());
     let mut handles = Vec::new();
     for (idx, e) in entries.iter().enumerate() {
         if e.dns_fake != Some(false) {
@@ -525,9 +551,9 @@ pub async fn check_http_all(
         }
         let domain = e.domain.clone();
         let target = e.resolved;
-        let cfg = cfg.clone();
+        let cfg = Arc::clone(&cfg);
         let sem = Arc::clone(sem);
-        let stub_ips = stub_ips.clone();
+        let stub_ips = Arc::clone(&stub_ips);
         handles.push(tokio::spawn(async move {
             let _permit = crate::probe::permit(&sem).await;
             let r = check_http_injection(&domain, target, &cfg, &stub_ips).await;

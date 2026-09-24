@@ -25,6 +25,11 @@ pub(crate) struct RustlsConnector {
     connector: TlsConnector,
 }
 
+// `From`, not `TryFrom`: a profile is plain data, and `create_tls_config` is
+// total over it — the only panics behind it are the provider invariants tls.rs
+// documents (the built-in provider serves TLS 1.2/1.3 and X25519), which no
+// `TlsProfile` can violate. There is no failure for a caller to handle, and a
+// `TryFrom` would only thread an unreachable `Result` through every call site.
 impl From<TlsProfile> for RustlsConnector {
     /// The rustls connector presenting `profile`.
     fn from(profile: TlsProfile) -> Self {

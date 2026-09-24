@@ -4,7 +4,7 @@
 //! share one 1700-line file.
 
 use std::collections::HashSet;
-use std::io::{IsTerminal, Write};
+use std::io::{self, IsTerminal, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -47,7 +47,10 @@ use crate::{print_out, tcp16_detail, Emitter};
 /// The domains to probe: `-d` names first, then `--domains`/the configured file,
 /// then the embedded list, then the profile's own. A file that parses to nothing
 /// falls through rather than shrinking the run to zero.
-pub(crate) fn load_domains(args: &CliArgs, cfg: &AppConfig, profile: RegionProfile) -> Vec<String> {
+///
+/// The one error that comes back is the list `--domains` named: that file *is*
+/// the run's target set, so the caller reports it instead of probing nothing.
+pub(crate) fn load_domains(args: &CliArgs, cfg: &AppConfig, profile: RegionProfile) -> io::Result<Vec<String>> {
     load_domain_set(args, profile, &cfg.domains_file, embedded_domains())
 }
 
@@ -62,7 +65,7 @@ const BURST_DOMAINS_FILE: &str = "burst-domains.txt";
 /// list out means it. What this does not do is fall back to the censored sites
 /// test 2 measures: a host that is already blocked cannot say whether connecting
 /// to it N times is what broke it.
-pub(crate) fn load_burst_domains(args: &CliArgs, profile: RegionProfile) -> Vec<String> {
+pub(crate) fn load_burst_domains(args: &CliArgs, profile: RegionProfile) -> io::Result<Vec<String>> {
     load_domain_set(args, profile, BURST_DOMAINS_FILE, embedded_burst_domains())
 }
 
@@ -71,46 +74,78 @@ fn load_domain_set(
     profile: RegionProfile,
     file_name: &str,
     embedded: Vec<String>,
-) -> Vec<String> {
+) -> io::Result<Vec<String>> {
     if !args.domain.is_empty() {
-        return args.domain.iter().filter_map(|d| clean_domain(d)).collect();
+        return Ok(args.domain.iter().filter_map(|d| clean_domain(d)).collect());
     }
     if let Some(path) = &args.domains {
-        return load_domains_from_file(path).unwrap_or_default();
+        // A file the user named is the run's target list, so a path that cannot
+        // be read is reported rather than swapped for an empty one: `--domains
+        // /typo.txt` used to end as a "successful" run that probed nothing. The
+        // path is folded into the error because the OS message alone does not
+        // say which file it was.
+        return load_domains_from_file(path)
+            .map_err(|err| io::Error::new(err.kind(), format!("{path}: {err}")));
     }
     let from_file = load_domains_from_file(resource_path(file_name)).unwrap_or_default();
     if !from_file.is_empty() {
-        return from_file;
+        return Ok(from_file);
     }
     if !embedded.is_empty() {
-        return embedded;
+        return Ok(embedded);
     }
-    profile.default_domains().iter().map(|s| s.to_string()).collect()
+    Ok(profile.default_domains().iter().map(|s| s.to_string()).collect())
 }
 
 /// The 16 KB-test targets: `--tcp16`, then the configured file, then the
 /// embedded list, then the shipped defaults.
-pub(crate) fn load_tcp16_targets(args: &CliArgs, cfg: &AppConfig) -> Vec<Tcp16Target> {
+///
+/// The one error that comes back is the file `--tcp16` named: it *is* the run's
+/// target list, so the caller reports it instead of firing at the shipped hosts
+/// the operator never asked for.
+pub(crate) fn load_tcp16_targets(args: &CliArgs, cfg: &AppConfig) -> io::Result<Vec<Tcp16Target>> {
     if let Some(path) = &args.tcp16 {
-        let from_file = load_tcp16_targets_from_file(path).unwrap_or_default();
-        return if from_file.is_empty() { embedded_tcp16_targets() } else { from_file };
+        // The path is folded into the error because the OS message alone does
+        // not say which file it was.
+        let from_file = load_tcp16_targets_from_file(path)
+            .map_err(|err| io::Error::new(err.kind(), format!("{path}: {err}")))?;
+        return Ok(if from_file.is_empty() { embedded_tcp16_targets() } else { from_file });
     }
     let from_file = load_tcp16_targets_from_file(resource_path(&cfg.tcp16_file)).unwrap_or_default();
     if !from_file.is_empty() {
-        return from_file;
+        return Ok(from_file);
     }
     let embedded = embedded_tcp16_targets();
-    if embedded.is_empty() {
+    Ok(if embedded.is_empty() {
         default_tcp16_targets()
     } else {
         embedded
-    }
+    })
 }
 
 /// The white-SNI list: the configured file, else the embedded one. There is no
 /// flag for it, and test 4 reports itself unavailable when this is empty.
-pub(crate) fn load_whitelist_sni_list(cfg: &AppConfig) -> Vec<(String, usize)> {
-    let from_file = load_whitelist_sni(resource_path(&cfg.whitelist_sni_file));
+///
+/// A file that is there but cannot be read is reported and then treated as
+/// absent: the embedded list is the documented fallback, and the notice is what
+/// lets an operator tell an unreadable file from a missing one — which is why a
+/// missing file (the normal case on a router) stays silent. The notice goes to
+/// stderr, so `--json` stdout stays byte-clean.
+pub(crate) fn load_whitelist_sni_list(cfg: &AppConfig, msg: &Messages) -> Vec<(String, usize)> {
+    let path = resource_path(&cfg.whitelist_sni_file);
+    let from_file = match load_whitelist_sni(&path) {
+        Ok(list) => list,
+        Err(err) => {
+            if err.kind() != io::ErrorKind::NotFound {
+                eprintln!(
+                    "{}",
+                    msg.whitelist_load_failed
+                        .replacen("{}", &format!("{}: {err}", path.display()), 1)
+                );
+            }
+            Vec::new()
+        }
+    };
     if from_file.is_empty() {
         embedded_whitelist_sni()
     } else {
@@ -331,8 +366,66 @@ impl BurstObserver for BurstLine {
 /// every language, and it never touches stdout: the frame and the table stay
 /// where they were.
 struct TraceObserver {
-    out: std::sync::Mutex<Box<dyn Write + Send>>,
+    /// The queue into the writer thread. A `Mutex` for `Sync`, not for
+    /// contention — the burst loop is its only sender, and a send on an
+    /// unbounded channel only enqueues, so the lock never spans I/O.
+    out: std::sync::Mutex<TraceWriter>,
     round: std::sync::Mutex<(usize, usize)>,
+}
+
+/// The thread that owns a `--trace` sink.
+///
+/// The burst loop runs on the one runtime thread the TUI draws on, and `--trace`
+/// is aimed at routers, where the file is flash rather than page cache: a
+/// write+flush per attempt from there stalls the probes and the screen with
+/// them. One thread fed over a channel keeps the order the lines were produced
+/// in and still flushes each line, which is what a live `Get-Content -Wait`
+/// tailing the file needs.
+struct TraceWriter {
+    /// `None` once the writer is dropped: the channel has to be closed before
+    /// the thread can be joined, and a field is only dropped *after* `drop`
+    /// returns, so the close has to be an explicit take.
+    tx: Option<std::sync::mpsc::Sender<String>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl TraceWriter {
+    fn spawn(out: Box<dyn Write + Send>) -> Self {
+        // Unbounded on purpose: a bounded `send` would block the runtime thread
+        // exactly when the sink is slow, which is the stall this thread exists
+        // to remove. The queue only grows if the file cannot keep up with the
+        // probes.
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let thread = std::thread::spawn(move || {
+            let mut out = out;
+            // Ends when the observer drops its sender.
+            while let Ok(line) = rx.recv() {
+                // A failed write is not worth stopping a diagnostic run for.
+                let _ = writeln!(out, "{line}");
+                let _ = out.flush();
+            }
+        });
+        Self { tx: Some(tx), thread: Some(thread) }
+    }
+
+    fn send(&self, line: String) {
+        if let Some(tx) = &self.tx {
+            // A writer that is gone leaves the run untraced rather than failing.
+            let _ = tx.send(line);
+        }
+    }
+}
+
+impl Drop for TraceWriter {
+    fn drop(&mut self) {
+        // Close the channel, then wait for the queue to drain: the last lines of
+        // a round are the interesting ones, and the process may exit the moment
+        // the run ends.
+        self.tx = None;
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 impl TraceObserver {
@@ -355,14 +448,15 @@ impl TraceObserver {
                 }
             }
         };
-        Some(Self { out: std::sync::Mutex::new(out), round: std::sync::Mutex::new((0, 0)) })
+        Some(Self {
+            out: std::sync::Mutex::new(TraceWriter::spawn(out)),
+            round: std::sync::Mutex::new((0, 0)),
+        })
     }
 
-    fn line(&self, text: &str) {
-        if let Ok(mut out) = self.out.lock() {
-            // A failed write is not worth stopping a diagnostic run for.
-            let _ = writeln!(out, "{text}");
-            let _ = out.flush();
+    fn line(&self, text: String) {
+        if let Ok(out) = self.out.lock() {
+            out.send(text);
         }
     }
 }
@@ -372,7 +466,7 @@ impl BurstObserver for TraceObserver {
         if let Ok(mut round) = self.round.lock() {
             *round = (index, total);
         }
-        self.line(&format!(
+        self.line(format!(
             "{}  round {}/{} {} ({}) hosts={hosts}",
             utc_clock(),
             index + 1,
@@ -385,7 +479,7 @@ impl BurstObserver for TraceObserver {
     fn host_probed(&self, fingerprint: TlsFingerprint, domain: &str, report: &BurstProfileReport) {
         let (index, total) = self.round.lock().map(|r| *r).unwrap_or((0, 0));
         for (attempt, result) in report.attempts.iter().enumerate() {
-            self.line(&format!(
+            self.line(format!(
                 "{}  r{}/{} {:<8} {:<28} #{:<2} {:<12} {:<40} {:>5} ms",
                 utc_clock(),
                 index + 1,
@@ -442,7 +536,10 @@ impl BurstObserver for Observers<'_> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one parameter per input the run needs; the shell holds each of them separately and a wrapper struct would only move the same list one level down"
+)]
 pub(crate) async fn run_test_suite(
     tests_str: &str,
     concurrency: usize,
@@ -905,7 +1002,7 @@ pub(crate) async fn run_test_suite(
             emitter.emit(&render_telegram(&rep, msg));
         } else {
             let transfer = |t: &dpi_core::probe::telegram::TransferStats| crate::json::Transfer {
-                status: t.status.clone(),
+                status: t.status,
                 avg_bps: t.avg_bps,
                 peak_bps: t.peak_bps,
                 bytes: t.bytes_total,
@@ -1015,8 +1112,16 @@ pub(crate) async fn run_test_suite(
         };
         let text = serde_json::to_string_pretty(&payload).unwrap_or_default();
         println!("{}", text);
-        if let Some(ref out_path) = args.output {
-            let _ = std::fs::write(out_path, &text);
+        if let Some(out_path) = &args.output {
+            // The document is already on stdout, so a failed save is a warning
+            // and not a fatal error — but it cannot be silent: `--json` is the
+            // mode nobody watches, and a script that asked for the file will
+            // assume it is there. Same message as the interactive export
+            // (`tui/screens/post_run.rs`), on stderr, so stdout stays
+            // byte-identical.
+            if let Err(err) = std::fs::write(out_path, &text) {
+                eprintln!("{}", msg.report_save_fail.replace("{}", &err.to_string()));
+            }
         }
     }
 }

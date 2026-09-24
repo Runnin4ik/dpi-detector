@@ -80,9 +80,9 @@ pub fn wrap_socks_udp(target: SocketAddr, payload: &[u8]) -> Vec<u8> {
 
 /// Unwraps an RFC 1928 SOCKS5 UDP relay response header, returning the raw payload.
 pub fn unwrap_socks_udp(data: &[u8]) -> Result<&[u8], DnsError> {
-    if data.len() < 7 {
-        return Err(DnsError::Socks5("datagram too short for SOCKS5 UDP header".to_string()));
-    }
+    (data.len() >= 7).ok_or_else(|| {
+        DnsError::Socks5("datagram too short for SOCKS5 UDP header".to_string())
+    })?;
 
     // Byte 0-1: RSV, Byte 2: FRAG
     let atyp = data[3];

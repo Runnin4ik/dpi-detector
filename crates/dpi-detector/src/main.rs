@@ -1,4 +1,4 @@
-use std::io::{stdout, IsTerminal, Write};
+use std::io::{self, stdout, IsTerminal, Write};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -155,6 +155,23 @@ fn prescan_language() -> Language {
     }
 }
 
+/// A target list the run was pointed at, or a stop.
+///
+/// A list the user named is the run's input, not a preference: `--domains
+/// /typo.txt` used to reach the tables as an empty set, so a run that measured
+/// nothing printed a report of nothing and exited zero, and `--tcp16 /typo.json`
+/// used to fire at the shipped hosts instead. Same shape as the `--iface`
+/// validator — message, then exit code 2.
+fn targets_or_exit<T>(loaded: io::Result<Vec<T>>, notice: &str) -> Vec<T> {
+    match loaded {
+        Ok(targets) => targets,
+        Err(err) => {
+            eprintln!("{}", notice.replacen("{}", &err.to_string(), 1));
+            std::process::exit(2);
+        }
+    }
+}
+
 /// A bypass probe per address family: the package covers IPv4 and IPv6 with
 /// separate rules, so the answer can differ between them.
 #[derive(Debug, Clone, Default)]
@@ -279,12 +296,21 @@ async fn main() {
     } else {
         tracing_subscriber::filter::LevelFilter::WARN
     };
-    let _ = tracing_subscriber::fmt().with_max_level(level).try_init();
+    // Logs go to stderr, never to stdout: stdout carries the machine-readable
+    // `--json` document, which a consumer pipes straight into a parser. The
+    // human output below is already gated on `json_mode` (`print_out`,
+    // `Emitter::emit`); the subscriber was the one path around that gate, and
+    // `-v` turns on DEBUG for the whole dependency graph, so its lines are
+    // both numerous and not ours.
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_writer(std::io::stderr)
+        .try_init();
 
     // Domains / TCP targets / whitelist, loaded from the CLI args and the config.
-    let domains = load_domains(&args, &cfg, profile);
-    let tcp_items = load_tcp16_targets(&args, &cfg);
-    let whitelist_sni = load_whitelist_sni_list(&cfg);
+    let domains = targets_or_exit(load_domains(&args, &cfg, profile), msg.domains_load_failed);
+    let tcp_items = targets_or_exit(load_tcp16_targets(&args, &cfg), msg.tcp16_load_failed);
+    let whitelist_sni = load_whitelist_sni_list(&cfg, &msg);
     // Test 4 is unavailable without an SNI list, so warn when the list is empty.
     if whitelist_sni.is_empty() && !args.json {
         print_out(&format!("\x1b[33m{}\x1b[0m", msg.whitelist_skipped));
@@ -526,7 +552,7 @@ async fn main() {
     // Test 6 fires at its own shipped hosts: the two tests ask opposite questions
     // of a domain, and a site that is already blocked cannot tell whether the
     // connecting is what broke it.
-    let burst_plan_domains = load_burst_domains(&args, profile);
+    let burst_plan_domains = targets_or_exit(load_burst_domains(&args, profile), msg.domains_load_failed);
     let mut burst_plan = burst_plan_from_cli(&args, &burst_plan_domains, &msg);
     // The configured list, kept apart from what a run actually probes: the
     // settings screen shows its size as the meaning of an empty box, and an
@@ -716,10 +742,10 @@ mod tests {
     #[test]
     fn burst_targets_come_from_their_own_list() {
         let args = CliArgs::default();
-        let burst = load_burst_domains(&args, RegionProfile::Ru);
+        let burst = load_burst_domains(&args, RegionProfile::Ru).unwrap();
         assert!(burst.contains(&"ezgame.su".to_string()), "{burst:?}");
         assert!(burst.contains(&"www.smartape.ru".to_string()), "{burst:?}");
-        let shared = load_domains(&args, &AppConfig::default(), RegionProfile::Ru);
+        let shared = load_domains(&args, &AppConfig::default(), RegionProfile::Ru).unwrap();
         assert!(!burst.is_empty() && !shared.is_empty());
         assert!(!burst.iter().any(|d| shared.contains(d)), "the two lists ask different questions");
         // `-d` still picks the hosts for a run, and picks them for this test too.
@@ -727,7 +753,7 @@ mod tests {
             domain: vec!["https://info.paymaster.ru/x?y=1".to_string()],
             ..CliArgs::default()
         };
-        assert_eq!(load_burst_domains(&picked, RegionProfile::Ru), vec!["info.paymaster.ru"]);
+        assert_eq!(load_burst_domains(&picked, RegionProfile::Ru).unwrap(), vec!["info.paymaster.ru"]);
     }
 
     /// `-d` reaches test 6 through the same cleaner as everything else: a pasted

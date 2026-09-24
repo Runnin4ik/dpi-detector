@@ -75,6 +75,13 @@ pub(crate) fn cipher_suites(message: &[u8]) -> Vec<u16> {
         return Vec::new();
     }
     let len = u16_at(message, ciphers_at) as usize;
+    // The length is the peer's claim, not a fact: `u16_at` reads two bytes
+    // blind, and a truncated hello would index past the message — which under
+    // `panic = "abort"` is the whole process. The same bound is what
+    // `extensions` applies to every extension body.
+    if ciphers_at + 2 + len > message.len() {
+        return Vec::new();
+    }
     (0..len / 2)
         .map(|i| u16_at(message, ciphers_at + 2 + i * 2))
         .filter(|suite| !is_grease(*suite))
@@ -154,7 +161,12 @@ pub fn key_share_groups(record: &[u8]) -> String {
     let Some(body) = body else {
         return "-".into();
     };
-    let end = (2 + u16_at(body, 0) as usize).min(body.len());
+    // A body too short to hold its own list length carries no group at all, and
+    // `u16_at` would read past it (see `cipher_suites`).
+    let Some(list_len) = be16(body, 0) else {
+        return "-".into();
+    };
+    let end = (2 + list_len as usize).min(body.len());
     let mut at = 2;
     let mut groups = Vec::new();
     while at + 4 <= end {

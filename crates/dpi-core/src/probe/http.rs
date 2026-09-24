@@ -24,14 +24,16 @@ use std::time::Duration;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::ext::HeaderCaseMap;
-use hyper::header::{HeaderName, HOST};
-use hyper::{Method, Request, Response};
+use hyper::header::{HeaderName, HeaderValue, HOST};
+use hyper::http::request::Builder;
+use hyper::{Method, Request, Response, Uri, Version};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use parking_lot::Mutex;
 use tokio::time::timeout;
 
 use crate::classify::{
-    classify_connect_error_full, classify_ssl_error, ConnectionStage, Detail, DpiProbeStream, DpiStatus,
+    classify_connect_error_full, classify_ssl_error, ConnectionStage, Detail, DpiProbeStream,
+    DpiStatus, ProbeStage,
 };
 use crate::config::AppConfig;
 use h2::client::RequestShape;
@@ -191,11 +193,21 @@ impl HttpSender {
     }
 
     /// Sends one request, built for the protocol in use.
+    ///
+    /// A request the builder refuses falls back instead of aborting: an h1 one
+    /// to `build_request_lenient`, an h2 one to a request the layer itself
+    /// rejects (`rejected_h2_request`). `send` also serves callers that do not
+    /// validate their identity first, and under `panic = "abort"` an `expect`
+    /// here would kill the whole run.
     pub async fn send(&mut self, req: HttpRequest<'_>) -> hyper::Result<Response<Incoming>> {
         match self {
-            Self::H1(sender) => sender.send_request(build_request(req, false)).await,
+            Self::H1(sender) => {
+                let request =
+                    build_request(&req, false).unwrap_or_else(|_| build_request_lenient(&req));
+                sender.send_request(request).await
+            }
             Self::H2 { sender, shape } => {
-                let mut request = build_request(req, true);
+                let mut request = build_request(&req, true).unwrap_or_else(|_| rejected_h2_request());
                 if let Some(shape) = *shape {
                     request.extensions_mut().insert(shape);
                 }
@@ -210,15 +222,77 @@ impl HttpSender {
 /// The shape an h2 profile pinned is attached by [`HttpSender::send`], which is
 /// where the protocol is known; the h1 header casing is attached here, because
 /// it is a property of the message.
-fn build_request(req: HttpRequest<'_>, h2: bool) -> Request<Full<Bytes>> {
-    let case_map = (!h2).then(|| header_case_map(&req));
-    let mut builder = Request::builder().method(req.method);
+///
+/// Returns the error `http` reports for a value it will not put on the wire. Not
+/// every value is a constant: the user-agent comes from `config.yml` verbatim
+/// (`config.rs::user_agent_for`), and a `USER_AGENT: |` block scalar leaves a
+/// trailing newline that `http` rejects. That used to reach an `expect` here,
+/// which under `panic = "abort"` killed the process; `check_http` now reports it
+/// as a run error before this point, and [`HttpSender::send`] falls back for the
+/// callers that do not validate first ([`build_request_lenient`] for h1,
+/// [`rejected_h2_request`] for h2).
+fn build_request(req: &HttpRequest<'_>, h2: bool) -> Result<Request<Full<Bytes>>, hyper::http::Error> {
+    let case_map = (!h2).then(|| header_case_map(req));
+    let mut builder = Request::builder().method(req.method.clone());
     if h2 {
         builder = builder.uri(format!("https://{}{}", req.host, req.path));
     } else {
         builder = builder.uri(req.path).header(HOST, req.host);
     }
-    for (name, value) in req.headers {
+    builder = add_headers(builder, req, h2, false)?;
+    let mut request = builder.body(Full::new(Bytes::new()))?;
+    if let Some(case_map) = case_map {
+        request.extensions_mut().insert(case_map);
+    }
+    Ok(request)
+}
+
+/// [`build_request`] with every value `http` refuses dropped.
+///
+/// This is the h1 request form the strict build already produces, so the two
+/// describe the same message; [`HttpSender::send`] falls back to it so that a
+/// value it did not validate itself cannot abort the process.
+fn build_request_lenient(req: &HttpRequest<'_>) -> Request<Full<Bytes>> {
+    let uri = Uri::try_from(req.path).unwrap_or_else(|_| Uri::from_static("/"));
+    let mut builder = Request::builder().method(req.method.clone()).uri(uri);
+    if let Ok(host) = HeaderValue::from_str(req.host) {
+        builder = builder.header(HOST, host);
+    }
+    // Every header value is validated before it is added, so the builder has
+    // nothing left to refuse; `body` reports a `Result` only because the API
+    // does. The floor is unreachable, not a fallback in use.
+    let mut request = add_headers(builder, req, false, true)
+        .and_then(|builder| builder.body(Full::new(Bytes::new())))
+        .unwrap_or_else(|_| Request::new(Full::new(Bytes::new())));
+    request.extensions_mut().insert(header_case_map(req));
+    request
+}
+
+/// A request the h2 layer refuses before anything reaches the wire.
+///
+/// An h2 request's `:authority` comes from its URI alone (the h2 client builds
+/// the pseudo-header from the URI, `vendor/h2/src/frame/headers.rs`), so a host
+/// `http` will not take as one has no equivalent request to fall back to.
+/// Handing the layer a request with no scheme or authority makes it report
+/// `MissingUriSchemeAndAuthority`, which [`HttpSender::send`] returns the way it
+/// returns every other send failure — instead of aborting the process under
+/// `panic = "abort"`.
+fn rejected_h2_request() -> Request<Full<Bytes>> {
+    let mut request = Request::new(Full::new(Bytes::new()));
+    *request.version_mut() = Version::HTTP_2;
+    request
+}
+
+/// The request's headers in the order the identity carries them, minus the ones
+/// the protocol rejects and with `te` normalized for h2. A value `http` will not
+/// take is an error, or — with `drop_invalid` — skipped.
+fn add_headers(
+    mut builder: Builder,
+    req: &HttpRequest<'_>,
+    h2: bool,
+    drop_invalid: bool,
+) -> Result<Builder, hyper::http::Error> {
+    for (name, value) in &req.headers {
         if h2 && is_connection_specific(name) {
             continue;
         }
@@ -235,18 +309,18 @@ fn build_request(req: HttpRequest<'_>, h2: bool) -> Request<Full<Bytes>> {
         // `TE: Trailers` over h1. hyper drops the header rather than rewriting
         // it, so the h2 spelling is ours to make.
         if h2 && name.eq_ignore_ascii_case("te") {
-            builder = builder.header(name, "trailers");
+            builder = builder.header(*name, "trailers");
             continue;
         }
-        builder = builder.header(name, value);
+        if drop_invalid {
+            if let Ok(value) = HeaderValue::from_str(value) {
+                builder = builder.header(*name, value);
+            }
+            continue;
+        }
+        builder = builder.header(*name, value);
     }
-    // Method, URI and every header above are already-validated constants and
-    // caller strings, so the request cannot fail to build.
-    let mut request = builder.body(Full::new(Bytes::new())).expect("valid request");
-    if let Some(case_map) = case_map {
-        request.extensions_mut().insert(case_map);
-    }
-    request
+    Ok(builder)
 }
 
 /// The spellings an identity writes its header names with, for hyper's h1
@@ -466,7 +540,7 @@ pub(crate) fn fat_read_verdict(bytes: usize, min_kb: u64, max_kb: u64) -> (DpiSt
 
 pub(crate) fn inner_hyper(
     e: &hyper::Error,
-    stage: &str,
+    stage: ProbeStage,
     bytes: usize,
     min_kb: u64,
     max_kb: u64,
@@ -477,7 +551,7 @@ pub(crate) fn inner_hyper(
     // Read timeout inside the fat window → the 16KB DROP badge, and the detail
     // names the offset the way the fat probe does: `READ TIMEOUT at N KB`. The
     // badge is the same in every test but test 3; the window is the detail's job.
-    if (e.is_timeout() || lower.contains("timed out")) && stage == "reading_data" {
+    if (e.is_timeout() || lower.contains("timed out")) && stage == ProbeStage::ReadingData {
         return fat_read_verdict(bytes, min_kb, max_kb);
     }
 
@@ -499,16 +573,16 @@ pub(crate) async fn check_http(
     domain: &str,
     cfg: &AppConfig,
     fingerprint: TlsFingerprint,
-    stage: &Arc<Mutex<String>>,
+    stage: &Arc<Mutex<ProbeStage>>,
     identity_encoding: bool,
 ) -> (DpiStatus, Detail, usize) {
-        *stage.lock() = "tls_connected".to_string();
+        *stage.lock() = ProbeStage::TlsConnected;
         let alpn_h2 = negotiated_h2(&tls_stream);
         let io = TokioIo::new(tls_stream);
         let mut sender = match HttpSender::handshake(io, alpn_h2, fingerprint).await {
             Ok(sender) => sender,
             Err(e) => {
-                let (s, d) = inner_hyper(&e, "tls_connected", 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                let (s, d) = inner_hyper(&e, ProbeStage::TlsConnected, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
                 return (s, d, 0usize);
             }
         };
@@ -518,25 +592,43 @@ pub(crate) async fn check_http(
         // `curl_chrome107` at the TLS layer looks like it here too.
         let user_agent = cfg.user_agent_for(fingerprint);
         let identity = http_identity(fingerprint);
+        let headers = request_headers(
+            &identity,
+            user_agent,
+            [("Connection", "close".to_string())],
+            identity_encoding,
+        );
+        // Every value but the user-agent is the profile's own constant, and the
+        // user-agent comes from `config.yml` verbatim
+        // (`config.rs::user_agent_for`): a `USER_AGENT: |` block scalar ends in a
+        // newline, and `http` refuses to put a control byte on the wire. That is
+        // a configuration error, not something the network did, so the probe
+        // reports it instead of a verdict — and it never reaches the request
+        // builder, where under `panic = "abort"` it would kill the run.
+        if let Some((name, _)) = headers.iter().find(|(_, value)| HeaderValue::from_str(value).is_err()) {
+            let detail = if name.eq_ignore_ascii_case("user-agent") {
+                Detail::Other("invalid USER_AGENT in config.yml".to_string())
+            } else {
+                Detail::Other(format!("invalid {} header value", name))
+            };
+            return (DpiStatus::Err, detail, 0usize);
+        }
         let req = HttpRequest {
             method: Method::GET,
             host: domain,
             path: "/",
-            headers: request_headers(
-                &identity,
-                user_agent,
-                [("Connection", "close".to_string())],
-                identity_encoding,
-            ),
+            headers,
             priority_on_h1: identity.priority_on_h1,
         };
 
-        *stage.lock() = "sending_data".to_string();
+        *stage.lock() = ProbeStage::SendingData;
         let resp = match timeout(Duration::from_secs_f64(cfg.read_timeout), sender.send(req)).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
-                let st = stage.lock().clone();
-                let (s, d) = inner_hyper(&e, &st, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                // The stage the request went out under, read out of the guard:
+                // `ProbeStage` is `Copy`, so nothing is cloned out of it.
+                let st = *stage.lock();
+                let (s, d) = inner_hyper(&e, st, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
                 return (s, d, 0usize);
             }
             Err(_) => {
@@ -566,7 +658,7 @@ pub(crate) async fn check_http(
         }
 
         // Read body capped at 64 KB
-        *stage.lock() = "reading_data".to_string();
+        *stage.lock() = ProbeStage::ReadingData;
         let mut body = resp.into_body();
         let mut bytes_read: usize = 0;
         loop {
@@ -580,7 +672,7 @@ pub(crate) async fn check_http(
                     }
                 }
                 Ok(Some(Err(e))) => {
-                    let (s, d) = inner_hyper(&e, "reading_data", bytes_read, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                    let (s, d) = inner_hyper(&e, ProbeStage::ReadingData, bytes_read, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
                     return (s, d, bytes_read);
                 }
                 Ok(None) => break,
@@ -640,7 +732,7 @@ mod tests {
     /// needs, so the same request description has to produce two different ones.
     #[test]
     fn http2_builds_an_absolute_uri_and_drops_connection_headers() {
-        let request = build_request(request(), true);
+        let request = build_request(&request(), true).expect("the test request builds");
         assert_eq!(request.uri().to_string(), "https://example.com/x");
         assert_eq!(request.headers().get("accept-encoding").expect("kept"), "identity");
         assert!(request.headers().get("connection").is_none(), "HTTP/2 forbids Connection");
@@ -650,7 +742,7 @@ mod tests {
 
     #[test]
     fn http1_keeps_the_path_host_and_connection_headers() {
-        let request = build_request(request(), false);
+        let request = build_request(&request(), false).expect("the test request builds");
         assert_eq!(request.uri().to_string(), "/x");
         assert_eq!(request.headers().get(HOST).expect("host"), "example.com");
         assert_eq!(request.headers().get("connection").expect("close"), "close");
@@ -664,10 +756,10 @@ mod tests {
     fn only_the_h1_request_carries_the_name_spellings() {
         let mut chrome = request();
         chrome.headers.push(("Sec-Fetch-Site", "none".to_string()));
-        assert!(build_request(chrome, false).extensions().get::<HeaderCaseMap>().is_some());
+        assert!(build_request(&chrome, false).expect("builds").extensions().get::<HeaderCaseMap>().is_some());
         let mut chrome = request();
         chrome.headers.push(("Sec-Fetch-Site", "none".to_string()));
-        assert!(build_request(chrome, true).extensions().get::<HeaderCaseMap>().is_none());
+        assert!(build_request(&chrome, true).expect("builds").extensions().get::<HeaderCaseMap>().is_none());
     }
 
     /// `priority` goes out on h1 only for a client that sends it there: the
@@ -681,11 +773,11 @@ mod tests {
             req.headers.push(("Priority", "u=0, i".to_string()));
             req
         };
-        let kept = build_request(with_priority(true), false);
+        let kept = build_request(&with_priority(true), false).expect("builds");
         assert_eq!(kept.headers().get("priority").expect("kept on h1"), "u=0, i");
-        let dropped = build_request(with_priority(false), false);
+        let dropped = build_request(&with_priority(false), false).expect("builds");
         assert!(dropped.headers().get("priority").is_none(), "h2-only for this client");
-        let h2 = build_request(with_priority(false), true);
+        let h2 = build_request(&with_priority(false), true).expect("builds");
         assert_eq!(h2.headers().get("priority").expect("always on h2"), "u=0, i");
     }
 
@@ -699,9 +791,9 @@ mod tests {
             req.headers.push(("TE", "Trailers".to_string()));
             req
         };
-        let h1 = build_request(with_te(), false);
+        let h1 = build_request(&with_te(), false).expect("builds");
         assert_eq!(h1.headers().get("te").expect("kept"), "Trailers");
-        let h2 = build_request(with_te(), true);
+        let h2 = build_request(&with_te(), true).expect("builds");
         assert_eq!(h2.headers().get("te").expect("kept"), "trailers");
     }
 }

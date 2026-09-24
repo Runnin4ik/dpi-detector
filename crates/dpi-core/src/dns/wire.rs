@@ -181,7 +181,12 @@ pub fn parse_dns_response(data: &[u8], expected_tx_id: Option<u16>) -> Result<Dn
     }
 
     // Parse Answer section
-    let mut answers = Vec::with_capacity(ancount);
+    // `ancount` is a 16-bit field straight off the wire: a 12-byte datagram may
+    // claim 65535 answers, and reserving for them is ~2 MiB on the live
+    // UDP/DoH/DoT response path. A record needs at least 11 bytes here — a
+    // one-byte root name plus the 10 fixed ones — so the packet's own length
+    // bounds the reservation; the loop below still validates every record.
+    let mut answers = Vec::with_capacity(ancount.min((data.len() - 12) / 11));
     for _ in 0..ancount {
         offset = skip_dns_name(data, offset)?;
         if offset + 10 > data.len() {

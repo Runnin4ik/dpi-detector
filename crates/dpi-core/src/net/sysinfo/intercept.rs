@@ -276,16 +276,38 @@ fn judge(facts: &Facts) -> (Vec<Problem>, Vec<Unchecked>) {
 /// configuration, which is the half that says whether that family is covered at
 /// all. The caller resolves addresses — `net/` does not reach into `dns/`.
 pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Intercept> {
-    let pid = pidfile_pid()?;
     let v6 = family == Family::V6;
-    // Where our traffic actually goes for this target, then the tunnel question
-    // answers itself: a per-destination route into a VPN leaves the interface
-    // the rules were hooked to.
-    let our_interface = match target {
-        Some(target) => route_interface_for(target.ip()),
-        None => route_interface_for(if v6 { IpAddr::V6(Ipv6Addr::UNSPECIFIED) } else { IpAddr::V4(Ipv4Addr::UNSPECIFIED) }),
-    };
-    let Some(conf) = conf_run() else {
+    // Every read below is a blocking `/proc` or flash read, and this runs on the
+    // single-threaded runtime the TUI draws on, so each group of reads is handed
+    // to the blocking pool. A join error means the runtime is shutting down, and
+    // the value it falls back to is the same "cannot tell" the readers already
+    // answer with.
+    let (pid, our_interface) = tokio::task::spawn_blocking(move || {
+        let pid = pidfile_pid()?;
+        // Where our traffic actually goes for this target, then the tunnel
+        // question answers itself: a per-destination route into a VPN leaves the
+        // interface the rules were hooked to.
+        let our_interface = match target {
+            Some(target) => route_interface_for(target.ip()),
+            None => route_interface_for(if v6 { IpAddr::V6(Ipv6Addr::UNSPECIFIED) } else { IpAddr::V4(Ipv4Addr::UNSPECIFIED) }),
+        };
+        Some((pid, our_interface))
+    })
+    .await
+    .ok()
+    .flatten()?;
+    let Some((conf, queue_is_bound)) = tokio::task::spawn_blocking(|| {
+        conf_run().map(|conf| {
+            // The queue's liveness is read from the same `/proc` tree, so it is
+            // gathered in the same blocking hop.
+            let bound = conf.queue.is_some_and(queue_bound);
+            (conf, bound)
+        })
+    })
+    .await
+    .ok()
+    .flatten()
+    else {
         // The package is up but its resolved config is unreadable: say so
         // rather than claim a verdict the numbers do not support.
         return Some(Intercept {
@@ -301,38 +323,46 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         Some(target) => probe_flow(target).await,
         None => Flow::default(),
     };
-    let strategy = strategy(pid);
-    // The recipe needs the config the service was started from; without it the
-    // options are still named, just not resolved to a variable.
-    let (list_fixes, list_unnamed) = match std::fs::read_to_string(CONF) {
-        Ok(conf) => {
-            let mut flat: Vec<String> = Vec::new();
-            for (_, option) in &strategy.lists {
-                if !flat.contains(option) {
-                    flat.push(option.clone());
+    // The strategy comes from the live argv and the recipe from the config: two
+    // more file reads, in one hop. An argv that cannot be read already answers
+    // with `Strategy::default()`, so a join error answers the same way.
+    let (strategy, list_fixes, list_unnamed) = tokio::task::spawn_blocking(move || {
+        let strategy = strategy(pid);
+        // The recipe needs the config the service was started from; without it
+        // the options are still named, just not resolved to a variable.
+        let (list_fixes, list_unnamed) = match std::fs::read_to_string(CONF) {
+            Ok(conf) => {
+                let mut flat: Vec<String> = Vec::new();
+                for (_, option) in &strategy.lists {
+                    if !flat.contains(option) {
+                        flat.push(option.clone());
+                    }
                 }
+                let (fixes, unnamed) = list_fixes(&conf, &flat);
+                let named = unnamed
+                    .into_iter()
+                    .map(|option| {
+                        let profile = strategy
+                            .lists
+                            .iter()
+                            .find(|(_, held)| *held == option)
+                            .map(|(profile, _)| profile.clone())
+                            .unwrap_or_default();
+                        (profile, option)
+                    })
+                    .collect();
+                (fixes, named)
             }
-            let (fixes, unnamed) = list_fixes(&conf, &flat);
-            let named = unnamed
-                .into_iter()
-                .map(|option| {
-                    let profile = strategy
-                        .lists
-                        .iter()
-                        .find(|(_, held)| *held == option)
-                        .map(|(profile, _)| profile.clone())
-                        .unwrap_or_default();
-                    (profile, option)
-                })
-                .collect();
-            (fixes, named)
-        }
-        Err(_) => (Vec::new(), strategy.lists.clone()),
-    };
+            Err(_) => (Vec::new(), strategy.lists.clone()),
+        };
+        (strategy, list_fixes, list_unnamed)
+    })
+    .await
+    .unwrap_or_else(|_| (Strategy::default(), Vec::new(), Vec::new()));
     let facts = Facts {
         v6,
         ipv6_enabled: conf.ipv6_enabled,
-        queue_bound: conf.queue.is_some_and(queue_bound),
+        queue_bound: queue_is_bound,
         rules_interfaces: conf.interfaces,
         our_interface,
         excluded: flow.mark == Some(MARK_EXCLUDE),
@@ -386,7 +416,14 @@ async fn probe_flow(target: SocketAddr) -> Flow {
             return Flow::default();
         };
         let _ = tokio::time::timeout(PROBE_WAIT, socket.connect(target)).await;
-        if let Some(mark) = conntrack_mark(local.port(), target) {
+        // The scan below reads the whole conntrack table, and this is the thread
+        // the TUI draws on: the read goes to the blocking pool like the other
+        // `/proc` readers in this module.
+        let mark = tokio::task::spawn_blocking(move || conntrack_mark(local.port(), target))
+            .await
+            .ok()
+            .flatten();
+        if let Some(mark) = mark {
             return Flow { mark: Some(mark) };
         }
     }
