@@ -146,11 +146,31 @@ jobs:
           python3 -m http.server 8931 --directory target/install-smoke \
             > target/install-smoke/server.log 2>&1 &
           server=$!
-          sleep 1
+          trap 'kill $server 2>/dev/null || true' EXIT
+          # Wait for the server to answer rather than sleep a fixed second. A
+          # fixed sleep is a race on a loaded runner, and the failure it produces
+          # is the installer's, three commands later, with nothing in the log
+          # saying the server was never up. The BusyBox step below polls for the
+          # same reason.
+          ready=0
+          for _ in $(seq 1 20); do
+            if curl -sf --connect-timeout 1 -o /dev/null \
+                 "http://127.0.0.1:8931/releases/latest/download/SHA256SUMS.txt"; then
+              ready=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "the fixture server never answered:"
+            cat target/install-smoke/server.log
+            exit 1
+          fi
           if ! DPI_RELEASE_BASE=http://127.0.0.1:8931/releases \
                DPI_VERSION=latest \
                DPI_INSTALL_DIR="$PWD/target/install-prefix" \
                  sh install.sh > "$PWD/target/install.log" 2>&1; then
+            echo "install.sh failed for DPI_VERSION=latest:"
             cat "$PWD/target/install.log"
             exit 1
           fi
@@ -158,7 +178,14 @@ jobs:
           # An installer that cannot fetch a manifest degrades to a warning and
           # installs anyway, so "it installed" is not proof the checksum path ran.
           # This is: the line is printed only when the file matched the manifest.
-          grep -q 'Checksum verified' "$PWD/target/install.log"
+          # Every check below says which one failed and prints its log: a bare
+          # `grep -q` under `set -e` ends the step with no output at all, which is
+          # what made the first flake in this step read like a code regression.
+          if ! grep -q 'Checksum verified' "$PWD/target/install.log"; then
+            echo "the manifest path did not run: no 'Checksum verified' in install.log"
+            cat "$PWD/target/install.log"
+            exit 1
+          fi
           "$PWD/target/install-prefix/dpi-detector" --version
 
           # A source that answers with another version is refused. The manifest
@@ -179,7 +206,11 @@ jobs:
             exit 1
           fi
           cat "$PWD/target/install-stale.log"
-          grep -q 'served dpi-detector' "$PWD/target/install-stale.log"
+          if ! grep -q 'served dpi-detector' "$PWD/target/install-stale.log"; then
+            echo "the refusal did not name the version it was served:"
+            cat "$PWD/target/install-stale.log"
+            exit 1
+          fi
 
           # A second run of the release that is already installed fetches nothing
           # and runs what is there. The server is stopped before it, so a download
@@ -187,31 +218,56 @@ jobs:
           # installer executed it with the argument it was given — the banner
           # prints the version without that prefix, the run path prints the path.
           ver=$(target/debug/dpi-detector --version | awk '{print $NF}')
+          # An empty version would send every path below after `v`, and the
+          # installer would then refuse a fixture that is correct — a failure that
+          # says nothing about its cause.
+          if [ -z "$ver" ]; then
+            echo "the dev binary printed no version; --version said:"
+            target/debug/dpi-detector --version || true
+            exit 1
+          fi
           current=target/install-smoke/releases/download/v$ver
           mkdir -p "$current"
           cp target/debug/dpi-detector "$current/dpi-detector-linux-x86_64"
           (cd "$current" && sha256sum dpi-detector-linux-x86_64 > SHA256SUMS.txt)
-          DPI_RELEASE_BASE=http://127.0.0.1:8931/releases \
-            DPI_VERSION="v$ver" \
-            DPI_INSTALL_DIR="$PWD/target/install-prefix-current" \
-              sh install.sh > "$PWD/target/install-current.log" 2>&1
-          grep -q 'Checksum verified' "$PWD/target/install-current.log"
+          if ! DPI_RELEASE_BASE=http://127.0.0.1:8931/releases \
+               DPI_VERSION="v$ver" \
+               DPI_INSTALL_DIR="$PWD/target/install-prefix-current" \
+                 sh install.sh > "$PWD/target/install-current.log" 2>&1; then
+            echo "install.sh failed for DPI_VERSION=v$ver:"
+            cat "$PWD/target/install-current.log"
+            exit 1
+          fi
+          if ! grep -q 'Checksum verified' "$PWD/target/install-current.log"; then
+            echo "the checksum path did not run for v$ver:"
+            cat "$PWD/target/install-current.log"
+            exit 1
+          fi
           kill "$server" 2>/dev/null || true
           sleep 1
           if ! DPI_RELEASE_BASE=http://127.0.0.1:8931/releases \
                DPI_VERSION="v$ver" \
                DPI_INSTALL_DIR="$PWD/target/install-prefix-current" \
                  sh install.sh --version > "$PWD/target/install-again.log" 2>&1; then
+            echo "the second run failed for v$ver:"
             cat "$PWD/target/install-again.log"
             exit 1
           fi
           cat "$PWD/target/install-again.log"
-          grep -q 'already installed' "$PWD/target/install-again.log"
+          if ! grep -q 'already installed' "$PWD/target/install-again.log"; then
+            echo "an installed release was fetched again instead of run:"
+            cat "$PWD/target/install-again.log"
+            exit 1
+          fi
           if grep -q 'Downloading' "$PWD/target/install-again.log"; then
             echo "an installed release was downloaded again"
             exit 1
           fi
-          grep -q "dpi-detector $ver" "$PWD/target/install-again.log"
+          if ! grep -q "dpi-detector $ver" "$PWD/target/install-again.log"; then
+            echo "the second run did not print the installed version ($ver):"
+            cat "$PWD/target/install-again.log"
+            exit 1
+          fi
 
       # The same fixture under BusyBox, which is the userland the router targets
       # actually have: the installer's comments are written for it (`command -v`
@@ -235,9 +291,23 @@ jobs:
             > target/install-busybox/server.log 2>&1 &
           server=$!
           trap 'kill $server 2>/dev/null || true' EXIT
-          until curl -sf -o /dev/null "http://127.0.0.1:8931/releases/latest/download/SHA256SUMS.txt"; do
+          # Bounded, unlike the `until` this replaces: a server that never comes
+          # up — a port left bound by an earlier failure, say — would otherwise
+          # spin here until the job's timeout, which reports nothing at all.
+          ready=0
+          for _ in $(seq 1 20); do
+            if curl -sf --connect-timeout 1 -o /dev/null \
+                 "http://127.0.0.1:8931/releases/latest/download/SHA256SUMS.txt"; then
+              ready=1
+              break
+            fi
             sleep 0.3
           done
+          if [ "$ready" -ne 1 ]; then
+            echo "the BusyBox fixture server never answered:"
+            cat target/install-busybox/server.log
+            exit 1
+          fi
           docker run --rm --network host -v "$PWD:/src:ro" \
             -e DPI_RELEASE_BASE=http://127.0.0.1:8931/releases \
             -e DPI_VERSION=latest \
