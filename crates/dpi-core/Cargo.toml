@@ -4,6 +4,21 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+# Never published: this is the engine of a binary that ships as a GitHub release
+# artifact. It matters to `deny.toml` — cargo-deny reads the absent version on a
+# path-only dependency as a wildcard requirement, and its `allow-wildcard-paths`
+# exemption covers private crates only, because crates.io itself rejects a path
+# dependency in a publishable one.
+publish = false
+
+[features]
+# The one test in this workspace that dials the real internet
+# (`dns/doh.rs::test_doh_connect_h2` -> `dns.google`). Off by default so that the
+# default `cargo test` needs no egress: this tool exists for the networks that
+# block DNS to Google, and a runner that blocks or rate-limits it would turn a
+# green tree red with no code change. Opt in with
+# `cargo test -p dpi-core --features live-network`. No dependency rides on it.
+live-network = []
 
 [dependencies]
 tokio = { workspace = true }
@@ -55,3 +70,6 @@ tokio = { workspace = true, features = ["test-util"] }
 # Test-only: the round-trip test needs a real encoder to produce the payloads
 # `net::cert_compression` has to read. Never linked into a release build.
 brotli = "8"
+
+[lints]
+workspace = true

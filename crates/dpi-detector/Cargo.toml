@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+# Never published: a binary crate that ships as a GitHub release asset. Same
+# reason as `dpi-core` — `deny.toml`'s wildcard check only exempts a path-only
+# dependency in a crate crates.io would refuse to accept it in.
+publish = false
 
 [[bin]]
 name = "dpi-detector"
@@ -31,3 +35,14 @@ winreg = "0.55"
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
+
+# Duplicated from `[workspace.lints]` rather than inherited, because Cargo rejects
+# a local entry next to `lints.workspace = true` — "cannot override
+# `workspace.lints` in `lints`" — and this crate has to add one lint.
+[lints.rust]
+unreachable_pub = "warn"
+# Kept in step with the workspace table by hand for the same reason.
+dead_code_pub_in_binary = "warn"
+
+[lints.clippy]
+all = "deny"

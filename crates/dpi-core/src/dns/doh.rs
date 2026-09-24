@@ -18,13 +18,19 @@ use crate::config::AppConfig;
 use crate::net::tcp::set_no_delay;
 use crate::net::tls::{create_tls_config, TlsProfile};
 
-pub enum DohSender {
+/// The transport half of one DoH connection: one variant per protocol the
+/// handshake negotiated. `pub(crate)`, not `pub`: both variants are `hyper` types,
+/// and `hyper` here is a `[patch.crates-io]` fork (root `Cargo.toml`), so in a
+/// public signature the fork becomes part of dpi-core's API — swapping it would
+/// break callers instead of rebuilding them. Nothing outside this crate names the
+/// type; `DohSession` is what the probes hold.
+pub(crate) enum DohSender {
     H1(hyper::client::conn::http1::SendRequest<Full<Bytes>>),
     H2(hyper::client::conn::http2::SendRequest<Full<Bytes>>),
 }
 
 impl DohSender {
-    pub async fn send_request(&mut self, req: Request<Full<Bytes>>) -> Result<hyper::Response<hyper::body::Incoming>, DnsError> {
+    pub(crate) async fn send_request(&mut self, req: Request<Full<Bytes>>) -> Result<hyper::Response<hyper::body::Incoming>, DnsError> {
         match self {
             DohSender::H1(s) => s.send_request(req).await.map_err(|e| DnsError::Io(e.to_string())),
             DohSender::H2(s) => s.send_request(req).await.map_err(|e| DnsError::Io(e.to_string())),
@@ -34,7 +40,8 @@ impl DohSender {
 
 /// Opens one verifying-TLS HTTPS (HTTP/2 with HTTP/1.1 fallback) connection to a DoH endpoint.
 /// The caller keeps that single connection for every query to the server.
-pub async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Result<(DohSender, String, String), DnsError> {
+/// `pub(crate)`, like the `DohSender` it returns: its variants are vendored `hyper` types.
+pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Result<(DohSender, String, String), DnsError> {
     let url = Url::parse(endpoint_url)
         .map_err(|e| DnsError::Io(format!("invalid DoH URL: {}", e)))?;
 
@@ -322,8 +329,15 @@ pub async fn query_doh_txt(
 #[cfg(test)]
 mod tests {
 
+    #[cfg(feature = "live-network")]
     use super::*;
 
+    /// The only test in this workspace that reaches the real internet, and
+    /// `dns.google` is exactly what the networks this tool is built to diagnose
+    /// block. Behind `live-network` so the default `cargo test` runs air-gapped:
+    /// otherwise a runner whose egress is blocked or rate-limited reddens the tree
+    /// with no code change. `cargo test -p dpi-core --features live-network`.
+    #[cfg(feature = "live-network")]
     #[tokio::test]
     async fn test_doh_connect_h2() {
         let mut sess = DohSession::connect("https://dns.google/dns-query", Duration::from_secs(5))

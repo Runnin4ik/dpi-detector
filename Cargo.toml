@@ -83,6 +83,36 @@ base64 = "0.22"
 sha2 = "0.10"
 rustix = { version = "0.38", default-features = false, features = ["use-libc", "termios", "stdio"] }
 
+# The lint posture lives in the manifest, not only on the CI command line, so that
+# a bare `cargo build`/`cargo test` — both of which `check.yml` runs — carries it
+# too, and so that a single non-default lint has somewhere to be turned on.
+# `dpi-core` takes it from here with `[lints] workspace = true`; `dpi-detector`
+# has to repeat the table locally, because Cargo refuses a local entry next to
+# `workspace = true` and that crate needs one (its manifest says which and why).
+# `vendor/rustls-rustcrypto` does not opt in at all: its crate root already
+# declares its own table, and upstream's suppressions are upstream's to make.
+[workspace.lints.rust]
+# `pub` on an item no path from the crate root can reach is a refactor leftover:
+# the item is `pub` only because it once was exported. Hoisted from
+# `crates/dpi-core/src/lib.rs`, which carried it alone.
+unreachable_pub = "warn"
+# `dead_code_pub_in_binary` is deliberately NOT set here, though the rule it
+# enforces (a `pub` item must not hide dead code in a crate that ships as a
+# binary) is one this project wants. `cargo test` compiles every library's test
+# target as a *binary harness*, so under `--all-targets` the lint fires on every
+# `pub` item a library exports for its dependents — 68 errors in `dpi-core`
+# alone, all of them used by `dpi-detector`. The rule is enforced where it can
+# hold instead: `crates/dpi-detector/Cargo.toml` sets it in its own table.
+
+[workspace.lints.clippy]
+# Equivalent to the `-- -D warnings` the CI clippy step passes — the whole
+# `clippy::all` group, which rustc leaves at `warn`. `pedantic` and `nursery` stay
+# off deliberately: their 196 members against a `-D warnings` tree fail on the
+# first run, and the two this project actually wants (`cast_lossless`, an allow
+# with a reason at every suppression site) are per-lint entries away when they are
+# wanted, not a group.
+all = "deny"
+
 [profile.release]
 opt-level = "z"
 lto = true
@@ -95,6 +125,17 @@ strip = true
 # codegen units and rustc's incremental cache. ~7x faster rebuilds at ~46%
 # larger binary (6.6 MiB vs 4.5 MiB), so releases still ship `--release`:
 #   cargo build --profile release-local --target x86_64-pc-windows-msvc -p dpi-detector
+#
+# Measured per changed file: 52 s under `release` against 1.28 s here, so
+# rebuilding `--release` to "check that it compiles" burns ~40x the time for
+# nothing. A no-op `--release` rebuild is 0.45 s — the cost is the LTO relink.
+#
+# Never alternate flag sets inside one target directory. Cargo keys a unit's
+# fingerprint on the full rustc invocation, `RUSTFLAGS` included, so switching
+# `+crt-static` on and off — or running `release-local` after a differently
+# flagged build of it — recompiles every dependency: measured 88 s for what
+# should have been a 1.3 s rebuild. Run the release row exactly as written, in
+# the same shell, every time.
 [profile.release-local]
 inherits = "release"
 lto = false
@@ -111,7 +152,11 @@ incremental = true
 # diagnostic run depends on is *ours* — dpi-core and the vendored provider, which
 # is a workspace member and therefore not covered by this table — so optimizing
 # dependencies would cost edit→test time without addressing the false timeouts
-# the dev profile is documented to produce (AGENTS.md §5). Timing runs belong to
-# `release-local`.
+# the dev profile is documented to produce (AGENTS.md, "Development Commands").
+# Timing runs belong to `release-local`.
+#
+# `panic` is deliberately not set here: Cargo ignores it for the test profile, so
+# a dev-profile `panic = "abort"` would build the dependency graph twice, once per
+# panic strategy. Only `release` sets it.
 [profile.dev.package."*"]
 debug = false

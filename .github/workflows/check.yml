@@ -73,15 +73,51 @@ jobs:
       - name: Build
         run: cargo build --workspace --locked
 
+      # No egress needed: the one test that dials the real internet
+      # (`dns/doh.rs::test_doh_connect_h2`) sits behind dpi-core's `live-network`
+      # feature, off here on purpose — a runner that blocks or rate-limits
+      # `dns.google` would otherwise red the tree with no code change. The linux
+      # job compiles that test in a step of its own, so it cannot rot unseen.
       - name: Test
         run: cargo test --workspace --locked
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      # Intra-doc links are user-visible on docs.rs and nothing checked them:
-      # twelve were broken when this step went in, all of them links from public
-      # docs to private items. `--no-deps` keeps it to this workspace.
+      # The `live-network` test is compiled by no other step: the run above cannot
+      # see it, and `release.yml` does not run tests at all. Without this, a
+      # signature change in `dns/doh.rs` would surface the day someone runs the
+      # test against the real `dns.google`. `--no-run` builds the harness and stops
+      # short of dialling anything, so this step needs no egress either.
+      - name: Compile the live-network test without running it
+        run: cargo test --locked -p dpi-core --features live-network --no-run
+
+      # Rule 2 (AGENTS.md) caps the shipped binary at 3-6 MB, and nothing measured
+      # it: a dependency added for convenience, or a monomorphisation blow-up,
+      # would be noticed by a router instead of by this job. Same `--release`
+      # profile the artifacts are cut from (`opt-level = "z"`, fat LTO, `strip`,
+      # `panic = "abort"`) on the one target the runner builds natively, so this is
+      # a tripwire rather than a per-arch baseline: `docs/OPTIMIZATIONS.md` logs
+      # 3.17 MB for the optimized desktop binary and `[profile.release-local]` in
+      # the root manifest documents `--release` at 4.5 MiB, so 6 MiB is the top of
+      # the documented budget with no headroom invented for it. The cross-built
+      # MIPS/ARM rows are the release matrix's business.
+      - name: Release binary fits the size budget
+        run: |
+          set -eu
+          cargo build --release --locked -p dpi-detector
+          size=$(stat -c %s target/release/dpi-detector)
+          limit=$((6 * 1024 * 1024))
+          echo "dpi-detector (linux x86_64, --release): $size bytes, budget $limit"
+          if [ "$size" -gt "$limit" ]; then
+            echo "::error::the release binary is $size bytes, over the 6 MiB budget (AGENTS.md Rule 2)"
+            exit 1
+          fi
+
+      # Intra-doc links are user-visible on docs.rs and nothing checked them.
+      # The tree carried broken links of this exact kind — a public doc naming a
+      # private item — the day the step went in, which is what `-D warnings`
+      # rejects here. `--no-deps` keeps it to this workspace.
       - name: Doc links
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --no-deps
 
@@ -300,6 +336,11 @@ jobs:
       - name: Build
         run: cargo build --workspace --locked
 
+      # No egress needed: the one test that dials the real internet
+      # (`dns/doh.rs::test_doh_connect_h2`) sits behind dpi-core's `live-network`
+      # feature, off here on purpose — a runner that blocks or rate-limits
+      # `dns.google` would otherwise red the tree with no code change. The linux
+      # job compiles that test in a step of its own, so it cannot rot unseen.
       - name: Test
         run: cargo test --workspace --locked
 
@@ -452,7 +493,7 @@ jobs:
           key: ${{ runner.os }}-policy-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: ${{ runner.os }}-policy-cargo-
 
-      # Rule 1 (AGENTS.md §2): no C or C++ may enter the build, because the
+      # Rule 1 (AGENTS.md): no C or C++ may enter the build, because the
       # router targets are cross-compiled with toolchains whose C compilers are
       # broken or absent, and `ring` does not target MIPS at all. `cargo tree`
       # answers that against the graph that is actually built — feature- and
@@ -496,6 +537,12 @@ jobs:
       # builds unreproducible. `advisories` is the RustSec database: this tool
       # parses bytes from a hostile network (TLS records, DNS responses, zstd
       # certificate frames), so a known vulnerability in a decoder is a defect
-      # here, not a housekeeping item.
-      - name: Check licences, sources and advisories
-        run: cargo deny --locked check licenses sources advisories
+      # here, not a housekeeping item. `bans` is the shape of the lock rather than
+      # its licences: a requirement the lock cannot pin (`wildcards = "deny"` — the
+      # two intra-workspace path dependencies are exempt, which is what
+      # `publish = false` on the two product crates buys) and a crate that appears
+      # twice and therefore compiles twice (`multiple-versions = "warn"`: the lock
+      # already carries nine such crates through third-party edges, so `deny` would
+      # fail on its first run and teach nothing).
+      - name: Check licences, sources, advisories and bans
+        run: cargo deny --locked check bans licenses sources advisories

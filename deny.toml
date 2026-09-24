@@ -1,6 +1,6 @@
 # cargo-deny policy, enforced by `.github/workflows/check.yml` (`policy` job).
 #
-# Three checks run, each answering a question this project has to answer anyway:
+# Four checks run, each answering a question this project has to answer anyway:
 #
 #   licenses    The repository redistributes four patched forks (`vendor/rustls`,
 #               `h2`, `hyper`, `rustls-rustcrypto`, all Apache-2.0/ISC/MIT) and
@@ -14,9 +14,13 @@
 #   advisories  RustSec. This tool parses bytes from a network that is assumed
 #               hostile — TLS records, DNS responses, zstd certificate frames —
 #               so a published vulnerability in a decoder is a defect in it.
+#   bans        The shape of the resolved lock rather than its licences: a
+#               requirement the lock cannot pin, and a crate that appears twice
+#               and therefore compiles twice. It is NOT how the pure-Rust rule is
+#               enforced — see below.
 #
-# The pure-Rust rule (AGENTS.md §2) is NOT expressed here: `bans` evaluates the
-# resolved lock, which holds `ring` and `cc` as optional edges of
+# The pure-Rust rule (AGENTS.md, Rule 1) is NOT expressed by `bans`: that check
+# evaluates the resolved lock, which holds `ring` and `cc` as optional edges of
 # `rustls-webpki` that no build enables, so denying them by name would fail on
 # the first run. `check.yml` asks `cargo tree` instead, which is feature- and
 # target-resolved.
@@ -81,3 +85,28 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
+
+[bans]
+# A `*` requirement resolves to whatever the registry happens to hold at build
+# time, so the lock stops meaning anything: the same commit builds a different
+# graph next month, on a router nobody can inspect. Nothing here needs one —
+# every requirement in this tree carries a version — so this is a tripwire
+# against a dependency added later, not a migration.
+#
+# The two hits on the first run are path dependencies inside this workspace
+# (`rustls-rustcrypto`, `dpi-core`), whose requirement cargo-deny reads as `*`
+# because a path carries no version to pin. `allow-wildcard-paths` is what keeps
+# the check aimed at the registry, where a `*` really does move.
+wildcards = "deny"
+allow-wildcard-paths = true
+# `warn`, not `deny`: the lock already carries nine duplicated crates through
+# third-party edges (`windows-sys` three ways, plus `syn`, `digest`, `rustix`,
+# `block-buffer`, `cpufeatures`, `crypto-common`, `linux-raw-sys`, `rand_core`),
+# and none of them is a requirement this repository writes — `deny` would fail on
+# its first run and be deleted again. What `warn` buys is the list, and a
+# duplicate that shows up in a diff is a dependency that doubled its compiled
+# code, which is exactly the 3-6 MB budget's business (AGENTS.md, Rule 2).
+multiple-versions = "warn"
+# The whole reverse-dependency chain per duplicate, so the output names the crate
+# that introduced it instead of only the two versions.
+highlight = "all"
