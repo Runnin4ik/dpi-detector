@@ -12,11 +12,12 @@
 //!
 //! Where the check lives is the point of the module. It used to be the one
 //! *semantic* change inside `vendor/rustls-rustcrypto/src/kx.rs`, i.e. a hunk
-//! upstream does not carry — the project's tracker has never mentioned
-//! `was_contributory`, so it is a gap rather than a decision — and which therefore
-//! had to be re-applied by hand on every rebase of that fork. It is now ours, in
-//! the crate that pays for it, and the vendored copy keeps only the
-//! `rustls-webpki` import swap and the two lint edits its workspace membership
+//! upstream does not carry — the check is submitted there as
+//! [RustCrypto/rustls-rustcrypto#314](https://github.com/RustCrypto/rustls-rustcrypto/pull/314),
+//! and that project's tracker had never mentioned `was_contributory` before it —
+//! and which therefore had to be re-applied by hand on every rebase of that fork.
+//! It is now ours, in the crate that pays for it, and the vendored copy keeps only
+//! the `rustls-webpki` import swap and the two lint edits its workspace membership
 //! costs (`vendor/rustls-rustcrypto/README-PATCH.md`).
 //!
 //! The group is offered under the same name, in the same position in

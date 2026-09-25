@@ -85,10 +85,12 @@ swap.
   provider: a peer key of low order makes the Diffie-Hellman result the identity —
   a secret the peer knows — and `x25519-dalek` only *reports* that through
   `was_contributory()`. Upstream reads the report nowhere (0.0.2-alpha and
-  `master` alike), so the check has to come from outside the crate — and nothing in
-  that project's tracker names `was_contributory` either, so the gap is one nobody
-  has raised rather than one that was weighed and refused. Keeping the check
-  outside is what leaves this patch with nothing of ours in it.
+  `master` alike), and nothing in that project's tracker named `was_contributory`
+  before this — the gap is one nobody had raised rather than one that was weighed
+  and refused. Keeping the check outside is what leaves this patch with nothing of
+  ours in it, and the check itself is submitted upstream as
+  [RustCrypto/rustls-rustcrypto#314][pr314]: when a release carries it, the group
+  and the substitution in `crypto_provider()` both go.
 * **Trimming what we do not use** (`quic.rs`, `sign/*`, the `KeyProvider`). The
   client path here loads no client certificate, but the saving has to be
   measured (`cargo bloat`, `--release` diff) before it is worth editing crypto
@@ -176,3 +178,4 @@ the source is now ours.
   against the real roots.
 
 [RUSTSEC-2026-0104]: https://rustsec.org/advisories/RUSTSEC-2026-0104.html
+[pr314]: https://github.com/RustCrypto/rustls-rustcrypto/pull/314
