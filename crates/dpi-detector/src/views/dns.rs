@@ -182,11 +182,12 @@ fn dns_latency_lines(
 ///
 /// Two badges say nothing about what happened and both are read wrong without
 /// their reason: `UNKNOWN` is the classifier declining to place the error — its
-/// [`Detail`] holds the transport's own words, the only thing that identifies it
-/// — and `NO CA BUNDLE` is a chain that stopped short of a bundled root, which is
-/// a local trust mismatch rather than proof of blocking (the TLS classification
-/// notes in AGENTS.md). `--json` has carried `detail` beside `status` for both
-/// all along; the console showed the token and stopped there.
+/// [`dpi_core::classify::Detail`] holds the transport's own words, the only
+/// thing that identifies it — and `NO CA BUNDLE` is a chain that stopped short
+/// of a bundled root, which is a local trust mismatch rather than proof of
+/// blocking (the TLS classification notes in AGENTS.md). `--json` has carried
+/// `detail` beside `status` for both all along; the console showed the token
+/// and stopped there.
 ///
 /// Nothing is printed when neither occurs, so a clean run grows no block. The
 /// list is `DnsAvailReport::endpoint_failures`, the same source the JSON

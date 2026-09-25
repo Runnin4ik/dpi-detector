@@ -247,7 +247,7 @@ impl HttpSender {
     /// crate's — and `alpn_h2` must be what the TLS handshake negotiated: it is
     /// the only thing that decides which client starts. `fingerprint` pins the
     /// HTTP/2 preface and the shape of the requests on it; the baseline profile
-    /// takes [`BASELINE_H2`], which is what hyper's own h2 client sent.
+    /// takes `BASELINE_H2`, which is what hyper's own h2 client sent.
     pub async fn handshake<T>(io: T, alpn_h2: bool, fingerprint: TlsFingerprint) -> Result<Self, HttpError>
     where
         T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -327,7 +327,7 @@ impl HttpSender {
 /// The response body of either protocol, as one `Body`.
 ///
 /// hyper hands HTTP/1.1 a body that decodes chunked framing itself, and the h2
-/// client hands HTTP/2 a `RecvStream`; [`check_http`] and the DoH client read
+/// client hands HTTP/2 a `RecvStream`; `check_http` and the DoH client read
 /// both with `frame()` in a loop, so the two meet here instead of in each
 /// reader. Like [`HttpError`], the variants stay private.
 pub struct HttpBody(pub(crate) BodyKind);
