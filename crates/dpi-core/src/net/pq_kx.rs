@@ -101,8 +101,8 @@ impl ActiveKeyExchange for ActiveX25519MlKem768 {
         // RFC 8446 §4.2.8.2 through the draft: a peer key of low order yields the
         // all-zero secret, and the handshake must abort instead of deriving keys
         // from it. x25519-dalek reports that as `was_contributory` rather than
-        // failing on its own, and the bare X25519 group in the provider does not
-        // check it either (upstream's, both in 0.0.2-alpha and `master`).
+        // failing on its own, and the bare X25519 group is this crate's own for
+        // the same reason (`net/x25519.rs`).
         if !x_dh.was_contributory() {
             return Err(invalid_key_share());
         }

@@ -62,30 +62,6 @@ diff -r a\Cargo.toml b\Cargo.toml
      "ed25519-dalek/std",
 Only in b: PATCH.diff
 Only in b: README-PATCH.md
-diff -r a\src\kx.rs b\src\kx.rs
---- a\src\kx.rs	2026-09-18 02:16:01.939481300 +0300
-+++ b\src\kx.rs	2026-09-18 02:16:02.052824700 +0300
-@@ -30,11 +30,15 @@
-         let peer_array: [u8; 32] = peer
-             .try_into()
-             .map_err(|_| rustls::Error::from(rustls::PeerMisbehaved::InvalidKeyShare))?;
--        Ok(self
--            .priv_key
--            .diffie_hellman(&peer_array.into())
--            .as_ref()
--            .into())
-+        let shared = self.priv_key.diffie_hellman(&peer_array.into());
-+        // RFC 8446 §4.2.8.2: a peer key of low order yields the all-zero secret,
-+        // and the handshake must abort rather than build keys from it. The ring
-+        // and aws-lc-rs providers reject it; x25519-dalek only reports it, and
-+        // upstream leaves the report unread.
-+        if !shared.was_contributory() {
-+            return Err(rustls::Error::from(rustls::PeerMisbehaved::InvalidKeyShare));
-+        }
-+        Ok(shared.as_ref().into())
-     }
- 
-     fn pub_key(&self) -> &[u8] {
 diff -r a\src\lib.rs b\src\lib.rs
 --- a\src\lib.rs	2026-09-18 02:16:01.942560100 +0300
 +++ b\src\lib.rs	2026-09-18 02:16:02.053370700 +0300

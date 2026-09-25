@@ -2,6 +2,7 @@ pub mod tls;
 pub mod cert_compression;
 pub mod hpke;
 pub mod pq_kx;
+pub mod x25519;
 pub mod fingerprint;
 pub mod connector;
 pub mod follow_up;

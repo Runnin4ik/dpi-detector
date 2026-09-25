@@ -9,16 +9,39 @@ use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCert
 use crate::net::fingerprint::{HelloVariant, TlsFingerprint};
 use crate::net::hpke;
 
-/// Returns the shared pure-Rust RustCrypto provider.
+/// Returns the shared pure-Rust RustCrypto provider, with this crate's X25519
+/// group in place of the provider's.
 ///
 /// Crate-private: no caller outside `dpi-core` picks a provider — the config
 /// builders do ([`create_tls_config`]) — so this stays a detail of how a
 /// `ClientConfig` is assembled.
+///
+/// The substitution is the one [`crate::net::x25519`] explains: the provider's own
+/// `X25519` completes a key exchange with a low-order peer key, where RFC 8446
+/// §4.2.8.2 requires the handshake to abort. The replacement keeps the name and
+/// the position in `kx_groups`, so nothing else about a ClientHello moves.
 pub(crate) fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
     static PROVIDER: LazyLock<Arc<rustls::crypto::CryptoProvider>> = LazyLock::new(|| {
-        let p = Arc::new(rustls_rustcrypto::provider());
-        let _ = rustls_rustcrypto::provider().install_default();
-        p
+        let upstream = rustls_rustcrypto::provider();
+        let groups: Vec<&'static dyn rustls::crypto::SupportedKxGroup> = upstream
+            .kx_groups
+            .iter()
+            .copied()
+            .map(|group| {
+                if group.name() == rustls::NamedGroup::X25519 {
+                    &crate::net::x25519::ContributoryX25519
+                        as &'static dyn rustls::crypto::SupportedKxGroup
+                } else {
+                    group
+                }
+            })
+            .collect();
+        let provider = rustls::crypto::CryptoProvider { kx_groups: groups, ..upstream };
+        // Installed as the process default too: a config built without this
+        // provider passed explicitly would otherwise negotiate through the
+        // provider's unguarded group, which is the hole this closes.
+        let _ = provider.clone().install_default();
+        Arc::new(provider)
     });
     Arc::clone(&PROVIDER)
 }
@@ -762,15 +785,15 @@ mod tests {
         assert!(err.contains("UnknownIssuer"), "{name} leaf: {err}");
     }
 
-    /// RFC 8446 §4.2.8.2 on the provider's own X25519 group, which is what every
-    /// probe that negotiates X25519 uses. An all-zero share is a low-order point
-    /// and its Diffie-Hellman output is the identity; x25519-dalek returns that
-    /// as zeros and only *reports* `was_contributory`, so a provider that does
-    /// not read the report completes a handshake on a secret the peer can
-    /// predict. Upstream RustCrypto leaves it unread (0.0.2-alpha and `master`
-    /// alike), which is why `vendor/rustls-rustcrypto` carries the check.
+    /// The group the provider offers under `X25519` is this crate's, and every
+    /// probe that negotiates X25519 goes through it: [`crate::net::x25519`] carries
+    /// the check and the reason it cannot live in the provider. This test is the
+    /// wiring — it asks the composed provider rather than the group, so a
+    /// substitution dropped in [`crypto_provider`] fails here.
     ///
-    /// `net::pq_kx`'s own two paths are covered by `rejects_a_low_order_x25519_share`.
+    /// `net::x25519`'s own tests cover the seven low-order encodings and a real
+    /// peer, and `net::pq_kx`'s two paths are covered by
+    /// `rejects_a_low_order_x25519_share`.
     #[test]
     fn provider_x25519_group_rejects_a_low_order_peer_key() {
         let provider = crypto_provider();
