@@ -59,6 +59,7 @@ Toolchain from `rust-toolchain.toml` (rustup, cargo, CI read it).
 | Supply chain | `cargo deny --locked check bans licenses sources advisories` (cargo-deny 0.20.2) |
 | Run | `cargo run -p dpi-detector -- --tests 2 --lang en` |
 | Example harness | `cargo run --release --example tls_fingerprint -- diff a.hex b.hex` |
+| JA4 cost | `cargo run --profile release-local -p dpi-core --example ja4_cost` (prices the legend's JA4 pass in ClientHello builds) |
 
 ```powershell
 cargo build --profile release-local --target x86_64-pc-windows-msvc -p dpi-detector  # iterate, ~1.5 s
