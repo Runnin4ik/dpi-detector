@@ -26,7 +26,7 @@ is `vendor/rustls-rustcrypto`'s `logging`, a configuration nothing ships.
 | `check` (ubuntu) | installer smoke tests: `install.sh` under `dash` and under BusyBox against a local release fixture, comparing the published `SHA256SUMS.txt` line and the `--version` of the installed file; `shellcheck -s sh --severity=warning`; mirror-list parity between `install.sh` and `install.ps1` (a host added to one file and forgotten in the other is a source a whole platform cannot reach) |
 | `windows` | the same build/test/clippy on `windows-2025`: `cfg(windows)` is dead on the Linux runner, so the Win32 console-mode probe, the keyboard layouts and the Windows adapters compile nowhere else |
 | `artifacts` | the `actions/upload-artifact` + `download-artifact` pair — they are bumped together, and a mismatch shows up only on a tag |
-| `policy` | pure Rust: `cargo tree --workspace --target all -e normal,build -i <crate>` over the ban list, then `cargo deny` |
+| `policy` | pure Rust: `cargo tree --workspace --target all -e normal,build -i <crate>` over the ban list, then `cargo deny`; and `scripts/vendor-advisories.sh`, because a `[patch.crates-io]` path dependency has no `source` in the lock and the advisory check skips it — the vendored crates are asked about by the published names and versions of the sources they carry |
 
 Every job sets `timeout-minutes`: a stalled `cross` pull or a hung installer MUST NOT hold
 a runner for the six-hour default.
@@ -82,6 +82,8 @@ workflow runs on.
 
 ## Nothing needs running by hand
 
-Neither `policy` nor the installer smoke tests are run manually before a push. Three
-things actually fail the job: a new dependency, an installer edit, and a broken doc link
-(`cargo doc` with `-D warnings` is the only thing that reads intra-doc links at all).
+Neither `policy` nor the installer smoke tests are run manually before a push. Four
+things actually fail the job: a new dependency, an installer edit, a broken doc link
+(`cargo doc` with `-D warnings` is the only thing that reads intra-doc links at all), and
+a vendored crate whose *published* version is affected by an advisory
+(`scripts/vendor-advisories.sh` — the `cargo deny` step cannot see a path dependency).
