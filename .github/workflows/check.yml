@@ -680,4 +680,7 @@ jobs:
       # the published names and versions of the sources they carry, which is what
       # makes the vendoring a supply-chain decision rather than an exemption.
       - name: Check the vendored crates against the advisory database
-        run: scripts/vendor-advisories.sh
+        # Through `bash`, not by path: the file's mode in the index is 100644 (a
+        # Windows checkout cannot carry the executable bit), and a runner would
+        # refuse to execute it.
+        run: bash scripts/vendor-advisories.sh
