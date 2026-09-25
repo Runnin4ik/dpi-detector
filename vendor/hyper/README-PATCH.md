@@ -28,7 +28,9 @@ That is what the probes need: a request that claims to be Chrome 146 sends
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 1.11.1 — **45 lines in one file**.
+`PATCH.diff` is the exact diff against pristine 1.11.1 — **177 lines in two
+files**: the public surface and its documentation in `src/ext/mod.rs`, and the
+encoder test in `src/proto/h1/role.rs`.
 It applies to a pristine copy with `patch -p1` (`patch -p1 --dry-run` was run
 against the crates.io source, and the applied result was compared with this tree
 byte for byte).
@@ -62,13 +64,16 @@ for the baseline preface.
 
 ## Upstream
 
-The one remaining hunk is submitted as
+The patch is submitted as
 [hyperium/hyper#4203](https://github.com/hyperium/hyper/pull/4203) — the minimal
 exposure [`#2695`](https://github.com/hyperium/hyper/issues/2695) asked for
 ("just figuring out the minimal methods needed to expose the existing
-`hyper::ext::HeaderCaseMap`"), which also answers
-[`#3971`](https://github.com/hyperium/hyper/issues/3971). When a hyper release
-carries it, this directory and its `[patch]` entry both go.
+`hyper::ext::HeaderCaseMap`"). [`#3971`](https://github.com/hyperium/hyper/pull/3971)
+explores the same design space from the other side (a `String` spelling for
+validation, still `pub(crate)`) and is parked behind the proposal process that
+[`#4131`](https://github.com/hyperium/hyper/pull/4131) (HIP-0001, merged) set up.
+When a hyper release carries the exposure, this directory and its `[patch]` entry
+both go.
 
 ## Notes for maintainers
 

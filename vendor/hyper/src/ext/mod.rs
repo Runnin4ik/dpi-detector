@@ -157,16 +157,46 @@ impl fmt::Debug for Protocol {
 ///
 /// [`preserve_header_case`]: /client/struct.Client.html#method.preserve_header_case
 ///
-/// # Writing a request with a client's own casing
+/// # Writing a message with a chosen casing
 ///
-/// A client that has to write a name the way some other program writes it —
-/// `TE` rather than `Te`, `sec-ch-ua` lowercase next to `Sec-Fetch-Site` — puts
-/// one here, in the request's extensions, and the h1 encoder writes the
-/// spellings it finds, falling back to the lowercase `HeaderName` for a name the
-/// map does not mention.
+/// A client that has to write a header name the way some other program writes
+/// it, because a server compares the bytes it receives. For example, `TE`
+/// rather than the lowercased `te`, or `sec-ch-ua` lowercased right next to a
+/// title-cased `Sec-Fetch-Site`. Insert a map like that into the message's
+/// extensions, and the HTTP/1 encoder writes each spelling it finds; a name the
+/// map does not mention is written as the lowercased [`HeaderName`].
+///
+/// ```rust
+/// use http::header::{HeaderName, HeaderValue, TE};
+/// use hyper::body::Bytes;
+/// use hyper::ext::HeaderCaseMap;
+///
+/// let sec_fetch_site = HeaderName::from_static("sec-fetch-site");
+///
+/// let mut req = http::Request::new(());
+/// req.headers_mut()
+///     .insert(TE, HeaderValue::from_static("trailers"));
+/// req.headers_mut()
+///     .insert(sec_fetch_site.clone(), HeaderValue::from_static("cross-site"));
+///
+/// let mut case_map = HeaderCaseMap::default();
+/// case_map.append(TE, Bytes::from_static(b"TE"));
+/// case_map.append(sec_fetch_site, Bytes::from_static(b"Sec-Fetch-Site"));
+///
+/// req.extensions_mut().insert(case_map);
+/// ```
 #[cfg(all(any(feature = "client", feature = "server"), feature = "http1"))]
 #[derive(Clone, Debug)]
 pub struct HeaderCaseMap(HeaderMap<Bytes>);
+
+#[cfg(all(any(feature = "client", feature = "server"), feature = "http1"))]
+impl Default for HeaderCaseMap {
+    /// An empty map: every header name is written as the lowercased
+    /// [`HeaderName`] it is.
+    fn default() -> Self {
+        Self(HeaderMap::default())
+    }
+}
 
 #[cfg(all(any(feature = "client", feature = "server"), feature = "http1"))]
 impl HeaderCaseMap {
@@ -187,19 +217,24 @@ impl HeaderCaseMap {
         self.0.get_all(name).into_iter()
     }
 
-    /// An empty map: every header name goes out as the lowercase
-    /// `http::HeaderName` it is.
-    #[cfg(any(feature = "client", feature = "server"))]
-    pub fn default() -> Self {
-        Self(HeaderMap::default())
-    }
-
     #[cfg(any(test, feature = "ffi"))]
     pub(crate) fn insert(&mut self, name: HeaderName, orig: Bytes) {
         self.0.insert(name, orig);
     }
 
-    /// Records the spelling `orig` was written with, under its lowercase name.
+    /// Records that `name` was written as `orig`, and so should be written as
+    /// `orig` when this map is put in a message's extensions and the message is
+    /// encoded as HTTP/1.
+    ///
+    /// `name` is the lowercased [`HeaderName`] used to look the spelling up
+    /// again, and `orig` are the bytes to write. `orig` must be a legal header
+    /// name equal to `name`, ignoring case: it is written to the wire
+    /// verbatim, so a value that contains anything other than header name
+    /// characters produces a message that cannot be parsed back.
+    ///
+    /// Appending several spellings for one `name` keeps them all, in the order
+    /// appended, and the encoder pairs them with the values of that header in
+    /// the same order, writing the lowercased name for a value left over.
     #[cfg(any(feature = "client", feature = "server"))]
     pub fn append<N>(&mut self, name: N, orig: Bytes)
     where
@@ -305,5 +340,42 @@ impl OriginalHeaderOrder {
     /// ```
     pub(crate) fn get_in_order(&self) -> impl Iterator<Item = &(HeaderName, usize)> {
         self.entry_order.iter()
+    }
+}
+
+#[cfg(all(test, any(feature = "client", feature = "server"), feature = "http1"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_appended_spellings_that_differ_only_in_case_are_distinct() {
+        let mut case_map = HeaderCaseMap::default();
+
+        // A name the map does not mention has no spelling, so the encoder
+        // writes the lowercased `HeaderName`.
+        assert_eq!(
+            case_map
+                .get_all_internal(&HeaderName::from_static("x-bread"))
+                .count(),
+            0
+        );
+
+        // `HeaderName` lowercases the name of both of these, so the spellings
+        // end up under the one lowercased name, as entries of their own, in the
+        // order they were appended.
+        case_map.append(
+            HeaderName::from_bytes(b"x-Bread").expect("valid header name"),
+            Bytes::from_static(b"x-Bread"),
+        );
+        case_map.append(
+            HeaderName::from_bytes(b"X-BREAD").expect("valid header name"),
+            Bytes::from_static(b"X-BREAD"),
+        );
+
+        let spellings: Vec<&[u8]> = case_map
+            .get_all_internal(&HeaderName::from_static("x-bread"))
+            .map(AsRef::as_ref)
+            .collect();
+        assert_eq!(spellings, [b"x-Bread".as_slice(), b"X-BREAD".as_slice()]);
     }
 }
