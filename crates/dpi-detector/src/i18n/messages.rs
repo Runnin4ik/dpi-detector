@@ -157,6 +157,10 @@ pub(crate) struct Messages {
     pub timeout_label: &'static str,
     pub egress_na: &'static str,
     pub partial_dns_warn: &'static str,
+    /// Heading of the post-table block that spells out the `UNKNOWN` and
+    /// `NO CA BUNDLE` failures: those two tokens do not say what happened, and
+    /// their reason only travelled in `--json` until this block existed.
+    pub dns_failure_details_title: &'static str,
     /// Shown when the substitution reference came from DNS_TRUTH_FALLBACK
     /// instead of a live encrypted-DNS answer.
     pub dns_truth_fallback_note: &'static str,

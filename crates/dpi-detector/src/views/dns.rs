@@ -4,7 +4,7 @@
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dpi_core::classify::DpiStatus;
 use dpi_core::config::AppConfig;
-use crate::i18n::{Messages, format_bidi};
+use crate::i18n::{Messages, detail_text, format_bidi};
 use dpi_core::probe::dns_avail::{
     DnsAnswer, DnsAvailReport, ProbeKind, known_resolver, net24, org_label, subst_counts,
 };
@@ -98,6 +98,18 @@ fn fail_color(status: DpiStatus) -> Color {
     }
 }
 
+/// The console label of a transport: `DoH`, `DoT`, `UDP`. `--json` carries the
+/// machine tokens (`doh_wire`, `dot`, `udp`) and a table heads its columns with
+/// these, so the mapping lives here once — a second copy would let a bullet list
+/// and the column it belongs to name the same endpoint differently.
+fn proto_label(kind: ProbeKind) -> &'static str {
+    match kind {
+        ProbeKind::DohWire => "DoH",
+        ProbeKind::Dot => "DoT",
+        ProbeKind::Udp => "UDP",
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PartialDnsEndpoint {
     pub provider: String,
@@ -150,11 +162,7 @@ fn dns_latency_lines(
         let color = if vals.len() == domains.len() {
             Color::Green
         } else {
-            let proto = match kind {
-                ProbeKind::DohWire => "DoH",
-                ProbeKind::Dot => "DoT",
-                ProbeKind::Udp => "UDP",
-            };
+            let proto = proto_label(kind);
             partial.push(PartialDnsEndpoint {
                 provider: name.to_string(),
                 protocol: proto,
@@ -170,6 +178,42 @@ fn dns_latency_lines(
     lines
 }
 
+/// The failures the table cannot explain by its own tokens, printed under it.
+///
+/// Two badges say nothing about what happened and both are read wrong without
+/// their reason: `UNKNOWN` is the classifier declining to place the error — its
+/// [`Detail`] holds the transport's own words, the only thing that identifies it
+/// — and `NO CA BUNDLE` is a chain that stopped short of a bundled root, which is
+/// a local trust mismatch rather than proof of blocking (the TLS classification
+/// notes in AGENTS.md). `--json` has carried `detail` beside `status` for both
+/// all along; the console showed the token and stopped there.
+///
+/// Nothing is printed when neither occurs, so a clean run grows no block. The
+/// list is `DnsAvailReport::endpoint_failures`, the same source the JSON
+/// `failures` array is built from, so the two cannot disagree about which
+/// endpoint failed.
+fn render_dns_failure_details(report: &DnsAvailReport, msg: &Messages) -> String {
+    let mut out = String::new();
+    for f in report.endpoint_failures() {
+        let Some(reason) = f.reason.as_ref() else { continue };
+        if !matches!(reason.status, DpiStatus::Unknown | DpiStatus::NoCa) {
+            continue;
+        }
+        if out.is_empty() {
+            out.push_str(&format!("\n{}\n", msg.dns_failure_details_title));
+        }
+        out.push_str(&format!(
+            "  \x1b[33m{}\x1b[0m \x1b[1m{}\x1b[0m [{}] \x1b[2m{}\x1b[0m — {}: {}\n",
+            asc("•"),
+            f.provider,
+            proto_label(f.kind),
+            f.endpoint,
+            cell_color(reason.label(), fail_color(reason.status)),
+            detail_text(&reason.detail, msg.lang),
+        ));
+    }
+    out
+}
 
 pub(crate) fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, msg: &Messages) -> String {
     let mut out = String::new();
@@ -345,6 +389,7 @@ pub(crate) fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, 
     }
 
     out.push_str(&format!("{}\n", table));
+    out.push_str(&render_dns_failure_details(report, msg));
 
     // The reference was not measured on this network, so a stale configured IP
     // must never look like a measurement.
@@ -605,5 +650,91 @@ mod tests {
             out.contains("\x1b[32m198.51.100.2→LEVEL3"),
             "Level 3 answers through its own network, and that is green: {out}"
         );
+    }
+
+    /// `UNKNOWN` and `NO CA BUNDLE` name a failure the table cannot explain, so
+    /// the block under it must spell out the reason — and only for those two.
+    ///
+    /// The failure mode: a report whose DoH endpoint was cut off by a cert chain
+    /// that never reached a bundled root shows the badge and nothing else, which
+    /// is what `--json` was needed for; a run whose failures are ordinary
+    /// timeouts or a censor's reset grows a block for every row if the filter is
+    /// written the other way round.
+    #[test]
+    fn unknown_and_no_ca_failures_are_spelled_out_under_the_table() {
+        use dpi_core::classify::{Detail, DpiStatus};
+        use dpi_core::probe::dns_avail::{DnsAvailReport, FailReason, ProbeKey, ProbeKind};
+        use std::collections::HashMap;
+
+        /// One DoH endpoint that answered none of the forbidden domains, with
+        /// `reason` as its first failure.
+        fn report_with(reason: FailReason) -> DnsAvailReport {
+            let mut report = DnsAvailReport {
+                forbidden: vec!["rutor.info".to_string()],
+                doh_servers: vec![(
+                    "https://dns.google/dns-query".to_string(),
+                    "Google".to_string(),
+                    443,
+                )],
+                all_names: vec!["Google".to_string()],
+                ..Default::default()
+            };
+            let key = ProbeKey {
+                kind: ProbeKind::DohWire,
+                addr: "https://dns.google/dns-query".to_string(),
+                name: "Google".to_string(),
+            };
+            let mut dm = HashMap::new();
+            dm.insert("rutor.info".to_string(), None);
+            report.raw.insert(key.clone(), dm);
+            report.fail_reasons.insert(key, reason);
+            report
+        }
+
+        let ru = crate::i18n::get_messages(crate::i18n::Language::Ru);
+        let cfg = AppConfig::default();
+        let no_ca = report_with(FailReason {
+            status: DpiStatus::NoCa,
+            detail: Detail::NoRootCa,
+        });
+        let out = render_dns_availability(&no_ca, &cfg, &ru);
+        let heading = out
+            .find(ru.dns_failure_details_title)
+            .unwrap_or_else(|| panic!("the reason of a NO CA BUNDLE endpoint is not printed: {out}"));
+        assert!(
+            heading > out.find(ru.doh_min).unwrap_or(0),
+            "the block belongs under the table, not above it: {out}"
+        );
+        assert!(
+            out.contains("NO CA BUNDLE") && out.contains(&detail_text(&Detail::NoRootCa, ru.lang)),
+            "the line names the endpoint's verdict and its localized reason: {out}"
+        );
+        assert!(
+            out.contains("Google") && out.contains("[DoH]"),
+            "the line identifies which endpoint failed: {out}"
+        );
+
+        let en = crate::i18n::get_messages(crate::i18n::Language::En);
+        assert!(
+            render_dns_availability(&no_ca, &cfg, &en).contains(en.dns_failure_details_title),
+            "the heading follows --lang: {}",
+            render_dns_availability(&no_ca, &cfg, &en)
+        );
+
+        for reason in [
+            // An ordinary miss and a censor's reset: both tokens say what
+            // happened, so neither belongs in the block.
+            FailReason::timeout(),
+            FailReason { status: DpiStatus::TlsRst, detail: Detail::RstHello },
+            FailReason { status: DpiStatus::DnsFail, detail: Detail::DomainNotFound },
+        ] {
+            let other = report_with(reason.clone());
+            let out = render_dns_availability(&other, &cfg, &ru);
+            assert!(
+                !out.contains(ru.dns_failure_details_title),
+                "{:?} is not an UNKNOWN / NO CA BUNDLE failure, so it gets no block: {out}",
+                reason.status
+            );
+        }
     }
 }

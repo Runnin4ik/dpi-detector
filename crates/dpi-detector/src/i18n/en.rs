@@ -126,6 +126,7 @@ pub(crate) fn messages() -> Messages {
         timeout_label: "timeout",
         egress_na: "egress N/A",
         partial_dns_warn: "Partially available DNS servers (packet loss):",
+        dns_failure_details_title: "Details of UNKNOWN / NO CA BUNDLE failures:",
         dns_truth_fallback_note: "Reference IPs for part of the domains come from DNS_TRUTH_FALLBACK\n(config.yml): no encrypted DNS answered here, so they may be outdated.",
         dns_fakeip_warn: "[!] DNS responses contain FakeIP\nDisable proxy/FakeIP during check for accurate assessment.",
         dns_intercept_warn: "[!] Your ISP intercepts DNS queries\nISP replaces UDP DNS responses with stubs or fake NXDOMAIN/EMPTY/TIMEOUT",

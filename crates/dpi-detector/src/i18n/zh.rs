@@ -122,6 +122,7 @@ pub(crate) fn messages() -> Messages {
         timeout_label: "超时",
         egress_na: "出口不可用",
         partial_dns_warn: "部分可用的 DNS 服务器 (丢包):",
+        dns_failure_details_title: "UNKNOWN / NO CA BUNDLE 失败的详情:",
         dns_truth_fallback_note: "部分域名的基准 IP 来自 DNS_TRUTH_FALLBACK\n(config.yml)：本网络加密 DNS 无应答，这些 IP 可能已过期。",
         dns_fakeip_warn: "[!] DNS 响应包含 FakeIP\n为了进行准确的 DNS 评估，请在测试期间关闭代理/FakeIP。",
         dns_intercept_warn: "[!] 您的互联网服务提供商拦截了 DNS 查询\nISP 将 UDP DNS 响应替换为封锁页面或虚假 NXDOMAIN/EMPTY/TIMEOUT",

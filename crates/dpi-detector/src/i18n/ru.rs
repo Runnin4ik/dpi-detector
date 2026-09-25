@@ -126,6 +126,7 @@ pub(crate) fn messages() -> Messages {
         timeout_label: "таймаут",
         egress_na: "выход н/д",
         partial_dns_warn: "Частично доступные DNS-серверы (потери запросов):",
+        dns_failure_details_title: "Детали ошибок UNKNOWN / NO CA BUNDLE:",
         dns_truth_fallback_note: "Эталонные IP части доменов взяты из DNS_TRUTH_FALLBACK\n(config.yml): зашифрованный DNS здесь не ответил, они могут быть устаревшими.",
         dns_fakeip_warn: "[!] DNS-ответы содержат FakeIP\nДля честной оценки DNS отключите прокси/FakeIP на время проверки.",
         dns_intercept_warn: "[!] Ваш интернет-провайдер перехватывает DNS-запросы\nПровайдер подменяет ответы UDP DNS на заглушки или ложные NXDOMAIN/EMPTY/TIMEOUT",
