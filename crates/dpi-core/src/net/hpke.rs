@@ -12,7 +12,9 @@
 //! `x25519-dalek` is in the tree for the group, `hkdf` and `hmac` for the KDF and
 //! `aes-gcm`/`chacha20poly1305` for the AEAD, because the provider uses all of
 //! them for TLS itself — so what is written here is the RFC's plumbing, pinned
-//! against the RFC's own vectors (appendix A.1: X25519, HKDF-SHA256, AES-128-GCM).
+//! against the RFC's own vectors: appendix A.1 (X25519, HKDF-SHA256, AES-128-GCM)
+//! and appendix A.2, which is the same KEM and KDF under ChaCha20-Poly1305 and so
+//! pins the 32-byte key the AES-256-GCM suite also takes.
 //!
 //! A client only ever seals: the sealer path is what ECH needs, and the opener
 //! exists because the trait requires it and because the vectors exercise both.
@@ -538,6 +540,112 @@ mod tests {
         let mut opener = suite.opener_with(&SK_RM, &PK_EM, INFO).expect("opener");
 
         for (sequence, (aad, ciphertext, nonce)) in VECTOR.into_iter().enumerate() {
+            assert_eq!(sealer.0.nonce_at(sequence as u64), nonce, "the nonce for {sequence}");
+            let sealed = sealer.seal(aad, PT).expect("seal");
+            assert_eq!(sealed.len(), PT.len() + N_TAG);
+            assert_eq!(sealed, ciphertext, "the ciphertext for {sequence}");
+            assert_eq!(opener.open(aad, &sealed).expect("open"), PT);
+        }
+    }
+
+    /// RFC 9180 appendix A.2: `DHKEM(X25519, HKDF-SHA256)` with `HKDF-SHA256` and
+    /// `ChaCha20Poly1305`, base mode. The `info` and the plaintext are the ones
+    /// above — the RFC reuses both across its X25519 vectors — and the KEM key
+    /// pairs are A.2's own.
+    ///
+    /// This is the arm A.1 never reaches: a 32-byte key. `AES-256-GCM`, the third
+    /// suite this build carries, has no vector of its own in the RFC: AES-256-GCM
+    /// appears only in A.6, under `DHKEM(P-521, HKDF-SHA512)` with `HKDF-SHA512`,
+    /// a different KEM and a different KDF, so replaying it would pin nothing this
+    /// module computes. What it shares with A.2 is the schedule: both take
+    /// `Nk = 32` and `Nn = 12`, so the key and base nonce below are derived by the
+    /// same arm the AES-256 suite takes, and the AEAD itself is the upstream
+    /// crate's own, covered by its vectors rather than by these.
+    const A2_SK_EM: [u8; 32] = [
+        0xf4, 0xec, 0x9b, 0x33, 0xb7, 0x92, 0xc3, 0x72, 0xc1, 0xd2, 0xc2, 0x06, 0x35, 0x07, 0xb6,
+        0x84, 0xef, 0x92, 0x5b, 0x8c, 0x75, 0xa4, 0x2d, 0xbc, 0xbf, 0x57, 0xd6, 0x3c, 0xcd, 0x38,
+        0x16, 0x00,
+    ];
+    const A2_PK_EM: [u8; 32] = [
+        0x1a, 0xfa, 0x08, 0xd3, 0xde, 0xc0, 0x47, 0xa6, 0x43, 0x88, 0x51, 0x63, 0xf1, 0x18, 0x04,
+        0x76, 0xfa, 0x7d, 0xdb, 0x54, 0xc6, 0xa8, 0x02, 0x9e, 0xa3, 0x3f, 0x95, 0x79, 0x6b, 0xf2,
+        0xac, 0x4a,
+    ];
+    const A2_SK_RM: [u8; 32] = [
+        0x80, 0x57, 0x99, 0x1e, 0xef, 0x8f, 0x1f, 0x1a, 0xf1, 0x8f, 0x4a, 0x94, 0x91, 0xd1, 0x6a,
+        0x1c, 0xe3, 0x33, 0xf6, 0x95, 0xd4, 0xdb, 0x8e, 0x38, 0xda, 0x75, 0x97, 0x5c, 0x44, 0x78,
+        0xe0, 0xfb,
+    ];
+    const A2_PK_RM: [u8; 32] = [
+        0x43, 0x10, 0xee, 0x97, 0xd8, 0x8c, 0xc1, 0xf0, 0x88, 0xa5, 0x57, 0x6c, 0x77, 0xab, 0x0c,
+        0xf5, 0xc3, 0xac, 0x79, 0x7f, 0x3d, 0x95, 0x13, 0x9c, 0x6c, 0x84, 0xb5, 0x42, 0x9c, 0x59,
+        0x66, 0x2a,
+    ];
+    const A2_SHARED_SECRET: [u8; 32] = [
+        0x0b, 0xbe, 0x78, 0x49, 0x04, 0x12, 0xb4, 0xbb, 0xea, 0x48, 0x12, 0x66, 0x6f, 0x79, 0x16,
+        0x93, 0x2b, 0x82, 0x8b, 0xba, 0x79, 0x94, 0x24, 0x24, 0xab, 0xb6, 0x52, 0x44, 0x93, 0x0d,
+        0x69, 0xa7,
+    ];
+    const A2_KEY: [u8; 32] = [
+        0xad, 0x27, 0x44, 0xde, 0x8e, 0x17, 0xf4, 0xeb, 0xba, 0x57, 0x5b, 0x3f, 0x5f, 0x5a, 0x8f,
+        0xa1, 0xf6, 0x9c, 0x2a, 0x07, 0xf6, 0xe7, 0x50, 0x0b, 0xc6, 0x0c, 0xa6, 0xe3, 0xe3, 0xec,
+        0x1c, 0x91,
+    ];
+    const A2_BASE_NONCE: [u8; N_NONCE] = [
+        0x5c, 0x4d, 0x98, 0x15, 0x06, 0x61, 0xb8, 0x48, 0x85, 0x3b, 0x54, 0x7f,
+    ];
+    /// Appendix A.2.1's first two encryptions: sequence 0 under the base nonce,
+    /// then sequence 1, whose nonce is one lower in its last byte.
+    const A2_VECTOR: [(&[u8], &[u8], [u8; N_NONCE]); 2] = [
+        (
+            b"Count-0",
+            &[
+                0x1c, 0x52, 0x50, 0xd8, 0x03, 0x4e, 0xc2, 0xb7, 0x84, 0xba, 0x2c, 0xfd, 0x69, 0xdb,
+                0xdb, 0x8a, 0xf4, 0x06, 0xcf, 0xe3, 0xff, 0x93, 0x8e, 0x13, 0x1f, 0x0d, 0xef, 0x8c,
+                0x8b, 0x60, 0xb4, 0xdb, 0x21, 0x99, 0x3c, 0x62, 0xce, 0x81, 0x88, 0x3d, 0x2d, 0xd1,
+                0xb5, 0x1a, 0x28,
+            ],
+            A2_BASE_NONCE,
+        ),
+        (
+            b"Count-1",
+            &[
+                0x6b, 0x53, 0xc0, 0x51, 0xe4, 0x19, 0x9c, 0x51, 0x8d, 0xe7, 0x95, 0x94, 0xe1, 0xc4,
+                0xab, 0x18, 0xb9, 0x6f, 0x08, 0x15, 0x49, 0xd4, 0x5c, 0xe0, 0x15, 0xbe, 0x00, 0x20,
+                0x90, 0xbb, 0x11, 0x9e, 0x85, 0x28, 0x53, 0x37, 0xcc, 0x95, 0xba, 0x5f, 0x59, 0x99,
+                0x2d, 0xc9, 0x8c,
+            ],
+            [
+                0x5c, 0x4d, 0x98, 0x15, 0x06, 0x61, 0xb8, 0x48, 0x85, 0x3b, 0x54, 0x7e,
+            ],
+        ),
+    ];
+
+    /// The KEM and the key schedule, against A.2's own numbers.
+    #[test]
+    fn the_a2_vector_survives_encap_and_the_key_schedule() {
+        let (enc, shared) = encap(&A2_SK_EM, &A2_PK_RM).expect("encap");
+        assert_eq!(enc.0, A2_PK_EM, "enc is the sender's public key");
+        assert_eq!(shared, A2_SHARED_SECRET);
+
+        let context = Context::new(AeadSuite::ChaCha20Poly1305, &shared, INFO);
+        assert_eq!(context.key, A2_KEY);
+        assert_eq!(context.base_nonce, A2_BASE_NONCE);
+
+        // The receiving end lands on the same secret from the other side.
+        assert_eq!(decap(&A2_SK_RM, &enc.0).expect("decap"), A2_SHARED_SECRET);
+    }
+
+    /// Seal and open both directions against A.2's ciphertexts. A.1 pins the
+    /// 16-byte key of AES-128-GCM; this is the 32-byte arm the AES-256 suite
+    /// shares with ChaCha20-Poly1305.
+    #[test]
+    fn the_a2_vector_survives_sealing_and_opening() {
+        let suite = &CHACHA20_POLY1305;
+        let (_, mut sealer) = suite.sealer_with(&A2_SK_EM, &A2_PK_RM, INFO).expect("sealer");
+        let mut opener = suite.opener_with(&A2_SK_RM, &A2_PK_EM, INFO).expect("opener");
+
+        for (sequence, (aad, ciphertext, nonce)) in A2_VECTOR.into_iter().enumerate() {
             assert_eq!(sealer.0.nonce_at(sequence as u64), nonce, "the nonce for {sequence}");
             let sealed = sealer.seal(aad, PT).expect("seal");
             assert_eq!(sealed.len(), PT.len() + N_TAG);
