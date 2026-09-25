@@ -1,6 +1,6 @@
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/ext/mod.rs b/src/ext/mod.rs
---- a/src/ext/mod.rs	2026-09-25 04:40:52.673212800 +0300
-+++ b/src/ext/mod.rs	2026-09-25 04:40:53.194428400 +0300
+--- a/src/ext/mod.rs	2026-09-25 04:47:59.362510500 +0300
++++ b/src/ext/mod.rs	2026-09-25 04:47:59.940102200 +0300
 @@ -156,9 +156,47 @@
  /// ```
  ///
@@ -50,7 +50,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
  
  #[cfg(all(any(feature = "client", feature = "server"), feature = "http1"))]
  impl HeaderCaseMap {
-@@ -179,18 +217,26 @@
+@@ -179,18 +217,20 @@
          self.0.get_all(name).into_iter()
      }
  
@@ -64,26 +64,20 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
          self.0.insert(name, orig);
      }
  
-+    /// Records that `name` was written as `orig`, and so should be written as
-+    /// `orig` when this map is put in a message's extensions and the message is
-+    /// encoded as HTTP/1.
-+    ///
-+    /// `name` is the lowercased [`HeaderName`] used to look the spelling up
-+    /// again, and `orig` are the bytes to write. `orig` must be a legal header
-+    /// name equal to `name`, ignoring case: it is written to the wire
-+    /// verbatim, so a value that contains anything other than header name
-+    /// characters produces a message that cannot be parsed back.
-+    ///
-+    /// Appending several spellings for one `name` keeps them all, in the order
-+    /// appended, and the encoder pairs them with the values of that header in
-+    /// the same order, writing the lowercased name for a value left over.
++    /// Records that `name` was written as `orig`, so that the encoder writes
++    /// `orig` when this map is in a message's extensions and the message goes
++    /// out as HTTP/1. `name` is the lowercased [`HeaderName`] the spelling is
++    /// looked up by; `orig` goes to the wire verbatim and must be a legal header
++    /// name equal to `name` ignoring case. Several spellings for one name are
++    /// kept in the order appended and paired with that header's values in the
++    /// same order, the lowercased name standing in for a value left over.
      #[cfg(any(feature = "client", feature = "server"))]
 -    pub(crate) fn append<N>(&mut self, name: N, orig: Bytes)
 +    pub fn append<N>(&mut self, name: N, orig: Bytes)
      where
          N: IntoHeaderName,
      {
-@@ -296,3 +342,40 @@
+@@ -296,3 +336,35 @@
          self.entry_order.iter()
      }
  }
@@ -96,8 +90,6 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +    fn test_appended_spellings_that_differ_only_in_case_are_distinct() {
 +        let mut case_map = HeaderCaseMap::default();
 +
-+        // A name the map does not mention has no spelling, so the encoder
-+        // writes the lowercased `HeaderName`.
 +        assert_eq!(
 +            case_map
 +                .get_all_internal(&HeaderName::from_static("x-bread"))
@@ -105,9 +97,6 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +            0
 +        );
 +
-+        // `HeaderName` lowercases the name of both of these, so the spellings
-+        // end up under the one lowercased name, as entries of their own, in the
-+        // order they were appended.
 +        case_map.append(
 +            HeaderName::from_bytes(b"x-Bread").expect("valid header name"),
 +            Bytes::from_static(b"x-Bread"),
@@ -125,9 +114,9 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +    }
 +}
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/proto/h1/role.rs b/src/proto/h1/role.rs
---- a/src/proto/h1/role.rs	2026-09-25 04:40:52.786751800 +0300
-+++ b/src/proto/h1/role.rs	2026-09-25 04:40:53.363758000 +0300
-@@ -2614,6 +2614,47 @@
+--- a/src/proto/h1/role.rs	2026-09-25 04:47:59.450514000 +0300
++++ b/src/proto/h1/role.rs	2026-09-25 04:48:00.100821200 +0300
+@@ -2614,6 +2614,45 @@
          );
      }
      #[test]
@@ -142,8 +131,6 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +            HeaderValue::from_static("trailers"),
 +        );
 +
-+        // The spellings a client that imitates a browser has to write: without
-+        // the map in the extensions, both names would go out lowercased.
 +        let mut case_map = HeaderCaseMap::default();
 +        case_map.append(&sec_fetch_site, Bytes::from_static(b"Sec-Fetch-Site"));
 +        case_map.append("te", Bytes::from_static(b"TE"));

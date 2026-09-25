@@ -28,7 +28,7 @@ That is what the probes need: a request that claims to be Chrome 146 sends
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 1.11.1 — **177 lines in two
+`PATCH.diff` is the exact diff against pristine 1.11.1 — **164 lines in two
 files**: the public surface and its documentation in `src/ext/mod.rs`, and the
 encoder test in `src/proto/h1/role.rs`.
 It applies to a pristine copy with `patch -p1` (`patch -p1 --dry-run` was run

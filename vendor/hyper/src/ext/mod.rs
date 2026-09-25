@@ -222,19 +222,13 @@ impl HeaderCaseMap {
         self.0.insert(name, orig);
     }
 
-    /// Records that `name` was written as `orig`, and so should be written as
-    /// `orig` when this map is put in a message's extensions and the message is
-    /// encoded as HTTP/1.
-    ///
-    /// `name` is the lowercased [`HeaderName`] used to look the spelling up
-    /// again, and `orig` are the bytes to write. `orig` must be a legal header
-    /// name equal to `name`, ignoring case: it is written to the wire
-    /// verbatim, so a value that contains anything other than header name
-    /// characters produces a message that cannot be parsed back.
-    ///
-    /// Appending several spellings for one `name` keeps them all, in the order
-    /// appended, and the encoder pairs them with the values of that header in
-    /// the same order, writing the lowercased name for a value left over.
+    /// Records that `name` was written as `orig`, so that the encoder writes
+    /// `orig` when this map is in a message's extensions and the message goes
+    /// out as HTTP/1. `name` is the lowercased [`HeaderName`] the spelling is
+    /// looked up by; `orig` goes to the wire verbatim and must be a legal header
+    /// name equal to `name` ignoring case. Several spellings for one name are
+    /// kept in the order appended and paired with that header's values in the
+    /// same order, the lowercased name standing in for a value left over.
     #[cfg(any(feature = "client", feature = "server"))]
     pub fn append<N>(&mut self, name: N, orig: Bytes)
     where
@@ -351,8 +345,6 @@ mod tests {
     fn test_appended_spellings_that_differ_only_in_case_are_distinct() {
         let mut case_map = HeaderCaseMap::default();
 
-        // A name the map does not mention has no spelling, so the encoder
-        // writes the lowercased `HeaderName`.
         assert_eq!(
             case_map
                 .get_all_internal(&HeaderName::from_static("x-bread"))
@@ -360,9 +352,6 @@ mod tests {
             0
         );
 
-        // `HeaderName` lowercases the name of both of these, so the spellings
-        // end up under the one lowercased name, as entries of their own, in the
-        // order they were appended.
         case_map.append(
             HeaderName::from_bytes(b"x-Bread").expect("valid header name"),
             Bytes::from_static(b"x-Bread"),

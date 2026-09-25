@@ -2625,8 +2625,6 @@ mod tests {
             HeaderValue::from_static("trailers"),
         );
 
-        // The spellings a client that imitates a browser has to write: without
-        // the map in the extensions, both names would go out lowercased.
         let mut case_map = HeaderCaseMap::default();
         case_map.append(&sec_fetch_site, Bytes::from_static(b"Sec-Fetch-Site"));
         case_map.append("te", Bytes::from_static(b"TE"));
