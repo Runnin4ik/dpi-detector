@@ -99,11 +99,18 @@ rustix = { version = "0.38", default-features = false, features = ["use-libc", "
 # The name of the report the binary writes for itself carries the run's local
 # date and time (`tui/screens/post_run.rs`), and the offset has to come from the
 # OS — a fixed one is wrong across DST and a hand-rolled one is wrong on every
-# platform but the one it was written for. `formatting` and `serde` stay off: the
-# stamp is six integer fields, and the feature list is what keeps the crate's
-# formatting machinery and its lookup tables out of a binary whose size is a
-# budget (docs/OPTIMIZATIONS.md).
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# platform but the one it was written for.
+#
+# `time`, not `chrono`: chrono's `clock` feature pulls `iana-time-zone`, which
+# pulls `iana-time-zone-haiku` and through it `cc` — a C compiler in the graph
+# for a target we never build, which the dependency-policy job (AGENTS.md Rule 1)
+# rejects, and rightly: the rule is that no crate here needs a C toolchain. `time`
+# reads the offset through `libc::localtime_r` on unix and a hand-declared
+# `SystemTimeToTzSpecificLocalTime` on Windows: no build script, no C, and the
+# same six fields. `formatting` and `serde` stay off — the stamp is six integers,
+# and the feature list is what keeps a date crate's formatting machinery and its
+# lookup tables out of a binary whose size is a budget (docs/OPTIMIZATIONS.md).
+time = { version = "0.3", default-features = false, features = ["std", "local-offset"] }
 
 # The lint posture lives in the manifest, not only on the CI command line, so that
 # a bare `cargo build`/`cargo test` — both of which `check.yml` runs — carries it

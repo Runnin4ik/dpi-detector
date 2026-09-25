@@ -2,7 +2,7 @@
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use chrono::{Datelike, Timelike};
+use time::OffsetDateTime;
 use crate::i18n::Messages;
 use std::io::{Write, stdout};
 
@@ -88,22 +88,26 @@ pub(crate) fn export_report(path: &str, content: &str, msg: &Messages) {
 /// away with the next press of `S`, and the folder could not say which run a file
 /// belonged to.
 ///
-/// The offset comes from the OS (`chrono::Local`) rather than from arithmetic on
-/// the epoch: a fixed offset would be wrong across a DST change, a hand-rolled one
-/// would be wrong on every platform but the one it was written for, and this is
-/// the only clock in the program that has to agree with the one on the desk.
+/// The offset comes from the OS (`time::OffsetDateTime::now_local`) rather than
+/// from arithmetic on the epoch: a fixed offset would be wrong across a DST
+/// change, a hand-rolled one would be wrong on every platform but the one it was
+/// written for, and this is the only clock in the program that has to agree with
+/// the one on the desk. A machine that cannot name its offset (a stripped router
+/// image with no `/etc/localtime`) falls back to UTC rather than to a name
+/// without a stamp.
 pub(crate) fn default_report_name() -> String {
-    format!("dpi_detector_results-{}.txt", stamp(&chrono::Local::now()))
+    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    format!("dpi_detector_results-{}.txt", stamp(&now))
 }
 
-/// `20260925-010507` — the stamp itself, over anything carrying the six fields,
-/// so the format can be pinned without a clock and read by anyone who has to
-/// reproduce one of these names.
-fn stamp(dt: &(impl Datelike + Timelike)) -> String {
+/// `20260925-010507` — the stamp itself, over the six fields, so the format can
+/// be pinned without a clock and read by anyone who has to reproduce one of
+/// these names.
+fn stamp(dt: &OffsetDateTime) -> String {
     format!(
         "{:04}{:02}{:02}-{:02}{:02}{:02}",
         dt.year(),
-        dt.month(),
+        u8::from(dt.month()),
         dt.day(),
         dt.hour(),
         dt.minute(),
@@ -122,9 +126,17 @@ mod tests {
     /// read wrong in the folder.
     #[test]
     fn the_report_stamp_is_zero_padded_and_year_first() {
-        let at = chrono::NaiveDate::from_ymd_opt(2026, 9, 25).unwrap().and_hms_opt(1, 5, 7).unwrap();
+        let at = time::Date::from_calendar_date(2026, time::Month::September, 25)
+            .unwrap()
+            .with_hms(1, 5, 7)
+            .unwrap()
+            .assume_utc();
         assert_eq!(stamp(&at), "20260925-010507");
-        let single = chrono::NaiveDate::from_ymd_opt(2001, 1, 9).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let single = time::Date::from_calendar_date(2001, time::Month::January, 9)
+            .unwrap()
+            .with_hms(0, 0, 0)
+            .unwrap()
+            .assume_utc();
         assert_eq!(stamp(&single), "20010109-000000", "one-digit fields pad");
     }
 

@@ -21,7 +21,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 comfy-table = { workspace = true }
 crossterm = { workspace = true }
-chrono = { workspace = true }
+time = { workspace = true }
 unicode-width = { workspace = true }
 futures-util = { workspace = true }
 tracing = { workspace = true }
