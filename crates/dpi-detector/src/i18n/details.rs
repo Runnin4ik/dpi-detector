@@ -30,7 +30,7 @@ pub(crate) fn detail_text(detail: &Detail, lang: Language) -> String {
     match detail {
         Detail::None => String::new(),
         Detail::RstHello => t4(lang, "TCP RST на ClientHello", "TCP RST on ClientHello", "ClientHello 上的 TCP RST", "TCP RST roye ClientHello"),
-        Detail::StreamEofHello => t4(lang, "DPI закрыл соединение сразу после TLS ClientHello", "DPI closed the connection right after TLS ClientHello", "DPI 在 TLS ClientHello 之后立即关闭连接", "DPI ettesal ra fauran pas az TLS ClientHello bast"),
+        Detail::StreamEofHello => t4(lang, "EOF после ClientHello", "EOF after ClientHello", "ClientHello 之后的 EOF", "EOF pas az ClientHello"),
         Detail::StreamRstConnect => t4(lang, "TCP RST от DPI при подключении", "TCP RST received from DPI on connect", "连接时收到 DPI 发送的 TCP RST", "TCP RST az taraf-e DPI dar zaman-e ettesal"),
         Detail::TlsDropHandshake => t4(lang, "TLS DROP (ТСПУ дропнул соединение при TLS handshake)", "TLS DROP (connection dropped during TLS handshake)", "TLS DROP（TLS 握手期间连接被丢弃）", "TLS DROP (ettesal dar zaman-e TLS handshake ghat shod)"),
         Detail::TimeoutConn => t4(lang, "TIMEOUT (Таймаут соединения)", "TIMEOUT (connection timeout)", "TIMEOUT（连接超时）", "TIMEOUT (mohlat-e ettesal)"),

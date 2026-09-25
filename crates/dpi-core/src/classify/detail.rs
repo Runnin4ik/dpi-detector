@@ -26,7 +26,10 @@ pub enum Detail {
     // ─── TCP / TLS stage failures ───
     /// Reset while the ClientHello was on the wire (or right after connect).
     RstHello,
-    /// The peer closed the connection right after the ClientHello.
+    /// The peer closed the connection right after the ClientHello: the read
+    /// returned EOF, where [`Detail::RstHello`] saw a reset. Both are `TlsRst`
+    /// with nothing received, so the detail is the only place the wire fact
+    /// survives — see `classify/stream.rs`.
     StreamEofHello,
     /// Reset during connect.
     StreamRstConnect,
