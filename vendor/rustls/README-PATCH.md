@@ -1,6 +1,6 @@
-# vendor/rustls — patched rustls 0.23.43
+# vendor/rustls — patched rustls 0.23.45
 
-This directory is the **upstream `rustls` 0.23.43 source** (copied verbatim from
+This directory is the **upstream `rustls` 0.23.45 source** (copied verbatim from
 crates.io) plus one small patch: a ClientHello profile hook, and a second hook
 that lets a profile answer a server which acknowledged one of the application
 extensions its hello carries. It is wired in the root `Cargo.toml` as
@@ -45,7 +45,7 @@ their patched rustls rejected valid server configurations.
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 0.23.43 — 1533 lines across 11
+`PATCH.diff` is the exact diff against pristine 0.23.45 — 1533 lines across 11
 files, two of them new (`src/client/hello_profile.rs` and
 `src/client/follow_up.rs`). It applies to a pristine copy with `patch -p1`
 (`patch -p1 --binary` was run against the crates.io source before this file was
@@ -88,6 +88,21 @@ patch -p1 -d vendor/rustls < PATCH.diff      # expect hunks only in the files ab
 2. Conflicts are expected in exactly one region: the ClientHello assembly in
    `client/hs.rs` and the extension encoder in `msgs/handshake.rs`. The hook
    points are named in the table above; nothing else in the crate is touched.
+
+   The 0.23.43 → 0.23.45 rebase (2026-09-25) is what that looked like in
+   practice: it was forced by
+   [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html) — a
+   TLS 1.3 message sent at the
+   wrong encryption level was accepted, `patched = [">= 0.23.45"]` — and `patch`
+   applied every hunk with no rejects, at offsets equal to the upstream
+   insertions (`client/hs.rs` +11, `server/test.rs` +125). The regenerated
+   `PATCH.diff` differs from the previous one only in its hunk positions: not one
+   line of the patch's own content changed. `cargo deny` did not catch the
+   advisory by itself — a `[patch.crates-io]` path dependency has no `source` in
+   the lock, so the advisory check skipped the crate it was pinning;
+   `scripts/vendor-advisories.sh` asks the same database about the vendored
+   crates by their published names and versions, and runs in the `policy` job.
+
 3. Re-verify — this is the part that matters (see below).
 
 ## How the patch is verified

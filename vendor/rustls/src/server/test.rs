@@ -72,12 +72,15 @@ mod tests {
         ActiveKeyExchange, CryptoProvider, KeyExchangeAlgorithm, SupportedKxGroup,
     };
     use crate::enums::CertificateType;
+    use crate::msgs::handshake::{PresharedKeyIdentity, PresharedKeyOffer, PskKeyExchangeModes};
     use crate::pki_types::pem::PemObject;
     use crate::pki_types::{CertificateDer, PrivateKeyDer};
     use crate::server::{AlwaysResolvesServerRawPublicKeys, ServerConfig, ServerConnection};
     use crate::sign::CertifiedKey;
     use crate::sync::Arc;
-    use crate::{CipherSuiteCommon, SupportedCipherSuite, Tls12CipherSuite, version};
+    use crate::{
+        CipherSuiteCommon, SupportedCipherSuite, Tls12CipherSuite, Tls13CipherSuite, version,
+    };
 
     #[cfg(feature = "tls12")]
     #[test]
@@ -239,6 +242,128 @@ mod tests {
             PeerIncompatible::IncorrectCertificateTypeExtension.into(),
         );
     }
+
+    #[test]
+    fn second_client_hello_cannot_withdraw_psk_offer() {
+        // Per RFC 9846 section 4.2.2, dropping a PreSharedKey offer is not one of the
+        // changes a client may make after a HelloRetryRequest.
+        let config =
+            ServerConfig::builder_with_provider(super::provider::default_provider().into())
+                .with_protocol_versions(&[&version::TLS13])
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(server_cert(), server_key())
+                .unwrap();
+        let mut conn = ServerConnection::new(config.into()).unwrap();
+
+        let encode = |hello| {
+            Message {
+                version: ProtocolVersion::TLSv1_3,
+                payload: MessagePayload::handshake(HandshakeMessagePayload(
+                    HandshakePayload::ClientHello(hello),
+                )),
+            }
+            .into_wire_bytes()
+        };
+
+        // this hello offers a PSK, but no key share for a group we support, so
+        // it draws a HelloRetryRequest.
+        let mut first = minimal_client_hello();
+        first.extensions.key_shares = Some(vec![]);
+        first.extensions.preshared_key_modes = Some(PskKeyExchangeModes {
+            psk_dhe: true,
+            psk: false,
+        });
+        first.extensions.preshared_key_offer = Some(PresharedKeyOffer::new(
+            PresharedKeyIdentity::new(vec![0u8; 16], 0),
+            vec![0u8; 32],
+        ));
+        conn.read_tls(&mut encode(first).as_slice())
+            .unwrap();
+        conn.process_new_packets().unwrap();
+
+        // the second hello follows the retry, but drops the PSK offer entirely.
+        let mut second = minimal_client_hello();
+        second.extensions.preshared_key_modes = Some(PskKeyExchangeModes {
+            psk_dhe: true,
+            psk: false,
+        });
+        conn.read_tls(&mut encode(second).as_slice())
+            .unwrap();
+
+        assert_eq!(
+            conn.process_new_packets().unwrap_err(),
+            PeerMisbehaved::MissingPskExtensionInSecondClientHello.into(),
+        );
+    }
+
+    #[test]
+    fn second_client_hello_cannot_change_cipher_suite() {
+        // RFC 9846 section 4.2.4 requires the server to negotiate the same cipher suite it
+        // named in its HelloRetryRequest, and section 4.2.2 does not let the client vary its
+        // offer, so a second hello that withdraws the retried suite cannot be honoured.
+        let provider = CryptoProvider {
+            cipher_suites: vec![
+                super::provider::cipher_suite::TLS13_AES_128_GCM_SHA256,
+                TLS13_AES_128_GCM_SHA256_ALT,
+            ],
+            ..super::provider::default_provider()
+        };
+        let config = ServerConfig::builder_with_provider(provider.into())
+            .with_protocol_versions(&[&version::TLS13])
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(server_cert(), server_key())
+            .unwrap();
+        let mut conn = ServerConnection::new(config.into()).unwrap();
+
+        let encode = |hello| {
+            Message {
+                version: ProtocolVersion::TLSv1_3,
+                payload: MessagePayload::handshake(HandshakeMessagePayload(
+                    HandshakePayload::ClientHello(hello),
+                )),
+            }
+            .into_wire_bytes()
+        };
+
+        // this hello has no key share for a group we support, so it draws a
+        // HelloRetryRequest naming `TLS13_AES_128_GCM_SHA256`.
+        let mut first = minimal_client_hello();
+        first.cipher_suites = vec![CipherSuite::TLS13_AES_128_GCM_SHA256];
+        first.extensions.key_shares = Some(vec![]);
+        conn.read_tls(&mut encode(first).as_slice())
+            .unwrap();
+        conn.process_new_packets().unwrap();
+
+        // the second hello follows the retry, but offers only a different suite. It shares
+        // the retried suite's hash, so the transcript stays valid and nothing else objects.
+        let mut second = minimal_client_hello();
+        second.cipher_suites = vec![TLS13_AES_128_GCM_SHA256_ALT.suite()];
+        conn.read_tls(&mut encode(second).as_slice())
+            .unwrap();
+
+        assert_eq!(
+            conn.process_new_packets().unwrap_err(),
+            PeerMisbehaved::CipherSuiteDifferedOnRetry.into(),
+        );
+    }
+
+    static TLS13_AES_128_GCM_SHA256_ALT: SupportedCipherSuite =
+        SupportedCipherSuite::Tls13(&TLS13_AES_128_GCM_SHA256_ALT_INNER);
+
+    /// Differs from `TLS13_AES_128_GCM_SHA256` only in its code point: same hash, same everything else.
+    static TLS13_AES_128_GCM_SHA256_ALT_INNER: Tls13CipherSuite =
+        match &super::provider::cipher_suite::TLS13_AES_128_GCM_SHA256 {
+            SupportedCipherSuite::Tls13(provider) => Tls13CipherSuite {
+                common: CipherSuiteCommon {
+                    suite: CipherSuite::Unknown(0xff14),
+                    ..provider.common
+                },
+                ..**provider
+            },
+            _ => unreachable!(),
+        };
 
     fn server_config_for_rpk() -> ServerConfig {
         let x25519_provider = CryptoProvider {
