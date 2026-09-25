@@ -4,12 +4,34 @@
 //! becomes the `WINDOW_UPDATE` increment. The request's own shape — the
 //! pseudo-header order and the PRIORITY flag with the weight and exclusivity the
 //! wrapper names (`--http2-stream-weight`, `--http2-stream-exclusive`) —
-//! travels beside it, in [`H2Fingerprint::priority`] and `pseudo_order`, and
-//! reaches the wire through the patched `h2` (`vendor/h2/README-PATCH.md`).
-
-use h2::client::PseudoOrder;
+//! travels beside it, in [`H2Fingerprint::priority`] and [`PseudoOrder`], and
+//! [`crate::net::http::HttpSender`] puts all of it on the connection it opens.
 
 use super::shapes::TlsShape;
+
+/// The order a request puts its four pseudo-header fields in.
+///
+/// RFC 9113 leaves the order open, the browsers disagree, and no hash of the
+/// ClientHello shows it: the `curl-impersonate` wrappers state it outright
+/// (`--http2-pseudo-headers-order "mpas"` for Firefox, `"mspa"` for Safari;
+/// Chrome's is the default) and it was read off their bundles' own requests.
+///
+/// The four orders the wrappers name, one variant each; `net::http` maps the
+/// variant onto the h2 client's own order type when it builds a connection.
+#[allow(clippy::enum_variant_names, reason = "each name is the wire order and begins with the `:method` every order starts with; the four are what the wrappers' own flags spell out")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PseudoOrder {
+    /// `:method :authority :scheme :path` — Chrome's and Edge's (`masp`, the
+    /// default the wrappers pass no flag for).
+    MethodAuthoritySchemePath,
+    /// `:method :scheme :authority :path` — h2's own order, and Safari 18.0,
+    /// 18.4 and 26.0.
+    MethodSchemeAuthorityPath,
+    /// `:method :scheme :path :authority` — Safari 15.5, 17.0 and 17.2 (`mspa`).
+    MethodSchemePathAuthority,
+    /// `:method :path :authority :scheme` — Firefox (`mpas`).
+    MethodPathAuthorityScheme,
+}
 
 /// The HTTP/2 preface a profile presents.
 ///
@@ -18,11 +40,10 @@ use super::shapes::TlsShape;
 /// baseline `None`, which is hyper's own defaults — the shape every earlier
 /// measurement used.
 ///
-/// Crate-private: `pseudo_order` is [`PseudoOrder`], a type the patched `h2`
-/// adds and no published `h2` has (`vendor/h2/README-PATCH.md`), so a caller
-/// outside this crate could not name this struct's field type. The preface
-/// reaches the wire through [`crate::net::http::HttpSender`], which takes only
-/// the fingerprint.
+/// Crate-private: a preface is not part of the CLI's surface — `--fingerprint`
+/// names a [`TlsFingerprint`](super::TlsFingerprint), and the h2 shape behind it
+/// is only ever read by [`crate::net::http::HttpSender`], which takes the
+/// fingerprint and nothing else.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct H2Fingerprint {
     /// `SETTINGS_HEADER_TABLE_SIZE`; `None` omits the setting.
@@ -72,13 +93,33 @@ impl TlsShape {
 }
 
 /// The HTTP/2 preface of `fingerprint`, `None` for the baseline profile
-/// (hyper's own defaults, the shape every earlier measurement used).
-///
-/// Crate-private for the same reason [`H2Fingerprint`] is: the shape it returns
-/// carries the patched `h2`'s [`PseudoOrder`].
+/// (see [`BASELINE_H2`] — the shape every earlier measurement used).
 pub(crate) fn h2_fingerprint(fingerprint: super::TlsFingerprint) -> Option<H2Fingerprint> {
     fingerprint.spec().preface()
 }
+
+/// The preface a connection sends when no profile pinned one: hyper's own h2
+/// defaults (`vendor/hyper/src/proto/h2/client.rs`, `Config::default`), which is
+/// what the baseline profile and the DoH client have always sent.
+///
+/// The h2 client here now sends **nothing it was not told to send**, where
+/// hyper's builder filled h2's own defaults in for it, so the numbers are named
+/// and not implied: without them a baseline connection would send an empty
+/// `SETTINGS` and no `WINDOW_UPDATE`, and nothing would be imitating anything.
+pub(crate) const BASELINE_H2: H2Fingerprint = H2Fingerprint {
+    header_table_size: None,
+    max_concurrent_streams: None,
+    initial_window_size: 2_097_152,
+    max_frame_size: Some(16_384),
+    max_header_list_size: Some(16_384),
+    enable_push: Some(false),
+    enable_connect_protocol: None,
+    no_rfc7540_priorities: None,
+    settings_order: &[],
+    connection_window: 5_242_880,
+    pseudo_order: PseudoOrder::MethodSchemeAuthorityPath,
+    priority: None,
+};
 
 /// `1:65536;2:0;4:6291456;6:262144`, window 15663105,
 /// `--http2-stream-weight 256 --http2-stream-exclusive 1`, pseudo-headers `masp`

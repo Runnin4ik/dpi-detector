@@ -544,9 +544,7 @@ fn http_identity_names_the_version_the_hello_imitates() {
 /// `--http2-window-update`, `--http2-pseudo-headers-order`,
 /// `--http2-stream-weight` / `--http2-stream-exclusive`, `--http2-no-priority` —
 /// and cross-checked against what the bundle itself sends to an echo service
-/// (`tools/fingerprint/fingerprint.py echo-diff`). Safari 18 and 26 name `8:1`
-/// and `9:1`, which this build cannot put on the wire: neither h2 nor hyper
-/// exposes them (see `vendor/h2/README-PATCH.md`), so they are absent by design.
+/// (`tools/fingerprint/fingerprint.py echo-diff`).
 ///
 /// One table rather than a sample per field, because the fields are what a
 /// profile *is*: sampling Chrome, Firefox and Safari 15.5 is how Safari 18 kept
@@ -554,8 +552,8 @@ fn http_identity_names_the_version_the_hello_imitates() {
 /// capture and the bundle all send.
 #[test]
 fn every_h2_preface_matches_the_wrapper_it_copies() {
-    use ::h2::client::PseudoOrder;
-    use ::h2::client::PseudoOrder::*;
+    use super::PseudoOrder;
+    use super::PseudoOrder::*;
 
     /// The `SETTINGS` payload as the wire orders it: `settings_order` names the
     /// ids that go first, in that order, and the rest follow ascending.

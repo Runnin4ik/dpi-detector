@@ -134,12 +134,7 @@ use rustls::ClientConfig;
 
 use crate::net::tls::TlsVersion;
 
-pub(crate) use h2::h2_fingerprint;
-// The type itself is reached through `h2`'s own module inside the library
-// (`shapes` imports it there); only the fingerprint tests name it through this
-// path, so the re-export carries the same gate they do.
-#[cfg(test)]
-pub(crate) use h2::H2Fingerprint;
+pub(crate) use h2::{h2_fingerprint, H2Fingerprint, PseudoOrder, BASELINE_H2};
 pub use identity::{http_identity, HttpIdentity};
 pub use variant::{HelloVariant, HelloVariantError};
 pub(crate) use variant::install_variant;

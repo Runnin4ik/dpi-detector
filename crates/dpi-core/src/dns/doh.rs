@@ -1,4 +1,6 @@
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use http_body_util::{BodyExt, Full, Limited};
@@ -16,25 +18,59 @@ use super::types::{DnsError, DnsRecord};
 use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
 use crate::classify::ConnectStage;
 use crate::config::AppConfig;
+use crate::net::fingerprint::BASELINE_H2;
+use crate::net::http::{h2_builder, BodyKind, HttpBody};
 use crate::net::tcp::set_no_delay;
 use crate::net::tls::{create_tls_config, TlsProfile};
 
 /// The transport half of one DoH connection: one variant per protocol the
-/// handshake negotiated. `pub(crate)`, not `pub`: both variants are `hyper` types,
-/// and `hyper` here is a `[patch.crates-io]` fork (root `Cargo.toml`), so in a
-/// public signature the fork becomes part of dpi-core's API — swapping it would
-/// break callers instead of rebuilding them. Nothing outside this crate names the
-/// type; `DohSession` is what the probes hold.
+/// handshake negotiated. `pub(crate)`, not `pub`: both variants are another
+/// crate's client types, so in a public signature they would become part of
+/// dpi-core's API. Nothing outside this crate names the type; `DohSession` is
+/// what the probes hold.
 pub(crate) enum DohSender {
     H1(hyper::client::conn::http1::SendRequest<Full<Bytes>>),
-    H2(hyper::client::conn::http2::SendRequest<Full<Bytes>>),
+    H2 {
+        sender: http2::client::SendRequest<Bytes>,
+        /// Set by the driver task when the connection ends — the h2 client's
+        /// sender carries no such flag of its own.
+        ended: Arc<AtomicBool>,
+    },
 }
 
 impl DohSender {
-    pub(crate) async fn send_request(&mut self, req: Request<Full<Bytes>>) -> Result<hyper::Response<hyper::body::Incoming>, DnsError> {
+    /// Sends one prepared request and its body.
+    ///
+    /// The two clients take the body in different places — hyper carries it in
+    /// the request, the h2 client sends it through the stream the request
+    /// returns — so the caller hands over the parts and the bytes, and this is
+    /// where each protocol gets what it wants.
+    pub(crate) async fn send_request(
+        &mut self,
+        head: Request<()>,
+        body: Bytes,
+    ) -> Result<hyper::Response<HttpBody>, DnsError> {
         match self {
-            DohSender::H1(s) => s.send_request(req).await.map_err(|e| DnsError::Io(e.to_string())),
-            DohSender::H2(s) => s.send_request(req).await.map_err(|e| DnsError::Io(e.to_string())),
+            DohSender::H1(s) => s
+                .send_request(head.map(|()| Full::new(body)))
+                .await
+                .map(|response| response.map(|body| HttpBody(BodyKind::H1(body))))
+                .map_err(|e| DnsError::Io(e.to_string())),
+            DohSender::H2 { sender, .. } => {
+                let empty = body.is_empty();
+                let (response, mut stream) = sender
+                    .send_request(head, empty)
+                    .map_err(|e| DnsError::Io(e.to_string()))?;
+                if !empty {
+                    stream
+                        .send_data(body, true)
+                        .map_err(|e| DnsError::Io(e.to_string()))?;
+                }
+                response
+                    .await
+                    .map(|response| response.map(|body| HttpBody(BodyKind::H2(body))))
+                    .map_err(|e| DnsError::Io(e.to_string()))
+            }
         }
     }
 }
@@ -107,12 +143,13 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
         })?;
     let alpn = tls_stream.get_ref().1.alpn_protocol();
     let is_h2 = alpn == Some(b"h2");
-    let io = TokioIo::new(tls_stream);
 
     let sender = if is_h2 {
+        // The baseline preface: a DoH endpoint is asked as the tool's own
+        // client, not as any one browser profile.
         let (sender, conn) = timeout(
             timeout_dur,
-            hyper::client::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new()).handshake(io),
+            h2_builder(&BASELINE_H2).handshake::<_, Bytes>(tls_stream),
         )
         .await
         .map_err(|_| DnsError::ConnectFault {
@@ -123,14 +160,17 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
             stage: ConnectStage::Connected,
             detail: e.to_string(),
         })?;
+        let ended = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ended);
         tokio::spawn(async move {
             if let Err(err) = conn.await {
                 tracing::debug!("DoH HTTP/2 connection error: {:?}", err);
             }
+            flag.store(true, Ordering::Relaxed);
         });
-        DohSender::H2(sender)
+        DohSender::H2 { sender, ended }
     } else {
-        let (sender, conn) = timeout(timeout_dur, hyper::client::conn::http1::handshake(io))
+        let (sender, conn) = timeout(timeout_dur, hyper::client::conn::http1::handshake(TokioIo::new(tls_stream)))
             .await
             .map_err(|_| DnsError::ConnectFault {
                 stage: ConnectStage::Connected,
@@ -180,14 +220,11 @@ async fn send_doh(
     if matches!(sender, DohSender::H1(_)) {
         builder = builder.header(HOST, host);
     }
-    let req = builder
-        .body(Full::new(Bytes::copy_from_slice(query_data)))
-        .map_err(|e| DnsError::Io(e.to_string()))?;
+    let head = builder.body(()).map_err(|e| DnsError::Io(e.to_string()))?;
 
     let resp = sender
-        .send_request(req)
-        .await
-        .map_err(|e| DnsError::Io(e.to_string()))?;
+        .send_request(head, Bytes::copy_from_slice(query_data))
+        .await?;
 
     if resp.status().is_success() {
         let body = Limited::new(resp.into_body(), MAX_BODY)
@@ -215,14 +252,9 @@ async fn send_doh(
     if matches!(sender, DohSender::H1(_)) {
         builder = builder.header(HOST, host);
     }
-    let req = builder
-        .body(Full::new(Bytes::new()))
-        .map_err(|e| DnsError::Io(e.to_string()))?;
+    let head = builder.body(()).map_err(|e| DnsError::Io(e.to_string()))?;
 
-    let resp = sender
-        .send_request(req)
-        .await
-        .map_err(|e| DnsError::Io(e.to_string()))?;
+    let resp = sender.send_request(head, Bytes::new()).await?;
 
     if !resp.status().is_success() {
         return Err(DnsError::DohHttp(post_status));
@@ -249,7 +281,7 @@ impl DohSession {
     /// after it; on HTTP/1.1 an abandoned request poisons the whole connection,
     /// which is why callers must not cut a request short on h1.
     pub fn is_h2(&self) -> bool {
-        matches!(self.sender, DohSender::H2(_))
+        matches!(self.sender, DohSender::H2 { .. })
     }
 
     /// Whether the connection can no longer carry a request. A dropped HTTP/1.1
@@ -258,7 +290,9 @@ impl DohSession {
     pub fn is_closed(&self) -> bool {
         match &self.sender {
             DohSender::H1(s) => s.is_closed(),
-            DohSender::H2(s) => s.is_closed(),
+            // The h2 client's sender has no such flag; the driver task sets this
+            // one when the connection it was handed ends.
+            DohSender::H2 { ended, .. } => ended.load(Ordering::Relaxed),
         }
     }
 

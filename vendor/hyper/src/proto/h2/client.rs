@@ -67,18 +67,7 @@ pub(crate) struct Config {
     pub(crate) initial_stream_window_size: u32,
     pub(crate) initial_max_send_streams: usize,
     pub(crate) max_frame_size: Option<u32>,
-    // `None` leaves the setting out of the initial SETTINGS frame entirely,
-    // which is what Safari and Firefox send for `MAX_HEADER_LIST_SIZE`.
-    pub(crate) max_header_list_size: Option<u32>,
-    // `None` omits `SETTINGS_ENABLE_PUSH`; Chrome and Firefox send `0`.
-    pub(crate) enable_push: Option<bool>,
-    // The order the initial SETTINGS frame lists its entries in; empty keeps the
-    // h2 default, ascending by id. Safari sends `4` before `3`.
-    pub(crate) settings_order: Vec<u16>,
-    // `Some(true)` sends `SETTINGS_ENABLE_CONNECT_PROTOCOL = 1`; Safari 18 does.
-    pub(crate) enable_connect_protocol: Option<bool>,
-    // `Some(true)` sends `SETTINGS_NO_RFC7540_PRIORITIES = 1`; Safari 18 and 26 do.
-    pub(crate) no_rfc7540_priorities: Option<bool>,
+    pub(crate) max_header_list_size: u32,
     pub(crate) keep_alive_interval: Option<Duration>,
     pub(crate) keep_alive_timeout: Duration,
     pub(crate) keep_alive_while_idle: bool,
@@ -99,11 +88,7 @@ impl Default for Config {
             initial_stream_window_size: DEFAULT_STREAM_WINDOW,
             initial_max_send_streams: DEFAULT_INITIAL_MAX_SEND_STREAMS,
             max_frame_size: Some(DEFAULT_MAX_FRAME_SIZE),
-            max_header_list_size: Some(DEFAULT_MAX_HEADER_LIST_SIZE),
-            enable_push: Some(false),
-            settings_order: Vec::new(),
-            enable_connect_protocol: None,
-            no_rfc7540_priorities: None,
+            max_header_list_size: DEFAULT_MAX_HEADER_LIST_SIZE,
             keep_alive_interval: None,
             keep_alive_timeout: Duration::from_secs(20),
             keep_alive_while_idle: false,
@@ -124,23 +109,10 @@ fn new_builder(config: &Config) -> Builder {
         .initial_max_send_streams(config.initial_max_send_streams)
         .initial_window_size(config.initial_stream_window_size)
         .initial_connection_window_size(config.initial_conn_window_size)
+        .max_header_list_size(config.max_header_list_size)
         .max_send_buffer_size(config.max_send_buffer_size)
-        .max_local_error_reset_streams(config.max_local_error_reset_streams);
-    if let Some(max) = config.max_header_list_size {
-        builder.max_header_list_size(max);
-    }
-    if let Some(enable_push) = config.enable_push {
-        builder.enable_push(enable_push);
-    }
-    if !config.settings_order.is_empty() {
-        builder.settings_order(config.settings_order.iter().copied());
-    }
-    if config.enable_connect_protocol == Some(true) {
-        builder.enable_connect_protocol();
-    }
-    if config.no_rfc7540_priorities == Some(true) {
-        builder.no_rfc7540_priorities();
-    }
+        .max_local_error_reset_streams(config.max_local_error_reset_streams)
+        .enable_push(false);
     if let Some(max) = config.max_frame_size {
         builder.max_frame_size(max);
     }

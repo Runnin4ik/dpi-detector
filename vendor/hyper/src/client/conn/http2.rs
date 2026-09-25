@@ -395,55 +395,9 @@ where
 
     /// Sets the max size of received header frames.
     ///
-    /// Default is currently 16KB, but can change. `None` omits
-    /// `SETTINGS_MAX_HEADER_LIST_SIZE` from the connection preface — the shape
-    /// Firefox and Safari send, unlike Chrome.
-    pub fn max_header_list_size(&mut self, max: impl Into<Option<u32>>) -> &mut Self {
-        self.h2_builder.max_header_list_size = max.into();
-        self
-    }
-
-    /// Sets whether the client advertises `SETTINGS_ENABLE_PUSH`.
-    ///
-    /// Default is `Some(false)`, which every client that does not want pushes
-    /// sends. `None` omits the setting — Safari sends none — and leaves the
-    /// peer's default (pushes allowed) in force.
-    pub fn enable_push(&mut self, enabled: impl Into<Option<bool>>) -> &mut Self {
-        self.h2_builder.enable_push = enabled.into();
-        self
-    }
-
-    /// Sets the order the connection preface lists its SETTINGS entries in: the
-    /// ids given here first, in this order, then anything else ascending.
-    ///
-    /// Default is empty, the ascending id every endpoint sends. RFC 9113 §6.5
-    /// makes the order insignificant; Safari's preface (`4` before `3`) is the
-    /// one client that does not sort.
-    pub fn settings_order(
-        &mut self,
-        order: impl IntoIterator<Item = u16>,
-    ) -> &mut Self {
-        self.h2_builder.settings_order = order.into_iter().collect();
-        self
-    }
-
-    /// Sets whether the preface advertises `SETTINGS_ENABLE_CONNECT_PROTOCOL`.
-    ///
-    /// Default is `None`, which omits the setting. `Some(true)` sends `8:1`, the
-    /// value Safari 18 announces; no request this client sends uses extended
-    /// CONNECT, so the setting is shape only.
-    pub fn enable_connect_protocol(&mut self, enabled: impl Into<Option<bool>>) -> &mut Self {
-        self.h2_builder.enable_connect_protocol = enabled.into();
-        self
-    }
-
-    /// Sets whether the preface advertises `SETTINGS_NO_RFC7540_PRIORITIES`.
-    ///
-    /// Default is `None`, which omits the setting. `Some(true)` sends `9:1`, the
-    /// value Safari 18 and 26 announce; it is independent of the PRIORITY flag a
-    /// request's `HEADERS` frame may still carry.
-    pub fn no_rfc7540_priorities(&mut self, no_priorities: impl Into<Option<bool>>) -> &mut Self {
-        self.h2_builder.no_rfc7540_priorities = no_priorities.into();
+    /// Default is currently 16KB, but can change.
+    pub fn max_header_list_size(&mut self, max: u32) -> &mut Self {
+        self.h2_builder.max_header_list_size = max;
         self
     }
 

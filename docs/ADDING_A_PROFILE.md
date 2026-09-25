@@ -124,7 +124,9 @@ deliberate revision of the pins, not a silent change of the shape.
    do, name it in `UNIMPLEMENTED` with a reason.
    If a profile needs an extension rustls cannot do, that is a patch in `vendor/rustls`
    plus a row in `vendor/rustls/README-PATCH.md` and a regenerated `PATCH.diff`
-   (the same for `h2`/`hyper` if the preface is what is at stake).
+   (the same for `hyper` if the request block is what is at stake; an h2 preface
+   goes through the `http2` crate's own API, so a knob it does not expose is a
+   question for that crate, not a patch here).
 6. **Run the ladder** (§3.1) and commit the code, tests and documentation as one
    piece: `README.md` (the profile list), this document, `tools/fingerprint/README.md`
    (if a new divergence appeared). A record without a wrapper — `utls:HelloX` in

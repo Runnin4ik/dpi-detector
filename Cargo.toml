@@ -9,17 +9,21 @@ members = [
     "vendor/rustls-rustcrypto",
 ]
 # The vendored crates are patched upstream sources (see
-# vendor/*/README-PATCH.md): rustls with a ClientHello-profile hook, h2 with the
-# request shape a browser puts in its h2 preface, and hyper with the two preface
-# settings a browser may leave out. They must NOT be workspace members (their
-# tests/examples are upstream's, not ours). The provider above is the exception.
-exclude = ["vendor/rustls", "vendor/h2", "vendor/hyper"]
+# vendor/*/README-PATCH.md): rustls with a ClientHello-profile hook, and hyper
+# with the original header casing a browser writes over HTTP/1.1. They must NOT
+# be workspace members (their tests/examples are upstream's, not ours). The
+# provider above is the exception.
+#
+# There were four: `h2` carried the request shape a browser puts in its h2
+# preface until `http2` — h2's own source, forked and published by a maintainer
+# who needs exactly those knobs — took that job as a plain dependency, so the
+# tree, its patch and the `[patch]` entry below all went.
+exclude = ["vendor/rustls", "vendor/hyper"]
 
 # Fingerprint hooks, applied through `[patch]` so that tokio-rustls /
 # hyper / hyper-util / rustls-rustcrypto keep resolving to one instance of each.
 [patch.crates-io]
 rustls = { path = "vendor/rustls" }
-h2 = { path = "vendor/h2" }
 hyper = { path = "vendor/hyper" }
 
 [workspace.package]
@@ -53,12 +57,22 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"
 # see vendor/rustls-rustcrypto/README-PATCH.md.
 rustls-rustcrypto = { path = "vendor/rustls-rustcrypto" }
 webpki-roots = "1.0"
-hyper = { version = "1.4", default-features = false, features = ["client", "http1", "http2"] }
-hyper-util = { version = "0.1", default-features = false, features = ["tokio", "client-legacy", "http1", "http2"] }
-# Direct: the probes put a request shape (pseudo-header order, HEADERS priority)
-# into the request, which only the patched h2 reads (vendor/h2/README-PATCH.md).
-h2 = "0.4"
+# HTTP/1.1 only, and hyper-util for its `TokioIo`: HTTP/2 is the `http2` client
+# below, driven directly, so hyper never compiles its own h2 client — which is
+# what left its patch (vendor/hyper/README-PATCH.md) with one hunk instead of
+# three.
+hyper = { version = "1.4", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+# The h2 fork that carries those knobs as published API (h2's own source, MIT).
+# (`unstable` is h2's own feature, and it is what exposes `frame`: the shape types
+# (`PseudoOrder`, `SettingsOrder`, `StreamDependency`) live there, as they do for
+# every client that needs them. This replaced `h2` and its vendored patch — same
+# lineage, no patch to re-apply.
+http2 = { version = "0.5", features = ["unstable"] }
 http-body-util = "0.1"
+# The `Body` trait itself: `net::http` implements it once for the two clients'
+# response bodies, and the DoH client reads them through `Limited`.
+http-body = "1"
 bytes = "1.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

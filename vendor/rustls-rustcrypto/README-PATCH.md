@@ -2,7 +2,7 @@
 
 This directory is the upstream **`rustls-rustcrypto` 0.0.2-alpha** (copied verbatim
 from crates.io) plus one patch: the `rustls-webpki` dependency is gone. Unlike
-`vendor/rustls`, `vendor/h2` and `vendor/hyper`, this crate is a **workspace
+`vendor/rustls` and `vendor/hyper`, this crate is a **workspace
 member**, wired as a path dependency — not an `exclude`d crate behind
 `[patch.crates-io]`. Why is under "What a member buys" below.
 

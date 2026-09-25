@@ -19,16 +19,25 @@
 //! the same thing and mean the same status when they report one.
 
 use std::borrow::Cow;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
+use http2::frame::{
+    PseudoId, PseudoOrder as ClientPseudoOrder, SettingId, SettingsOrder, StreamDependency,
+    StreamId,
+};
+use http2::RecvStream;
+use http_body::{Body, Frame, SizeHint};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::ext::HeaderCaseMap;
 use hyper::header::{HeaderName, HeaderValue, HOST};
 use hyper::http::request::Builder;
 use hyper::{Method, Request, Response, Uri, Version};
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::TokioIo;
 use parking_lot::Mutex;
 use tokio::time::timeout;
 
@@ -37,9 +46,73 @@ use crate::classify::{
     DpiStatus, ProbeStage,
 };
 use crate::config::AppConfig;
-use h2::client::RequestShape;
 
-use crate::net::fingerprint::{h2_fingerprint, http_identity, HttpIdentity, TlsFingerprint};
+use crate::net::fingerprint::{
+    h2_fingerprint, http_identity, H2Fingerprint, HttpIdentity, PseudoOrder, TlsFingerprint,
+    BASELINE_H2,
+};
+
+/// The error a request died of.
+///
+/// A type of ours rather than either client's, so both crates stay inside this
+/// module: the callers that only print it (`examples/tls_fingerprint.rs`) need
+/// nothing more, and replacing a client again would not change them.
+#[derive(Debug)]
+pub struct HttpError(ErrorKind);
+
+/// Which client raised the error. Private on purpose — the variants are two
+/// other crates' types, and neither belongs in dpi-core's API.
+#[derive(Debug)]
+pub(crate) enum ErrorKind {
+    /// HTTP/1.1, hyper's own error.
+    H1(hyper::Error),
+    /// HTTP/2, from the h2 client the probes drive directly.
+    H2(http2::Error),
+}
+
+impl HttpError {
+    /// Whether the client itself gave up on a deadline.
+    pub(crate) fn is_timeout(&self) -> bool {
+        match &self.0 {
+            ErrorKind::H1(e) => e.is_timeout(),
+            // The h2 client sets no read deadline of its own — every read in
+            // this crate runs under `tokio::time::timeout` — so an `io` error is
+            // the only thing left that can name one.
+            ErrorKind::H2(e) => e
+                .get_io()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::TimedOut),
+        }
+    }
+
+    /// Whether the connection went away under the request, which the fat probe
+    /// answers by opening a new one and sending the chunk again.
+    pub(crate) fn is_canceled(&self) -> bool {
+        match &self.0 {
+            ErrorKind::H1(e) => e.is_canceled(),
+            // The h2 client has no single "canceled" flag: a stream the peer
+            // reset, a `GOAWAY`, and an `io` error that says the pipe is gone
+            // are the same situation from here. A deadline of ours is not — it
+            // is a verdict, and this is the retry question.
+            ErrorKind::H2(e) => {
+                e.is_reset()
+                    || e.is_go_away()
+                    || e.get_io()
+                        .is_some_and(|io| io.kind() != std::io::ErrorKind::TimedOut)
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            ErrorKind::H1(e) => e.fmt(f),
+            ErrorKind::H2(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for HttpError {}
 
 /// Message plus the OS code and kind of the `io::Error` at the end of a hyper
 /// error chain.
@@ -58,6 +131,24 @@ pub(crate) fn hyper_err_info(e: &hyper::Error) -> (String, Option<i32>, Option<s
         source = std::error::Error::source(s);
     }
     (msg, None, None)
+}
+
+/// [`hyper_err_info`] for either protocol's error; the h2 client hands its `io`
+/// error over directly instead of leaving it to a source chain.
+pub(crate) fn http_err_info(e: &HttpError) -> (String, Option<i32>, Option<std::io::ErrorKind>) {
+    match &e.0 {
+        ErrorKind::H1(e) => hyper_err_info(e),
+        ErrorKind::H2(e) => {
+            let mut msg = e.to_string();
+            match e.get_io() {
+                Some(io_err) => {
+                    msg.push_str(&format!(" | {}", io_err));
+                    (msg, io_err.raw_os_error(), Some(io_err.kind()))
+                }
+                None => (msg, None, None),
+            }
+        }
+    }
 }
 
 /// A request both protocols can carry.
@@ -128,67 +219,56 @@ pub fn request_headers<'a>(
     headers
 }
 
-/// A hyper sender for whichever protocol the connection agreed on.
+/// A sender over whichever protocol the connection agreed on.
 ///
-/// Opaque on purpose: the HTTP/2 arm carries the request shape its profile
-/// pinned (pseudo-header order and whether a request's `HEADERS` frame takes the
-/// PRIORITY flag), and that shape is [`RequestShape`] — a type the patched `h2`
-/// adds (`vendor/h2/README-PATCH.md`) and no published `h2` has. A caller names
-/// the sender and its methods, never the variant, so replacing the fork stays a
-/// change inside this crate.
+/// Opaque on purpose: the two arms hold two different clients' request senders
+/// (hyper's for HTTP/1.1, the h2 client's for HTTP/2), and a caller names the
+/// sender and its methods, never a variant.
 pub struct HttpSender(Sender);
 
 /// The two client connections, one per protocol.
 ///
-/// Private: both arms carry hyper's own `SendRequest`, and the h2 one carries
-/// the fork-only request shape beside it.
+/// Private: each arm is another crate's `SendRequest`. The h2 one also holds the
+/// flag its driver task sets when the connection ends — hyper's HTTP/1.1 sender
+/// tracks that itself, the h2 client's does not.
 enum Sender {
     H1(hyper::client::conn::http1::SendRequest<Full<Bytes>>),
     H2 {
-        sender: hyper::client::conn::http2::SendRequest<Full<Bytes>>,
-        shape: Option<RequestShape>,
+        sender: http2::client::SendRequest<Bytes>,
+        ended: Arc<AtomicBool>,
     },
 }
 
 impl HttpSender {
     /// Runs the HTTP handshake over `io` and spawns the connection driver.
     ///
-    /// `io` is a `TokioIo`-wrapped stream (hyper's own I/O traits), and
-    /// `alpn_h2` must be what the TLS handshake negotiated — it is the only
-    /// thing that decides which client to start. `fingerprint` tunes the HTTP/2
-    /// preface and the shape of the requests on it: hyper's defaults are the
-    /// baseline, a browser profile overrides them with the ones its ClientHello
-    /// is pinned to.
-    pub async fn handshake<T>(io: T, alpn_h2: bool, fingerprint: TlsFingerprint) -> hyper::Result<Self>
+    /// `io` is the established stream — for a probe that is the TLS stream over
+    /// [`DpiProbeStream`], so the stages past the handshake are still this
+    /// crate's — and `alpn_h2` must be what the TLS handshake negotiated: it is
+    /// the only thing that decides which client starts. `fingerprint` pins the
+    /// HTTP/2 preface and the shape of the requests on it; the baseline profile
+    /// takes [`BASELINE_H2`], which is what hyper's own h2 client sent.
+    pub async fn handshake<T>(io: T, alpn_h2: bool, fingerprint: TlsFingerprint) -> Result<Self, HttpError>
     where
-        T: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
         if alpn_h2 {
-            let mut builder = hyper::client::conn::http2::Builder::new(TokioExecutor::new());
-            if let Some(h2) = h2_fingerprint(fingerprint) {
-                builder
-                    .header_table_size(h2.header_table_size)
-                    .initial_stream_window_size(h2.initial_window_size)
-                    .initial_connection_window_size(h2.connection_window)
-                    .max_frame_size(h2.max_frame_size)
-                    .max_header_list_size(h2.max_header_list_size)
-                    .enable_push(h2.enable_push)
-                    .enable_connect_protocol(h2.enable_connect_protocol)
-                    .no_rfc7540_priorities(h2.no_rfc7540_priorities)
-                    .settings_order(h2.settings_order.iter().copied())
-                    .max_concurrent_streams(h2.max_concurrent_streams);
-            }
-            let (sender, connection) = builder.handshake(io).await?;
+            let h2 = h2_fingerprint(fingerprint).unwrap_or(BASELINE_H2);
+            let (sender, connection) = h2_builder(&h2)
+                .handshake::<_, Bytes>(io)
+                .await
+                .map_err(|e| HttpError(ErrorKind::H2(e)))?;
+            let ended = Arc::new(AtomicBool::new(false));
+            let flag = Arc::clone(&ended);
             tokio::spawn(async move {
                 let _ = connection.await;
+                flag.store(true, Ordering::Relaxed);
             });
-            let shape = h2_fingerprint(fingerprint).map(|h2| RequestShape {
-                pseudo_order: h2.pseudo_order,
-                priority: h2.priority,
-            });
-            Ok(Self(Sender::H2 { sender, shape }))
+            Ok(Self(Sender::H2 { sender, ended }))
         } else {
-            let (sender, connection) = hyper::client::conn::http1::handshake(io).await?;
+            let (sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(io))
+                .await
+                .map_err(|e| HttpError(ErrorKind::H1(e)))?;
             tokio::spawn(async move {
                 let _ = connection.await;
             });
@@ -205,7 +285,7 @@ impl HttpSender {
     pub fn is_closed(&self) -> bool {
         match &self.0 {
             Sender::H1(sender) => sender.is_closed(),
-            Sender::H2 { sender, .. } => sender.is_closed(),
+            Sender::H2 { ended, .. } => ended.load(Ordering::Relaxed),
         }
     }
 
@@ -216,29 +296,179 @@ impl HttpSender {
     /// rejects (`rejected_h2_request`). `send` also serves callers that do not
     /// validate their identity first, and under `panic = "abort"` an `expect`
     /// here would kill the whole run.
-    pub async fn send(&mut self, req: HttpRequest<'_>) -> hyper::Result<Response<Incoming>> {
+    pub async fn send(&mut self, req: HttpRequest<'_>) -> Result<Response<HttpBody>, HttpError> {
         match &mut self.0 {
             Sender::H1(sender) => {
                 let request =
                     build_request(&req, false).unwrap_or_else(|_| build_request_lenient(&req));
-                sender.send_request(request).await
+                let request = request.map(|()| Full::new(Bytes::new()));
+                sender
+                    .send_request(request)
+                    .await
+                    .map(|response| response.map(|body| HttpBody(BodyKind::H1(body))))
+                    .map_err(|e| HttpError(ErrorKind::H1(e)))
             }
-            Sender::H2 { sender, shape } => {
-                let mut request = build_request(&req, true).unwrap_or_else(|_| rejected_h2_request());
-                if let Some(shape) = *shape {
-                    request.extensions_mut().insert(shape);
-                }
-                sender.send_request(request).await
+            Sender::H2 { sender, .. } => {
+                let request = build_request(&req, true).unwrap_or_else(|_| rejected_h2_request());
+                // The probe's requests carry no body, so the `HEADERS` frame ends
+                // the stream and the `SendStream` is dropped unsent: `h2` sends
+                // the body through it, and there is none.
+                let (response, _send_stream) =
+                    sender.send_request(request, true).map_err(|e| HttpError(ErrorKind::H2(e)))?;
+                response
+                    .await
+                    .map(|response| response.map(|body| HttpBody(BodyKind::H2(body))))
+                    .map_err(|e| HttpError(ErrorKind::H2(e)))
             }
         }
     }
 }
 
-/// Builds the wire request for one of the two protocols.
+/// The response body of either protocol, as one `Body`.
 ///
-/// The shape an h2 profile pinned is attached by [`HttpSender::send`], which is
-/// where the protocol is known; the h1 header casing is attached here, because
-/// it is a property of the message.
+/// hyper hands HTTP/1.1 a body that decodes chunked framing itself, and the h2
+/// client hands HTTP/2 a `RecvStream`; [`check_http`] and the DoH client read
+/// both with `frame()` in a loop, so the two meet here instead of in each
+/// reader. Like [`HttpError`], the variants stay private.
+pub struct HttpBody(pub(crate) BodyKind);
+
+/// Which client's body this is. Private on purpose, for [`ErrorKind`]'s reason.
+pub(crate) enum BodyKind {
+    H1(Incoming),
+    H2(RecvStream),
+}
+
+impl Body for HttpBody {
+    type Data = Bytes;
+    type Error = HttpError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, HttpError>>> {
+        match &mut self.get_mut().0 {
+            BodyKind::H1(body) => Pin::new(body)
+                .poll_frame(cx)
+                .map_err(|e| HttpError(ErrorKind::H1(e))),
+            BodyKind::H2(stream) => match stream.poll_data(cx) {
+                Poll::Ready(Some(Ok(data))) => Poll::Ready(Some(Ok(Frame::data(data)))),
+                Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(HttpError(ErrorKind::H2(e))))),
+                Poll::Pending => Poll::Pending,
+                // The data half ended; whatever trailers the peer sent (the DoH
+                // resolvers send none) come after it.
+                Poll::Ready(None) => match stream.poll_trailers(cx) {
+                    Poll::Ready(Ok(Some(trailers))) => {
+                        Poll::Ready(Some(Ok(Frame::trailers(trailers))))
+                    }
+                    Poll::Ready(Ok(None)) => Poll::Ready(None),
+                    Poll::Ready(Err(e)) => Poll::Ready(Some(Err(HttpError(ErrorKind::H2(e))))),
+                    Poll::Pending => Poll::Pending,
+                },
+            },
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        match &self.0 {
+            BodyKind::H1(body) => body.is_end_stream(),
+            BodyKind::H2(stream) => stream.is_end_stream(),
+        }
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        match &self.0 {
+            BodyKind::H1(body) => body.size_hint(),
+            // h2's receive half knows nothing before the first frame: the
+            // `content-length` header is the caller's to read.
+            BodyKind::H2(_) => SizeHint::default(),
+        }
+    }
+}
+
+/// An h2 client builder carrying a profile's preface.
+///
+/// Every setting is optional because an absent one and a present one differ on
+/// the wire, and this client sends what it was told to send and nothing else:
+/// `None` is "this profile advertises nothing here", which is what Firefox's
+/// bundle does with `SETTINGS_MAX_HEADER_LIST_SIZE`, not a fallback to h2's
+/// 65 535. The two windows are not optional — a profile that named none would
+/// otherwise take the protocol's 65 535 instead of this one's.
+///
+/// Shared with the DoH client (`dns/doh.rs`), which asks a resolver with
+/// [`BASELINE_H2`].
+pub(crate) fn h2_builder(h2: &H2Fingerprint) -> http2::client::Builder {
+    let mut builder = http2::client::Builder::new();
+    builder
+        .initial_window_size(h2.initial_window_size)
+        .initial_connection_window_size(h2.connection_window);
+    if let Some(size) = h2.header_table_size {
+        builder.header_table_size(size);
+    }
+    if let Some(max) = h2.max_concurrent_streams {
+        builder.max_concurrent_streams(max);
+    }
+    if let Some(max) = h2.max_frame_size {
+        builder.max_frame_size(max);
+    }
+    if let Some(max) = h2.max_header_list_size {
+        builder.max_header_list_size(max);
+    }
+    if let Some(enable) = h2.enable_push {
+        builder.enable_push(enable);
+    }
+    if let Some(enable) = h2.enable_connect_protocol {
+        builder.enable_connect_protocol(enable);
+    }
+    if let Some(enable) = h2.no_rfc7540_priorities {
+        builder.no_rfc7540_priorities(enable);
+    }
+    if !h2.settings_order.is_empty() {
+        builder.settings_order(
+            SettingsOrder::builder()
+                .extend(h2.settings_order.iter().map(|id| SettingId::from(*id)))
+                .build(),
+        );
+    }
+    builder.headers_pseudo_order(pseudo_order(h2.pseudo_order));
+    if let Some((weight, exclusive)) = h2.priority {
+        // The profile names the weight the way the wrapper's flag does (Chrome's
+        // `256`), one more than the byte the frame carries.
+        builder.headers_stream_dependency(StreamDependency::new(
+            StreamId::ZERO,
+            u8::try_from(weight.saturating_sub(1)).unwrap_or(u8::MAX),
+            exclusive,
+        ));
+    }
+    builder
+}
+
+/// A profile's pseudo-header order as the h2 client's own order type.
+fn pseudo_order(order: PseudoOrder) -> ClientPseudoOrder {
+    let fields = match order {
+        PseudoOrder::MethodAuthoritySchemePath => {
+            [PseudoId::Method, PseudoId::Authority, PseudoId::Scheme, PseudoId::Path]
+        }
+        PseudoOrder::MethodSchemeAuthorityPath => {
+            [PseudoId::Method, PseudoId::Scheme, PseudoId::Authority, PseudoId::Path]
+        }
+        PseudoOrder::MethodSchemePathAuthority => {
+            [PseudoId::Method, PseudoId::Scheme, PseudoId::Path, PseudoId::Authority]
+        }
+        PseudoOrder::MethodPathAuthorityScheme => {
+            [PseudoId::Method, PseudoId::Path, PseudoId::Authority, PseudoId::Scheme]
+        }
+    };
+    ClientPseudoOrder::builder().extend(fields).build()
+}
+
+/// Builds the wire request for one of the two protocols, without a body — the
+/// caller attaches what its protocol's client wants (`Full::new(Bytes::new())`
+/// for hyper, `()` for the h2 client, which sends the body through the
+/// `SendStream` the request returns).
+///
+/// The h1 header casing is attached here, because it is a property of the
+/// message; the h2 shape is not, because it is a property of the *connection*
+/// the profile opened (`apply_preface`).
 ///
 /// Returns the error `http` reports for a value it will not put on the wire. Not
 /// every value is a constant: the user-agent comes from `config.yml` verbatim
@@ -248,7 +478,7 @@ impl HttpSender {
 /// as a run error before this point, and [`HttpSender::send`] falls back for the
 /// callers that do not validate first ([`build_request_lenient`] for h1,
 /// [`rejected_h2_request`] for h2).
-fn build_request(req: &HttpRequest<'_>, h2: bool) -> Result<Request<Full<Bytes>>, hyper::http::Error> {
+fn build_request(req: &HttpRequest<'_>, h2: bool) -> Result<Request<()>, hyper::http::Error> {
     let case_map = (!h2).then(|| header_case_map(req));
     let mut builder = Request::builder().method(req.method.clone());
     if h2 {
@@ -257,7 +487,7 @@ fn build_request(req: &HttpRequest<'_>, h2: bool) -> Result<Request<Full<Bytes>>
         builder = builder.uri(req.path).header(HOST, req.host);
     }
     builder = add_headers(builder, req, h2, false)?;
-    let mut request = builder.body(Full::new(Bytes::new()))?;
+    let mut request = builder.body(())?;
     if let Some(case_map) = case_map {
         request.extensions_mut().insert(case_map);
     }
@@ -269,7 +499,7 @@ fn build_request(req: &HttpRequest<'_>, h2: bool) -> Result<Request<Full<Bytes>>
 /// This is the h1 request form the strict build already produces, so the two
 /// describe the same message; [`HttpSender::send`] falls back to it so that a
 /// value it did not validate itself cannot abort the process.
-fn build_request_lenient(req: &HttpRequest<'_>) -> Request<Full<Bytes>> {
+fn build_request_lenient(req: &HttpRequest<'_>) -> Request<()> {
     let uri = Uri::try_from(req.path).unwrap_or_else(|_| Uri::from_static("/"));
     let mut builder = Request::builder().method(req.method.clone()).uri(uri);
     if let Ok(host) = HeaderValue::from_str(req.host) {
@@ -279,23 +509,22 @@ fn build_request_lenient(req: &HttpRequest<'_>) -> Request<Full<Bytes>> {
     // nothing left to refuse; `body` reports a `Result` only because the API
     // does. The floor is unreachable, not a fallback in use.
     let mut request = add_headers(builder, req, false, true)
-        .and_then(|builder| builder.body(Full::new(Bytes::new())))
-        .unwrap_or_else(|_| Request::new(Full::new(Bytes::new())));
+        .and_then(|builder| builder.body(()))
+        .unwrap_or_else(|_| Request::new(()));
     request.extensions_mut().insert(header_case_map(req));
     request
 }
 
 /// A request the h2 layer refuses before anything reaches the wire.
 ///
-/// An h2 request's `:authority` comes from its URI alone (the h2 client builds
-/// the pseudo-header from the URI, `vendor/h2/src/frame/headers.rs`), so a host
-/// `http` will not take as one has no equivalent request to fall back to.
-/// Handing the layer a request with no scheme or authority makes it report
-/// `MissingUriSchemeAndAuthority`, which [`HttpSender::send`] returns the way it
-/// returns every other send failure — instead of aborting the process under
-/// `panic = "abort"`.
-fn rejected_h2_request() -> Request<Full<Bytes>> {
-    let mut request = Request::new(Full::new(Bytes::new()));
+/// An h2 request's `:authority` comes from its URI alone (the client builds the
+/// pseudo-header from the URI), so a host `http` will not take as one has no
+/// equivalent request to fall back to. Handing the layer a request with no
+/// scheme or authority makes it report `MissingUriSchemeAndAuthority`, which
+/// [`HttpSender::send`] returns the way it returns every other send failure —
+/// instead of aborting the process under `panic = "abort"`.
+fn rejected_h2_request() -> Request<()> {
+    let mut request = Request::new(());
     *request.version_mut() = Version::HTTP_2;
     request
 }
@@ -562,6 +791,8 @@ pub(crate) fn fat_read_verdict(bytes: usize, min_kb: u64, max_kb: u64) -> (DpiSt
     (DpiStatus::ReadTimeout, Detail::at_kb(Detail::ReadTimeoutWord, 0.0))
 }
 
+/// The verdict for an HTTP/1.1 client error — the call sites that start a
+/// connection with hyper directly (`probe/domains.rs`) name this one.
 pub(crate) fn inner_hyper(
     e: &hyper::Error,
     stage: ProbeStage,
@@ -570,20 +801,49 @@ pub(crate) fn inner_hyper(
     max_kb: u64,
 ) -> (DpiStatus, Detail) {
     let (msg, os_code, os_kind) = hyper_err_info(e);
+    verdict_from_client_error(&msg, os_code, os_kind, e.is_timeout(), stage, bytes, min_kb, max_kb)
+}
+
+/// [`inner_hyper`] for either protocol's client error: a request that went out
+/// through [`HttpSender`] dies of one variant or the other, and the verdict is
+/// the same question either way.
+pub(crate) fn inner_http(
+    e: &HttpError,
+    stage: ProbeStage,
+    bytes: usize,
+    min_kb: u64,
+    max_kb: u64,
+) -> (DpiStatus, Detail) {
+    let (msg, os_code, os_kind) = http_err_info(e);
+    verdict_from_client_error(&msg, os_code, os_kind, e.is_timeout(), stage, bytes, min_kb, max_kb)
+}
+
+/// The verdict for a client error, whichever client raised it.
+#[allow(clippy::too_many_arguments, reason = "one client error's parts, the stage it died in and the fat window's bounds; both callers already hold them as locals, and a bundle struct would exist for two calls")]
+fn verdict_from_client_error(
+    msg: &str,
+    os_code: Option<i32>,
+    os_kind: Option<std::io::ErrorKind>,
+    timed_out: bool,
+    stage: ProbeStage,
+    bytes: usize,
+    min_kb: u64,
+    max_kb: u64,
+) -> (DpiStatus, Detail) {
     let lower = msg.to_ascii_lowercase();
 
     // Read timeout inside the fat window → the 16KB DROP badge, and the detail
     // names the offset the way the fat probe does: `READ TIMEOUT at N KB`. The
     // badge is the same in every test but test 3; the window is the detail's job.
-    if (e.is_timeout() || lower.contains("timed out")) && stage == ProbeStage::ReadingData {
+    if (timed_out || lower.contains("timed out")) && stage == ProbeStage::ReadingData {
         return fat_read_verdict(bytes, min_kb, max_kb);
     }
 
-    let (s, d) = classify_ssl_error(&msg, bytes, ConnectionStage::TlsClientHelloSent);
+    let (s, d) = classify_ssl_error(msg, bytes, ConnectionStage::TlsClientHelloSent);
     if s != DpiStatus::Unknown {
         return (s, d);
     }
-    classify_connect_error_full(&msg, os_code, os_kind, bytes, stage)
+    classify_connect_error_full(msg, os_code, os_kind, bytes, stage)
 }
 
 /// The HTTP phase of a probe: HTTP/2 or HTTP/1.1 by the ALPN the handshake
@@ -602,11 +862,10 @@ pub(crate) async fn check_http(
 ) -> (DpiStatus, Detail, usize) {
         *stage.lock() = ProbeStage::TlsConnected;
         let alpn_h2 = negotiated_h2(&tls_stream);
-        let io = TokioIo::new(tls_stream);
-        let mut sender = match HttpSender::handshake(io, alpn_h2, fingerprint).await {
+        let mut sender = match HttpSender::handshake(tls_stream, alpn_h2, fingerprint).await {
             Ok(sender) => sender,
             Err(e) => {
-                let (s, d) = inner_hyper(&e, ProbeStage::TlsConnected, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                let (s, d) = inner_http(&e, ProbeStage::TlsConnected, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
                 return (s, d, 0usize);
             }
         };
@@ -652,7 +911,7 @@ pub(crate) async fn check_http(
                 // The stage the request went out under, read out of the guard:
                 // `ProbeStage` is `Copy`, so nothing is cloned out of it.
                 let st = *stage.lock();
-                let (s, d) = inner_hyper(&e, st, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                let (s, d) = inner_http(&e, st, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
                 return (s, d, 0usize);
             }
             Err(_) => {
@@ -696,7 +955,7 @@ pub(crate) async fn check_http(
                     }
                 }
                 Ok(Some(Err(e))) => {
-                    let (s, d) = inner_hyper(&e, ProbeStage::ReadingData, bytes_read, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                    let (s, d) = inner_http(&e, ProbeStage::ReadingData, bytes_read, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
                     return (s, d, bytes_read);
                 }
                 Ok(None) => break,
@@ -819,5 +1078,89 @@ mod tests {
         assert_eq!(h1.headers().get("te").expect("kept"), "Trailers");
         let h2 = build_request(&with_te(), true).expect("builds");
         assert_eq!(h2.headers().get("te").expect("kept"), "trailers");
+    }
+
+    /// The client's own bytes, per profile: the connection preface and the
+    /// request's `HEADERS` frame, exactly as they reach the wire.
+    ///
+    /// Past TLS this is the whole of what a probe imitates — the `SETTINGS`
+    /// values and their order, the connection window, the pseudo-header order,
+    /// and whether the request's `HEADERS` frame carries the PRIORITY flag with
+    /// which weight. No hash of the ClientHello sees any of it, so a client that
+    /// gets it wrong is a client a middlebox can tell apart; this is the test
+    /// that says the data in `fingerprint::h2` reaches the wire unchanged, and it
+    /// is pinned as bytes rather than as fields because that is what the peer
+    /// sees.
+    ///
+    /// The four rows are the baseline (`BASELINE_H2`, which the DoH client also
+    /// opens with — no PRIORITY, `SETTINGS` ascending from `ENABLE_PUSH`),
+    /// Chrome 146 (`masp`, weight 256 exclusive, four settings), Firefox 133
+    /// (`mpas`, weight 42, no `MAX_HEADER_LIST_SIZE`) and Safari 18.0 (`msap`,
+    /// five settings including the two the wrapper names). A diff here is a
+    /// change to what every probe sends.
+    ///
+    /// The listener is a plain socket that records what arrives, and the request
+    /// is [`request`]'s — three headers and a `GET`, small enough to read.
+    #[tokio::test]
+    async fn the_h2_wire_is_what_the_profiles_pin() {
+        use tokio::io::AsyncReadExt;
+
+        let expected = [
+            (
+                TlsFingerprint::Rustls,
+                "505249202a20485454502f322e300d0a0d0a534d0d0a0d0a00001804000000000000020000000000040020\
+                 0000000500004000000600004000000004080000000000004f000100001c010500000001828741882f91d35d055c\
+                 87a7048263cf7a82b47f50863485a9264faf",
+            ),
+            (
+                TlsFingerprint::Chrome146,
+                "505249202a20485454502f322e300d0a0d0a534d0d0a0d0a0000180400000000000001000100000002000000\
+                 0000040060000000060004000000000408000000000000ef000100002101250000000180000000ff8241882f91d3\
+                 5d055c87a787048263cf7a82b47f50863485a9264faf",
+            ),
+            (
+                TlsFingerprint::Firefox133,
+                "505249202a20485454502f322e300d0a0d0a534d0d0a0d0a0000180400000000000001000100000002000000\
+                 0000040002000000050000400000000408000000000000bf0001000021012500000001000000002982048263cf41\
+                 882f91d35d055c87a7877a82b47f50863485a9264faf",
+            ),
+            (
+                TlsFingerprint::Safari180,
+                "505249202a20485454502f322e300d0a0d0a534d0d0a0d0a00001e0400000000000002000000000003000000\
+                 64000400200000000800000001000900000001000004080000000000009f000100002101250000000100000000ff\
+                 828741882f91d35d055c87a7048263cf7a82b47f50863485a9264faf",
+            ),
+        ];
+
+        for (fingerprint, want) in expected {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            let capture = tokio::spawn(async move {
+                let (mut sock, _) = listener.accept().await.expect("accept");
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match tokio::time::timeout(Duration::from_millis(250), sock.read(&mut chunk)).await
+                    {
+                        Ok(Ok(0)) | Err(_) => break,
+                        Ok(Ok(n)) => buf.extend_from_slice(&chunk[..n]),
+                        Ok(Err(_)) => break,
+                    }
+                }
+                buf
+            });
+            let stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+            let mut sender = HttpSender::handshake(stream, true, fingerprint)
+                .await
+                .expect("handshake");
+            // The reply never comes — the listener records and closes — so the
+            // send is cut by the deadline; by then the preface and the request
+            // are on the socket.
+            let _ = tokio::time::timeout(Duration::from_millis(300), sender.send(request())).await;
+            drop(sender);
+            let got = capture.await.expect("capture");
+            let got: String = got.iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(got, want, "{fingerprint:?}");
+        }
     }
 }

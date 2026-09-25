@@ -1,8 +1,8 @@
 # vendor/hyper — patched hyper 1.11.1
 
 This directory is the **upstream `hyper` 1.11.1 source** (copied verbatim from
-crates.io) plus one patch: two settings of the HTTP/2 connection preface became
-optional. It is wired in the root `Cargo.toml` as
+crates.io) plus one patch: `ext::HeaderCaseMap` became public. It is wired in the
+root `Cargo.toml` as
 
 ```toml
 [patch.crates-io]
@@ -15,68 +15,70 @@ examples are upstream's, not ours).
 
 ## Why patch hyper at all
 
-hyper's HTTP/2 client builds the connection preface unconditionally: its
-`proto::h2::client::new_builder` always calls `h2`'s `max_header_list_size` and
-`enable_push(false)`, so every client hyper starts advertises both
-`SETTINGS_MAX_HEADER_LIST_SIZE` and `SETTINGS_ENABLE_PUSH = 0`. The browsers do
-not agree on either, and `tls.peet.ws` echoes the settings (and their order) in
-its akamai fingerprint, so a profile that imitates Firefox or Safari was still
-distinguishable on the first frame it sent:
+An HTTP/1.1 request's header *casing* is part of what a browser looks like, and
+`http::HeaderName` is lowercase: a request built from a `HeaderMap` goes out
+lowercased, and no browser writes `Sec-Fetch-Site`, `TE` or `Accept-Encoding`
+that way. hyper's h1 encoder has written the spelling of a name it is given since
+0.12 (`write_headers_original_case`, driven by the request's extensions), but only
+a *parsed* message or the C API could build that map — a client that has to write
+its own casing had no way to say so.
 
-| Preface | `SETTINGS` the bundle sends |
-| --- | --- |
-| `curl_chrome107` | `1:65536;2:0;3:1000;4:6291456;6:262144` |
-| `curl_firefox133` | `1:65536;2:0;4:131072;5:16384` |
-| `curl_safari155` | `4:4194304;3:100` |
-
-No hyper API can express "leave this setting out": `max_header_list_size` takes a
-plain `u32`, and `enable_push` has no setter at all.
+That is what the probes need: a request that claims to be Chrome 146 sends
+`sec-ch-ua`, `Sec-Fetch-Site` and `TE` spelled the way Chrome 146 spells them.
 
 ## What the patch adds
 
-`PATCH.diff` is the exact diff against pristine 1.11.1 — **170 lines across 3
-files**. It applies to a pristine copy with `patch -p1` (`patch -p1 --dry-run`
-was run against the crates.io source, and the applied result was compared with
-this tree byte for byte).
+`PATCH.diff` is the exact diff against pristine 1.11.1 — **45 lines in one file**.
+It applies to a pristine copy with `patch -p1` (`patch -p1 --dry-run` was run
+against the crates.io source, and the applied result was compared with this tree
+byte for byte).
 
-* `proto::h2::client::Config` carries `max_header_list_size: Option<u32>`, a new
-  `enable_push: Option<bool>`, a new `settings_order: Vec<u16>`, and the two new
-  `enable_connect_protocol: Option<bool>` / `no_rfc7540_priorities: Option<bool>`,
-  defaulting to the values hyper sent before (`Some(16 KB)`, `Some(false)`, empty,
-  `None`, `None`), and `new_builder` only calls the matching `h2` setter when it
-  has something to say.
-* `client::conn::http2::Builder` follows: `max_header_list_size` now takes
-  `impl Into<Option<u32>>` — hyper's own idiom for its other settings — and the
-  new `enable_push(impl Into<Option<bool>>)`,
-  `settings_order(impl IntoIterator<Item = u16>)`,
-  `enable_connect_protocol(impl Into<Option<bool>>)` and
-  `no_rfc7540_priorities(impl Into<Option<bool>>)` were added.
-* `ext::HeaderCaseMap` is public, with a public `default()` and `append()`: the
-  h1 encoder has written the original casing of a name since 0.12
-  (`write_headers_original_case`, driven by the request's extensions), but only a
-  parsed message or the C API could build the map. A client that has to write
-  `Sec-Fetch-Site`, `TE` or `sec-ch-ua` the way its profile does can now put one
-  in the request's extensions; a request without one is unaffected.
+* `ext::HeaderCaseMap` is public (its field stays private, so the internals can
+  still change), with a public `Default` and a public
+  `append<N: IntoHeaderName>(name: N, orig: Bytes)` — the two calls a client needs
+  to build one. A request without a map is unaffected: the encoder falls back to
+  the lowercase name, which is upstream's behaviour byte for byte.
 
-Nothing else changes: a caller that touches neither setter gets byte-identical
-behaviour to upstream, which is what the DNS/DoH paths and the rustls baseline
-profile rely on.
+The read side (`get_all`, `get_all_internal`, `insert`) stays `pub(crate)`: this
+build only writes requests, and the API upstream is still designing is the
+reader's half.
 
-`h2` itself needed two patches for all this: the `Option`-based `Settings` makes
-"omitted" expressible without one, but the *order* of the entries is an `h2`
-encoder concern — `Settings::set_order` and `client::Builder::settings_order`
-come from `vendor/h2/README-PATCH.md`. Leaving `MAX_HEADER_LIST_SIZE` out also
-leaves the receive-side cap at h2's own default (`codec::framed_read`'s
-`DEFAULT_SETTINGS_MAX_HEADER_LIST_SIZE`) rather than at 16 KB — both bounded.
+## What left, and why
+
+Two hunks used to be here, in `proto::h2::client` and `client::conn::http2`:
+`SETTINGS_MAX_HEADER_LIST_SIZE` and `SETTINGS_ENABLE_PUSH` became optional, the
+settings order became a caller's list, and the two settings Safari 18 sends
+(`ENABLE_CONNECT_PROTOCOL`, `NO_RFC7540_PRIORITIES`) got client setters. They
+existed because hyper drove the h2 client, and hyper's builder cannot leave a
+setting out.
+
+The probes drive the h2 client themselves now — `http2`, the fork that carries
+the whole request shape as published API (root `Cargo.toml`) — and hyper is built
+with `features = ["client", "http1"]`, so it never compiles its h2 client and
+those hunks were dead code. The numbers they configured live in
+`crates/dpi-core/src/net/fingerprint/h2.rs` (`H2Fingerprint`, `BASELINE_H2`) and
+are applied by `net::http::h2_builder`, which is also where the DoH client asks
+for the baseline preface.
+
+## Upstream
+
+The one remaining hunk is submitted as
+[hyperium/hyper#4203](https://github.com/hyperium/hyper/pull/4203) — the minimal
+exposure [`#2695`](https://github.com/hyperium/hyper/issues/2695) asked for
+("just figuring out the minimal methods needed to expose the existing
+`hyper::ext::HeaderCaseMap`"), which also answers
+[`#3971`](https://github.com/hyperium/hyper/issues/3971). When a hyper release
+carries it, this directory and its `[patch]` entry both go.
 
 ## Notes for maintainers
 
-* All three knobs are per-connection and optional; a caller that sets none of
-  them gets upstream's wire byte for byte, which is what the DNS/DoH paths and
-  the rustls baseline profile rely on.
+* A caller that touches nothing gets upstream's wire byte for byte, which is what
+  the baseline profile and the DoH client rely on.
 * When regenerating `PATCH.diff`: copy the pristine crates.io source into `a/`,
   this directory into `b/` (dropping `PATCH.diff`, `README-PATCH.md`,
-  `Cargo.lock`, `.cargo-ok`, `.cargo_vcs_info.json`), run `diff -ruN a b`, rewrite
-  the header paths to `a/…` and `b/…`, and validate with `patch -p1 --dry-run` in
-  a pristine copy. As with `vendor/h2`, no LF normalisation is applied — the tree
-  keeps upstream's line endings so the diff reproduces it exactly.
+  `Cargo.lock`, `.cargo-ok`, `.cargo_vcs_info.json`), run
+  `diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a b`,
+  rewrite the header paths to `a/…` and `b/…`, and validate with
+  `patch -p1 --dry-run` in a pristine copy. As with `vendor/rustls`, no LF
+  normalisation is applied — the tree keeps upstream's line endings so the diff
+  reproduces it exactly.

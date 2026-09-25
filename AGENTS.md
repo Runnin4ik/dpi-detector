@@ -135,7 +135,7 @@ registry/env keys, `Detail` codes, raw error text appended after a localized lab
 ## Runtime/Tooling Preferences
 
 - Rust only, via cargo. Exactly one feature exists — `dpi-core`'s `live-network`, which gates the one test that needs egress (Testing & QA); everything else is a curated selection in `[workspace.dependencies]` — e.g. `brotli-decompressor`/`ruzstd` for decode-only RFC 8879/8878 support instead of rustls's compressor-linking features.
-- `vendor/` = patched upstream, not ours: read the crate's `README-PATCH.md` before touching it; a change goes back to the fork, NEVER into the vendored copy. `rustls-rustcrypto` = the one vendored crate that is a workspace member; root `Cargo.toml` explains why, and which three are not.
+- `vendor/` = patched upstream, not ours: read the crate's `README-PATCH.md` before touching it; a change goes back to the fork, NEVER into the vendored copy. `rustls-rustcrypto` = the one vendored crate that is a workspace member; root `Cargo.toml` explains why, and which two are not.
 - Auxiliary tooling lives outside the workspace, writes ONLY under `target/`, NEVER invoked by cargo: Python 3 (`tools/fingerprint/fingerprint.py`), Go (`tools/fingerprint/utls`, uTLS v1.8.2), `tools/diag/*.ps1`, `scripts/*.sh`.
 - CI, release, toolchain rows, supply chain: `docs/CI.md` — read it when changing a dependency, an installer or the build matrix. Nothing there needs running by hand before a push.
 

@@ -161,7 +161,6 @@ use dpi_core::net::{ja3, ja4};
 use dpi_core::net::http::{request_headers, HttpRequest, HttpSender};
 use http_body_util::BodyExt;
 use hyper::Method;
-use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -905,7 +904,7 @@ async fn headers(fingerprint: TlsFingerprint, host: &str, connect_to: Option<&Co
         Err(e) => return println!("{host:22} HANDSHAKE FAILED: {e}"),
     };
     // h1 whatever ALPN says: this mode exists to see the h1 request block.
-    let mut sender = match HttpSender::handshake(TokioIo::new(tls), false, fingerprint).await {
+    let mut sender = match HttpSender::handshake(tls, false, fingerprint).await {
         Ok(sender) => sender,
         Err(e) => return println!("HTTP handshake failed: {e}"),
     };
@@ -953,7 +952,7 @@ async fn peet(fingerprint: TlsFingerprint, host: &str, connect_to: Option<&Conne
     let h2 = tls.get_ref().1.alpn_protocol() == Some(b"h2");
     println!("profile   = {} (the browser's own offer)", fingerprint.code());
     println!("{host:22} alpn={}", if h2 { "h2" } else { "http/1.1" });
-    let mut sender = match HttpSender::handshake(TokioIo::new(tls), h2, fingerprint).await {
+    let mut sender = match HttpSender::handshake(tls, h2, fingerprint).await {
         Ok(sender) => sender,
         Err(e) => return println!("HTTP handshake failed: {e}"),
     };

@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 use http_body_util::{BodyExt, Limited};
 
 use hyper::Method;
-use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
@@ -25,7 +24,7 @@ use crate::classify::{
 use crate::config::AppConfig;
 use crate::net::fingerprint::http_identity;
 use crate::net::http::{
-    hyper_err_info, negotiated_h2, request_headers, HttpRequest, HttpSender,
+    http_err_info, negotiated_h2, request_headers, HttpRequest, HttpSender,
 };
 use crate::net::tcp::{dial_tcp, DialError};
 use crate::net::tls::{create_tls_config, TlsProfile};
@@ -138,22 +137,20 @@ async fn connect_fat_target(
             }
         };
         let alpn_h2 = negotiated_h2(&tls_stream);
-        let io = TokioIo::new(tls_stream);
-        match HttpSender::handshake(io, alpn_h2, cfg.fingerprint()).await {
+        match HttpSender::handshake(tls_stream, alpn_h2, cfg.fingerprint()).await {
             Ok(sender) => Ok(sender),
             Err(e) => {
-                let (msg, os_code, os_kind) = hyper_err_info(&e);
+                let (msg, os_code, os_kind) = http_err_info(&e);
                 let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, ProbeStage::TlsConnected);
                 Err((s, d))
             }
         }
     } else {
-        let io = TokioIo::new(tcp);
         // No TLS, so no ALPN: HTTP/1.1 is the only protocol on the wire here.
-        match HttpSender::handshake(io, false, cfg.fingerprint()).await {
+        match HttpSender::handshake(tcp, false, cfg.fingerprint()).await {
             Ok(sender) => Ok(sender),
             Err(e) => {
-                let (msg, os_code, os_kind) = hyper_err_info(&e);
+                let (msg, os_code, os_kind) = http_err_info(&e);
                 let (s, d) = classify_connect_error_full(&msg, os_code, os_kind, 0, ProbeStage::TcpConnect);
                 Err((s, d))
             }
@@ -279,7 +276,7 @@ pub async fn probe_tcp_16_20(
 
         // If connection was closed concurrently between requests, reconnect and retry this chunk once
         if let Ok(Err(ref e)) = res {
-            let (emsg, _, _) = hyper_err_info(e);
+            let (emsg, _, _) = http_err_info(e);
             if e.is_canceled() || emsg.contains("canceled") || sender.is_closed() {
                 if let Ok(new_sender) = connect_fat_target(addr, target_ip, sni, use_tls, cfg).await {
                     sender = new_sender;
@@ -318,7 +315,7 @@ pub async fn probe_tcp_16_20(
                 }
             }
             Ok(Err(e)) => {
-                let (msg, os_code, os_kind) = hyper_err_info(&e);
+                let (msg, os_code, os_kind) = http_err_info(&e);
                 let lower = msg.to_ascii_lowercase();
                 let is_read_timeout = e.is_timeout() || lower.contains("timed out");
                 if is_read_timeout {

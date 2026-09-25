@@ -27,9 +27,10 @@ tokio-rustls = { workspace = true }
 webpki-roots = { workspace = true }
 rustls-rustcrypto = { workspace = true }
 hyper = { workspace = true }
-h2 = { workspace = true }
+http2 = { workspace = true }
 hyper-util = { workspace = true }
 http-body-util = { workspace = true }
+http-body = { workspace = true }
 bytes = { workspace = true }
 serde = { workspace = true }
 parking_lot = { workspace = true }
