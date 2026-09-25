@@ -22,8 +22,8 @@ mod views;
 
 use dpi_core::classify::Detail;
 use menu::{
-    apply_interface, burst_settings_menu, export_report, legend_loop, menu_until_something_to_run,
-    read_post_test_action, run_interactive_menu, tui_available, MenuAction,
+    apply_interface, burst_settings_menu, default_report_name, export_report, legend_loop,
+    menu_until_something_to_run, read_post_test_action, run_interactive_menu, tui_available, MenuAction,
     MenuResult, PostTestAction, VersionSlot,
 };
 use runner::{
@@ -685,7 +685,7 @@ async fn run() {
     // previous screen session.
     let burst_defaults = burst_plan.targets.clone();
     let mut burst_domain: Option<String> = None;
-    let mut result_path = args.output.clone();
+    let result_path = args.output.clone();
     let mut selection = tests_str.clone();
 
     loop {
@@ -817,12 +817,16 @@ async fn run() {
                     should_repeat = true;
                 }
                 PostTestAction::Export => {
-                    if result_path.is_none() {
-                        result_path = Some(base_dir().join("dpi_detector_results.txt").to_string_lossy().to_string());
-                    }
-                    if let Some(ref p) = result_path {
-                        export_report(p, &emitter.report, &msg);
-                    }
+                    // The name is stamped per press, not once per session: the
+                    // default report of a run is what an operator is about to
+                    // send, and a second press has to be a second file rather
+                    // than the first one overwritten. A caller who named the
+                    // path with `-o` gets that exact path, as before.
+                    let path = match &result_path {
+                        Some(p) => p.clone(),
+                        None => base_dir().join(default_report_name()).to_string_lossy().into_owned(),
+                    };
+                    export_report(&path, &emitter.report, &msg);
                 }
                 PostTestAction::Quit => return,
             }

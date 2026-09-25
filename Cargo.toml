@@ -82,6 +82,14 @@ thiserror = "1.0"
 base64 = "0.22"
 sha2 = "0.10"
 rustix = { version = "0.38", default-features = false, features = ["use-libc", "termios", "stdio"] }
+# The name of the report the binary writes for itself carries the run's local
+# date and time (`tui/screens/post_run.rs`), and the offset has to come from the
+# OS — a fixed one is wrong across DST and a hand-rolled one is wrong on every
+# platform but the one it was written for. `formatting` and `serde` stay off: the
+# stamp is six integer fields, and the feature list is what keeps the crate's
+# formatting machinery and its lookup tables out of a binary whose size is a
+# budget (docs/OPTIMIZATIONS.md).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # The lint posture lives in the manifest, not only on the CI command line, so that
 # a bare `cargo build`/`cargo test` — both of which `check.yml` runs — carries it

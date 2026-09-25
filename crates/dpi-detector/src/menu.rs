@@ -8,5 +8,5 @@ pub(crate) use crate::tui::screens::main::{run_interactive_menu, tui_available, 
 pub(crate) use crate::tui::screens::legend::{legend_loop, MenuAction};
 pub(crate) use crate::tui::screens::main::{apply_interface, menu_until_something_to_run};
 pub(crate) use crate::tui::screens::post_run::{
-    export_report, read_post_test_action, PostTestAction,
+    default_report_name, export_report, read_post_test_action, PostTestAction,
 };

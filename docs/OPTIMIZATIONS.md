@@ -58,6 +58,7 @@ This document records the architectural decisions and compilation profiles appli
 * The RSS tracks the file because the ELF is demand-paged (§3.1): what becomes
   resident is the pages the run touches, and a larger file leaves more of them
   touched. That is also why the file-size knobs below are memory knobs.
+* **Re-checked 
 
 ### 2.3. Eliminating Duplicate Dependencies in `Cargo.lock`
 * **`crossterm`:** Updated to `0.29` in the root `Cargo.toml`. Double compilation of versions `0.28.1` (from `dpi-detector`) and `0.29.0` (from `comfy-table`) has been eliminated.
@@ -139,7 +140,15 @@ Measured on the target (MT7621, musl, `--release`). §2.5's two guesses about wh
 * **The same binary on tmpfs shows the same pages under another name.** Run from `/tmp` (tmpfs on this router): `RssShmem` 4776 + `RssFile` 796, the same ~5.6 MB counted as shared memory. That matters, because tmpfs pages cannot be reclaimed at all: a binary placed in `/tmp` costs its own size in RAM twice, once as the file and once as the process's resident pages. The installer puts it in `/opt/bin`, which is ext4.
 * **What that does and does not mean.** File-backed pages are clean, so under memory pressure the kernel drops them and re-faults them from flash — the code is elastic memory, and the file size is the cheap kind of it. `echo 3 > /proc/sys/vm/drop_caches` does *not* demonstrate that on a running process, because `invalidate_mapping_pages` skips pages that are still mapped: the eviction is the kernel's documented behaviour here, not something this measurement showed. What cannot be reclaimed without swap is the anonymous part, 1.3–1.6 MB per run, and that is where an OOM kill would come from.
 * **`VmData` is virtual, not resident:** 19–79 MB per test, and reading it as memory use would overstate the tool by an order of magnitude. `VmExe` is likewise the size of the mapping, not what is resident.
-* **The code is diffuse: no single big win is left.** `cargo bloat` on the release build — `.text` is 2.7 MiB of the 4.0 MiB file, and the largest crates are `std` 528 KiB, `dpi_detector` 411 KiB, `dpi_core` 241 KiB, `rustls` 198 KiB, `tokio` 179 KiB, `h2` 173 KiB, then 125 crates at 93 KiB and below. The largest single function is `runner::run_test_suite`'s future at 124 KiB, followed by `run`'s at 103 KiB — the two async state machines, whose size is the sum of every branch they await. Cutting the resident memory further means removing features, not codegen settings; the YAML config (98 KiB with libyaml) and the `h2`/`hyper` stack (256 KiB) are both deliberate (§2.7, §3.3).
+* **The code is diffuse: no single big win is left.** `cargo bloat` on the release build — `.text` is 2.7 MiB of the 4.0 MiB file, and the largest crates are `std` 528 KiB, `dpi_detector` 411 KiB, `dpi_core` 241 KiB, `rustls` 198 KiB, `tokio` 179 KiB, `h2` 173 KiB, then 125 crates at 93 KiB and below. The largest single function is `runner::run_test_suite`'s future at 124 KiB, followed by `run`'s at 103 KiB — the two async state machines, whose size is the sum of every branch they await. Cutting the resident memory further means removing features, not codegen settings; the YAML config (98 KiB with libyaml) and the `h2`/`hyper` stack (256 KiB) are both deliberate (§2.7, §3.3).).
+
+### 2.9. The Clock in the Report File Name (`chrono`)
+
+* **Files:** `Cargo.toml` (`[workspace.dependencies]`), `crates/dpi-detector/Cargo.toml`, `crates/dpi-detector/src/tui/screens/post_run.rs`
+* **What it buys:** the report the binary writes for itself — the post-run `S` export, when no `-o` path was given — is named `dpi_detector_results-20260925-020115.txt`, so a second export is a second file instead of the first one overwritten. The offset has to come from the OS: a fixed one is wrong across a DST change, and this is the only clock in the tree that has to agree with the one on the desk.
+* **Features:** `default-features = false, features = ["clock"]`. `formatting`, `serde` and `wasmbind` stay off: the stamp is six integer fields read off `Local::now()`, and the formatting machinery with its tables is what a default build would have carried.
+* **Measured (`release-local`, x86_64-pc-windows-msvc, one tree, A/B):** 6 233 600 bytes with the clock in use against 6 242 304 bytes with `default_report_name()` stubbed to a literal and the dependency unused — 8 704 bytes *smaller* with the clock, which is linker layout rather than code, and is below the smallest win this document records (§2.4's 35 KB). The shipping profile is not measured; the reasoning, not the measurement, says it costs no more there: `release-local` has no LTO and 16 codegen units, so it is the profile that keeps the most of a crate's unused monomorphised code, and the release build strips at least as much.
+* **Rejected:** a hand-rolled `GetLocalTime`/`localtime_r`, i.e. two new platform blocks of `unsafe`, which would stop `src/tui/backend.rs` being the crate's only FFI module (both the lint posture in `Cargo.toml` and that module's own comment name it as the one) — more code, two platforms, the same information. Rejected too: a UTC stamp, which reads at an offset from the wall clock of the machine the report is opened on.
 
 ---
 
@@ -148,7 +157,14 @@ Measured on the target (MT7621, musl, `--release`). §2.5's two guesses about wh
 1. **UPX is a fallback, not the default:**
    * The plain binary is what the installer prefers. Three router targets (`armv7`, `mipsel`, `mips`) additionally ship a `-upx` variant, and `install.sh` switches to it only when the target has less than 200 MB free (`DPI_UPX=1` forces it, `DPI_UPX=0` forbids it).
    * On routers the SquashFS filesystem compresses binaries with the **XZ / LZMA** algorithm directly on the Flash memory, so the plain ELF is already stored compactly.
-   * A normal Linux ELF is loaded by the kernel page by page (4 KB demand-paging via `mmap`), while a UPX binary must fully unpack itself into RAM on startup. On routers with 64–128 MB RAM this instantly inflates RSS by several megabytes and provokes the OOM-killer — which is why UPX is reserved for flash-tight devices, where the trade is deliberate.
+   * A normal Linux ELF is loaded by the kernel page by page (4 KB demand-paging via `mmap`), while a UPX binary unpacks its whole image before `main`. **Measured on the target** — the same router (MT7621, 512 MB), one session, the two `mipsel` artifacts of `v5.0.0-alpha.20` (`install.sh` with `DPI_UPX=1` for the packed one), `/opt/bin/time -v` for the rusage numbers (peak RSS is `ru_maxrss`, not a sample), tests 0 / 2 / 4 / 1:
+
+| build | peak RSS, 0 / 2 / 4 / 1 | file | anon | CPU (user+sys), 0 / 2 / 4 / 1 |
+| --- | --- | --- | --- | --- |
+| `dpi-detector-linux-mipsel` (4.94 MB) | 6216 / 6704 / 7692 / 6764 kB | 3996 kB | 2096 kB | 2.3 / 5.3 / 9.8 / 34.6 s |
+| `dpi-detector-linux-mipsel-upx` (1.57 MB) | 6392 / 6740 / 7792 / 7100 kB | 4 kB | 6820 kB | 4.5 / 6.0 / 10.6 / 34.5 s |
+
+   * The `file` and `anon` columns are one-second samples of `/proc/<pid>/status` during test 2, and they are the finding: **the peak is the same within a few hundred kB, but the pages are a different kind.** The packed build's ~4.7 MB of code is anonymous and dirty — the part §2.8 names as what an OOM kill comes from — where the plain build's ~4 MB is file-backed and clean, which the kernel drops and re-faults from flash under pressure. So the claim that stood here ("instantly inflates RSS by several megabytes") is not what this box shows; the cost of UPX is the reclaimability of the code plus the unpack's processor time, ~0.7–2.2 s per run (2.1 s against a 2.3 s test 0, and nothing measurable against the 35 s test 1). UPX stays reserved for flash-tight devices, which is the trade this section is about.
 2. **100% self-containment (Static Musl):**
    * Builds for `mipsel-unknown-linux-musl`, `mips-unknown-linux-musl` and `armv7-unknown-linux-musleabihf` are built with static Musl libc (`+crt-static`), which allows running the utility on any firmware without installing external libraries into `/opt/lib`.
 3. **Keeping DoH HTTP/2 (`h2`):**
