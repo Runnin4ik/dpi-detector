@@ -32,3 +32,4 @@ www.cdn77.com
 shikimori.io
 vk.ru
 www.google.com
+fonts.gstatic.com
