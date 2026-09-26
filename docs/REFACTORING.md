@@ -88,12 +88,31 @@ Deviations from the plan, recorded deliberately:
 
 ## 3. Target layering
 
-Right now the core has three cycles, each with exactly one guilty import:
+The graph is acyclic today. The three cycles this section used to list are gone,
+and the third of them was a misreading:
 
-* `net → dns` — `net/netinfo.rs:21` (`query_doh_txt`);
-* `dns → probe` — `dns/availability.rs:23` (`fake_ip_type`);
-* `dns → classify` — `dns/availability.rs:98-99` (both lines are inside `availability`).
+* `net → dns` — gone with P4 (`750e185`): `net/netinfo.rs` is a re-export shim
+  over `net/http_client`, `net/public_ip` and `net/sysinfo`, and the Cymru
+  lookup that called `query_doh_txt` now lives in `dns/cymru.rs` (§5).
+* `dns → probe` — gone with P2 (`50afd0e`): `dns/availability.rs` no longer
+  exists, it is `probe/dns_avail.rs`, and `fake_ip_type` is imported from
+  `probe::domains` by the layer that owns it.
+* `dns → classify` — not a cycle: `classify` is the leaf of the diagram below,
+  so this edge points *down* the layering; only an edge back up out of `dns`
+  could close a loop.
 
+Re-checked on the tree rather than read off the phase log:
+
+* a search for `crate::dns` under `crates/dpi-core/src/net` — no matches;
+* a search for `crate::probe` under `crates/dpi-core/src/dns` — no matches;
+* a search for `crate::` + `net`/`dns`/`probe` under `crates/dpi-core/src/classify`
+  (brace-elided forms included) — no matches, so the leaf still imports nothing
+  from the layers above it;
+* `dns/availability.rs` is absent from `ls crates/dpi-core/src/dns`
+  (`cymru doh dot mod resolve socks types udp wire`).
+
+The layer-crossing imports `dns/` makes are all on the allowed side:
+`crate::net::{bind,fingerprint,http,tcp,tls}` and the leaf `crate::classify`.
 The goal is an acyclic graph:
 
 ```
@@ -293,6 +312,20 @@ each carries the reason so the next pass does not re-open it:
 | Make `domain_stats` count the QUIC column | The stats deliberately ignore it — a QUIC endpoint is absent for most domains, so folding it into the blocked count would turn "no HTTP/3 here" into a finding. The decision is written at the phase in `probe/quic.rs`. |
 | Move the QUIC byte layer (`net/quic.rs`) into `dns/` or `probe/` | It is `net/`'s layer by §3: it owns the wire, imports nothing from the crate, and both `dns/` and `probe/` would create a new edge. |
 | Give the QUIC phase its own progress type instead of `PhaseProgress`/`PhaseId` | Same refusal as the `DiagnosticTask` row above: the seam already exists, and `PhaseId::DomainQuic` was missing from `stage_block()` — a wiring gap, not a missing abstraction. |
+
+**Added 2026-09-27 by the fingerprint review.** The pass itself is in the commits
+(the named `drop12`/`drop13` constants, the two byte-identical records turned into
+aliases, the narrowed accessors, the ECH counts, the two doc comments that
+contradicted their own records). Six proposals were examined and refused:
+
+| Proposal | Reason |
+| --- | --- |
+| Deduplicate the identity-only sibling records (`chrome133`/`chrome146`, the Safari rows, `edge101`/`107`) with struct-update syntax | Their whole point is a second *identity* over one TLS shape, and each record is read field by field by the table, the JA3/JA4 pins and `--legend`; a `..BASE` spread would hide which fields a record actually names, and the sharing that pays (the big lists) is already named. |
+| Merge `HelloVariant::AddExtension` into `ExtBody(id, &[])` | They are not equivalent: `ExtBody` *replaces* an entry (`retain` first) while `AddExtension` appends, so the merge either changes behaviour for an id already in the order or reproduces that difference inside one variant. The duplicate-order footgun is real and is recorded here instead. |
+| Alias `go.rs`/`tor.rs`'s once-written `drop12`/`drop13` arrays to the Safari/Firefox constants they happen to equal | Aliasing a once-written array couples two unrelated clients' records (go → safari) for no repetition saved. The *repeated* arrays — 8–12 copies per family — are named now; these two are written once. |
+| Merge `ja3.rs`'s and `ja4.rs`'s parsing | `ja4.rs` already reads `ja3.rs`'s walkers; what remains is that each walks the record once, which is the price of two independent hash implementations — and a JA4 that disagrees with JA3 is a signal worth keeping. |
+| Replace `TlsShape::token` with a derivation from `label` | They differ exactly where the token is not the label (`--legend` prints the token); deriving it needs the same table the field already is, at the cost of a lookup per call. |
+| Give the QUIC column its own ECH handling instead of inheriting the shape's GREASE ECH | The column sends what the shape sends, and a live Chrome's QUIC hello carries extension 65037 with a GREASE body (measured: `0xfe0d` in `tp_dump.py`'s dump of its hello). Documenting and testing that coupling is a follow-up, not a divergence. |
 
 **Superseded 2026-09-24.** The first two rows above were acted on, and the second
 of them only partly as written:
