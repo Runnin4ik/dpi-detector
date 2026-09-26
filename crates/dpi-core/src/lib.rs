@@ -86,13 +86,19 @@ impl ProgressBlock {
 impl PhaseId {
     /// The counter this phase owns on a line shared with other stages, for the
     /// phases that run one after another inside one test (test 2: DNS →
-    /// TLS 1.3 → TLS 1.2 → HTTP). Phases that own a whole line return `None`.
+    /// TLS 1.3 → TLS 1.2 → HTTP → QUIC). Phases that own a whole line return
+    /// `None`.
     pub fn stage_block(self) -> Option<ProgressBlock> {
         match self {
             PhaseId::DomainDns => Some(ProgressBlock::DomainDns),
             PhaseId::DomainTls13 => Some(ProgressBlock::DomainTls13),
             PhaseId::DomainTls12 => Some(ProgressBlock::DomainTls12),
             PhaseId::DomainHttp => Some(ProgressBlock::DomainHttp),
+            // Test 2 declares all five counters on one line (`runner.rs`,
+            // `live.begin_stages`); a phase missing from this match does not
+            // advance its block but replaces the whole line, which is how the
+            // QUIC counter declared on that line never moved.
+            PhaseId::DomainQuic => Some(ProgressBlock::DomainQuic),
             _ => None,
         }
     }

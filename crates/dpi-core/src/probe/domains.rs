@@ -401,6 +401,24 @@ impl DomainEntry {
     }
 }
 
+/// The QUIC cell of a row whose probe never ran because the DNS phase already
+/// decided the row: a DNS failure (NXDOMAIN or v6-unsupported), an ISP stub
+/// answer, or a local/relay address.
+///
+/// It carries the same status and the same detail as the row's TLS and HTTP
+/// cells. `Unknown`, which is what the row held before, is not a verdict: the
+/// TUI paints it red (`dpi-detector`'s `widgets::status_color`) and `--json`
+/// writes `"unknown"` beside a `"dns_fail"` that describes the whole row.
+/// `build_domain_row` groups lines by detail, so reusing the sibling detail
+/// also keeps one reason on one line instead of adding a second `QUIC` line.
+///
+/// A row that is resolved cleanly does not come through here: it keeps
+/// [`QuicCheck::pending`](crate::probe::quic::QuicCheck::pending) until
+/// `check_quic_all` fills it.
+fn skipped_quic(status: DpiStatus, detail: Detail) -> crate::probe::quic::QuicCheck {
+    crate::probe::quic::QuicCheck { status, detail, elapsed: 0.0 }
+}
+
 /// Phase 0: resolves every domain under the semaphore (IPv6 mode re-probes over IPv4
 /// to tell "IPv6 unsupported" from "domain not found") and records its IP and fake-IP class.
 pub async fn resolve_all(
@@ -442,6 +460,7 @@ pub async fn resolve_all(
                     e.t13 = TlsCheck { status: DpiStatus::DnsFail, detail: detail.clone(), elapsed: 0.0 };
                     e.t12 = e.t13.clone();
                     e.http = HttpCheck { status: DpiStatus::DnsFail, detail };
+                    e.quic = skipped_quic(DpiStatus::DnsFail, e.http.detail.clone());
                     e
                 }
                 Some(ip) => {
@@ -456,6 +475,7 @@ pub async fn resolve_all(
                             e.t13 = TlsCheck { status: DpiStatus::DnsFake, detail: detail.clone(), elapsed: 0.0 };
                             e.t12 = e.t13.clone();
                             e.http = HttpCheck { status: DpiStatus::DnsFake, detail };
+                            e.quic = skipped_quic(DpiStatus::DnsFake, e.http.detail.clone());
                             e
                         }
                         FakeIpType::Local => {
@@ -464,6 +484,7 @@ pub async fn resolve_all(
                             e.t13 = TlsCheck { status: DpiStatus::LocalIp, detail: detail.clone(), elapsed: 0.0 };
                             e.t12 = e.t13.clone();
                             e.http = HttpCheck { status: DpiStatus::LocalIp, detail };
+                            e.quic = skipped_quic(DpiStatus::LocalIp, e.http.detail.clone());
                             e
                         }
                         _ => DomainEntry::pending(domain, Some(ip), Some(false)),

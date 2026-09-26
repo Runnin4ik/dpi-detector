@@ -9,9 +9,11 @@
 //!
 //! The outcome mapping deliberately mirrors the hand-written probe's vocabulary
 //! (`QuicCheck`, `DpiStatus`, `Detail`), so the two implementations can be
-//! compared row by row on the same host list.
+//! compared row by row on the same host list. The hand-written probe
+//! (`probe/quic.rs`) is the reference: where the two can say different things,
+//! this file follows it.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -24,6 +26,24 @@ use crate::config::AppConfig;
 /// The port the column dials, and the ALPN an HTTP/3 client offers.
 const QUIC_PORT: u16 = 443;
 const ALPN: &[u8] = b"h3";
+
+/// Where this experiment's endpoint binds.
+///
+/// A constant, not `"0.0.0.0:0".parse()`, because a `parse` of a literal is an
+/// infallible call that still needs an `expect`, and this tree forbids
+/// unwrap-class calls outside tests (P7) — with `panic = "abort"` one would take
+/// the whole run down.
+///
+/// It is narrower than what the shipping probe binds through
+/// `net::bind::udp_socket`: that helper binds the chosen interface's own address
+/// (`net::bind::local_for`), and picks the family from the peer, while quinn's
+/// `Endpoint::client` takes one address for every destination — here IPv4
+/// unspecified. For an experiment that is acceptable: `quinn-probe` is off by
+/// default (Rule 2), it exists to compare the two implementations on the
+/// default route, and `--interface` runs remain the hand-written probe's job.
+/// The cost is spelled out rather than hidden: with `0.0.0.0` bound, a v6 target
+/// has no source address this endpoint can use.
+const CLIENT_BIND: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
 
 /// Why the handshake did not complete.
 enum Outcome {
@@ -49,14 +69,19 @@ pub async fn check(domain: &str, target: IpAddr, cfg: &AppConfig) -> QuicCheck {
     QuicCheck { status, detail, elapsed: started.elapsed().as_secs_f64() }
 }
 
-/// quinn's outcome in the column's vocabulary. The close codes are the same
-/// numbers the hand-written probe reads off the wire (`quic_close_296` is a TLS
-/// `handshake_failure`), which is what makes the two comparable.
+/// quinn's outcome in the column's vocabulary. The reference is the hand-written
+/// probe (`probe/quic.rs`'s `Verdict::finish`), which the two are compared
+/// against: the close codes are the same numbers it reads off the wire
+/// (`quic_close_296` is a TLS `handshake_failure`), silence is its `QuicDrop`,
+/// and a version mismatch is its `QuicVn` — the endpoint answered, the path
+/// works, and only the version is declined; mapping that to `QuicClosed` would
+/// read as a shutdown and make the row-by-row comparison disagree with the
+/// shipping probe.
 fn classify(error: &ConnectionError) -> (DpiStatus, Detail) {
     match error {
         ConnectionError::Reset => (DpiStatus::QuicClosed, Detail::QuicReset),
         ConnectionError::TimedOut => (DpiStatus::QuicDrop, Detail::QuicTimeout),
-        ConnectionError::VersionMismatch => (DpiStatus::QuicClosed, Detail::QuicVersionNegotiation),
+        ConnectionError::VersionMismatch => (DpiStatus::QuicVn, Detail::QuicVersionNegotiation),
         ConnectionError::ConnectionClosed(close) => close_code(u64::from(close.error_code)),
         ConnectionError::ApplicationClosed(close) => close_code(close.error_code.into_inner()),
         ConnectionError::TransportError(error) => close_code(u64::from(error.code)),
@@ -81,7 +106,7 @@ async fn handshake(addr: SocketAddr, sni: &str, window: Duration) -> Result<(), 
     let mut client = ClientConfig::new(Arc::new(quic));
     client.transport_config(Arc::new(transport));
 
-    let endpoint = Endpoint::client("0.0.0.0:0".parse().expect("bind address"))
+    let endpoint = Endpoint::client(CLIENT_BIND)
         .map_err(|error| Outcome::Local(format!("quinn: {error}")))?;
     let connecting = endpoint
         .connect_with(client, addr, sni)

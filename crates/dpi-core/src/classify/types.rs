@@ -490,6 +490,11 @@ mod tests {
     /// `tcp16_detected` where the documented token was something else. Pinned one
     /// by one: the enum cannot be iterated, and a list that rots is worse than
     /// none, so the ones that drifted are the ones named here.
+    ///
+    /// The QUIC column's members are pinned here for the same reason: row
+    /// verdicts (five) and skipped-row statuses (three) all reach `--json`
+    /// through this pair, and nothing else would fail if one of them were
+    /// renamed.
     #[test]
     fn the_wire_token_is_the_same_through_serde() {
         for (status, token) in [
@@ -499,6 +504,17 @@ mod tests {
             (DpiStatus::NxDomain, "nxdomain"),
             (DpiStatus::RedirSuspect, "redir"),
             (DpiStatus::TlsErr, "tls_err"),
+            // The five verdicts of the QUIC cell (`probe/quic.rs`).
+            (DpiStatus::QuicOk, "quic_ok"),
+            (DpiStatus::QuicClosed, "quic_closed"),
+            (DpiStatus::QuicVn, "quic_vn"),
+            (DpiStatus::QuicSpoof, "quic_spoof"),
+            (DpiStatus::QuicDrop, "quic_drop"),
+            // What the cell carries on a row the DNS phase already decided
+            // (`probe/domains.rs`): the same status the TLS and HTTP cells do.
+            (DpiStatus::DnsFail, "dns_fail"),
+            (DpiStatus::DnsFake, "dns_fake"),
+            (DpiStatus::LocalIp, "local_ip"),
         ] {
             assert_eq!(status.as_str(), token);
             assert_eq!(

@@ -460,12 +460,33 @@ mod tests {
             Detail::Redirect { host: "example.com".into() },
             Detail::UpgradeHttps { status: Some(301) },
             Detail::UpgradeHttps { status: None },
+            // The QUIC column's details: `--json` writes `Detail::code()` for
+            // each, so they are pinned with the rest rather than left to a
+            // rename that only the wire would notice.
+            Detail::QuicServerHello,
+            Detail::QuicRetry,
+            Detail::QuicForgedRetry,
+            Detail::QuicClose { error_code: 296 },
+            Detail::QuicReset,
+            Detail::QuicVersionNegotiation,
+            Detail::QuicTimeout,
+            Detail::QuicUnreadableReply,
+            Detail::QuicAnsweredWithoutHandshake,
+            Detail::QuicPortUnreachable,
         ];
         for d in &all {
             let code = d.code();
             assert!(
                 code.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
                 "{code:?} is not a snake_case token"
+            );
+            // `Serialize` writes the code and nothing else (the file header's
+            // rule), which is the half of the contract `--json` reads: the two
+            // must not drift apart.
+            assert_eq!(
+                serde_json::to_string(d).expect("a detail serializes"),
+                format!("\"{code}\""),
+                "{d:?} serializes to something other than its code"
             );
         }
         assert_eq!(Detail::HttpStatus(403).code(), "http_403");
@@ -478,6 +499,19 @@ mod tests {
         assert_eq!(Detail::UpgradeHttps { status: Some(301) }.code(), "upgrade_https");
         assert_eq!(Detail::Elapsed(0.3).code(), "elapsed_300ms");
         assert_eq!(Detail::None.code(), "");
+        // The QUIC column, one by one: every code the column can write, including
+        // the measured form — `quic_close_296` carries the transport error of
+        // RFC 9000 §20.1.
+        assert_eq!(Detail::QuicServerHello.code(), "quic_server_hello");
+        assert_eq!(Detail::QuicRetry.code(), "quic_retry");
+        assert_eq!(Detail::QuicForgedRetry.code(), "quic_forged_retry");
+        assert_eq!(Detail::QuicClose { error_code: 296 }.code(), "quic_close_296");
+        assert_eq!(Detail::QuicReset.code(), "quic_stateless_reset");
+        assert_eq!(Detail::QuicVersionNegotiation.code(), "quic_version_negotiation");
+        assert_eq!(Detail::QuicTimeout.code(), "quic_timeout");
+        assert_eq!(Detail::QuicUnreadableReply.code(), "quic_unreadable_reply");
+        assert_eq!(Detail::QuicAnsweredWithoutHandshake.code(), "quic_answered_without_handshake");
+        assert_eq!(Detail::QuicPortUnreachable.code(), "quic_port_unreachable");
     }
 
     #[test]
