@@ -11,9 +11,7 @@ under test.
 
 | script | what it answers |
 | --- | --- |
-| `validate.py` | Do the column's verdicts agree with a stock HTTP/3 client? One attempt per host from `hosts.txt`, plus the host's own `Alt-Svc` over TCP |
 | `crosscheck.py` | The same, but every attempt is made **at the address the detector itself resolved** (read from its `--json`), so an anycast difference cannot be mistaken for a wrong verdict |
-| `bracket.py` | Stock client → detector → stock client, one host at a time, in one window: the only way to tell "the endpoint is silent" from "the endpoint answers other clients and not us" |
 | `replay.py` | Replays the detector's own captured ClientHello on a fresh connection, once and then as a retransmission — the experiment that showed an edge answering the second flight and not the first |
 | `decrypt.py` | Opens the QUIC Initial packets of a capture by hand (RFC 9001 §5.2/§5.4), with an RFC 9001 A.1 self-test; the tool that showed the endpoint's first reply opens under no key this connection can derive |
 | `tp_dump.py` | Reassembles a real client's ClientHello out of a capture and prints its transport parameters — where the browser's numbers in `probe/quic.rs` come from |
@@ -21,7 +19,7 @@ under test.
 | `variants.py` | A stock client with one property of the detector's hello at a time (zeroed flow control, 1200-byte datagrams): the experiment that showed Cloudflare closing a zero-limit client with `Error opening control stream` |
 | `browser_check.py` | Drives a headless Chrome with QUIC forced for one origin and reports what the endpoint did with a **browser's** hello — the reference the column actually claims |
 | `online_h3.py` | Two third-party testers (`intodns.ai`, `http3check.net`) answer the *other* question — does the host serve HTTP/3 at all, from networks that are not ours — and writes `target/validation/online-h3.txt` |
-| `hosts.txt` | The host list the first two use |
+| `hosts.txt` | The host list `crosscheck.py`, `bracket.py` and `online_h3.py` default to |
 
 ## What the stand measured
 
@@ -124,9 +122,11 @@ hello edits above:
 | `www.canva.com` | `quic_answered_without_handshake` | `quic_closed(quic_close_296)`, as the stock client reads it |
 
 Measured after the fix: twelve runs out of twelve on those four hosts, and a full
-34-host sweep with no regression. The sweep now agrees with both online testers
-host by host: every row that is not `quic_ok` is one of the fourteen hosts they
-call "no HTTP/3".
+34-host sweep with no regression. The sweep agrees with both online testers on
+which hosts serve HTTP/3 — but a row that is not `quic_ok` is not thereby one the
+testers call "no HTTP/3": `x.com` closes this probe with 296 in the same window
+above and both testers list it as serving, because reading a close is a
+different fact from being refused a handshake.
 
 What is left is a lower class — `aws.amazon.com`, `soundcloud.com`,
 `www.currenttime.tv`, `www.svoboda.org`, `www.coursera.org` — where a *forced*
@@ -251,7 +251,7 @@ are `trust_anchors` (`0xca34`, which quinn does without and works), the key shar
 
 ### The reference is a browser, not a stock client
 
-`validate.py`, `crosscheck.py` and `bracket.py` compare against `aioquic`, which
+`crosscheck.py` and `bracket.py` compare against `aioquic`, which
 is the right tool for "does the endpoint answer at all" and the wrong one for
 "does it answer the way it answers a browser": measured on `www.apkmirror.com`, a
 Chrome hello (two 1258-byte Initials, split ClientHello) gets the unreadable
@@ -336,35 +336,38 @@ about the new ones in the same window.
   three Telegram hosts drop here *and* serve no HTTP/3 anywhere, so their
   `QUIC DROP` is not a finding.
 
-## The defect that is not in the hello: the address
+## The row that looked like a defect, and was not: `www.whatsapp.com`
 
-`www.whatsapp.com` is the row that shows it. `crosscheck.py` and `bracket.py`
-agree — the detector drops it and so does aioquic, before and after, at
-`31.13.72.52`, the address the system resolver returns. `browser_check.py`
-reported that a browser completed HTTP/3, and the capture says which address it
-used:
+This row is worth keeping, because it is where a measurement lied and the probe
+was right.
 
-| client | address | result |
-| --- | --- | --- |
-| detector, aioquic, Chrome (one attempt each) | `31.13.72.52`, the system resolver's answer | silence |
-| aioquic, and the detector's own hello | `157.240.205.60`, `dns.google`'s answer — `whatsapp-cdn-shv-01-hel3.fbcdn.net` | silence (the example prints `elapsed: 8.02s`) |
-| Chrome | `109.194.137.78` — `whatsapp-cdn-shv-01-arn2.fbcdn.net`, a Russian address | `HTTP/3 404` (aioquic); the detector's hello was answered in 0.01 s |
+`crosscheck.py` and `bracket.py` agree — the detector drops the host, and so does
+aioquic, before and after, at `31.13.72.52`. `browser_check.py` then reported that
+"a real browser completed the HTTP/3 handshake", and that report was taken at face
+value for a while: it looked as though the probe's hello were distinguishable from
+a browser's. It was not. The old `report()` decided with
+`any("Handshake" in line for line in server_frames)`, where `server_frames` was
+every QUIC packet not from `192.168.*` — Chrome's own background QUIC to Google
+included, and every other host Chrome opened in the same capture. The capture did
+hold a busy HTTP/3 conversation with `109.194.137.78`
+(`whatsapp-cdn-shv-01-arn2.fbcdn.net`); that connection simply was not
+`www.whatsapp.com`.
 
-The hello is not the difference: at the working edge the detector's own hello is
-answered as aioquic's is, and at the other two both are silent. The resolver is.
-Following the RFC 9460 record does not help either — the local resolver answers
-`mmx-ds.cdn.whatsapp.net`, that record's target, with the same silent
-`31.13.72.52` — so the fix is not "use DoH", it is "try the answers a browser
-would", which is more than the one the system resolver happens to hold.
+Scoped to the host's own connection — the fix, which imports `tp_dump.py`'s
+reassembly instead of parsing SNIs a second time — the same capture says:
 
-Two things to fix before the next run trusts `browser_check.py`:
+```
+the browser used 31.13.72.52:443 for www.whatsapp.com (connection DCID=70692190fe957555 from 192.168.1.110)
+0 QUIC packets from 31.13.72.52 on this connection
+www.whatsapp.com: a real browser did NOT complete the HTTP/3 handshake with 31.13.72.52
+```
 
-* `report()` decides with `any("Handshake" in line for line in server_frames)`,
-  and `server_frames` is every QUIC packet not from `192.168.*` — Chrome's own
-  background QUIC to Google, and the host's own NATed outbound packets included.
-  The verdict has to be scoped to the connection whose ClientHello carried the
-  host's SNI (the DCID `tp_dump.py` already finds), and it should print the
-  address the browser used: that field is what took three passes to notice here.
-* A `QUIC DROP` for a host that serves HTTP/3 from another address is not a
-  censored path, it is a verdict about one edge. The column should say which
-  address its verdict belongs to.
+So the browser went to the address the probe used and got the same silence: the
+`QUIC DROP` is what a browser would report, and the third-party testers that see
+HTTP/3 for this name are on another network. That is a finding about the path, not
+about the probe. The one address the probe did not try — `157.240.205.60`,
+`dns.google`'s answer — is silent too.
+
+What the row still argues for is a diagnosis aid rather than a fix: a verdict is
+about one edge, so the column should print which address it belongs to. The
+verdict itself needs no change.

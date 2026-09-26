@@ -22,6 +22,15 @@ from decrypt import TSHARK, keys_for, parse_long_header, read_varint  # noqa: E4
 
 V1 = 0x00000001
 PADDING = 1200
+# The probe's own schedule, mirrored here on purpose: `PTO_FIRST` and
+# `MAX_RETRANSMITS` in `crates/dpi-core/src/probe/quic.rs`, and the window is
+# `QUIC_TIMEOUT` from `config.yml`. This script exists to study *that* schedule -
+# the repeats leave at ~0.7, 2.0 and 4.7 s from the send, and the endpoint's
+# answer to the third arrives later still, which is why a 4-second window cannot
+# see what an 8-second one does. Change one and change the other.
+PTO_FIRST = 0.666
+MAX_RETRANSMITS = 3
+WINDOW = 8.0
 
 
 def open_client_packet(packet, dcid):
@@ -211,18 +220,25 @@ def main(path, host):
                 continue
             print(f"  [{label}] <- {describe_reply(data, dcid)}")
 
-    print("first send (what the detector does: the flight once)")
+    deadline = time.time() + WINDOW
+    next_retransmit = time.time() + PTO_FIRST
+    base = len(chunks)
+    print(f"first send (what the detector does: the flight once), then up to "
+          f"{MAX_RETRANSMITS} retransmissions on the probe's PTO schedule "
+          f"({PTO_FIRST * 1000:.0f} ms doubling), window {WINDOW:.0f} s")
     for pn, (offset, chunk) in enumerate(chunks):
         sock.send(build_initial(dcid, scid, pn, offset, chunk))
-    drain(4.0, "once")
-
-    print("retransmission (what a real client does on PTO: same CRYPTO, new numbers)")
-    base = len(chunks)
-    for round_number in range(2):
+    for retransmits in range(MAX_RETRANSMITS + 1):
+        # The probe repeats at PTO_FIRST, then doubles: the i-th wait is
+        # PTO_FIRST * 2**i after the previous send, and the window check that
+        # closes the loop is the probe's own deadline.
+        until = next_retransmit if retransmits < MAX_RETRANSMITS else deadline
+        drain(max(0.0, until - time.time()), "once" if retransmits == 0 else f"retransmit {retransmits}")
+        if retransmits == MAX_RETRANSMITS:
+            break
         for i, (offset, chunk) in enumerate(chunks):
-            sock.send(build_initial(dcid, scid, base + round_number * len(chunks) + i, offset, chunk))
-        drain(1.0, f"retransmit {round_number + 1}")
-    drain(4.0, "after retransmissions")
+            sock.send(build_initial(dcid, scid, base + retransmits * len(chunks) + i, offset, chunk))
+        next_retransmit = time.time() + PTO_FIRST * (1 << (retransmits + 1))
 
 
 if __name__ == "__main__":

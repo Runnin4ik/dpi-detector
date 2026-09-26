@@ -146,7 +146,7 @@ async def main(hosts):
 
 
 if __name__ == "__main__":
-    # No arguments: the same host list `validate.py` and `crosscheck.py` use,
+    # No arguments: the same host list `crosscheck.py` and `online_h3.py` use,
     # read from the file next to this script (a bare default of one host made a
     # "full sweep" a one-row run).
     hosts = sys.argv[1:]
