@@ -16,8 +16,14 @@ const EXT_SUPPORTED_GROUPS: u16 = 10;
 const EXT_EC_POINT_FORMATS: u16 = 11;
 const EXT_KEY_SHARE: u16 = 51;
 
-pub(crate) fn u16_at(bytes: &[u8], at: usize) -> u16 {
-    u16::from_be_bytes([bytes[at], bytes[at + 1]])
+/// A big-endian `u16` at `at`, `None` when the slice is short of one.
+///
+/// The one reader every parser below shares. What it reads is a peer's claim —
+/// a hello's lengths come off the wire — so a read that runs past the slice has
+/// to be an ordinary `None` the caller can stop on: `panic = "abort"` turns an
+/// index out of bounds into the whole process.
+fn be16(bytes: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]))
 }
 
 /// GREASE: `0x0a0a`, `0x1a1a`, … `0xfafa`.
@@ -33,27 +39,29 @@ pub(crate) fn extensions(message: &[u8]) -> Vec<(u16, &[u8])> {
     let mut at = 4 + 2 + 32; // handshake header, legacy version, random
     let session_id = message[at] as usize;
     at += 1 + session_id;
-    if at + 2 > message.len() {
+    let Some(cipher_len) = be16(message, at).map(usize::from) else {
         return Vec::new();
-    }
-    let cipher_len = u16_at(message, at) as usize;
+    };
     at += 2 + cipher_len;
     if at >= message.len() {
         return Vec::new();
     }
     let compression_len = message[at] as usize;
     at += 1 + compression_len;
-    if at + 2 > message.len() {
+    let Some(total) = be16(message, at).map(usize::from) else {
         return Vec::new();
-    }
-    let total = u16_at(message, at) as usize;
+    };
     at += 2;
 
     let end = (at + total).min(message.len());
     let mut out = Vec::new();
     while at + 4 <= end {
-        let ext_type = u16_at(message, at);
-        let len = u16_at(message, at + 2) as usize;
+        // Four bytes of extension header, guaranteed by the loop guard: a `None`
+        // here is the same stop the body bound below takes.
+        let Some((ext_type, len)) = be16(message, at).zip(be16(message, at + 2)) else {
+            break;
+        };
+        let len = len as usize;
         let body_at = at + 4;
         if body_at + len > message.len() {
             break;
@@ -71,19 +79,20 @@ pub(crate) fn cipher_suites(message: &[u8]) -> Vec<u16> {
         return Vec::new();
     }
     let ciphers_at = session_id_at + 1 + message[session_id_at] as usize;
-    if ciphers_at + 2 > message.len() {
+    // The length is the peer's claim, not a fact: a hello that declares a cipher
+    // list longer than it carries gets no suite out of here rather than an index
+    // past the message — which under `panic = "abort"` is the whole process. The
+    // same bound is what `extensions` applies to every extension body.
+    let Some(len) = be16(message, ciphers_at).map(usize::from) else {
         return Vec::new();
-    }
-    let len = u16_at(message, ciphers_at) as usize;
-    // The length is the peer's claim, not a fact: `u16_at` reads two bytes
-    // blind, and a truncated hello would index past the message — which under
-    // `panic = "abort"` is the whole process. The same bound is what
-    // `extensions` applies to every extension body.
-    if ciphers_at + 2 + len > message.len() {
+    };
+    let Some(list) = message.get(ciphers_at + 2..ciphers_at + 2 + len) else {
         return Vec::new();
-    }
-    (0..len / 2)
-        .map(|i| u16_at(message, ciphers_at + 2 + i * 2))
+    };
+    list.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_be_bytes(*pair))
         .filter(|suite| !is_grease(*suite))
         .collect()
 }
@@ -94,9 +103,12 @@ pub(crate) fn cipher_suites(message: &[u8]) -> Vec<u16> {
 /// connection, record header included.
 pub fn client_hello_ja3(record: &[u8]) -> String {
     let message = record.get(RECORD_HEADER..).unwrap_or(record);
-    if message.len() < 6 {
+    // The first field of the string is the hello's `legacy_version`, the u16 at
+    // offset 4; a message too short to hold it is not a hello. This is the old
+    // `message.len() < 6` guard, spelled as the read it protects.
+    let Some(legacy_version) = be16(message, 4) else {
         return String::new();
-    }
+    };
 
     let mut ext_types = Vec::new();
     let mut curves = Vec::new();
@@ -108,8 +120,16 @@ pub fn client_hello_ja3(record: &[u8]) -> String {
         ext_types.push(ext_type.to_string());
         match ext_type {
             EXT_SUPPORTED_GROUPS => {
-                curves = (0..body.len().saturating_sub(2) / 2)
-                    .map(|i| u16_at(body, 2 + i * 2))
+                // The body opens with its own two-byte list length; the groups are
+                // the pairs that follow it, and a body that stops mid-pair drops
+                // the leftover byte rather than reading past its end.
+                curves = body
+                    .get(2..)
+                    .unwrap_or_default()
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| u16::from_be_bytes(*pair))
                     .filter(|group| !is_grease(*group))
                     .map(|group| group.to_string())
                     .collect();
@@ -133,7 +153,7 @@ pub fn client_hello_ja3(record: &[u8]) -> String {
 
     format!(
         "{},{},{},{},{}",
-        u16_at(message, 4),
+        legacy_version,
         ciphers.join("-"),
         ext_types.join("-"),
         curves.join("-"),
@@ -161,8 +181,8 @@ pub fn key_share_groups(record: &[u8]) -> String {
     let Some(body) = body else {
         return "-".into();
     };
-    // A body too short to hold its own list length carries no group at all, and
-    // `u16_at` would read past it (see `cipher_suites`).
+    // A body too short to hold its own two-byte list length carries no group at
+    // all, and reading it anyway is an index out of bounds (see `cipher_suites`).
     let Some(list_len) = be16(body, 0) else {
         return "-".into();
     };
@@ -170,11 +190,15 @@ pub fn key_share_groups(record: &[u8]) -> String {
     let mut at = 2;
     let mut groups = Vec::new();
     while at + 4 <= end {
-        let group = u16_at(body, at);
+        // The loop guard keeps both fields inside the body; a `None` here is the
+        // stop that guard stands for.
+        let Some((group, key_len)) = be16(body, at).zip(be16(body, at + 2)) else {
+            break;
+        };
         if !is_grease(group) {
             groups.push(group.to_string());
         }
-        at += 4 + u16_at(body, at + 2) as usize;
+        at += 4 + key_len as usize;
     }
     groups.join(",")
 }
@@ -258,11 +282,6 @@ pub fn client_hello(record: &[u8]) -> Option<ClientHello> {
     })
 }
 
-/// A big-endian `u16` at `at`, `None` when the slice is short of one.
-fn be16(bytes: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,10 +327,11 @@ mod tests {
     }
 
     /// A length in a hello is the peer's claim, not a fact. Every walk over one
-    /// stops where the message does: without that, `u16_at` reads two bytes blind
-    /// and the slice past the end is an index out of bounds — a panic, and under
-    /// the release profile's `panic = "abort"` the whole process rather than one
-    /// parse. The bytes here are what a hostile or broken server answers with.
+    /// stops where the message does, and every read is `be16`'s fallible one:
+    /// without that, the slice past the end is an index out of bounds — a panic,
+    /// and under the release profile's `panic = "abort"` the whole process rather
+    /// than one parse. The bytes here are what a hostile or broken server answers
+    /// with.
     #[test]
     fn a_truncated_hello_stops_at_the_message() {
         // Cipher list: two suites carried, 65535 declared.
@@ -345,8 +365,8 @@ mod tests {
     }
 
     /// One level down from the list length: a `key_share` body too short to hold
-    /// its own two-byte list length carries no group. Reading it with `u16_at`
-    /// would be an index out of bounds on a one-byte body.
+    /// its own two-byte list length carries no group. Reading it anyway is an
+    /// index out of bounds on a one-byte body.
     #[test]
     fn a_short_key_share_body_carries_no_group() {
         // Extension 51, declared length 1, one byte present: the list length itself

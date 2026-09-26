@@ -15,7 +15,6 @@ use hyper::header::HOST;
 use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
 use parking_lot::Mutex;
-use rustls::pki_types::ServerName;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
@@ -166,7 +165,7 @@ pub async fn check_domain_tls(
             TlsProfile::insecure(fingerprint).tls13()
         };
         let rustls_conn = RustlsConnector::from(profile);
-        let server_name = match ServerName::try_from(domain.to_string()) {
+        let server_name = match crate::net::tls::server_name(domain) {
             Ok(n) => n,
             Err(e) => {
                 return (DpiStatus::Err, Detail::Other(format!("bad SNI: {}", e)), 0usize);

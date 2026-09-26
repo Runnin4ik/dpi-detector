@@ -410,6 +410,12 @@ async fn probe_addr(
     let scid = random_cid();
     let keys = quic::InitialKeys::derive(&dcid)
         .map_err(|_| (DpiStatus::Err, Detail::Other("quic: key schedule".to_string())))?;
+    // A name the resolver accepted but rustls refuses must become this row's
+    // verdict, not a panic: `hello_record_for` aborts on it and this column hands
+    // it the domain under test. `probe/domains.rs` reports the same failure the
+    // same way, and both go through `net::tls::server_name` so they cannot drift.
+    crate::net::tls::server_name(sni)
+        .map_err(|error| (DpiStatus::Err, Detail::Other(format!("bad SNI: {error}"))))?;
     let hello = quic_hello(fingerprint, sni, &scid);
     let mut flight = quic::client_initials(&keys, &dcid, &scid, &hello, 0)
         .map_err(|error| (DpiStatus::Err, Detail::Other(error.to_string())))?;

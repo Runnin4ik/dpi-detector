@@ -20,9 +20,10 @@ use rustls::client::hello_profile::GREASE_EXTENSION_MARKER;
 use rustls::client::ClientHelloProfile;
 use rustls::ClientConfig;
 
-/// The padding extension's code point: its position comes from the profile's
-/// extension order, its length from `padding_to`.
-const EXT_PADDING: u16 = 21;
+// The padding code point is `shapes`'s — the records name it in their extension
+// order — and the `Padding` variant only needs it to append the slot; the body's
+// length comes from `padding_to` (see `TlsShape`).
+use super::shapes::EXT_PADDING;
 
 /// One edit to the installed ClientHello.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -327,6 +328,11 @@ pub(crate) fn install_variant(config: &mut ClientConfig, variant: &HelloVariant)
     let mut edited = (**shared).clone();
     variant.apply(&mut edited, &mut config.alpn_protocols);
     config.hello_profile = Some(Arc::new(edited));
+    // The hook answers for the extensions the profile advertises, and the edit
+    // just changed them: a variant that adds, drops or rewrites ALPS (17513) or
+    // `channel_id` (30032) would otherwise leave the message the *previous* body
+    // is owed — one the server never asked for. Same derivation the builder uses.
+    crate::net::tls::install_follow_up(config);
     true
 }
 

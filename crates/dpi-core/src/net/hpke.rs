@@ -46,18 +46,30 @@ const N_TAG: usize = 16;
 
 /// The suites this build can offer, in the order an ECH config is scanned.
 ///
-/// `EchConfig::new` is handed these and picks the first the server's config
-/// names. The first is also what the bundle's own GREASE extension carries
-/// (`0001 0001` — HKDF-SHA256 with AES-128-GCM), as does every Cloudflare-issued
-/// ECH config today.
-pub static SUITES: &[&dyn Hpke] = &[&AES_128_GCM, &AES_256_GCM, &CHACHA20_POLY1305];
+/// [`AES_128_GCM`] is the one the code passes on: [`crate::net::tls`] hands it
+/// to `EchGreaseConfig::new`. It is also the suite the bundle's own GREASE
+/// extension carries (`0001 0001` — HKDF-SHA256 with AES-128-GCM), as does
+/// every Cloudflare-issued ECH config today; the other two are the rest of the
+/// X25519/HKDF-SHA256 family a real config may name.
+///
+/// Test-only, like the two suites nothing else reads: the module's tests are the
+/// list's only consumer, and a `pub(crate)` static kept for them alone would be
+/// dead code in the shipped build under `#[warn(dead_code)]`.
+#[cfg(test)]
+static SUITES: &[&dyn Hpke] = &[&AES_128_GCM, &AES_256_GCM, &CHACHA20_POLY1305];
 
 /// DHKEM(X25519, HKDF-SHA256) with HKDF-SHA256 and AES-128-GCM.
 pub(crate) static AES_128_GCM: X25519HkdfSha256 = X25519HkdfSha256::new(AeadSuite::Aes128Gcm);
 /// DHKEM(X25519, HKDF-SHA256) with HKDF-SHA256 and AES-256-GCM.
-pub static AES_256_GCM: X25519HkdfSha256 = X25519HkdfSha256::new(AeadSuite::Aes256Gcm);
+///
+/// Nothing but [`SUITES`] reads it.
+#[cfg(test)]
+static AES_256_GCM: X25519HkdfSha256 = X25519HkdfSha256::new(AeadSuite::Aes256Gcm);
 /// DHKEM(X25519, HKDF-SHA256) with HKDF-SHA256 and ChaCha20-Poly1305.
-pub static CHACHA20_POLY1305: X25519HkdfSha256 = X25519HkdfSha256::new(AeadSuite::ChaCha20Poly1305);
+///
+/// [`SUITES`] and the A.2 vectors — the 32-byte key arm — read it.
+#[cfg(test)]
+static CHACHA20_POLY1305: X25519HkdfSha256 = X25519HkdfSha256::new(AeadSuite::ChaCha20Poly1305);
 
 /// One HPKE suite: one shared KEM and KDF, with an AEAD that differs.
 #[derive(Debug)]
@@ -178,7 +190,14 @@ impl HpkeOpener for Opener {
 }
 
 /// The AEAD of a suite, as the crates that implement it.
+///
+/// `Aes128Gcm` is the one the shipped path passes on: `net::tls` hands
+/// [`AES_128_GCM`] to `EchGreaseConfig::new`. The other two exist because RFC 9180
+/// defines them and this module's tests exercise each — they are constructed only
+/// from the `#[cfg(test)]` statics above, so they are dead in a non-test build by
+/// construction rather than by neglect, which is what the attribute records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
 enum AeadSuite {
     Aes128Gcm,
     Aes256Gcm,

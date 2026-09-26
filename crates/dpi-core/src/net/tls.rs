@@ -2,7 +2,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::client::{EchGreaseConfig, EchMode};
-use rustls::crypto::hpke::Hpke;
+use rustls::crypto::hpke::{Hpke, HpkePublicKey};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme};
 
@@ -277,6 +277,19 @@ pub(crate) fn create_tls_config_variant(
     Arc::new(edited)
 }
 
+/// The `ServerName` a probe dials `host` at, or the error its row reports.
+///
+/// [`hello_record_for`] panics on a name it cannot dial, which is right for its
+/// constant-`example.com` callers and wrong for the two that pass a name from the
+/// run: the QUIC column hands it the domain under test, and the TLS column dials
+/// the same name through `RustlsConnector`. Both ask this first, so a name the
+/// resolver accepted but rustls refuses becomes the row's verdict — the way
+/// `probe/domains.rs` already reported it — instead of aborting the whole run
+/// under `panic = "abort"`.
+pub fn server_name(host: &str) -> Result<ServerName<'static>, rustls::pki_types::InvalidDnsNameError> {
+    ServerName::try_from(host.to_string())
+}
+
 /// The ClientHello `profile` puts on the wire, record header included.
 ///
 /// The same factory the probes use, so a caller hashes what goes out rather than
@@ -428,6 +441,29 @@ fn verifying_config(profile: &TlsProfile) -> Arc<ClientConfig> {
     config
 }
 
+/// The placeholder HPKE public key a GREASE ECH offer encapsulates to.
+///
+/// One key for the process. `build_config` runs per connection for every
+/// insecure profile (`create_tls_config` explains why), so generating the pair
+/// there cost a fresh X25519 keygen — and a private key dropped on the floor —
+/// for every hello the QUIC column replays and every replica a probe dials;
+/// `hello_ja4_variants` alone builds up to 32 hellos per call for the two ECH
+/// shapes whose random body length can land under their padding floor.
+///
+/// Sharing the key cannot reach the wire: `EchGreaseConfig::grease_ext` (see
+/// `vendor/rustls/src/client/ech.rs`) builds the `EncryptedClientHelloOuter`
+/// that is encoded — `cipher_suite`, `config_id`, `enc`, random payload — and
+/// `enc` is an encapsulation `EchState::new` performs fresh for each hello,
+/// which is why two greased hellos never share a body either way. The key itself
+/// still has to be a real X25519 public key, because that encapsulation is what
+/// produces the `enc` that is sent.
+static ECH_PLACEHOLDER_KEY: LazyLock<HpkePublicKey> = LazyLock::new(|| {
+    hpke::AES_128_GCM
+        .generate_key_pair()
+        .expect("the provider serves X25519")
+        .0
+});
+
 /// Builds the config `profile` describes: provider, versions, verifier, shape.
 fn build_config(profile: &TlsProfile) -> ClientConfig {
     // `with_protocol_versions` rejects only a version the provider has no cipher
@@ -441,16 +477,12 @@ fn build_config(profile: &TlsProfile) -> ClientConfig {
     // `with_ech`: the latter would drop the profile's TLS 1.2 fallback out of the
     // offer, and Chrome 120's own hello keeps it.
     //
-    // The placeholder key is never on the wire — each connection encapsulates to
-    // it afresh, which is why two greased hellos never share a body — but it has
-    // to be a real X25519 public key for that encapsulation to run.
+    // The placeholder is the one process-wide key [`ECH_PLACEHOLDER_KEY`]
+    // describes; the config gets its own copy because `EchGreaseConfig` owns it.
     let builder = if crate::net::fingerprint::sends_ech(profile.fingerprint) {
-        let (placeholder, _) = hpke::AES_128_GCM
-            .generate_key_pair()
-            .expect("the provider serves X25519");
         builder.with_ech_mode(EchMode::Grease(EchGreaseConfig::new(
             &hpke::AES_128_GCM,
-            placeholder,
+            (*ECH_PLACEHOLDER_KEY).clone(),
         )))
     } else {
         builder
@@ -549,6 +581,19 @@ fn apply_profile(config: &mut ClientConfig, profile: &TlsProfile) {
     // advertises neither gets no hook: it can never be acknowledged, and a hook
     // that answered an unsolicited acknowledgement would put a message on the
     // wire the server never asked for.
+    install_follow_up(config);
+}
+
+/// Installs the follow-up hook a shape is owed, derived from the extensions its
+/// profile advertises **now**.
+///
+/// Called twice on purpose: [`apply_profile`] installs it for the shape as it
+/// stands, and `fingerprint::variant::install_variant` calls it again after an
+/// edit — a variant that adds, drops or rewrites ALPS (17513/17613) or
+/// `channel_id` (30032) would otherwise leave the hook answering for the body the
+/// *previous* shape advertised, which is a message the server never asked for.
+/// One derivation is what keeps the two callers from drifting.
+pub(crate) fn install_follow_up(config: &mut ClientConfig) {
     config.client_follow_up = config
         .hello_profile
         .as_ref()

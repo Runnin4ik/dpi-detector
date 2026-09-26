@@ -62,10 +62,10 @@
 //!
 //! It is **not** a byte-for-byte browser. What is left, and why:
 //!
-//! * The eight shapes whose client sends `encrypted_client_hello` send it as
+//! * The nine shapes whose client sends `encrypted_client_hello` send it as
 //!   GREASE, because that is what their own references send: curl needs DoH or
 //!   an explicit `--ecl:` for a real ECHConfigList and no wrapper passes
-//!   either, and the eighth — `firefox120`, whose reference is the uTLS ladder
+//!   either, and the ninth — `firefox120`, whose reference is the uTLS ladder
 //!   rather than a wrapper — sends it as GREASE in its own spec
 //!   (`net::tls` installs `EchMode::Grease`, `net::hpke` is the HPKE suite
 //!   behind it). A real config would have to come from the target's own HTTPS
@@ -454,7 +454,7 @@ pub(crate) fn hello_profile(fingerprint: TlsFingerprint) -> Option<Arc<ClientHel
 /// Only the shapes that offer `X25519MLKEM768`: the curl shapes pinned to
 /// Chrome 99–116 / Safari 15.5–18.4 predate it, and adding a group the original
 /// does not send would change the fingerprint being reproduced.
-pub fn needs_pq(fingerprint: TlsFingerprint) -> bool {
+pub(crate) fn needs_pq(fingerprint: TlsFingerprint) -> bool {
     fingerprint.spec().pq
 }
 
@@ -466,23 +466,23 @@ pub fn needs_pq(fingerprint: TlsFingerprint) -> bool {
 /// needs the list itself: a browser's QUIC hello carries one more scheme than the
 /// same browser's TCP hello (`rsa_pkcs1_sha1`, last), so that edit has to start
 /// from the shape's own code points rather than a raw body that does not exist.
-pub fn sig_algs(fingerprint: TlsFingerprint) -> &'static [u16] {
+pub(crate) fn sig_algs(fingerprint: TlsFingerprint) -> &'static [u16] {
     fingerprint.spec().sig_algs
 }
 
 /// True when this shape carries `encrypted_client_hello` (65037) as GREASE.
 ///
-/// Eight shapes do: the seven wrappers that name `--ech true` —
+/// Nine shapes do: the eight wrappers that name `--ech true` —
 /// `curl_chrome123`, `curl_chrome131`, `curl_chrome131_android`,
-/// `curl_chrome146`, `curl_firefox133`, `curl_firefox147` and `curl_tor145` —
-/// plus `firefox120`, whose reference is the uTLS ladder rather than a wrapper
-/// and whose own spec pins GREASE ECH. The first seven send it as grease because
-/// curl needs DoH or an explicit `--ecl:` to have a real config at all; the
-/// wrappers' own flags, and `firefox120`'s spec, are the source, and the
-/// captures agree
+/// `curl_chrome133a`, `curl_chrome146`, `curl_firefox133`, `curl_firefox147`
+/// and `curl_tor145` — plus `firefox120`, whose reference is the uTLS ladder
+/// rather than a wrapper and whose own spec pins GREASE ECH. The eight send it
+/// as grease because curl needs DoH or an explicit `--ecl:` to have a real
+/// config at all; the wrappers' own flags, and `firefox120`'s spec, are the
+/// source, and the captures agree
 /// (`encrypted_client_hello` in `firefox_133.0.3_linux.yaml`,
 /// `chrome_136.0.7103.93.yaml` and the rest).
-pub fn sends_ech(fingerprint: TlsFingerprint) -> bool {
+pub(crate) fn sends_ech(fingerprint: TlsFingerprint) -> bool {
     fingerprint.spec().ech
 }
 
@@ -495,7 +495,7 @@ pub fn sends_ech(fingerprint: TlsFingerprint) -> bool {
 /// baseline fingerprint that all previous measurements were taken with — so the
 /// default profile keeps rustls's empty list and sends the wire shape this tool
 /// has always sent.
-pub fn advertises_cert_compression(fingerprint: TlsFingerprint) -> bool {
+pub(crate) fn advertises_cert_compression(fingerprint: TlsFingerprint) -> bool {
     !fingerprint.spec().cert_compression.is_empty()
 }
 
@@ -523,7 +523,7 @@ pub fn advertises_cert_compression(fingerprint: TlsFingerprint) -> bool {
 /// `standby-rezka.tv`: Chrome 107 and Safari 15.5 pinned to 1.3 got
 /// `alert_illegal_parameter`, while the same shapes from the pinned bundle —
 /// which drops these — got `200`.
-pub fn pinned_drop(fingerprint: TlsFingerprint, version: TlsVersion) -> &'static [u16] {
+pub(crate) fn pinned_drop(fingerprint: TlsFingerprint, version: TlsVersion) -> &'static [u16] {
     let shape = fingerprint.spec();
     match version {
         TlsVersion::Tls13 => shape.drop13,
