@@ -14,7 +14,7 @@ use super::{
     EXT_ALPN, EXT_COMPRESS_CERTIFICATE, EXT_EC_POINT_FORMATS, EXT_EXTENDED_MASTER_SECRET,
     EXT_KEY_SHARE, EXT_PADDING, EXT_PSK_KEY_EXCHANGE_MODES, EXT_RENEGOTIATION_INFO, EXT_SCT,
     EXT_SERVER_NAME, EXT_SESSION_TICKET, EXT_SIGNATURE_ALGORITHMS, EXT_STATUS_REQUEST,
-    EXT_SUPPORTED_GROUPS, EXT_SUPPORTED_VERSIONS, H2_AND_HTTP11,
+    EXT_SUPPORTED_GROUPS, EXT_SUPPORTED_VERSIONS, H2_AND_HTTP11, ZLIB,
 };
 use super::TlsShape;
 
@@ -55,7 +55,12 @@ const SAFARI_TLS_GROUPS: &[u16] = &[
 
 /// Safari 26.0's groups: the four above with the hybrid group in front, which
 /// is the whole TLS difference between 26.0 on macOS and 26.0 on iOS.
-const SAFARI_TLS_PQ_GROUPS: &[u16] = &[
+///
+/// Byte-identical to Go 1.27's `defaultCurvePreferences` — the list is written
+/// once here and `go.rs`'s `GO_TLS_GROUPS` aliases it, because two unrelated
+/// clients arrived at the same five groups. `pub(crate)` for that second
+/// reader.
+pub(crate) const SAFARI_TLS_PQ_GROUPS: &[u16] = &[
     4588, // X25519MLKEM768
     29,   // X25519
     23,   // secp256r1
@@ -269,6 +274,26 @@ const SAFARI260_TLS_RAW_EXTS: &[(u16, &[u8])] = &[
     (EXT_PADDING, &[]),
 ];
 
+/// The three extensions every Safari drops from a hello pinned to TLS 1.3
+/// alone: `ec_point_formats`, plus `extended_master_secret` and
+/// `renegotiation_info`, which a Safari 1.3 hello does not carry. One list for
+/// all eight records — measured on `curl_safari155` through `curl_safari260_ios`
+/// (see `super::super::pinned_drop`).
+const SAFARI_TLS_DROP13: &[u16] = &[
+    EXT_EXTENDED_MASTER_SECRET,
+    EXT_RENEGOTIATION_INFO,
+    EXT_EC_POINT_FORMATS,
+];
+
+/// What every Safari but 26.0 on macOS drops from a hello pinned to TLS 1.2
+/// alone: the 1.3-only `supported_versions`, and the padding — a 1.2 hello is
+/// already under the 256-byte floor where BoringSSL stops padding.
+const SAFARI_TLS_DROP12: &[u16] = &[EXT_SUPPORTED_VERSIONS, EXT_PADDING];
+
+/// Safari 26.0 on macOS's 1.2 drop: `supported_versions` alone, because that
+/// hello sends no padding at all, so there is no slot to take out.
+const SAFARI_TLS_DROP12_NO_PADDING: &[u16] = &[EXT_SUPPORTED_VERSIONS];
+
 // Safari 26.0 on macOS, as `curl_safari260` sends it: the first Safari in
 // the bundle that offers the hybrid group, and the first client of any
 // family whose hello carries no padding *and* a session ticket.
@@ -292,8 +317,8 @@ pub(crate) const SAFARI260: TlsShape = TlsShape {
     raw_exts: SAFARI260_TLS_RAW_EXTS,
     // The session ticket is part of this shape, so nothing is suppressed.
     suppress: &[],
-    drop13: &[EXT_EXTENDED_MASTER_SECRET, EXT_RENEGOTIATION_INFO, EXT_EC_POINT_FORMATS],
-    drop12: &[EXT_SUPPORTED_VERSIONS],
+    drop13: SAFARI_TLS_DROP13,
+    drop12: SAFARI_TLS_DROP12_NO_PADDING,
     alpn: H2_AND_HTTP11,
     // No padding either, and the hello says so.
     padding_to: None,
@@ -301,7 +326,7 @@ pub(crate) const SAFARI260: TlsShape = TlsShape {
     permute_extensions: false,
     ech: false,
     priority_on_h1: false,
-    cert_compression: &[1],
+    cert_compression: ZLIB,
     key_share_groups: None,
     pq: true,
     // Safari 26 offers 1.3 and 1.2 only, where 15.5–18.4 still listed 1.1
@@ -312,11 +337,13 @@ pub(crate) const SAFARI260: TlsShape = TlsShape {
 };
 // Safari 26.0 on iOS, as `curl_safari260_ios` sends it.
 //
-// The same release as the macOS row with three differences a middlebox can
-// read: no hybrid group (iOS keeps X25519 first), the padding extension back
-// (its hello measures 512 bytes where macOS 26's does not), and the iOS UA.
-// Everything else, the cipher order and the preface included, matches 26.0
-// on macOS.
+// The same release as the macOS row with four differences a middlebox can
+// read: no hybrid group (iOS keeps X25519 first), the older TLS 1.3 suite
+// order — `4865-4866-4867`, where macOS 26 reorders them to `4866-4867-4865`,
+// which is the cipher list of 15.5 rather than the macOS row's own — the
+// padding extension back (its hello measures 512 bytes where macOS 26's does
+// not), and the iOS UA. The preface is the only thing that matches 26.0 on
+// macOS.
 pub(crate) const SAFARI260_IOS: TlsShape = TlsShape {
     variant: TlsFingerprint::Safari260Ios,
     code: "safari260ios",
@@ -330,15 +357,15 @@ pub(crate) const SAFARI260_IOS: TlsShape = TlsShape {
     ext_order: SAFARI260_IOS_TLS_EXT_ORDER,
     raw_exts: SAFARI260_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[EXT_EXTENDED_MASTER_SECRET, EXT_RENEGOTIATION_INFO, EXT_EC_POINT_FORMATS],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: SAFARI_TLS_DROP13,
+    drop12: SAFARI_TLS_DROP12,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
     permute_extensions: false,
     ech: false,
     priority_on_h1: false,
-    cert_compression: &[1],
+    cert_compression: ZLIB,
     key_share_groups: None,
     pq: false,
     legacy_versions: &[],
@@ -365,15 +392,15 @@ pub(crate) const SAFARI184_IOS: TlsShape = TlsShape {
     ext_order: SAFARI_TLS_EXT_ORDER,
     raw_exts: SAFARI_TLS_RAW_EXTS,
     suppress: &[EXT_SESSION_TICKET],
-    drop13: &[EXT_EXTENDED_MASTER_SECRET, EXT_RENEGOTIATION_INFO, EXT_EC_POINT_FORMATS],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: SAFARI_TLS_DROP13,
+    drop12: SAFARI_TLS_DROP12,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
     permute_extensions: false,
     ech: false,
     priority_on_h1: false,
-    cert_compression: &[1],
+    cert_compression: ZLIB,
     key_share_groups: None,
     pq: false,
     legacy_versions: &[0x0302, 0x0301],
@@ -413,15 +440,15 @@ pub(crate) const SAFARI180: TlsShape = TlsShape {
     ext_order: SAFARI_TLS_EXT_ORDER,
     raw_exts: SAFARI_TLS_RAW_EXTS,
     suppress: &[EXT_SESSION_TICKET],
-    drop13: &[EXT_EXTENDED_MASTER_SECRET, EXT_RENEGOTIATION_INFO, EXT_EC_POINT_FORMATS],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: SAFARI_TLS_DROP13,
+    drop12: SAFARI_TLS_DROP12,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
     permute_extensions: false,
     ech: false,
     priority_on_h1: false,
-    cert_compression: &[1],
+    cert_compression: ZLIB,
     key_share_groups: None,
     pq: false,
     legacy_versions: &[0x0302, 0x0301],
@@ -444,15 +471,15 @@ pub(crate) const SAFARI172_IOS: TlsShape = TlsShape {
     ext_order: SAFARI_TLS_EXT_ORDER,
     raw_exts: SAFARI_TLS_RAW_EXTS,
     suppress: &[EXT_SESSION_TICKET],
-    drop13: &[EXT_EXTENDED_MASTER_SECRET, EXT_RENEGOTIATION_INFO, EXT_EC_POINT_FORMATS],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: SAFARI_TLS_DROP13,
+    drop12: SAFARI_TLS_DROP12,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
     permute_extensions: false,
     ech: false,
     priority_on_h1: false,
-    cert_compression: &[1],
+    cert_compression: ZLIB,
     key_share_groups: None,
     pq: false,
     legacy_versions: &[0x0302, 0x0301],
@@ -480,15 +507,15 @@ pub(crate) const SAFARI170: TlsShape = TlsShape {
     ext_order: SAFARI_TLS_EXT_ORDER,
     raw_exts: SAFARI_TLS_RAW_EXTS,
     suppress: &[EXT_SESSION_TICKET],
-    drop13: &[EXT_EXTENDED_MASTER_SECRET, EXT_RENEGOTIATION_INFO, EXT_EC_POINT_FORMATS],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: SAFARI_TLS_DROP13,
+    drop12: SAFARI_TLS_DROP12,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
     permute_extensions: false,
     ech: false,
     priority_on_h1: false,
-    cert_compression: &[1],
+    cert_compression: ZLIB,
     key_share_groups: None,
     pq: false,
     legacy_versions: &[0x0302, 0x0301],
@@ -525,16 +552,15 @@ pub(crate) const SAFARI155: TlsShape = TlsShape {
     raw_exts: SAFARI_TLS_RAW_EXTS,
     // rustls sends session_ticket; Safari does not.
     suppress: &[EXT_SESSION_TICKET],
-    drop13: &[EXT_EXTENDED_MASTER_SECRET, EXT_RENEGOTIATION_INFO, EXT_EC_POINT_FORMATS],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: SAFARI_TLS_DROP13,
+    drop12: SAFARI_TLS_DROP12,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
     permute_extensions: false,
     ech: false,
     priority_on_h1: false,
-    // zlib, exactly what Safari advertises.
-    cert_compression: &[1],
+    cert_compression: ZLIB,
     key_share_groups: None,
     pq: false,
     // Safari 15.5 keeps offering TLS 1.1 and 1.0 behind 1.2, and
@@ -567,8 +593,8 @@ pub(crate) const SAFARI153: TlsShape = TlsShape {
     ext_order: SAFARI153_TLS_EXT_ORDER,
     raw_exts: SAFARI_TLS_RAW_EXTS,
     suppress: &[EXT_SESSION_TICKET],
-    drop13: &[EXT_EXTENDED_MASTER_SECRET, EXT_RENEGOTIATION_INFO, EXT_EC_POINT_FORMATS],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: SAFARI_TLS_DROP13,
+    drop12: SAFARI_TLS_DROP12,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,

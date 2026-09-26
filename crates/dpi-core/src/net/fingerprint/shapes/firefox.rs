@@ -133,6 +133,21 @@ const FIREFOX_PRE_HYBRID_KEY_SHARE_GROUPS: &[u16] = &[
     23, // secp256r1
 ];
 
+/// The two extensions every Firefox drops from a hello pinned to TLS 1.3
+/// alone: `ec_point_formats`, and `session_ticket`, which Firefox sends on the
+/// 1.2 hello but not at 1.3. Unlike Chrome and Safari it keeps
+/// `extended_master_secret` and `renegotiation_info` there (see
+/// `super::super::pinned_drop`).
+const FIREFOX_TLS_DROP13: &[u16] = &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET];
+
+/// Firefox 147, 133 and 120's 1.2 drop: the 1.3-only `supported_versions`
+/// alone, because those hellos send no padding.
+const FIREFOX_TLS_DROP12: &[u16] = &[EXT_SUPPORTED_VERSIONS];
+
+/// Firefox 105, 99 and 65's 1.2 drop: `supported_versions` and the 512-byte
+/// padding slot those older hellos carry.
+const FIREFOX_TLS_DROP12_PADDING: &[u16] = &[EXT_SUPPORTED_VERSIONS, EXT_PADDING];
+
 /// Firefox 133–144's signature schemes. `curl_tor145` sends the same eleven in
 /// the same order.
 pub(crate) const FIREFOX_TLS_SIG_ALGS: &[u16] = &[
@@ -308,8 +323,8 @@ pub(crate) const FIREFOX147: TlsShape = TlsShape {
     ext_order: FIREFOX147_TLS_EXT_ORDER,
     raw_exts: FIREFOX_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
-    drop12: &[EXT_SUPPORTED_VERSIONS],
+    drop13: FIREFOX_TLS_DROP13,
+    drop12: FIREFOX_TLS_DROP12,
     alpn: H2_AND_HTTP11,
     padding_to: None,
     grease: false,
@@ -374,8 +389,8 @@ pub(crate) const FIREFOX133: TlsShape = TlsShape {
     suppress: &[],
     // Firefox 133 keeps `extended_master_secret` and `renegotiation_info` at
     // 1.3, and drops `session_ticket` there.
-    drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
-    drop12: &[EXT_SUPPORTED_VERSIONS],
+    drop13: FIREFOX_TLS_DROP13,
+    drop12: FIREFOX_TLS_DROP12,
     alpn: H2_AND_HTTP11,
     // Firefox sends no padding; the JA3 this profile is pinned to has none.
     padding_to: None,
@@ -429,8 +444,8 @@ pub(crate) const FIREFOX120: TlsShape = TlsShape {
     ext_order: FIREFOX120_TLS_EXT_ORDER,
     raw_exts: FIREFOX_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
-    drop12: &[EXT_SUPPORTED_VERSIONS],
+    drop13: FIREFOX_TLS_DROP13,
+    drop12: FIREFOX_TLS_DROP12,
     alpn: H2_AND_HTTP11,
     padding_to: None,
     grease: false,
@@ -481,8 +496,8 @@ pub(crate) const FIREFOX105: TlsShape = TlsShape {
     ext_order: FIREFOX99_TLS_EXT_ORDER,
     raw_exts: FIREFOX_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: FIREFOX_TLS_DROP13,
+    drop12: FIREFOX_TLS_DROP12_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: false,
@@ -522,8 +537,8 @@ pub(crate) const FIREFOX99: TlsShape = TlsShape {
     ext_order: FIREFOX99_TLS_EXT_ORDER,
     raw_exts: FIREFOX_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: FIREFOX_TLS_DROP13,
+    drop12: FIREFOX_TLS_DROP12_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: false,
@@ -565,8 +580,8 @@ pub(crate) const FIREFOX65: TlsShape = TlsShape {
     ext_order: FIREFOX65_TLS_EXT_ORDER,
     raw_exts: FIREFOX_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[EXT_EC_POINT_FORMATS, EXT_SESSION_TICKET],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: FIREFOX_TLS_DROP13,
+    drop12: FIREFOX_TLS_DROP12_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: false,

@@ -55,9 +55,9 @@ const TOR_KEY_SHARE_GROUPS: &[u16] = &[
 ];
 
 /// Tor Browser 14.5's extension order, exactly the wrapper's
-/// `--tls-extension-order`: no GREASE (Tor does not grease), no
-/// `compress_certificate`, no SCT, and ECH last — which this build omits, so
-/// the order stops at `record_size_limit`.
+/// `--tls-extension-order`: no GREASE slots (Tor does not grease), no
+/// `compress_certificate`, no SCT, and `encrypted_client_hello` last, sent as
+/// GREASE (see the record).
 const TOR_TLS_EXT_ORDER: &[u16] = &[
     EXT_SERVER_NAME,
     EXT_EXTENDED_MASTER_SECRET,
@@ -92,8 +92,10 @@ const TOR_TLS_EXT_ORDER: &[u16] = &[
 // with, and it drops `compress_certificate` — so a hello-shaped block that
 // reacts to extension 27 alone cannot be what passes Tor.
 //
-// One deviation: `encrypted_client_hello` (last in the wrapper's order) is
-// omitted for the reason in the Firefox record.
+// The wrapper's `--ech true` is sent as GREASE, the same as every other ECH
+// wrapper: curl fetches no real ECHConfigList, for the reason in the Firefox
+// record, so what reaches the wire is the grease body and the extension is
+// present, not omitted.
 pub(crate) const TOR145: TlsShape = TlsShape {
     variant: TlsFingerprint::Tor145,
     code: "tor145",

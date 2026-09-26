@@ -2,6 +2,7 @@
 
 use super::super::TlsFingerprint;
 use super::super::identity::GO127_HEADERS;
+use super::safari::SAFARI_TLS_PQ_GROUPS;
 use super::{
     EXT_ALPN, EXT_EC_POINT_FORMATS, EXT_EXTENDED_MASTER_SECRET, EXT_KEY_SHARE,
     EXT_PSK_KEY_EXCHANGE_MODES, EXT_RENEGOTIATION_INFO, EXT_SCT, EXT_SERVER_NAME,
@@ -44,13 +45,13 @@ const GO_TLS_CIPHERS: &[u16] = &[
 /// Go's curves: the hybrid group Go 1.24 added in front of Go's classical four,
 /// all of them shared-classical in this build's provider. The key share follows
 /// from them (see the record).
-const GO_TLS_GROUPS: &[u16] = &[
-    4588, // X25519MLKEM768
-    29,   // X25519
-    23,   // secp256r1
-    24,   // secp384r1
-    25,   // secp521r1
-];
+///
+/// Defined once as [`SAFARI_TLS_PQ_GROUPS`], the list it is byte-identical to:
+/// Go 1.27's `defaultCurvePreferences` and Safari 26.0 both put X25519MLKEM768
+/// in front of X25519, secp256r1, secp384r1 and secp521r1 — an accident of two
+/// unrelated clients, so the five groups are written there and both records
+/// reference them.
+const GO_TLS_GROUPS: &[u16] = SAFARI_TLS_PQ_GROUPS;
 
 /// Go's signature schemes, in the order `defaultSupportedSignatureAlgorithms`
 /// lists them: RSA-PSS first, Ed25519 between the P-256 and the P-384 ECDSA

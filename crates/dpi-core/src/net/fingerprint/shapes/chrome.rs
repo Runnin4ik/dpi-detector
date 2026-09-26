@@ -103,6 +103,39 @@ pub(crate) const CHROME_TLS_RAW_EXTS: &[(u16, &[u8])] = &[
 (EXT_PADDING, &[]),
 ];
 
+/// The four extensions every Chrome drops from a hello pinned to TLS 1.3
+/// alone: `ec_point_formats` (a 1.2-era extension), and `extended_master_secret`,
+/// `renegotiation_info` and `session_ticket`, none of which a Chrome 1.3 hello
+/// carries. Measured on `curl_chrome99…146`, whose pinned 1.3 hellos all drop
+/// these four (see `super::super::pinned_drop`).
+pub(crate) const CHROME_TLS_DROP13: &[u16] = &[
+    EXT_EXTENDED_MASTER_SECRET,
+    EXT_RENEGOTIATION_INFO,
+    EXT_EC_POINT_FORMATS,
+    EXT_SESSION_TICKET,
+];
+
+/// Chrome 133 and 146's 1.2 drop: the 1.3-only `supported_versions` and ALPS,
+/// at the code point those releases moved ALPS to.
+pub(crate) const CHROME_TLS_DROP12_ALPS_NEW: &[u16] =
+    &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS_NEW];
+
+/// Chrome 131 and 115 PQ's 1.2 drop: the 1.3-only `supported_versions` and
+/// ALPS at its old code point, which those releases still send.
+pub(crate) const CHROME_TLS_DROP12_ALPS: &[u16] =
+    &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS];
+
+/// The 1.2 drop of the Chrome records whose hello can carry the padding slot:
+/// `supported_versions`, ALPS, and the padding — a 1.2 hello is already under
+/// the 256-byte floor where BoringSSL stops padding. Used by Chrome 99 Android
+/// through 131 Android and Edge 101.
+pub(crate) const CHROME_TLS_DROP12_ALPS_PADDING: &[u16] =
+    &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING];
+
+/// The 1.2 drop of the older Chrome records, which send no ALPS: the 1.3-only
+/// `supported_versions` and the padding slot.
+pub(crate) const CHROME_TLS_DROP12_PADDING: &[u16] = &[EXT_SUPPORTED_VERSIONS, EXT_PADDING];
+
 /// Chrome 110–131's extension order: Chrome 99–107's list without the padding
 /// slot, which those releases no longer send on their own — nothing pads a
 /// 300-byte hello.
@@ -408,13 +441,8 @@ pub(crate) const CHROME146: TlsShape = TlsShape {
     ext_order: CHROME_ALPS_NEW_EXT_ORDER,
     raw_exts: CHROME_ALPS_NEW_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS_NEW],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_ALPS_NEW,
     alpn: H2_AND_HTTP11,
     padding_to: None,
     grease: true,
@@ -453,13 +481,8 @@ pub(crate) const CHROME133: TlsShape = TlsShape {
     ext_order: CHROME_ALPS_NEW_EXT_ORDER,
     raw_exts: CHROME_ALPS_NEW_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS_NEW],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_ALPS_NEW,
     alpn: H2_AND_HTTP11,
     padding_to: None,
     grease: true,
@@ -495,13 +518,8 @@ pub(crate) const CHROME131: TlsShape = TlsShape {
     ext_order: CHROME_NO_PADDING_EXT_ORDER,
     raw_exts: CHROME_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_ALPS,
     alpn: H2_AND_HTTP11,
     padding_to: None,
     grease: true,
@@ -536,13 +554,8 @@ pub(crate) const CHROME131_ANDROID: TlsShape = TlsShape {
     ext_order: CHROME_PADDING_AND_ECH_EXT_ORDER,
     raw_exts: CHROME_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_ALPS_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
@@ -595,15 +608,10 @@ pub(crate) const CHROME123: TlsShape = TlsShape {
     ext_order: CHROME_PADDING_AND_ECH_EXT_ORDER,
     raw_exts: CHROME_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
+    drop13: CHROME_TLS_DROP13,
     // The padding extension goes with the pinned 1.2 hello, ALPS and the
     // version list with it.
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING],
+    drop12: CHROME_TLS_DROP12_ALPS_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
@@ -647,13 +655,8 @@ pub(crate) const CHROME116: TlsShape = TlsShape {
     ext_order: CHROME_TLS_EXT_ORDER,
     raw_exts: CHROME_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_ALPS_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
@@ -711,13 +714,8 @@ pub(crate) const CHROME115_PQ: TlsShape = TlsShape {
     ext_order: CHROME115_PQ_TLS_EXT_ORDER,
     raw_exts: CHROME_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_ALPS,
     alpn: H2_AND_HTTP11,
     // No padding: the spec's 1524-byte hello never takes extension 21, and
     // this build's shorter one must not either (see
@@ -774,13 +772,8 @@ pub(crate) const CHROME107: TlsShape = TlsShape {
     // Chrome sends session_ticket and psk_key_exchange_modes, so nothing is
     // suppressed — the difference from rustls' defaults is additive.
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_ALPS_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
@@ -824,13 +817,8 @@ pub(crate) const CHROME99_ANDROID: TlsShape = TlsShape {
     ext_order: CHROME_TLS_EXT_ORDER,
     raw_exts: CHROME_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_ALPS_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
@@ -879,13 +867,8 @@ pub(crate) const CHROME87: TlsShape = TlsShape {
     ext_order: CHROME72_TLS_EXT_ORDER,
     raw_exts: CHROME_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
@@ -928,13 +911,8 @@ pub(crate) const CHROME72: TlsShape = TlsShape {
     ext_order: CHROME72_TLS_EXT_ORDER,
     raw_exts: CHROME_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,
@@ -976,13 +954,8 @@ pub(crate) const CHROME70: TlsShape = TlsShape {
     ext_order: CHROME70_TLS_EXT_ORDER,
     raw_exts: CHROME70_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_PADDING],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,

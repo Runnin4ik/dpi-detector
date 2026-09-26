@@ -168,20 +168,14 @@ pub(crate) const CHROME99_ANDROID_H2: H2Fingerprint = H2Fingerprint {
 /// `1:65536;3:1000;4:6291456;6:262144`, window 15663105,
 /// `--http2-stream-weight 256 --http2-stream-exclusive 1`, pseudo-headers `masp`.
 /// Edge leaves out `SETTINGS_ENABLE_PUSH`, which Chrome sends.
-pub(crate) const EDGE101_H2: H2Fingerprint = H2Fingerprint {
-    header_table_size: Some(65_536),
-    max_concurrent_streams: Some(1000),
-    initial_window_size: 6_291_456,
-    max_frame_size: None,
-    max_header_list_size: Some(262_144),
-    enable_push: None,
-    enable_connect_protocol: None,
-    no_rfc7540_priorities: None,
-    settings_order: &[],
-    connection_window: 15_663_105 + 65_535,
-    pseudo_order: PseudoOrder::MethodAuthoritySchemePath,
-    priority: Some((256, true)),
-};
+///
+/// An alias of [`CHROME99_ANDROID_H2`], the record it is byte-identical to: the
+/// two clients send the same preface, so the list is written once there. Both
+/// keep Chrome's Android stream cap of 1000, both send no
+/// `SETTINGS_ENABLE_PUSH` (which desktop Chrome does), and both use the same
+/// window and request priority — the differences between the records are their
+/// TLS shape and their identity, not the preface.
+pub(crate) const EDGE101_H2: H2Fingerprint = CHROME99_ANDROID_H2;
 
 /// `2:0;3:100;4:2097152;8:1;9:1`, window 10420225,
 /// `--http2-pseudo-headers-order "msap" --http2-stream-weight 256

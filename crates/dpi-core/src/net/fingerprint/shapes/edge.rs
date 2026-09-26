@@ -3,16 +3,12 @@
 
 use super::super::TlsFingerprint;
 use super::chrome::{
-    CHROME_TLS_CIPHERS, CHROME_TLS_EXT_ORDER, CHROME_TLS_GROUPS, CHROME_TLS_RAW_EXTS,
-    CHROME_TLS_SIG_ALGS,
+    CHROME_TLS_CIPHERS, CHROME_TLS_DROP12_ALPS_PADDING, CHROME_TLS_DROP13, CHROME_TLS_EXT_ORDER,
+    CHROME_TLS_GROUPS, CHROME_TLS_RAW_EXTS, CHROME_TLS_SIG_ALGS,
 };
 use super::super::h2::EDGE101_H2;
 use super::super::identity::EDGE101_HEADERS;
-use super::{
-    BROTLI, EXT_APPLICATION_SETTINGS, EXT_EC_POINT_FORMATS, EXT_EXTENDED_MASTER_SECRET,
-    EXT_PADDING, EXT_RENEGOTIATION_INFO, EXT_SESSION_TICKET, EXT_SUPPORTED_VERSIONS,
-    H2_AND_HTTP11,
-};
+use super::{BROTLI, H2_AND_HTTP11};
 use super::TlsShape;
 
 // Edge 101, as `curl_edge101` of curl-impersonate v2.2.3 sends it, with
@@ -36,13 +32,9 @@ pub(crate) const EDGE101: TlsShape = TlsShape {
     ext_order: CHROME_TLS_EXT_ORDER,
     raw_exts: CHROME_TLS_RAW_EXTS,
     suppress: &[],
-    drop13: &[
-        EXT_EXTENDED_MASTER_SECRET,
-        EXT_RENEGOTIATION_INFO,
-        EXT_EC_POINT_FORMATS,
-        EXT_SESSION_TICKET,
-    ],
-    drop12: &[EXT_SUPPORTED_VERSIONS, EXT_APPLICATION_SETTINGS, EXT_PADDING],
+    // Chromium's drop lists, the same ones the Chrome 99–107 records use.
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_ALPS_PADDING,
     alpn: H2_AND_HTTP11,
     padding_to: Some(512),
     grease: true,

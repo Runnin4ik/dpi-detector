@@ -87,7 +87,7 @@ pub(crate) struct TlsShape {
     pub(crate) grease: bool,
     /// Whether the impersonated client carries `encrypted_client_hello` (65037).
     ///
-    /// Nine of the nineteen shapes do, and every one of them does it as GREASE:
+    /// Nine of the thirty shapes do, and every one of them does it as GREASE:
     /// their wrappers say `--ech true`, and curl can only fetch an ECHConfigList
     /// through DoH or `--ecl:`, neither of which the wrappers pass — so what
     /// reaches the wire is a grease extension. Measured on the bundle's own
@@ -156,6 +156,12 @@ const H2_AND_HTTP11: &[&[u8]] = &[b"h2", b"http/1.1"];
 
 /// brotli, exactly what Chrome 107, Chrome 133 and Edge 101 advertise.
 const BROTLI: &[u16] = &[2];
+
+/// zlib (RFC 8879 code point 1), the algorithm every Safari record from 15.5 on
+/// advertises for certificate compression. Safari 15.3 is the exception its
+/// empty list records: `curl_safari153` advertises no `compress_certificate` at
+/// all.
+const ZLIB: &[u16] = &[1];
 
 /// Every selectable shape, in report order: the baseline first, then Go, then one
 /// browser at a time alphabetically with the newest version of each first, and
@@ -252,7 +258,7 @@ pub(crate) const EXT_SUPPORTED_VERSIONS: u16 = 43;
 pub(crate) const EXT_PSK_KEY_EXCHANGE_MODES: u16 = 45;
 pub(crate) const EXT_KEY_SHARE: u16 = 51;
 pub(crate) const EXT_RENEGOTIATION_INFO: u16 = 65281;
-/// `encrypted_client_hello` (draft-ietf-tls-esni), the extension seven shapes
+/// `encrypted_client_hello` (draft-ietf-tls-esni), the extension nine shapes
 /// carry as GREASE.
 pub(crate) const EXT_ENCRYPTED_CLIENT_HELLO: u16 = 65037;
 /// Chrome's ALPS (draft-vvv-tls-alps), as Chrome 107 and Safari send it.

@@ -311,17 +311,17 @@ fn the_shuffling_shapes_are_the_chromium_ones_from_110_on() {
     );
 }
 
-/// The eight shapes whose client carries `encrypted_client_hello`, and the body
+/// The nine shapes whose client carries `encrypted_client_hello`, and the body
 /// they carry.
 ///
-/// Seven of the list are the wrappers that name `--ech true` — `curl_chrome123`,
-/// `curl_chrome131`, `curl_chrome131_android`, `curl_chrome146`,
-/// `curl_firefox133`, `curl_firefox147` and `curl_tor145` — and every one of
-/// them is GREASE: curl needs DoH or an explicit `--ecl:` to have a real
-/// config, and no wrapper passes either. The eighth is `firefox120`, whose uTLS
-/// spec carries the library's own `GREASEEncryptedClientHelloExtension`: the
-/// extension is in the shape its JA3 and JA4 were read from, and both hashes
-/// see only its presence.
+/// Eight of the list are the wrappers that name `--ech true` —
+/// `curl_chrome123`, `curl_chrome131`, `curl_chrome131_android`,
+/// `curl_chrome133a`, `curl_chrome146`, `curl_firefox133`, `curl_firefox147`
+/// and `curl_tor145` — and every one of them is GREASE: curl needs DoH or an
+/// explicit `--ecl:` to have a real config, and no wrapper passes either. The
+/// ninth is `firefox120`, whose uTLS spec carries the library's own
+/// `GREASEEncryptedClientHelloExtension`: the extension is in the shape its JA3
+/// and JA4 were read from, and both hashes see only its presence.
 ///
 /// The body is the GREASE form of draft-ietf-tls-esni §6.2 — outer, a cipher
 /// suite, a random `config_id`, an `enc` of the KEM's public-key length, and a
@@ -1352,11 +1352,11 @@ fn profiles_that_share_a_tls_shape_send_the_same_hello() {
     for version in [TlsVersion::Any, TlsVersion::Tls13, TlsVersion::Tls12] {
         same(TlsFingerprint::Edge101, TlsFingerprint::Chrome107, version);
         // The M4 rows that are an identity rather than a hello: Chrome 99's
-        // Android build, Chrome 136 (which is Chrome 133's shape), Safari 18.4
-        // on iOS and Firefox 144.
+        // Android build, Chrome 133's identity over the same hello Chrome 146
+        // sends, and Safari 18.4 on iOS.
         for (left, right) in [
             (TlsFingerprint::Chrome99Android, TlsFingerprint::Chrome107),
-            (TlsFingerprint::Chrome146, TlsFingerprint::Chrome146),
+            (TlsFingerprint::Chrome133, TlsFingerprint::Chrome146),
             (TlsFingerprint::Safari184Ios, TlsFingerprint::Safari180),
         ] {
             same(left, right, version);
@@ -1441,16 +1441,16 @@ fn added_shapes_match_the_captures_they_were_read_from() {
         assert_eq!(got.split('_').nth(1), Some("8daaf6152771"), "{fingerprint}: cipher hash");
     }
 
-    // Chrome 133's hello, which 136 shares: the pin is the one that test
-    // carries. Both shuffle a GREASE ECH body whose length is drawn per
-    // connection, so the comparison is the sorted extension list and the two
-    // hashes — the length is not a property of the shape.
-    let ours = client_hello_full(TlsFingerprint::Chrome146, TlsVersion::Any);
+    // Chrome 133's record is Chrome 146's hello under the 133 identity: the pin
+    // is the one that test carries. Both shuffle a GREASE ECH body whose length
+    // is drawn per connection, so the comparison is the sorted extension list
+    // and the two hashes — the length is not a property of the shape.
+    let ours = client_hello_full(TlsFingerprint::Chrome133, TlsVersion::Any);
     let theirs = client_hello_full(TlsFingerprint::Chrome146, TlsVersion::Any);
     assert_eq!(
         (order_independent_ja3(&ours.0), ours.2),
         (order_independent_ja3(&theirs.0), theirs.2),
-        "chrome136 sends Chrome 133's hello"
+        "chrome133 and chrome146 send one hello"
     );
 }
 
