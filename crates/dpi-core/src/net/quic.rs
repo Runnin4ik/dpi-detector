@@ -570,6 +570,16 @@ pub struct CryptoStream {
 /// window buys another entry.
 const CRYPTO_CAP: usize = 16 * 1024;
 
+/// How many chunks that stream may be split into.
+///
+/// The byte cap above does not bound the map. A datagram carrying a single byte
+/// at a fresh offset costs a `Vec` and a `BTreeMap` node, so 16 KiB of held bytes
+/// can be 16 384 entries and close to a megabyte of heap — per probe, from an
+/// endpoint that simply never answers the handshake, which is the case this
+/// column exists to classify. A ServerHello arrives in a handful of packets, so
+/// the count is generous for the honest case and finite for the other one.
+const CRYPTO_CHUNKS: usize = 64;
+
 impl CryptoStream {
     pub fn new() -> Self {
         Self::default()
@@ -577,9 +587,13 @@ impl CryptoStream {
 
     /// Records one chunk. A chunk that is already held is ignored, so a
     /// retransmitted packet does not duplicate the stream; a chunk that would
-    /// take the stream past `CRYPTO_CAP` is dropped whole.
+    /// take the stream past `CRYPTO_CAP`, or the map past [`CRYPTO_CHUNKS`], is
+    /// dropped whole.
     pub fn push(&mut self, offset: u64, data: &[u8]) {
-        if data.is_empty() || self.held + data.len() > CRYPTO_CAP {
+        if data.is_empty()
+            || self.held + data.len() > CRYPTO_CAP
+            || self.chunks.len() >= CRYPTO_CHUNKS
+        {
             return;
         }
         if let std::collections::btree_map::Entry::Vacant(slot) = self.chunks.entry(offset) {
@@ -1135,6 +1149,25 @@ fce7f7b37ba1d1632e96677825ddf739\
         assert_eq!(one_short.assembled().len(), CRYPTO_CAP - 1);
         one_short.push(cap - 1, &[0x16; 1]);
         assert_eq!(one_short.assembled().len(), CRYPTO_CAP);
+    }
+
+    /// The byte cap does not bound the map. An endpoint that never answers the
+    /// handshake is exactly the case this column classifies, and 16 KiB of held
+    /// bytes can be 16 384 one-byte chunks at fresh offsets — each a `Vec` and a
+    /// `BTreeMap` node, close to a megabyte of heap for one probe. Counted from
+    /// the code rather than measured; what the test pins is that the count is now
+    /// bounded at all.
+    #[test]
+    fn the_crypto_stream_stops_at_its_chunk_count() {
+        let mut stream = CryptoStream::new();
+        for offset in 0..(CRYPTO_CHUNKS as u64 * 4) {
+            stream.push(offset, &[0x16]);
+        }
+        assert_eq!(
+            stream.assembled().len(),
+            CRYPTO_CHUNKS,
+            "one byte per chunk, and no more chunks than the cap"
+        );
     }
 
     #[test]

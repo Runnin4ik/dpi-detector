@@ -243,18 +243,19 @@ impl TlsFingerprint {
         &SHAPES[shape_index(self)]
     }
 
-    /// Whether this shape's ClientHello carries `id` verbatim. The QUIC column
-    /// asks before it edits an extension a shape may not send at all: adding one
-    /// to Firefox would be a shape no client sends.
-    pub(crate) fn sends_extension(self, id: u16) -> bool {
+    /// Whether this shape's ClientHello carries `id` **in its raw list**.
+    ///
+    /// Only `raw_exts` is visible here, and that is the whole point of the name:
+    /// a typed extension — `signature_algorithms` (13), `cert_compression` (27),
+    /// `encrypted_client_hello` (65037) — lives in its own field of the record
+    /// and is in no shape's raw list, so this answers `false` for it. The QUIC
+    /// column learned that the hard way: its `signature_algorithms` edit gated on
+    /// the old name and therefore never ran for any profile. Ask the typed
+    /// accessor for those (`sig_algs`, `sends_ech`,
+    /// `advertises_cert_compression`), or drop the extension unconditionally the
+    /// way `TCP_ONLY_FOR_QUIC` does.
+    pub(crate) fn sends_raw_extension(self, id: u16) -> bool {
         self.spec().raw_exts.iter().any(|(ext, _)| *ext == id)
-    }
-
-    /// The body the shape sends for an extension, if it sends it at all — the
-    /// counterpart of [`Self::sends_extension`] for the edits that have to start
-    /// from the shape's own bytes rather than a fresh body.
-    pub(crate) fn extension_body(self, id: u16) -> Option<&'static [u8]> {
-        self.spec().raw_exts.iter().find(|(ext, _)| *ext == id).map(|(_, body)| *body)
     }
 
     /// Canonical uppercase token for tables and logs. Never translated (rule 4).
@@ -455,6 +456,18 @@ pub(crate) fn hello_profile(fingerprint: TlsFingerprint) -> Option<Arc<ClientHel
 /// does not send would change the fingerprint being reproduced.
 pub fn needs_pq(fingerprint: TlsFingerprint) -> bool {
     fingerprint.spec().pq
+}
+
+/// The signature schemes this shape offers, in the order its hello lists them.
+///
+/// Extension 13 is a **typed** field of the record (`sig_algs`), built into
+/// rustls's `signature_schemes` — it is in no shape's `raw_exts`, which is why
+/// [`TlsFingerprint::sends_raw_extension`] cannot answer for it. The QUIC column
+/// needs the list itself: a browser's QUIC hello carries one more scheme than the
+/// same browser's TCP hello (`rsa_pkcs1_sha1`, last), so that edit has to start
+/// from the shape's own code points rather than a raw body that does not exist.
+pub fn sig_algs(fingerprint: TlsFingerprint) -> &'static [u16] {
+    fingerprint.spec().sig_algs
 }
 
 /// True when this shape carries `encrypted_client_hello` (65037) as GREASE.

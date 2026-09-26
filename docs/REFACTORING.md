@@ -283,6 +283,17 @@ refusing to accept configs that work today. Decision made 2026-09-14: no typing.
 | Move `probe/http.rs` into `protocols/` | There are no consumers outside the probes, and the move would spread probe support across two layers |
 | `enum DiagnosticVerdict` instead of `DpiStatus` | `DpiStatus` is already an enum; it was `detail` that needed typing — done in P2.5 (`classify::Detail`) |
 
+**Added 2026-09-27 by the QUIC review.** Five proposals were examined and refused;
+each carries the reason so the next pass does not re-open it:
+
+| Proposal | Reason |
+| --- | --- |
+| Move `TlsFingerprint::sends_raw_extension` / `sig_algs` out of `net/fingerprint` and next to their only consumer (`probe/quic.rs`) | They answer a question about a *shape's own data*, which is what `net/fingerprint` owns — the same reason `needs_pq`, `sends_ech` and `advertises_cert_compression` live there. One consumer today does not make the data the consumer's. |
+| Delete `QuicCheck.elapsed` as unused | It has a consumer: `crates/dpi-core/examples/quic_probe_once.rs` prints it as `elapsed:` for the stand. "Unused in the product" is not unused. |
+| Make `domain_stats` count the QUIC column | The stats deliberately ignore it — a QUIC endpoint is absent for most domains, so folding it into the blocked count would turn "no HTTP/3 here" into a finding. The decision is written at the phase in `probe/quic.rs`. |
+| Move the QUIC byte layer (`net/quic.rs`) into `dns/` or `probe/` | It is `net/`'s layer by §3: it owns the wire, imports nothing from the crate, and both `dns/` and `probe/` would create a new edge. |
+| Give the QUIC phase its own progress type instead of `PhaseProgress`/`PhaseId` | Same refusal as the `DiagnosticTask` row above: the seam already exists, and `PhaseId::DomainQuic` was missing from `stage_block()` — a wiring gap, not a missing abstraction. |
+
 **Superseded 2026-09-24.** The first two rows above were acted on, and the second
 of them only partly as written:
 

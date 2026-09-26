@@ -39,8 +39,8 @@ use crate::classify::{classify_connect_error_icmp, Detail, DpiStatus, ProbeStage
 use crate::config::AppConfig;
 use crate::net::bind::udp_socket;
 use crate::net::fingerprint::{
-    HelloVariant, TlsFingerprint, EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW, EXT_SCT,
-    EXT_SIGNATURE_ALGORITHMS, EXT_STATUS_REQUEST,
+    sig_algs, HelloVariant, TlsFingerprint, EXT_APPLICATION_SETTINGS,
+    EXT_APPLICATION_SETTINGS_NEW, EXT_SCT, EXT_SIGNATURE_ALGORITHMS, EXT_STATUS_REQUEST,
 };
 use crate::net::quic::{self, CryptoStream, Frame, ServerReply, SERVER_HELLO};
 use crate::net::tls::{hello_record_for, TlsProfile, TlsVersion};
@@ -223,7 +223,7 @@ const TCP_ONLY_FOR_QUIC: &[u16] = &[EXT_STATUS_REQUEST, EXT_SCT];
 fn application_settings_for_quic(fingerprint: TlsFingerprint) -> Option<HelloVariant> {
     let id = [EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW]
         .into_iter()
-        .find(|id| fingerprint.sends_extension(*id))?;
+        .find(|id| fingerprint.sends_raw_extension(*id))?;
     Some(HelloVariant::ExtBody(id, vec![0x00, 0x03, 0x02, b'h', b'3']))
 }
 
@@ -239,14 +239,20 @@ fn application_settings_for_quic(fingerprint: TlsFingerprint) -> Option<HelloVar
 /// Measured for Chrome; Firefox's QUIC hello has not been captured, so the edit
 /// adds the value to whatever list the shape carries rather than pinning one.
 fn signature_algorithms_for_quic(fingerprint: TlsFingerprint) -> Option<HelloVariant> {
-    if !fingerprint.sends_extension(EXT_SIGNATURE_ALGORITHMS) {
+    // The list comes from the shape's typed field, not from a raw body:
+    // extension 13 is in no shape's `raw_exts`, so the earlier form of this
+    // function — gated on `sends_extension` and reading `extension_body` —
+    // returned `None` for every profile and this edit never reached the wire.
+    let schemes = sig_algs(fingerprint);
+    if schemes.is_empty() || schemes.contains(&0x0201) {
         return None;
     }
-    let body = fingerprint.extension_body(EXT_SIGNATURE_ALGORITHMS)?;
-    // The body is a `u16` list length and then the code points.
-    let mut out = body.to_vec();
-    if out.len() < 2 || out[2..].as_chunks::<2>().0.contains(&[0x02, 0x01]) {
-        return None;
+    // The body is a `u16` list length and then the code points; `0x0201` is
+    // `rsa_pkcs1_sha1`, the value the browser appends last over QUIC.
+    let mut out = Vec::with_capacity(2 + (schemes.len() + 1) * 2);
+    out.extend_from_slice(&[0x00, 0x00]);
+    for scheme in schemes {
+        out.extend_from_slice(&scheme.to_be_bytes());
     }
     out.extend_from_slice(&[0x02, 0x01]);
     let list_len = (out.len() - 2) as u16;
@@ -462,7 +468,16 @@ async fn probe_addr(
             retransmits += 1;
             next_retransmit = now + PTO_FIRST * (1 << retransmits);
         }
-        let until_retransmit = next_retransmit.saturating_duration_since(Instant::now()).min(left);
+        // Once the retransmits are spent the only thing left is the window: waiting
+        // on a `next_retransmit` that is already in the past would hand
+        // `timeout(..)` a zero duration, and the loop would spin on `continue`
+        // until the deadline, burning a runtime worker — there are two of them on
+        // a router build.
+        let until_retransmit = if retransmits >= MAX_RETRANSMITS {
+            left
+        } else {
+            next_retransmit.saturating_duration_since(Instant::now()).min(left)
+        };
         match tokio::time::timeout(until_retransmit, socket.recv(&mut buf)).await {
             // Either the window closed or it is time to repeat the flight; the
             // loop's own deadline check tells the two apart.
@@ -665,6 +680,51 @@ mod tests {
                 "a GREASE value inside extension {id:#06x}: {values:04x?}"
             );
         }
+    }
+
+    /// The QUIC hello's `signature_algorithms` is the browser's, one scheme longer
+    /// than the same shape's TCP hello: a live Chrome sends nine
+    /// (`0403 0804 0401 0503 0805 0501 0806 0601 0201`) over QUIC, where the TCP
+    /// shape here sends the first eight and stops.
+    ///
+    /// This test is the one that was missing, and its absence is exactly why the
+    /// edit could be dead for every profile: the body was read through
+    /// `extension_body`, which sees only `raw_exts`, while extension 13 is a
+    /// *typed* field of the record. The column then sent the TCP body while its
+    /// own doc claimed the measured fix, and nothing failed.
+    #[test]
+    fn the_quic_hello_carries_the_browser_signature_algorithms() {
+        let fingerprint = TlsFingerprint::Chrome146;
+        let hello = quic_hello(fingerprint, "example.com", &[0x5a; 8]);
+        let extensions = crate::net::ja3::extensions(&hello);
+        let body = extensions
+            .iter()
+            .find(|(id, _)| *id == EXT_SIGNATURE_ALGORITHMS)
+            .map(|(_, body)| *body)
+            .expect("the QUIC hello carries signature_algorithms");
+        let schemes: Vec<u16> = body[2..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_be_bytes(*pair))
+            .collect();
+
+        assert_eq!(
+            u16::from_be_bytes([body[0], body[1]]) as usize,
+            body.len() - 2,
+            "the list length is the body's own"
+        );
+        assert_eq!(
+            schemes.len(),
+            sig_algs(fingerprint).len() + 1,
+            "the QUIC list is the shape's plus rsa_pkcs1_sha1"
+        );
+        assert_eq!(schemes.last(), Some(&0x0201), "which a browser sends last");
+        assert_eq!(
+            &schemes[..schemes.len() - 1],
+            sig_algs(fingerprint),
+            "and the shape's own list, in its own order"
+        );
     }
 
     /// A short-header packet is remembered, not final: measured on
