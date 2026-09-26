@@ -256,7 +256,7 @@ impl EchGreaseConfig {
         // encoding's final padding step lands on — picks one at random and appends the AEAD tag.
         // See `setup_ech_grease()` in BoringSSL's `ssl/encrypted_client_hello.cc`, whose comment
         // names the extensions an inner hello carries. The measured result is an ECH extension
-        // body of 185 to 281 bytes; the encoding of this client's own inner hello is 446, a
+        // body of 186 to 282 bytes; the encoding of this client's own inner hello is 446, a
         // length no browser produces, which is a stable identifier of this build.
         let estimated_inner_hello_len =
             32 * (4 + usize::from(crate::rand::random_u16(secure_random)? % 4));
