@@ -224,6 +224,25 @@ pub enum DpiStatus {
     /// `nxdomain` — not the derived `nx_domain`.
     #[serde(rename = "nxdomain")]
     NxDomain,
+    /// The QUIC endpoint answered the Initial and the handshake can proceed: a
+    /// ServerHello, a HelloRetryRequest, or a Retry whose integrity tag checked
+    /// out. It says the UDP path to port 443 works and the endpoint's QUIC stack
+    /// is running — not that the site answered HTTP/3, which needs a request.
+    QuicOk,
+    /// The endpoint answered with a protected `CONNECTION_CLOSE`, or with a
+    /// stateless reset: something on the other side holds the Initial keys (or
+    /// has no state for this connection), so the path is not filtered, but the
+    /// handshake will not run.
+    QuicClosed,
+    /// Version negotiation: the endpoint does not speak v1, and lists what it
+    /// does. The path works; the probe's version does not.
+    QuicVn,
+    /// A Retry whose integrity tag does not match (RFC 9001 §5.8): the packet
+    /// cannot have been computed by a party that saw the Initial, so something
+    /// on the path answered in the endpoint's place.
+    QuicSpoof,
+    /// Nothing came back within the window: the silence `SYN DROP` is for TCP.
+    QuicDrop,
     Err,
     Unknown,
 }
@@ -266,6 +285,11 @@ impl DpiStatus {
         DpiStatus::DnsFail,
         DpiStatus::DnsFake,
         DpiStatus::NxDomain,
+        DpiStatus::QuicOk,
+        DpiStatus::QuicClosed,
+        DpiStatus::QuicVn,
+        DpiStatus::QuicSpoof,
+        DpiStatus::QuicDrop,
         DpiStatus::Err,
         DpiStatus::Unknown,
     ];
@@ -303,6 +327,11 @@ impl DpiStatus {
             Self::DnsFail => "dns_fail",
             Self::DnsFake => "dns_fake",
             Self::NxDomain => "nxdomain",
+            Self::QuicOk => "quic_ok",
+            Self::QuicClosed => "quic_closed",
+            Self::QuicVn => "quic_vn",
+            Self::QuicSpoof => "quic_spoof",
+            Self::QuicDrop => "quic_drop",
             Self::Err => "err",
             Self::Unknown => "unknown",
         }
@@ -341,6 +370,11 @@ impl DpiStatus {
             Self::DnsFail => "DNS FAIL",
             Self::DnsFake => "DNS FAKE",
             Self::NxDomain => "NXDOMAIN",
+            Self::QuicOk => "OK",
+            Self::QuicClosed => "CLOSED",
+            Self::QuicVn => "VN",
+            Self::QuicSpoof => "SPOOF",
+            Self::QuicDrop => "DROP",
             Self::Err => "ERR",
             Self::Unknown => "UNKNOWN",
         }
@@ -372,6 +406,10 @@ impl DpiStatus {
                 | Self::DnsFake
                 | Self::SynDropped
                 | Self::TlsDropped
+                // Silence on the QUIC Initial is the same class of verdict as
+                // silence on a SYN: nothing answered, which is what a filter and
+                // a dead endpoint both look like from here.
+                | Self::QuicDrop
         )
     }
 }

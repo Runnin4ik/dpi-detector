@@ -3,6 +3,7 @@
 // that prints what crossed it.
 //
 //	lab [--port 8443] [--tap-port 443] [--keylog keys.log] [--upstream host:port]
+//	lab --quic-tap-port 443 --quic-upstream host:port
 //
 // The burst resolves its target itself and dials a fixed 443, so a stand that
 // wants to see the handshake has to own that port: the tap accepts there, relays
@@ -119,6 +120,10 @@ func main() {
 	tapPort := fs.Int("tap-port", 443, "port the tap listens on and relays to the server")
 	upstream := fs.String("upstream", "",
 		"relay to this host:port instead of the local server (e.g. www.google.com:443); the local server is then not started")
+	quicTapPort := fs.Int("quic-tap-port", 0,
+		"port the UDP (QUIC) tap listens on, relaying to --quic-upstream; 0 = no QUIC tap")
+	quicUpstream := fs.String("quic-upstream", "",
+		"the QUIC tap relays to this host:port (e.g. discord.com:443); required with --quic-tap-port")
 	fs.Usage = usage
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return
@@ -128,6 +133,17 @@ func main() {
 		os.Exit(2)
 	}
 	out.w = os.Stdout
+
+	// The QUIC tap is a mode of its own: it has no local server (a QUIC endpoint
+	// would need a handshake the probe never finishes), it takes a UDP port, and
+	// it neither needs nor starts the TCP tap below.
+	if *quicTapPort != 0 {
+		if *quicUpstream == "" {
+			fatal(fmt.Errorf("--quic-tap-port needs --quic-upstream host:port"))
+		}
+		runQuicTap(*quicTapPort, *quicUpstream)
+		return
+	}
 
 	// The local server is the default: the tap relays to it and the stand is
 	// self-contained. `--upstream` makes the stand a pure tap in front of a real
@@ -282,6 +298,21 @@ Both streams share stdout, tagged:
 A refused profile ends with a [server] line naming the reason and a request
 census of zero; if no such line appears, the stand is more tolerant than the
 remote server and that is the finding.
+
+The QUIC probe dials UDP 443 and never finishes the handshake, so it gets a tap
+of its own rather than the server above:
+
+	lab --quic-tap-port 443 --quic-upstream discord.com:443
+
+That tap relays every datagram to the named host and back, printing its size,
+its direction and the fields that are in the clear: the header form, the version,
+the connection ID lengths, and the first bytes. A reply line is what settles the
+question the remote server cannot - a QUIC DROP next to a stock client's HTTP/3
+answer means either the endpoint sent nothing or the probe did not read what it
+sent, and a short-header reply, a Retry, a version-negotiation packet or silence
+are told apart here. It listens on 127.0.0.1 (IPv4) and always relays: there is
+no local QUIC server, because an endpoint would need the handshake the probe
+deliberately stops short of.
 `)
 }
 

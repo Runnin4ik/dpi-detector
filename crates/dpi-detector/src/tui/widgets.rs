@@ -154,6 +154,19 @@ pub(crate) fn status_color(s: DpiStatus) -> Color {
         DpiStatus::NoTls13 | DpiStatus::NoCa => Color::Yellow,
         DpiStatus::LocalIp | DpiStatus::DnsFail | DpiStatus::NxDomain => Color::Yellow,
         DpiStatus::Err => Color::DarkGrey,
+        // QUIC: green only for an endpoint that answered the handshake. A close
+        // or a version negotiation is the path working and the protocol not —
+        // yellow, the same "read the detail" colour the TLS columns use for
+        // `NoTls13`. Silence and an imitation are the red ones.
+        DpiStatus::QuicOk => Color::Green,
+        DpiStatus::QuicClosed | DpiStatus::QuicVn => Color::Yellow,
+        DpiStatus::QuicSpoof | DpiStatus::QuicDrop => Color::Red,
+        // A refusal is the peer *answering*: ECONNREFUSED on TCP is the
+        // endpoint's own RST, and on the QUIC column it is the kernel handing up
+        // an ICMP "nothing listens on that port". Both say the path works and the
+        // service is not there, which is what yellow says — a block looks like
+        // `TcpRst` or `DROP`, not like a refusal.
+        DpiStatus::Refused => Color::Yellow,
         DpiStatus::RedirSuspect
         | DpiStatus::Blocked
         | DpiStatus::IspPage
@@ -174,7 +187,6 @@ pub(crate) fn status_color(s: DpiStatus) -> Color {
         | DpiStatus::TlsEof
         | DpiStatus::Tcp16Range
         | DpiStatus::SynDropped
-        | DpiStatus::Refused
         | DpiStatus::NetUnreach
         | DpiStatus::HostUnreach
         | DpiStatus::OsErr

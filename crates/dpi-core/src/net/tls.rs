@@ -101,6 +101,12 @@ pub struct TlsProfile {
     /// never read: the bundle is what ships, so the answer is the same on every
     /// platform and nothing a machine has installed changes it.
     pub verify: bool,
+    /// Present the hello a QUIC client sends — an empty `legacy_session_id`
+    /// (RFC 9001 §8.4) — instead of the TCP compatibility-mode one. Only a probe
+    /// that carries the hello in a QUIC `CRYPTO` frame wants this: over TCP the
+    /// field is what every browser sends, and a server on the other side of a
+    /// TCP connection expects it.
+    pub quic: bool,
 }
 
 impl TlsProfile {
@@ -481,6 +487,13 @@ fn apply_profile(config: &mut ClientConfig, profile: &TlsProfile) {
         config.cert_decompressors = crate::net::cert_compression::decompressors();
     }
     crate::net::fingerprint::apply(config, profile.fingerprint);
+    if profile.quic {
+        // Same copy-on-write rule as the ALPN override below: the shared shape
+        // is cloned for the caller that asked for a QUIC hello.
+        if let Some(profile) = config.hello_profile.as_mut() {
+            Arc::make_mut(profile).quic = true;
+        }
+    }
     match &profile.alpn {
         Some(alpn) => {
             config.alpn_protocols = alpn.clone();

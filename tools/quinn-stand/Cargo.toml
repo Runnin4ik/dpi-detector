@@ -1,0 +1,20 @@
+[package]
+name = "quinn-stand"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Not a workspace member on purpose: this is an experiment about a dependency
+# the workspace deliberately does not have (`quinn`), and it must not enter the
+# root lock file or the policy job's graph. The empty table below is what keeps
+# cargo from adopting the root workspace.
+[workspace]
+
+[dependencies]
+# Default features: `rustls-ring`. On x86_64 that is fine, and it is exactly the
+# point of the measurement - see README.md.
+quinn = "0.11"
+# `ring`, explicitly: quinn needs a process-level provider, and this is the one
+# its default features bring - the dependency the workspace refuses (Rule 1).
+rustls = { version = "0.23", features = ["ring"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

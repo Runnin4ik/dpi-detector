@@ -26,6 +26,8 @@ pub enum PhaseId {
     DomainTls12,
     /// Phase 3: Plain HTTP request probes
     DomainHttp,
+    /// Phase 4: QUIC Initial probes (UDP 443)
+    DomainQuic,
     /// TCP 16–20 KB window throttling test
     Tcp16,
     /// Phase 1/2 of whitelist discovery: base check
@@ -61,6 +63,8 @@ pub enum ProgressBlock {
     DomainTls12,
     /// Test 2 stage 3: plain HTTP requests
     DomainHttp,
+    /// Test 2 stage 4: QUIC Initials on UDP 443
+    DomainQuic,
 }
 
 impl ProgressBlock {
@@ -74,6 +78,7 @@ impl ProgressBlock {
             ProgressBlock::DomainTls13 => "TLS 1.3",
             ProgressBlock::DomainTls12 => "TLS 1.2",
             ProgressBlock::DomainHttp => "HTTP",
+            ProgressBlock::DomainQuic => "QUIC",
         }
     }
 }

@@ -11,8 +11,12 @@ pub mod dns_avail;
 pub mod tcp16;
 pub mod domains;
 pub mod burst;
+pub mod quic;
+#[cfg(feature = "quinn-probe")]
+pub mod quic_quinn;
 pub mod telegram;
 pub mod whitelist;
+pub use quic::{check_quic_all, QuicCheck};
 pub use burst::{burst_targets, BurstAttempt, BurstProfileReport, BurstReport, BurstSettings, BurstTarget};
 pub use tcp16::check_tcp_16_20;
 pub use telegram::{probe_telegram_all_dcs, probe_telegram_dc, run_download, run_telegram_full, run_telegram_test, run_upload, TelegramDcResult, TelegramFullReport, TelegramReport, TransferStats, TransferStatus};

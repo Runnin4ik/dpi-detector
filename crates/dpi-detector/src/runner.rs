@@ -30,7 +30,7 @@ use dpi_core::probe::domains::{
 };
 use dpi_core::probe::telegram::run_telegram_full;
 use dpi_core::probe::whitelist::run_whitelist_sni;
-use dpi_core::probe::{check_tcp_16_20, domains};
+use dpi_core::probe::{check_quic_all, check_tcp_16_20, domains};
 use dpi_core::profile::RegionProfile;
 use dpi_core::{PhaseProgress, ProgressTick};
 use tokio::sync::Semaphore;
@@ -874,6 +874,7 @@ pub(crate) async fn run_test_suite(
                     (dpi_core::ProgressBlock::DomainTls13, domains.len()),
                     (dpi_core::ProgressBlock::DomainTls12, domains.len()),
                     (dpi_core::ProgressBlock::DomainHttp, domains.len()),
+                    (dpi_core::ProgressBlock::DomainQuic, domains.len()),
                 ],
             );
         }
@@ -881,6 +882,7 @@ pub(crate) async fn run_test_suite(
         check_tls_all(&mut entries, false, cfg, &sem, phases.clone()).await;
         check_tls_all(&mut entries, true, cfg, &sem, phases.clone()).await;
         check_http_all(&mut entries, cfg, &stub_ips, &sem, phases.clone()).await;
+        check_quic_all(&mut entries, cfg, &sem, phases.clone()).await;
         live.finish();
 
         let stats = domain_stats(&entries);
@@ -900,6 +902,8 @@ pub(crate) async fn run_test_suite(
                         tls12_detail: e.t12.detail.clone(),
                         tls13: e.t13.status.as_str(),
                         tls13_detail: e.t13.detail.clone(),
+                        quic: e.quic.status.as_str(),
+                        quic_detail: e.quic.detail.clone(),
                     })
                     .collect(),
             );

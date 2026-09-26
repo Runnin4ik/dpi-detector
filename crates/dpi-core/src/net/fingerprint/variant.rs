@@ -31,6 +31,12 @@ pub enum HelloVariant {
     SigalgSwap,
     /// Open the extension list with a GREASE slot, as Chrome does.
     GreaseExtra,
+    /// Drop every GREASE value (RFC 8701): the cipher, the supported group, the
+    /// version and the extension slots. A browser greases over TCP and does not
+    /// over QUIC — measured on a live Chrome's QUIC hello, which carries none —
+    /// so the QUIC column applies this, while a shape that greases keeps doing so
+    /// on TCP.
+    NoGrease,
     /// Append an extension, sent as an empty body.
     AddExtension(u16),
     /// Replace an extension's body, keeping its code point and its place in the
@@ -163,6 +169,7 @@ impl HelloVariant {
         match name {
             "sigalg-swap" => Ok(Self::SigalgSwap),
             "+grease" => Ok(Self::GreaseExtra),
+            "-grease" => Ok(Self::NoGrease),
             "+ext" => one().map(Self::AddExtension),
             "ext-body" => body(),
             "-ext" => one().map(Self::DropExtension),
@@ -185,6 +192,7 @@ impl HelloVariant {
         match self {
             Self::SigalgSwap => "sigalg-swap".into(),
             Self::GreaseExtra => "+grease".into(),
+            Self::NoGrease => "-grease".into(),
             Self::AddExtension(id) => format!("+ext:{id}"),
             Self::ExtBody(id, body) => {
                 let hex: String = body.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -225,6 +233,15 @@ impl HelloVariant {
                     order.insert(0, GREASE_EXTENSION_MARKER);
                 }
                 hello.grease = true;
+            }
+            Self::NoGrease => {
+                // The slots go with the flag: the hook draws the cipher, the
+                // group and the version from `grease`, and pushes the extension
+                // bodies from the markers in the order.
+                if let Some(order) = hello.extension_order.as_mut() {
+                    order.retain(|ext| *ext != GREASE_EXTENSION_MARKER);
+                }
+                hello.grease = false;
             }
             Self::AddExtension(id) => {
                 if let Some(order) = hello.extension_order.as_mut() {
@@ -454,6 +471,7 @@ mod tests {
         for text in [
             "sigalg-swap",
             "+grease",
+            "-grease",
             "+ext:65037",
             "ext-body:17513:0003026832",
             "-ext:17513",

@@ -108,6 +108,20 @@ pub(crate) fn detail_text(detail: &Detail, lang: Language) -> String {
         Detail::UpgradeHttps { status: Some(code) } => format!("{code} → https"),
         Detail::UpgradeHttps { status: None } => "→ https".to_string(),
         Detail::Elapsed(secs) => format!("{:.1}s", secs),
+        Detail::QuicServerHello => t4(lang, "Сервер ответил на QUIC-рукопожатие (ServerHello)", "The server answered the QUIC handshake (ServerHello)", "服务器回应了 QUIC 握手（ServerHello）", "Server be handshake-e QUIC pasokh dad (ServerHello)"),
+        Detail::QuicRetry => t4(lang, "Сервер запросил Retry-токен (QUIC-путь работает)", "The server asked for a Retry token (the QUIC path works)", "服务器要求 Retry 令牌（QUIC 路径可用）", "Server token-e Retry khast (masir-e QUIC kar mikonad)"),
+        Detail::QuicForgedRetry => t4(lang, "Retry с неверным integrity-тегом — пакет не от сервера", "Retry with a bad integrity tag — the packet is not the server's", "Retry 的完整性标签错误 — 报文不是服务器发出的", "Retry ba integrity tag-e ghalat — packet az server nist"),
+        Detail::QuicClose { error_code } => format!(
+            "{} ({})",
+            t4(lang, "Сервер закрыл QUIC-соединение", "The server closed the QUIC connection", "服务器关闭了 QUIC 连接", "Server ettesal-e QUIC ra bast"),
+            error_code
+        ),
+        Detail::QuicReset => t4(lang, "Stateless reset: ответил тот, у кого нет состояния этого соединения", "Stateless reset: something answered that has no state for this connection", "无状态重置：回应方没有此连接的状态", "Stateless reset: kasani pasokh dad ke hich state-i baraye in ettesal nadarad"),
+        Detail::QuicVersionNegotiation => t4(lang, "Сервер не поддерживает QUIC v1 (version negotiation)", "The server does not speak QUIC v1 (version negotiation)", "服务器不支持 QUIC v1（version negotiation）", "Server version-e QUIC v1 ra nadarad (version negotiation)"),
+        Detail::QuicTimeout => t4(lang, "Ответа на Initial нет (UDP 443 молчал всё окно)", "No reply to the Initial (UDP 443 stayed silent for the whole window)", "Initial 没有回应（UDP 443 在整个窗口内没有响应）", "Be Initial pasokhi nayamad (UDP 443 dar tamam-e window sokut kard)"),
+        Detail::QuicUnreadableReply => t4(lang, "Ответ пришёл, но не открывается ни одним ключом соединения (так отвечает эдж на первый Initial)", "Something answered, and no key of this connection opens it (what an edge sends to a first Initial)", "有回应，但本连接的任何密钥都无法解开（边缘对首个 Initial 的回应方式）", "Pasokh amad, vali ba hich kelid-e in ettesal baz nemishavad (pasokh-e edge be avvalin Initial)"),
+        Detail::QuicAnsweredWithoutHandshake => t4(lang, "Эндпоинт ответил, но данных рукопожатия не прислал (только подтверждение)", "The endpoint answered, and sent no handshake data at all (an acknowledgement, nothing else)", "端点有回应，但完全没有握手数据（只有确认）", "Endpoint pasokh dad, vali hich dade-ye handshake nafrestad (faghat acknowledgement)"),
+        Detail::QuicPortUnreachable => t4(lang, "ICMP: на UDP-порту никто не слушает", "ICMP says nothing listens on the UDP port", "ICMP 表示该 UDP 端口无人监听", "ICMP migooyad hich kas ru-ye in port-e UDP gush nemidahad"),
         // Free text from the OS or the TLS stack: appended as it came.
         Detail::Other(text) => text.clone(),
     }
@@ -153,6 +167,17 @@ mod tests {
         assert_eq!(detail_text(&Detail::UpgradeHttps { status: Some(301) }, Ru), "301 → https");
         assert_eq!(detail_text(&Detail::UpgradeHttps { status: None }, Ru), "→ https");
         assert_eq!(detail_text(&Detail::Elapsed(0.3), Ru), "0.3s");
+        // A transport error is a number from the peer: it is composed into the
+        // label, so the label must not carry the bracket itself (the message
+        // once ended in "(transport error" and the number hung outside it).
+        assert_eq!(
+            detail_text(&Detail::QuicClose { error_code: 10 }, En),
+            "The server closed the QUIC connection (10)"
+        );
+        assert_eq!(
+            detail_text(&Detail::QuicClose { error_code: 0x12f }, Zh),
+            "服务器关闭了 QUIC 连接 (303)"
+        );
         assert_eq!(detail_text(&Detail::None, Ru), "");
         assert_eq!(detail_text(&Detail::Other("→ https".into()), En), "→ https");
     }
@@ -244,6 +269,16 @@ mod tests {
             Detail::IcmpAdminProhibited,
             Detail::UnknownConnectionFailure,
             Detail::Ipv6Unsupported,
+            Detail::QuicServerHello,
+            Detail::QuicRetry,
+            Detail::QuicForgedRetry,
+            Detail::QuicClose { error_code: 8 },
+            Detail::QuicReset,
+            Detail::QuicVersionNegotiation,
+            Detail::QuicTimeout,
+            Detail::QuicUnreadableReply,
+            Detail::QuicAnsweredWithoutHandshake,
+            Detail::QuicPortUnreachable,
             Detail::at_kb(Detail::TimeoutWord, 24.0),
             Detail::TimeoutStage { stage: "reading_data".into() },
             Detail::IspBlockpage { arrow: true, ip: "192.0.2.1".into() },

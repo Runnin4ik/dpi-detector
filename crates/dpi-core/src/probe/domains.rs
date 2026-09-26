@@ -382,6 +382,8 @@ pub struct DomainEntry {
     pub t13: TlsCheck,
     pub t12: TlsCheck,
     pub http: HttpCheck,
+    /// The QUIC column (test 2's fourth protocol, UDP 443).
+    pub quic: crate::probe::quic::QuicCheck,
 }
 
 impl DomainEntry {
@@ -394,6 +396,7 @@ impl DomainEntry {
             t13: dash.clone(),
             t12: dash,
             http: HttpCheck { status: DpiStatus::Unknown, detail: Detail::None },
+            quic: crate::probe::quic::QuicCheck::pending(),
         }
     }
 }
@@ -680,12 +683,20 @@ fn is_timeout_detail(detail: &Detail) -> bool {
     )
 }
 
-/// Builds the (http, t12, t13, details) cells: each failing protocol contributes a
-/// detail (timeouts dropped), and two passing TLS columns collapse to the best time.
-pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Vec<DetailLine>) {
+/// Builds the (http, t12, t13, quic, details) cells: each failing protocol
+/// contributes a detail (timeouts dropped), and two passing TLS columns collapse
+/// to the best time.
+///
+/// The QUIC column joins them on the same terms as the others: a verdict that is
+/// not `OK` names its reason, and only a row where every protocol passed
+/// collapses to the elapsed time.
+pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, DpiStatus, Vec<DetailLine>) {
     let http_ok = col_ok(e.http.status);
     let t12_ok = col_ok_t12(e.t12.status);
     let t13_ok = col_ok_t12(e.t13.status);
+    // `Unknown` is "not measured", not a failure: a row whose QUIC probe did not
+    // run must not hide the elapsed time of the columns that did.
+    let quic_failed = !matches!(e.quic.status, DpiStatus::Unknown | DpiStatus::QuicOk);
 
     let mut problems: Vec<(&'static str, Detail)> = Vec::new();
     if !http_ok
@@ -700,6 +711,11 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Ve
     }
     if !t13_ok && e.t13.detail != Detail::None && !is_timeout_detail(&e.t13.detail) {
         problems.push(("T1.3", e.t13.detail.clone()));
+    }
+    // `DROP` keeps its line: unlike the TLS timeouts, the badge does not say
+    // why nothing came back, and "no reply to the Initial" is the whole finding.
+    if quic_failed && e.quic.detail != Detail::None {
+        problems.push(("QUIC", e.quic.detail.clone()));
     }
 
     let mut details: Vec<DetailLine> = Vec::new();
@@ -721,7 +737,7 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Ve
         }
     }
 
-    if t12_ok && t13_ok {
+    if t12_ok && t13_ok && !quic_failed {
         let mut times: Vec<f64> = Vec::new();
         if e.t12.elapsed > 0.0 {
             times.push(e.t12.elapsed);
@@ -735,7 +751,7 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Ve
         }
     }
 
-    (e.http.status, e.t12.status, e.t13.status, details)
+    (e.http.status, e.t12.status, e.t13.status, e.quic.status, details)
 }
 
 #[cfg(test)]
@@ -756,7 +772,7 @@ mod tests {
         entry.t12 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.35 };
         entry.t13 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.28 };
 
-        let (http_s, t12_s, t13_s, details) = build_domain_row(&entry);
+        let (http_s, t12_s, t13_s, _quic_s, details) = build_domain_row(&entry);
         assert_eq!(http_s, DpiStatus::ReadTimeout);
         assert_eq!(http_s.display_label(), "TIMEOUT");
         assert_eq!(t12_s, DpiStatus::Ok);
@@ -771,7 +787,7 @@ mod tests {
         entry.t12 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, elapsed: 0.1 };
         entry.t13 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, elapsed: 0.1 };
 
-        let (http_s, t12_s, t13_s, details) = build_domain_row(&entry);
+        let (http_s, t12_s, t13_s, _quic_s, details) = build_domain_row(&entry);
         assert_eq!(http_s, DpiStatus::ReadTimeout);
         assert_eq!(http_s.display_label(), "TIMEOUT");
         assert_eq!(t12_s, DpiStatus::TlsRst);
@@ -787,7 +803,7 @@ mod tests {
         entry.t12 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, elapsed: 5.0 };
         entry.t13 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, elapsed: 5.0 };
 
-        let (http_s, t12_s, t13_s, details) = build_domain_row(&entry);
+        let (http_s, t12_s, t13_s, _quic_s, details) = build_domain_row(&entry);
         assert_eq!(http_s, DpiStatus::ReadTimeout);
         assert_eq!(http_s.display_label(), "TIMEOUT");
         assert_eq!(t12_s, DpiStatus::TlsDropped);

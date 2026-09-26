@@ -112,7 +112,11 @@ impl ClientHelloInput {
         // https://tools.ietf.org/html/draft-ietf-quic-tls-34#section-8.4
         let session_id = match session_id {
             Some(session_id) => session_id,
-            None if cx.common.is_quic() => SessionId::empty(),
+            None if cx.common.is_quic()
+                || config.hello_profile.as_ref().is_some_and(|p| p.quic) =>
+            {
+                SessionId::empty()
+            }
             None if !config.supports_version(ProtocolVersion::TLSv1_3, cx.common.protocol) => {
                 SessionId::empty()
             }

@@ -103,6 +103,46 @@ pub enum Detail {
     UnknownConnectionFailure,
     Ipv6Unsupported,
 
+    // ─── QUIC Initial (test 2) ───
+    /// The endpoint answered the QUIC handshake: a ServerHello, or the
+    /// HelloRetryRequest that asks for another key share.
+    QuicServerHello,
+    /// The endpoint answered with a Retry, and its integrity tag checked out
+    /// (RFC 9001 §5.8) — so the packet came from the endpoint and not from a
+    /// router that decided to imitate one.
+    QuicRetry,
+    /// A Retry whose integrity tag does not match: only a party that saw the
+    /// Initial can compute that tag, so this packet was made by something else
+    /// on the path.
+    QuicForgedRetry,
+    /// The endpoint closed the connection at the QUIC layer. `error_code` is the
+    /// transport error of RFC 9000 §20.1 (`8` is
+    /// `TRANSPORT_PARAMETER_ERROR`, which is what a server answers a ClientHello
+    /// that is not a QUIC one with) or the application's own code in the
+    /// application-close form.
+    QuicClose { error_code: u64 },
+    /// A stateless reset (RFC 9000 §10.3): something answered with no state for
+    /// this connection, which a fresh Initial should never meet.
+    QuicReset,
+    /// The endpoint does not speak v1 and listed the versions it does.
+    QuicVersionNegotiation,
+    /// Nothing answered the Initial inside the window.
+    QuicTimeout,
+    /// Something answered the Initial and the reply did not open under the
+    /// connection's own Initial keys: measured against Cloudflare's edge, the
+    /// packet a first flight meets looks like an Initial (long header, a source
+    /// connection ID, a length field) and decrypts under no key the client can
+    /// derive — a stock client ignores it and waits for the next flight, and so
+    /// does this probe. The path works; the handshake does not start.
+    QuicUnreadableReply,
+    /// The reply opened, and it carried no handshake data at all — an
+    /// acknowledgement and padding, no `CRYPTO` frame — for the whole window,
+    /// repeats included. The path works and the endpoint answered; it did not
+    /// answer the handshake.
+    QuicAnsweredWithoutHandshake,
+    /// ICMP said nothing listens on the UDP port.
+    QuicPortUnreachable,
+
     // ─── Composed ───
     /// `<head> at <n>KB`: how far the transfer got — the whole kilobytes the
     /// 16–20 KB test counts, the measured ones test 2 reports.
@@ -320,6 +360,16 @@ impl Detail {
             IcmpAdminProhibited => Cow::Borrowed("icmp_admin_prohibited"),
             UnknownConnectionFailure => Cow::Borrowed("unknown_connection_failure"),
             Ipv6Unsupported => Cow::Borrowed("ipv6_unsupported"),
+            QuicServerHello => Cow::Borrowed("quic_server_hello"),
+            QuicRetry => Cow::Borrowed("quic_retry"),
+            QuicForgedRetry => Cow::Borrowed("quic_forged_retry"),
+            QuicClose { error_code } => Cow::Owned(format!("quic_close_{error_code}")),
+            QuicReset => Cow::Borrowed("quic_stateless_reset"),
+            QuicVersionNegotiation => Cow::Borrowed("quic_version_negotiation"),
+            QuicTimeout => Cow::Borrowed("quic_timeout"),
+            QuicUnreadableReply => Cow::Borrowed("quic_unreadable_reply"),
+            QuicAnsweredWithoutHandshake => Cow::Borrowed("quic_answered_without_handshake"),
+            QuicPortUnreachable => Cow::Borrowed("quic_port_unreachable"),
             AtKb { head, kb } => Cow::Owned(format!("{}_at_{}", head.code(), kb_token(*kb))),
             TimeoutStage { stage } => Cow::Owned(format!("timeout_{}", stage)),
             IspBlockpage { .. } => Cow::Borrowed("isp_blockpage"),

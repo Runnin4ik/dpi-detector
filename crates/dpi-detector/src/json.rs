@@ -122,6 +122,9 @@ pub(crate) struct DomainRow {
     pub tls12_detail: Detail,
     pub tls13: &'static str,
     pub tls13_detail: Detail,
+    /// The QUIC column: the `DpiStatus` token of the Initial probe on UDP 443.
+    pub quic: &'static str,
+    pub quic_detail: Detail,
 }
 
 #[derive(Serialize)]

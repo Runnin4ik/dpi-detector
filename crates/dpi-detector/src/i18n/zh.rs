@@ -136,6 +136,7 @@ pub(crate) fn messages() -> Messages {
         http: "HTTP",
         tls12: "TLS1.2",
         tls13: "TLS1.3",
+        quic_col: "QUIC",
         dns_info_title: "[i] DNS 解析信息:",
         traffic_fakeip: "流量被 Fake-IP 拦截: 共 {} 个域名",
         dns_isp_stub: "DNS 返回了 ISP 封锁页面 IP ({}): 共 {} 个域名",
@@ -321,6 +322,14 @@ pub(crate) fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("16KB DROP", "在 14–36 KB 窗口内读取被切断; 详情显示 READ TIMEOUT at N KB"),
             ("DETECTED", "同一 14–36 KB 窗口内的发送被切断 — 即 16 KB 测试的 16KB DROP (该测试发送而非读取)"),
             ("OK", "所有 10 次请求 (最高 40 KB) 均正常传输无阻断"),
+        ]),
+        ("— QUIC —", vec![
+            ("OK", "QUIC 端点回应了 Initial：到 443 的 UDP 路径可用，HTTP/3 栈在运行（ServerHello，或完整性标签正确的 Retry）"),
+            ("CLOSED", "端点以受保护的 CONNECTION_CLOSE 或无状态重置回应：路径可用，握手不会进行；详情给出 transport error 代码"),
+            ("VN", "端点不支持 QUIC v1，并列出了它支持的版本"),
+            ("SPOOF", "Retry 的完整性标签不匹配：该报文并非来自端点（只有看到 Initial 的一方能计算该标签）"),
+            ("DROP", "Initial 没有回应：UDP 443 被过滤或端点不可用（TCP 中的对应物是 SYN DROP）"),
+            ("REFUSED", "ICMP：UDP 端口无人监听——路径可用，端点根本没有 QUIC 监听器；这不是封锁（封锁是 DROP）"),
         ]),
         ("— 其他 —", vec![
             ("OK", "站点可正常访问 (状态码 200–4xx 无阻断特征)"),

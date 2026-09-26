@@ -54,6 +54,7 @@ fn d_telegram_dc_port() -> u16 { 443 }
 fn d_domains_file() -> String { "domains.txt".to_string() }
 fn d_tcp16_file() -> String { "tcp16.json".to_string() }
 fn d_whitelist_sni_file() -> String { "whitelist_sni.txt".to_string() }
+fn d_quic_timeout() -> f64 { 8.0 }
 
 fn d_dns_check_domains() -> Vec<String> {
     vec![
@@ -446,6 +447,11 @@ pub struct AppConfig {
     pub tcp16_file: String,
     #[serde(default = "d_whitelist_sni_file")]
     pub whitelist_sni_file: String,
+    /// Test 2's QUIC column: seconds one target's Initial waits for a reply. A
+    /// ServerHello needs one round trip, so the default is generous for a router
+    /// link and short enough that a silent target does not hold the run.
+    #[serde(default = "d_quic_timeout")]
+    pub quic_timeout: f64,
     #[serde(default)]
     pub debug: bool,
     #[serde(skip)]
@@ -532,6 +538,7 @@ impl Default for AppConfig {
             domains_file: d_domains_file(),
             tcp16_file: d_tcp16_file(),
             whitelist_sni_file: d_whitelist_sni_file(),
+            quic_timeout: d_quic_timeout(),
             debug: false,
             config_load_error: None,
             config_warnings: Vec::new(),
@@ -556,7 +563,7 @@ const KNOWN_KEYS: &[&str] = &[
     "PIN_CACHE_TTL", "CONCURRENCY_PRESETS", "BYPASS_TOOLS", "DNS_KNOWN_RESOLVER_NAMES",
     "DNS_HIJACK_EXEMPT_RESOLVERS",
     "DNS_STUB_THRESHOLD", "DEBUG", "CYMRU_DOH_SERVERS", "IP4_LOOKUP_URLS",
-    "IP6_LOOKUP_URLS", "IP_LOOKUP_URLS",
+    "IP6_LOOKUP_URLS", "IP_LOOKUP_URLS", "QUIC_TIMEOUT",
 ];
 
 /// True when `value` can be an HTTP header value: `http` refuses every control
@@ -621,7 +628,7 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<Config
             | "DNS_CHECK_TIMEOUT" | "DNS_AVAILABILITY_TIMEOUT" | "FAT_CONNECT_TIMEOUT"
             | "FAT_READ_TIMEOUT" | "FAT_CHUNK_DELAY" | "TELEGRAM_MEDIA_SIZE_MB"
             | "TELEGRAM_UPLOAD_SIZE_MB" | "TELEGRAM_STALL_TIMEOUT" | "TELEGRAM_TOTAL_TIMEOUT"
-            | "TELEGRAM_DC_PING_TIMEOUT" => {
+            | "TELEGRAM_DC_PING_TIMEOUT" | "QUIC_TIMEOUT" => {
                 if !is_num(v) || v.as_f64().is_none_or(|f| f <= 0.0) {
                     false
                 } else {
@@ -1408,6 +1415,7 @@ mod tests {
         assert!(cfg.dns_known_resolver_names.contains(&"google".to_string()));
         assert!(cfg.dns_known_resolver_names.contains(&"yandex".to_string()));
         assert_eq!(cfg.dns_hijack_exempt_resolvers, vec!["MSK-IX", "НСДИ"]);
+        assert_eq!(cfg.quic_timeout, 8.0);
     }
 
     /// No-file fallbacks carry the same lists (embedded use without config.yml).
@@ -1426,6 +1434,7 @@ mod tests {
         assert_eq!(def.dns_known_resolver_names, from_yml.dns_known_resolver_names);
         assert_eq!(def.dns_hijack_exempt_resolvers, from_yml.dns_hijack_exempt_resolvers);
         assert_eq!(def.concurrency_presets, from_yml.concurrency_presets);
+        assert_eq!(def.quic_timeout, from_yml.quic_timeout);
     }
 
     /// Embedded fallbacks parse to the same lists as the shipped files.

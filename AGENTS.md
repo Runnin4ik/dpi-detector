@@ -33,16 +33,16 @@ core, no `anyhow`, no `unwrap()` outside tests. Logs: `tracing` (`WARN`; `-v` �
 
 ## Key Directories
 
-- `crates/dpi-core/src/classify/` — `types.rs` (`DpiStatus`, 33 variants, `ConnectionStage`), `detail.rs` (`Detail`, `AlertKind`, `StackKind`), `classifier.rs` (error ⇒ verdict), `stream.rs` (`DpiProbeStream`).
-- `crates/dpi-core/src/net/` — `tcp.rs`, `tls.rs` (`TlsProfile`, cert verifier), `fingerprint/` (30 profiles: `shapes/`, `identity.rs`, `h2.rs`, `variant.rs`), `http.rs` (the h1/h2 sender with the fingerprint on it), `connector.rs` (`DpiTlsConnector`), `ja3.rs`/`ja4.rs`, `pq_kx.rs`, `cert_compression.rs`, `hpke.rs`, `follow_up.rs`, `bind.rs`, `sysinfo/`, `netinfo.rs`.
+- `crates/dpi-core/src/classify/` — `types.rs` (`DpiStatus`, 38 variants, `ConnectionStage`), `detail.rs` (`Detail`, `AlertKind`, `StackKind`), `classifier.rs` (error ⇒ verdict), `stream.rs` (`DpiProbeStream`).
+- `crates/dpi-core/src/net/` — `tcp.rs`, `tls.rs` (`TlsProfile`, cert verifier), `fingerprint/` (30 profiles: `shapes/`, `identity.rs`, `h2.rs`, `variant.rs`), `http.rs` (the h1/h2 sender with the fingerprint on it), `connector.rs` (`DpiTlsConnector`), `ja3.rs`/`ja4.rs`, `pq_kx.rs`, `quic.rs` (the RFC 9000 Initial: header protection, the `CRYPTO` stream, the RFC 9001 §5.2 keys), `cert_compression.rs`, `hpke.rs`, `follow_up.rs`, `bind.rs`, `sysinfo/`, `netinfo.rs`.
 - `crates/dpi-core/src/dns/` — `wire.rs` (RFC 1035), `udp.rs`, `doh.rs`, `dot.rs`, `socks.rs`, `resolve.rs`, `cymru.rs` (Team Cymru ASN/org over DoH TXT).
-- `crates/dpi-core/src/probe/` — one module per test: `dns_avail.rs` (1), `domains.rs` (2), `tcp16.rs` (3), `whitelist.rs` (4), `telegram.rs` (5), `burst.rs` (6), and nothing else — the transport those tests drive lives in `net/` and `dns/`.
+- `crates/dpi-core/src/probe/` — one module per test: `dns_avail.rs` (1), `domains.rs` (2), `tcp16.rs` (3), `whitelist.rs` (4), `telegram.rs` (5), `burst.rs` (6), and nothing else — the transport those tests drive lives in `net/` and `dns/`. `quic.rs` sits beside them as test 2's QUIC column: the probe's own Initial and the reply's classification, not a test of its own.
 - `crates/dpi-core/src/config.rs` — `AppConfig` (`config.yml` schema), `ConfigWarning`, embedded data lists.
 - `crates/dpi-detector/src/i18n/` — ONLY location for user-facing strings.
 - `crates/dpi-detector/src/tui/`, `views/` — terminal backend, width math, one renderer per test.
 - `vendor/` — patched upstream crates; each carries `README-PATCH.md` + `PATCH.diff`.
 - `docs/` — English. `CI.md` (CI, release, supply chain), `ADDING_A_PROFILE.md` (profile procedure), `REFACTORING.md` (invariants + phases), `OPTIMIZATIONS.md` (size log), `i18n-fa.tsv|csv` (dev-only worksheet, Russian header). `README.md` is the only Russian document: it is the user manual.
-- `tools/`, `scripts/` — `fingerprint/` (profile harness), `diag/dns-ca-report.ps1`, `bench-strategies.sh` (router benchmark).
+- `tools/`, `scripts/` — `fingerprint/` (profile harness), `diag/dns-ca-report.ps1`, `bench-strategies.sh` (router benchmark), `quic/` (the stand that validates test 2's QUIC column against aioquic — see `scripts/quic/README.md`; its client is `cargo run -p dpi-core --example quic_probe_once -- 127.0.0.1 <fingerprint>`).
 
 ## Development Commands
 

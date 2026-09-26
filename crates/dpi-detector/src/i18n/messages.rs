@@ -177,6 +177,8 @@ pub(crate) struct Messages {
     pub http: &'static str,
     pub tls12: &'static str,
     pub tls13: &'static str,
+    /// Test 2's QUIC column header: a protocol token, Latin in every language.
+    pub quic_col: &'static str,
     pub dns_info_title: &'static str,
     pub traffic_fakeip: &'static str,
     pub dns_isp_stub: &'static str,
@@ -357,6 +359,7 @@ impl Messages {
             dpi_core::PhaseId::DomainTls13 => dpi_core::ProgressBlock::DomainTls13.token().to_string(),
             dpi_core::PhaseId::DomainTls12 => dpi_core::ProgressBlock::DomainTls12.token().to_string(),
             dpi_core::PhaseId::DomainHttp => dpi_core::ProgressBlock::DomainHttp.token().to_string(),
+            dpi_core::PhaseId::DomainQuic => dpi_core::ProgressBlock::DomainQuic.token().to_string(),
             dpi_core::PhaseId::Tcp16 => self.tcp16_check_title.to_string(),
             dpi_core::PhaseId::SniBase => self.phase_sni_base.to_string(),
             dpi_core::PhaseId::SniParallel { detected_as, batch, top_n } => {

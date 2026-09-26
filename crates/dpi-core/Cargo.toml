@@ -20,12 +20,23 @@ publish = false
 # `cargo test -p dpi-core --features live-network`. No dependency rides on it.
 live-network = []
 
+# Experiment: run the QUIC column through `quinn` instead of the hand-written
+# Initial. Not a shipping candidate — `quinn` needs a QUIC-capable crypto
+# provider, and the only one reachable here is `ring` (assembly, no MIPS target,
+# Rule 1) — so this feature exists to measure that cost, not to be enabled.
+# `probe/quic_quinn.rs` has the details; off by default (Rule 2).
+quinn-probe = ["dep:quinn"]
+
 [dependencies]
 tokio = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 webpki-roots = { workspace = true }
 rustls-rustcrypto = { workspace = true }
+# Only for the `quinn-probe` experiment; see `[features]` above and
+# `probe/quic_quinn.rs`. Deliberately not in `[workspace.dependencies]`: the
+# point of the measurement is that this dependency must not reach the workspace.
+quinn = { version = "0.11", optional = true }
 hyper = { workspace = true }
 http2 = { workspace = true }
 hyper-util = { workspace = true }

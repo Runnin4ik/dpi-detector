@@ -140,8 +140,13 @@ pub use variant::{HelloVariant, HelloVariantError};
 pub(crate) use variant::install_variant;
 
 pub(crate) use shapes::{
-    EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW, EXT_FAKE_CHANNEL_ID,
+    EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW, EXT_FAKE_CHANNEL_ID, EXT_SCT,
+    EXT_SIGNATURE_ALGORITHMS, EXT_STATUS_REQUEST,
 };
+// The two list-carrying extensions the QUIC hello's GREASE test walks; nothing in
+// the library itself needs them by name.
+#[cfg(test)]
+pub(crate) use shapes::{EXT_SUPPORTED_GROUPS, EXT_SUPPORTED_VERSIONS};
 use shapes::{TlsShape, SHAPES};
 
 /// Which ClientHello shape the probes present.
@@ -236,6 +241,20 @@ impl TlsFingerprint {
     /// without a row is a suite failure, not a silent fallback.
     fn spec(self) -> &'static TlsShape {
         &SHAPES[shape_index(self)]
+    }
+
+    /// Whether this shape's ClientHello carries `id` verbatim. The QUIC column
+    /// asks before it edits an extension a shape may not send at all: adding one
+    /// to Firefox would be a shape no client sends.
+    pub(crate) fn sends_extension(self, id: u16) -> bool {
+        self.spec().raw_exts.iter().any(|(ext, _)| *ext == id)
+    }
+
+    /// The body the shape sends for an extension, if it sends it at all — the
+    /// counterpart of [`Self::sends_extension`] for the edits that have to start
+    /// from the shape's own bytes rather than a fresh body.
+    pub(crate) fn extension_body(self, id: u16) -> Option<&'static [u8]> {
+        self.spec().raw_exts.iter().find(|(ext, _)| *ext == id).map(|(_, body)| *body)
     }
 
     /// Canonical uppercase token for tables and logs. Never translated (rule 4).

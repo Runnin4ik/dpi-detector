@@ -229,6 +229,7 @@ impl TlsShape {
             cert_compression: Some(self.cert_compression.to_vec()),
             padding_to: self.padding_to,
             legacy_versions: self.legacy_versions.to_vec(),
+            quic: false,
         })
     }
 }

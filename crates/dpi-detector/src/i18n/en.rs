@@ -140,6 +140,7 @@ pub(crate) fn messages() -> Messages {
         http: "HTTP",
         tls12: "TLS1.2",
         tls13: "TLS1.3",
+        quic_col: "QUIC",
         dns_info_title: "[i] DNS RESOLUTION INFO:",
         traffic_fakeip: "Traffic intercepted by Fake-IP: for {} domains",
         dns_isp_stub: "DNS returned ISP blockpage IP ({}): for {} domains",
@@ -325,6 +326,14 @@ pub(crate) fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("16KB DROP", "Read cut inside the 14–36 KB window; the detail says READ TIMEOUT at N KB"),
             ("DETECTED", "Send-side cut inside the same 14–36 KB window — the same 16KB DROP, for the 16 KB test, which sends instead of reading"),
             ("OK", "All 10 requests (up to 40 KB) passed without a break"),
+        ]),
+        ("— QUIC —", vec![
+            ("OK", "The QUIC endpoint answered the Initial: the UDP path to 443 works and its HTTP/3 stack is running (a ServerHello, or a Retry whose integrity tag checked out)"),
+            ("CLOSED", "The endpoint answered with a protected CONNECTION_CLOSE or a stateless reset: the path works, the handshake does not run — the detail names the transport error"),
+            ("VN", "The endpoint does not speak QUIC v1 and listed the versions it does"),
+            ("SPOOF", "A Retry whose integrity tag does not match: the packet did not come from the endpoint, since only a party that saw the Initial can compute that tag"),
+            ("DROP", "No reply to the Initial: UDP 443 is filtered or the endpoint is down — the silence SYN DROP is for TCP"),
+            ("REFUSED", "ICMP says nothing listens on UDP 443: the path works and the endpoint runs no QUIC at all — not a block (a block is DROP)"),
         ]),
         ("— Other —", vec![
             ("OK", "Site reachable (200–4xx with no block signs)"),

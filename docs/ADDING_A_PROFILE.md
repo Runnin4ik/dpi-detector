@@ -239,7 +239,10 @@ as Chrome 133–146 in §1, not a divergence from the source.
 
 * **QUIC/HTTP-3.** In `vendor/rustls-rustcrypto/src/quic.rs` there are stubs, and
   every TLS 1.3 suite has `quic: None`. As long as that is so, no h3 profile is
-  possible, regardless of `quinn`/`h3`. The order of work, if one takes this on:
+  possible, regardless of `quinn`/`h3`. A record's `quic` flag
+  (`ClientHelloProfile::quic`, the patched hook) only empties `legacy_session_id`
+  the way RFC 9001 §8.4 requires, which is what test 2's QUIC column needs — the
+  handshake still does not run over QUIC. The order of work, if one takes this on:
   header protection per RFC 9001 §5.4 with the §A.2 test vectors, `quinn` without the
   default `rustls-ring`, a transport parameters patch, and an `http3` feature
   (off by default — Rule 2).

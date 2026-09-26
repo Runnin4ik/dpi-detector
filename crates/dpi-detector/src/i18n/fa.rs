@@ -138,6 +138,7 @@ pub(crate) fn messages() -> Messages {
         http: "HTTP",
         tls12: "TLS1.2",
         tls13: "TLS1.3",
+        quic_col: "QUIC",
         dns_info_title: "[i] Ettela'ate tahlil-e DNS:",
         traffic_fakeip: "Traffic tavasot-e Fake-IP intercept mishavad: baraye {} domain",
         dns_isp_stub: "DNS IP-e blockpage-e ISP ra bargardand ({}): baraye {} domain",
@@ -321,6 +322,14 @@ pub(crate) fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("16KB DROP", "Ghat'-e khanesh dar panjere-ye 14 ta 36 kilobyte; dar tafsilat: READ TIMEOUT at N KB"),
             ("DETECTED", "Ghat' dar ersal dar hamaan panjere-ye 14 ta 36 kilobyte - hamaan 16KB DROP, baraye azmun-e 16 KB ke ersal mikonad na khanesh"),
             ("OK", "Har 10 darkhast (ta 40 kilobyte) bedun-e ghat'i anjam shodand"),
+        ]),
+        ("- QUIC -", vec![
+            ("OK", "Endpoint-e QUIC be Initial pasokh dad: masir-e UDP ta 443 kar mikonad va stack-e HTTP/3 zende ast (ServerHello, ya Retry ba integrity tag-e dorost)"),
+            ("CLOSED", "Endpoint ba CONNECTION_CLOSE-e mahfuz ya stateless reset pasokh dad: masir kar mikonad, handshake na - detail code-e transport error ra migooyad"),
+            ("VN", "Endpoint version-e QUIC v1 ra nadarad va version-hayi ke darad ra fehrest kard"),
+            ("SPOOF", "Retry ba integrity tag-e ghalat: packet az endpoint nayamade, chon tag ra faghat kasani ke Initial ra dideand mitavanand hesab konand"),
+            ("DROP", "Be Initial pasokhi nayamad: UDP 443 filter shode ya endpoint kharab ast (haman sokuti ke SYN DROP baraye TCP ast)"),
+            ("REFUSED", "ICMP: ru-ye UDP-port hich kas goosh nemidahad - masir kar mikonad va endpoint aslan QUIC nadarad; in block nist (block = DROP)"),
         ]),
         ("- Sayer -", vec![
             ("OK", "Site dar dastras ast (kode 200-4xx bedun-e alayem-e filtering)"),

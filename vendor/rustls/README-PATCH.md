@@ -57,12 +57,12 @@ survive real servers; they are described under "findings" below.
 
 | File | Change |
 | --- | --- |
-| `src/client/hello_profile.rs` | **new**: public `ClientHelloProfile` (cipher list, groups, the key-share group list, signature schemes, ALPN, extension order with `GREASE_EXTENSION_MARKER` placeholders, verbatim extra extensions, suppressed extensions, GREASE, the per-connection shuffle, certificate compression, `padding_to`, `legacy_versions`) and its `apply`. An empty certificate-compression list clears the typed value instead of setting an empty one: the profiles whose client advertises no algorithm (Safari 15.3, Tor 14.5) must send no extension 27 at all, not one with zero entries. `permute_extensions` shuffles the order the way BoringSSL's `ssl_setup_extension_permutation` does — one Fisher–Yates pass from the end, seeded by `hs.rs`, with the GREASE slots, the padding and the extensions TLS 1.3 requires last left in place |
+| `src/client/hello_profile.rs` | **new**: public `ClientHelloProfile` (cipher list, groups, the key-share group list, signature schemes, ALPN, extension order with `GREASE_EXTENSION_MARKER` placeholders, verbatim extra extensions, suppressed extensions, GREASE, the per-connection shuffle, certificate compression, `padding_to`, `legacy_versions`, `quic`) and its `apply`. An empty certificate-compression list clears the typed value instead of setting an empty one: the profiles whose client advertises no algorithm (Safari 15.3, Tor 14.5) must send no extension 27 at all, not one with zero entries. `permute_extensions` shuffles the order the way BoringSSL's `ssl_setup_extension_permutation` does — one Fisher–Yates pass from the end, seeded by `hs.rs`, with the GREASE slots, the padding and the extensions TLS 1.3 requires last left in place |
 | `src/client/follow_up.rs` | **new**: public `ClientFollowUp` (one method, `messages(acknowledged, transcript_hash) -> Vec<(u8, Vec<u8>)>`) and the place it is called from. A browser hello advertises ALPS or `channel_id`, the server acknowledges it in its EncryptedExtensions, and the client then owes the server a handshake message before its Finished; upstream rustls has neither a typed field for either extension nor a way to add a message to the second flight |
 | `src/client/client_conn.rs` | `ClientConfig::hello_profile: Option<Arc<ClientHelloProfile>>`, `ClientConfig::client_follow_up: Option<Arc<dyn ClientFollowUp>>`, `ClientConnectionData::server_extensions` (the extension ids the server sent in its EncryptedExtensions) and `ClientConnection::server_encrypted_extensions()`, which reads that set back |
 | `src/client/builder.rs` | initializes both hooks to `None`; `with_ech_mode` sets the ECH mode on a builder that has already chosen its versions — upstream's `with_ech` forces TLS 1.3 alone, and a profile that keeps its 1.2 fallback (Chrome 120) still carries the extension |
 | `src/crypto/hpke.rs` | re-exports `HpkeKem`, `HpkeKdf`, `HpkeAead` and `HpkeSymmetricCipherSuite` — an `Hpke` implementation outside the crate cannot name the suite it implements otherwise — and gives `HpkePrivateKey` the `from_bytes` constructor its private field implies |
-| `src/client/hs.rs` | applies the profile while building the ClientHello, with a per-connection GREASE seed and a 128-bit shuffle seed from the provider's CSPRNG; adds the GREASE key share and the GREASE `supported_versions` entry for a greasing profile; carries a *list* of key exchanges (`offered_key_shares`) instead of one, so a profile can send the shares a browser's `--tls-key-shares-limit` produces, and handles the HelloRetryRequest against that list; records the *encoded* extension set as `sent_extensions`; gates `compress_certificate` on the hello offering TLS 1.3 |
+| `src/client/hs.rs` | applies the profile while building the ClientHello, with a per-connection GREASE seed and a 128-bit shuffle seed from the provider's CSPRNG; adds the GREASE key share and the GREASE `supported_versions` entry for a greasing profile; carries a *list* of key exchanges (`offered_key_shares`) instead of one, so a profile can send the shares a browser's `--tls-key-shares-limit` produces, and handles the HelloRetryRequest against that list; records the *encoded* extension set as `sent_extensions`; gates `compress_certificate` on the hello offering TLS 1.3; and leaves `legacy_session_id` empty for a profile with `quic` set, since the QUIC rule for that field (RFC 9001 §8.4) is decided from the *connection*'s protocol, which a TCP client cannot reach |
 | `src/client/tls13.rs` | `initial_key_shares` builds one exchange per group `key_share_groups` names; `KeyExchangeChoice::new` looks the server's group up among every share the client sent (whole or hybrid component); `ExpectEncryptedExtensions` records the server's extension set, and `ExpectFinished` calls `client_follow_up` and appends what it returns to the client's second flight ahead of the Finished, hashed into the transcript |
 | `src/client/ech.rs` | `EchGreaseConfig::grease_ext` sizes the GREASE payload the way BoringSSL does — one of 128, 160, 192 or 224 bytes, a rounded estimate of the inner hello, plus the AEAD tag (`setup_ech_grease()` in its `ssl/encrypted_client_hello.cc`) — instead of encoding the inner hello this client would really send, which is 441 bytes and a length no browser produces. The outer hello is no longer needed to size the body, so that argument is gone |
 | `src/msgs/handshake.rs` | `SupportedProtocolVersions` gains `grease: Option<u16>` (written ahead of the real versions) and `legacy: Vec<u16>` (the fallbacks a browser advertises behind 1.2, written after them); `ClientExtensions` gains `profile_order`, `raw_extensions`, `suppress_extensions`, `padding_to`; the encoder honours them, computes RFC 7685 padding to the profile's target size, and still keeps ECH/PSK last; a certificate entry carrying SCTs (type 18) is accepted and ignored; `ServerExtensions::extension_types()` lists every extension id the server sent, typed fields and unknown ones together |
@@ -102,6 +102,17 @@ patch -p1 -d vendor/rustls < PATCH.diff      # expect hunks only in the files ab
    the lock, so the advisory check skipped the crate it was pinning;
    `scripts/vendor-advisories.sh` asks the same database about the vendored
    crates by their published names and versions, and runs in the `policy` job.
+
+   One thing that rebase made visible, and that is deliberately left alone:
+   upstream's TLS-1.2 signature-scheme filter (in `emit_client_hello_for_retry`)
+   runs *before* the hook installs the shape, so a shaped 1.2 hello carries the
+   shape's `signature_algorithms` unfiltered. Measured on the shipped shapes: not
+   one of them advertises a code outside 0.23.45's `SignatureScheme::algorithm()`
+   set — `rsa_pss_pss_*`, `0x0809`–`0x080b`, is what that filter drops — so the
+   wire is unchanged and `cargo test -p dpi-core fingerprint` still pins the same
+   JA4. Re-applying the filter after `profile.apply` was tried and reverted: it
+   would make a shaped 1.2 hello differ from the browser's, and this probe exists
+   to report what a browser would get.
 
 3. Re-verify — this is the part that matters (see below).
 
@@ -240,6 +251,26 @@ failing handshake or a real mismatched fingerprint, not a theoretical concern:
   follow-up, and the hook is additionally gated on the shape having advertised
   the extension the server named, so an unsolicited acknowledgement is not
   answered either.
+* **A QUIC ClientHello must leave `legacy_session_id` empty.** RFC 8446
+  Appendix D.4 puts 32 random bytes there for middlebox compatibility over TCP,
+  and RFC 9001 §8.4 removes the mode for QUIC: a server treats a non-empty field
+  as `PROTOCOL_VIOLATION`. rustls decides it from `cx.common.is_quic()`, which a
+  TCP-shaped client cannot reach without a QUIC-capable cipher suite — the
+  provider here declares `quic: None` for every suite
+  (`docs/ADDING_A_PROFILE.md` §6) — so the hello a profile builds over TCP
+  carries the field and a QUIC endpoint refuses it. Measured against
+  `cloudflare.com`: `CRYPTO_ERROR 0x12f` (`illegal_parameter`, the alert the
+  server puts in a `CONNECTION_CLOSE`) with the field present, a ServerHello in
+  0.1 s with `quic: true`. The flag is the whole fix; the
+  `quic_transport_parameters` extension a QUIC endpoint also requires is a raw
+  extension the caller supplies.
+* **A browser ClientHello does not fit one QUIC datagram.** The post-quantum key
+  share alone is 1216 bytes (`X25519MLKEM768`), so a Chrome-shaped hello is
+  ~1700 bytes: the client's first flight has to be split across Initial packets,
+  each padded to 1200 bytes, with the `CRYPTO` frame's offset carrying the
+  stream on (`crates/dpi-core/src/net/quic.rs::client_initials`). Dropping the
+  PQ group or the shape to make one datagram fit would send a hello no client
+  sends.
 * **`compress_certificate` belongs to TLS 1.3 only.** rustls sets the extension
   only when the hello offers 1.3; the profile hook runs after that and must not
   put it back into a 1.2-only hello (RFC 8879), which is exactly the hello the

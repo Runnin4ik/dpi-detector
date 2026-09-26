@@ -93,7 +93,7 @@ pub(crate) const CHROME_TLS_RAW_EXTS: &[(u16, &[u8])] = &[
 (EXT_SCT, &[]),
 // session_ticket: empty in a fresh session. rustls drops the extension from
 // a TLS 1.3-only hello, Chrome sends it in both, so the profile supplies it
-// — without this the TLS 1.3 column and test 7 sent a Chrome hello with one
+// — without this the TLS 1.3 and QUIC columns sent a Chrome hello with one
 // extension less than Chrome's.
 (EXT_SESSION_TICKET, &[]),
 // ALPS: one protocol, h2.

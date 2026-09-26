@@ -18,17 +18,19 @@ pub(crate) fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> St
             Cell::new(msg.http),
             Cell::new(msg.tls12),
             Cell::new(msg.tls13),
+            Cell::new(msg.quic_col),
             Cell::new(format_bidi(msg.detail, msg.lang)),
         ]);
 
     for e in entries {
-        let (http_s, t12_s, t13_s, raw_details) = dpi_core::probe::domains::build_domain_row(e);
+        let (http_s, t12_s, t13_s, quic_s, raw_details) = dpi_core::probe::domains::build_domain_row(e);
         let details = row_details(&raw_details, msg.lang);
         table.add_row(vec![
             Cell::new(cell_color(&e.domain, Color::Cyan)),
             Cell::new(cell_color(http_s.display_label(), status_color(http_s))),
             Cell::new(cell_color(t12_s.display_label(), status_color(t12_s))),
             Cell::new(cell_color(t13_s.display_label(), status_color(t13_s))),
+            Cell::new(cell_color(quic_s.display_label(), status_color(quic_s))),
             Cell::new(details),
         ]);
     }

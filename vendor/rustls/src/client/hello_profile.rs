@@ -141,6 +141,21 @@ pub struct ClientHelloProfile {
     /// `PeerIncompatible::ServerDoesNotSupportTls12Or13`, which callers can tell
     /// apart from a real block.
     pub legacy_versions: Vec<u16>,
+
+    /// Present the hello a QUIC client sends: an *empty* `legacy_session_id`.
+    ///
+    /// TLS 1.3 over TCP sets that field to 32 random bytes for middlebox
+    /// compatibility (RFC 8446 Appendix D.4), and rustls does it from the
+    /// connection's protocol — `is_quic()` — which a caller cannot reach
+    /// without a QUIC-capable cipher suite. RFC 9001 §8.4 removes the mode for
+    /// QUIC and has a server treat a non-empty field as `PROTOCOL_VIOLATION`;
+    /// Cloudflare answers a hello that carries one with
+    /// `CRYPTO_ERROR 0x12f` (`illegal_parameter`), which is what a probe on a
+    /// profile-built hello meets. This flag is the one thing about a QUIC hello
+    /// rustls decides outside a profile — the `quic_transport_parameters`
+    /// extension and `h3` in ALPN are a raw extension and an ALPN override
+    /// already.
+    pub quic: bool,
 }
 
 /// Marker for a GREASE extension (RFC 8701) inside a profile's extension order.
