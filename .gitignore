@@ -9,3 +9,4 @@
 /vendor/*/Cargo.lock
 /dist/
 tmp-commit-msg.txt
+__pycache__/
