@@ -587,7 +587,7 @@ impl CryptoStream {
 
     /// Records one chunk. A chunk that is already held is ignored, so a
     /// retransmitted packet does not duplicate the stream; a chunk that would
-    /// take the stream past `CRYPTO_CAP`, or the map past [`CRYPTO_CHUNKS`], is
+    /// take the stream past `CRYPTO_CAP`, or the map past `CRYPTO_CHUNKS`, is
     /// dropped whole.
     pub fn push(&mut self, offset: u64, data: &[u8]) {
         if data.is_empty()

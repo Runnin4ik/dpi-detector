@@ -18,7 +18,8 @@ fn d_fat_connect_timeout() -> f64 { 8.0 }
 fn d_fat_read_timeout() -> f64 { 12.0 }
 /// The placeholder `User-Agent` `config.yml` starts with.
 ///
-/// It is not what the probes send: [`AppConfig::user_agent_for`] hands the
+/// It is not what the probes send:
+/// [`crate::net::fingerprint::TlsFingerprint::user_agent_for`] hands the
 /// selected fingerprint profile's own UA to a probe, and only an operator who
 /// edited `user_agent` away from this value gets it on the wire.
 pub const DEFAULT_USER_AGENT: &str =
