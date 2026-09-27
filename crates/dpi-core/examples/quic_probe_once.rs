@@ -22,7 +22,7 @@ async fn main() {
         let fingerprint = TlsFingerprint::parse(&name).expect("a known fingerprint");
         cfg.tls_fingerprint = fingerprint.code().to_string();
     }
-    println!("fingerprint: {}", cfg.fingerprint().code());
+    println!("fingerprint: {}", TlsFingerprint::from_config(&cfg).code());
     let check = check_domain_quic("localhost", target, &cfg).await;
     println!("status: {:?}", check.status);
     println!("token:  {}", check.status.as_str());

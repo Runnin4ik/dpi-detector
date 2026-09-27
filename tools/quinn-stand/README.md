@@ -6,9 +6,11 @@ the host list test 2 already covers?**
 
 It is a standalone cargo project, not a workspace member (the empty `[workspace]`
 table in `Cargo.toml` keeps it out): `quinn`'s default features pull
-`rustls-ring`, and neither `quinn` nor `ring` may enter the root lock file or the
-`policy` CI job's graph. Building it here also measures that cost, which is the
-second thing the experiment is for.
+`rustls-ring`, and neither may enter the `policy` CI job's graph. `ring` is a
+*lock entry* all the same — the vendored `rustls-rustcrypto` names it as an
+optional feature, and a lockfile covers every feature — but `cargo tree -i ring`
+prints nothing, so no build of this workspace reaches it. Building the stand here
+also measures that cost, which is the second thing the experiment is for.
 
 What it does: for every host in `scripts/quic/hosts.txt`, connect over QUIC with
 ALPN `h3`, an 8-second idle timeout (the value measured for the probe), and a

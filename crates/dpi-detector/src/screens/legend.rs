@@ -5,7 +5,7 @@ use std::io::{IsTerminal, Write, stdout};
 
 use crate::{print_out, println_out};
 use crate::render::panel_to_string;
-use crate::tui::screens::post_run::{PostTestAction, read_post_test_action};
+use crate::screens::post_run::{PostTestAction, read_post_test_action};
 
 /// Legend-only interactive loop: shows the legend and its key menu until the user
 /// repeats it, goes back to the menu, or quits.

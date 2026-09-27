@@ -11,7 +11,7 @@ use dpi_core::classify::Detail;
 use dpi_core::probe::telegram::TransferStatus;
 use serde::Serialize;
 
-use crate::render::TcpRow;
+use dpi_core::probe::tcp16::Tcp16Row;
 
 /// Wire version of the payload; bump it when a key changes meaning.
 pub(crate) const SCHEMA_VERSION: u32 = 1;
@@ -36,7 +36,7 @@ pub(crate) struct Results {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain_inspection: Option<Vec<DomainRow>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tcp16: Option<Vec<TcpRow>>,
+    pub tcp16: Option<Vec<Tcp16Row>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub whitelist_sni: Option<WhitelistSni>,
     #[serde(skip_serializing_if = "Option::is_none")]

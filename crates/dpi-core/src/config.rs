@@ -4,8 +4,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
-use crate::probe::dns_avail::ProbeKind;
-
 fn d_max_concurrent() -> usize { 50 }
 fn d_ip_version() -> String { "ipv4".to_string() }
 fn d_tls_fingerprint() -> String { "rustls".to_string() }
@@ -258,17 +256,19 @@ impl DnsAvailServerKind {
         }
     }
 
-    /// The port a row of this kind uses when it names none. Delegates to the
-    /// measurement vocabulary's table, which owns it: `doh_json` and `doh_wire`
-    /// are two input spellings of the same wire probe, and that collapse is
-    /// exactly what the delegation below spells out.
+    /// The port a row of this kind uses when it names none.
+    ///
+    /// The measurement vocabulary (`probe::dns_avail::ProbeKind`) owns the same
+    /// three numbers for the probes it runs, and the two are held together by
+    /// `test_the_two_transport_tables_agree_on_their_ports` rather than by one
+    /// calling the other: `config` is the layer the probes read, and a call the
+    /// other way would close the loop the doctrine's layering forbids.
     pub fn default_port(self) -> u16 {
-        let probe = match self {
-            Self::Udp => ProbeKind::Udp,
-            Self::DohJson | Self::DohWire => ProbeKind::DohWire,
-            Self::Dot => ProbeKind::Dot,
-        };
-        probe.default_port()
+        match self {
+            Self::Udp => 53,
+            Self::DohJson | Self::DohWire => 443,
+            Self::Dot => 853,
+        }
     }
 }
 
@@ -831,28 +831,6 @@ impl AppConfig {
         cfg
     }
 
-    /// The ClientHello profile the probes must present.
-    ///
-    /// Parsed here rather than at every call site; an unknown value has already
-    /// been reset with a warning in `Self::clamp`.
-    pub fn fingerprint(&self) -> crate::net::fingerprint::TlsFingerprint {
-        crate::net::fingerprint::TlsFingerprint::parse(&self.tls_fingerprint).unwrap_or_default()
-    }
-
-    /// The `User-Agent` the probes present.
-    ///
-    /// A configured `user_agent` wins — it is the operator saying what the tool
-    /// should look like. Left at the built-in default it is the placeholder
-    /// `d_user_agent()` ships, so the selected fingerprint profile's own UA takes
-    /// over instead: sending `Chrome/133` behind a `chrome107` ClientHello is a
-    /// mismatch a header-matching middlebox reads in one packet.
-    pub fn user_agent_for(&self, fingerprint: crate::net::fingerprint::TlsFingerprint) -> &str {
-        if self.user_agent != DEFAULT_USER_AGENT {
-            return &self.user_agent;
-        }
-        crate::net::fingerprint::http_identity(fingerprint).user_agent.unwrap_or(DEFAULT_USER_AGENT)
-    }
-
     fn clamp(&mut self) {
         // These resets keep their integer types instead of parsing into
         // `NonZero*`: a zero here is a legitimate input — an operator typo —
@@ -1147,16 +1125,6 @@ pub fn load_tcp16_targets_from_file(path: impl AsRef<Path>) -> io::Result<Vec<Tc
     Ok(targets)
 }
 
-/// Default fallback list of TCP16 targets if file is absent.
-pub fn default_tcp16_targets() -> Vec<Tcp16Target> {
-    vec![
-        Tcp16Target { id: "HE-01".into(), asn: "24940".into(), provider: "Hetzner".into(), ip: "91.98.156.82".into(), port: 443, sni: None },
-        Tcp16Target { id: "CF-01".into(), asn: "13335".into(), provider: "Cloudflare".into(), ip: "172.67.70.222".into(), port: 443, sni: None },
-        Tcp16Target { id: "AK-01".into(), asn: "20940".into(), provider: "Akamai".into(), ip: "23.222.76.4".into(), port: 443, sni: None },
-        Tcp16Target { id: "AWS-02".into(), asn: "16509".into(), provider: "AWS".into(), ip: "3.165.188.250".into(), port: 443, sni: None },
-    ]
-}
-
 /// TCP16 targets shipped inside the binary.
 pub fn embedded_tcp16_targets() -> Vec<Tcp16Target> {
     serde_json::from_str(EMBEDDED_TCP16_JSON).unwrap_or_default()
@@ -1182,13 +1150,13 @@ mod tests {
         use crate::net::fingerprint::TlsFingerprint;
 
         let mut cfg = AppConfig::default();
-        assert!(cfg.user_agent_for(TlsFingerprint::Chrome107).contains("Chrome/107.0.0.0"));
-        assert!(cfg.user_agent_for(TlsFingerprint::Firefox133).contains("Firefox/133.0"));
-        assert_eq!(cfg.user_agent_for(TlsFingerprint::Rustls), DEFAULT_USER_AGENT);
+        assert!(TlsFingerprint::user_agent_for(&cfg, TlsFingerprint::Chrome107).contains("Chrome/107.0.0.0"));
+        assert!(TlsFingerprint::user_agent_for(&cfg, TlsFingerprint::Firefox133).contains("Firefox/133.0"));
+        assert_eq!(TlsFingerprint::user_agent_for(&cfg, TlsFingerprint::Rustls), DEFAULT_USER_AGENT);
 
         cfg.user_agent = "my-probe/1.0".to_string();
         for fingerprint in TlsFingerprint::ALL {
-            assert_eq!(cfg.user_agent_for(fingerprint), "my-probe/1.0");
+            assert_eq!(TlsFingerprint::user_agent_for(&cfg, fingerprint), "my-probe/1.0");
         }
     }
 
@@ -1229,14 +1197,15 @@ mod tests {
     /// loader names — not a server that quietly dials 443.
     #[test]
     fn test_availability_kind_vocabulary() {
+        use crate::probe::dns_avail::ProbeKind;
         assert_eq!(
             ["udp", "doh_json", "doh_wire", "dot"]
                 .map(|t| DnsAvailServerKind::parse(t).unwrap().default_port()),
             [53, 443, 443, 853]
         );
-        // One owner for the table — the probe vocabulary, through the wire probe
-        // each input spelling stands for. A second copy here would load a row on
-        // one port while the endpoint table printed it against another.
+        // Two tables on purpose — `config`'s input vocabulary and the probe's
+        // measurement one — and this is the net under that split: a row cannot be
+        // loaded on one port while the endpoint table prints it against another.
         assert_eq!(
             ["udp", "doh_json", "doh_wire", "dot"]
                 .map(|t| DnsAvailServerKind::parse(t).unwrap().default_port()),

@@ -10,10 +10,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use dpi_core::classify::Detail;
 use dpi_core::config::{
-    clean_domain, default_tcp16_targets, embedded_burst_domains, embedded_domains,
+    clean_domain, embedded_burst_domains, embedded_domains,
     embedded_tcp16_targets, embedded_whitelist_sni, load_domains_from_file,
     load_tcp16_targets_from_file, load_whitelist_sni, resource_path, AppConfig, Tcp16Target,
 };
+use dpi_core::probe::tcp16::Tcp16Row;
 use dpi_core::probe::dns_avail::check_dns_availability;
 use dpi_core::dns::parse_socks_proxy;
 use dpi_core::dns::udp::probe_udp_dns;
@@ -40,7 +41,7 @@ use crate::render::{
     render_banner, render_burst_table,
     render_dns_availability, render_dns_endpoints, render_dns_resolve_notes, render_domain_table, render_intercept_notice, render_netinfo_panel, render_summary, render_tcp_table, render_telegram,
     render_whitelist, LiveProgress,
-    NetFamilyInfo, NetInfoData, NetTtlb, Spinner, SummaryData, TcpRow,
+    NetFamilyInfo, NetInfoData, NetTtlb, Spinner, SummaryData,
 };
 use crate::{print_out, tcp16_detail, Emitter};
 
@@ -145,12 +146,7 @@ pub(crate) fn load_tcp16_targets(args: &CliArgs, cfg: &AppConfig) -> io::Result<
     if !from_file.is_empty() {
         return Ok(from_file);
     }
-    let embedded = embedded_tcp16_targets();
-    Ok(if embedded.is_empty() {
-        default_tcp16_targets()
-    } else {
-        embedded
-    })
+    Ok(embedded_tcp16_targets())
 }
 
 /// The white-SNI list: the configured file, else the embedded one. There is no
@@ -924,7 +920,7 @@ pub(crate) async fn run_test_suite(
             ));
             emitter.emit(&format!("{}\n", msg.checking_status));
         }
-        let mut rows: Vec<TcpRow> = Vec::new();
+        let mut rows: Vec<Tcp16Row> = Vec::new();
         let tcp_tick = phases
             .as_ref()
             .map(|p| (p.on_phase)(dpi_core::PhaseId::Tcp16, tcp_items.len()));
@@ -959,7 +955,7 @@ pub(crate) async fn run_test_suite(
                 t();
             }
             if let Ok((id, asn, provider, status, detail)) = done {
-                rows.push(TcpRow { id, asn, provider, status, detail });
+                rows.push(Tcp16Row { id, asn, provider, status, detail });
             }
         }
         // The verdict tally, by the classifier's own predicates: the badge is a
@@ -1145,7 +1141,7 @@ pub(crate) async fn run_test_suite(
             schema_version: crate::json::SCHEMA_VERSION,
             version: env!("CARGO_PKG_VERSION"),
             profile: profile.code(),
-            tls_fingerprint: cfg.fingerprint().code().to_string(),
+            tls_fingerprint: TlsFingerprint::from_config(cfg).code().to_string(),
             results,
         };
         let text = serde_json::to_string_pretty(&payload).unwrap_or_default();

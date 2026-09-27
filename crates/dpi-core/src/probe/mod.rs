@@ -12,8 +12,6 @@ pub mod tcp16;
 pub mod domains;
 pub mod burst;
 pub mod quic;
-#[cfg(feature = "quinn-probe")]
-pub mod quic_quinn;
 pub mod telegram;
 pub mod whitelist;
 pub use quic::{check_quic_all, QuicCheck};

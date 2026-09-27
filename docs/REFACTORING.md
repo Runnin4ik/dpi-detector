@@ -88,11 +88,21 @@ Deviations from the plan, recorded deliberately:
 
 ## 3. Target layering
 
-The graph is acyclic today. The three cycles this section used to list are gone,
-and the third of them was a misreading:
+The graph is acyclic, with one named exception: `AppConfig::clamp` validates
+`tls_fingerprint` through `net::fingerprint::TlsFingerprint::parse`, so `config`
+and `net` meet in both directions on that one line. It is deliberate — the parse
+has to happen before a run, and the warning it raises is a load-time
+`ConfigWarning` — and it is the only production edge `config` has: the profile
+parse is `TlsFingerprint::from_config`, the `User-Agent` is
+`TlsFingerprint::user_agent_for`, and the transport-port table is `config`'s own,
+pinned against the probe's by `test_availability_kind_vocabulary`.
 
-* `net → dns` — gone with P4 (`750e185`): `net/netinfo.rs` is a re-export shim
-  over `net/http_client`, `net/public_ip` and `net/sysinfo`, and the Cymru
+The three cycles this section used to list are gone, and the third of them was a
+misreading:
+
+* `net → dns` — gone with P4 (`750e185`): `net/netinfo.rs` is a re-export facade
+  over `net/http_client`, `net/public_ip` and `net/sysinfo` — a live one, with
+  nine consumers in the binary — and the Cymru
   lookup that called `query_doh_txt` now lives in `dns/cymru.rs` (§5).
 * `dns → probe` — gone with P2 (`50afd0e`): `dns/availability.rs` no longer
   exists, it is `probe/dns_avail.rs`, and `fake_ip_type` is imported from
@@ -109,7 +119,13 @@ Re-checked on the tree rather than read off the phase log:
   (brace-elided forms included) — no matches, so the leaf still imports nothing
   from the layers above it;
 * `dns/availability.rs` is absent from `ls crates/dpi-core/src/dns`
-  (`cymru doh dot mod resolve socks types udp wire`).
+  (`cymru doh dot mod resolve socks types udp wire`);
+* a search for `crate::probe` and for `crate::net` under
+  `crates/dpi-core/src/config.rs` — the first only inside `#[cfg(test)]`, the
+  second only on the `clamp` line named above;
+* a search for `crate::render` and `crate::views` under
+  `crates/dpi-detector/src/tui` — no matches, so the terminal layer no longer
+  depends on the screens that draw with it (`screens → views → tui`).
 
 The layer-crossing imports `dns/` makes are all on the allowed side:
 `crate::net::{bind,fingerprint,http,tcp,tls}` and the leaf `crate::classify`.
@@ -118,7 +134,9 @@ The goal is an acyclic graph:
 ```
 classify  ←  net  ←  dns  ←  probe
    (leaf: stages and verdicts)  (7 diagnostic tests)
-config, profile, i18n — off to the side; the binary is presentation and orchestration only
+config, profile, i18n — read by every layer above them, never reading back;
+  `config`'s one exception is the `clamp` validation named above
+the binary: screens → views → tui, and presentation only — no probing
 ```
 
 ## 4. Phases
@@ -312,6 +330,16 @@ each carries the reason so the next pass does not re-open it:
 | Make `domain_stats` count the QUIC column | The stats deliberately ignore it — a QUIC endpoint is absent for most domains, so folding it into the blocked count would turn "no HTTP/3 here" into a finding. The decision is written at the phase in `probe/quic.rs`. |
 | Move the QUIC byte layer (`net/quic.rs`) into `dns/` or `probe/` | It is `net/`'s layer by §3: it owns the wire, imports nothing from the crate, and both `dns/` and `probe/` would create a new edge. |
 | Give the QUIC phase its own progress type instead of `PhaseProgress`/`PhaseId` | Same refusal as the `DiagnosticTask` row above: the seam already exists, and `PhaseId::DomainQuic` was missing from `stage_block()` — a wiring gap, not a missing abstraction. |
+
+**Added 2026-09-27 by the structure review.** Five more were examined and refused:
+
+| Proposal | Reason |
+| --- | --- |
+| Merge the three copies of the aioquic H3 client in `scripts/quic/` | The stand is a development harness outside the workspace, and the three files ask different questions (`crosscheck`, `bracket`, `variants`) while sharing `decrypt.py` for the low-level work. Merging them would couple experiments that are meant to disagree with each other. |
+| Rename `net/http.rs` / `net/http_client.rs` so the names say which is which | They are a real boundary — the fingerprinted probe sender versus the control-plane GET — and every call site of both would change to move no allocation. The `http_client.rs` entry in `AGENTS.md`'s directory map is where the distinction is written down. |
+| Regenerate `scripts/quic/hosts.txt` from `domains.txt` | The stand needs a fixed host list so a re-run is comparable with the previous one; regenerating it would move the stand's baseline every time a target is added to test 2. |
+| Strip the `☆` from the nine `tcp16.json` rows that carry it | That is the author's data, and whether the marker means "this ASN needs a second look" is not for a review pass to decide. What the pass did remove is the Rust fallback that disagreed with those rows. |
+| Remove the `config → net` edge in `AppConfig::clamp` | The parse must happen before a run and the warning it raises is a load-time `ConfigWarning`; moving the check would change *when* an operator learns their `tls_fingerprint` is unknown. §3 names it as the one exception rather than pretending it is not there. |
 
 **Added 2026-09-27 by the fingerprint review.** The pass itself is in the commits
 (the named `drop12`/`drop13` constants, the two byte-identical records turned into

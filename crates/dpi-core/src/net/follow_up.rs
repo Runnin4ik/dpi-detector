@@ -10,7 +10,7 @@
 //! (30032) with a `ChannelId` message (type 203) carrying a P-256 assertion. A
 //! server that acknowledged one and then reads the Finished instead aborts with
 //! `unexpected_message` — which is what `www.google.com` does to every shape
-//! here that carries one, measured in `target/lab/decrypted-evidence.txt`.
+//! here that carries one, seen in a decrypted capture of that handshake.
 //!
 //! The messages are built here, in the client, because rustls has no typed field
 //! for either extension and no opinion about their bodies; the patched rustls
@@ -101,8 +101,8 @@ impl ClientFollowUp for ProbeFollowUp {
 ///
 /// BoringSSL sends the settings it configured for the negotiated protocol —
 /// empty for a client that configured none, which is what these profiles are.
-/// The measured bytes for the 17613 code point are `00 04 44 cd 00 00`
-/// (`target/lab/decrypted-evidence.txt`), and the code point echoed is the one
+/// The measured bytes for the 17613 code point are `00 04 44 cd 00 00`,
+/// and the code point echoed is the one
 /// the *server* used: its EncryptedExtensions and the message it expects back
 /// are written from one config flag, so they can only agree.
 fn application_settings_message(codepoint: u16) -> Vec<u8> {

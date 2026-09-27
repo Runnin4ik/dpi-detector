@@ -26,7 +26,7 @@ use crate::config::AppConfig;
 use crate::dns::resolve_host;
 use crate::PhaseProgress;
 use crate::net::connector::RustlsConnector;
-use crate::net::fingerprint::http_identity;
+use crate::net::fingerprint::{http_identity, TlsFingerprint};
 use crate::net::http::{
     check_http, classify_redirect, inner_hyper, parse_host, request_headers,
 };
@@ -158,7 +158,7 @@ pub async fn check_domain_tls(
 
         // TLS handshake (version-pinned client)
         *stage.lock() = ProbeStage::TlsHandshake;
-        let fingerprint = cfg.fingerprint();
+        let fingerprint = TlsFingerprint::from_config(cfg);
         let profile = if tls12_only {
             TlsProfile::insecure(fingerprint).tls12()
         } else {
@@ -282,14 +282,14 @@ pub async fn check_http_injection(
 
         // Plain HTTP (port 80) fallback: the same identity the TLS probes send,
         // with `Connection: close` so the response ends with an EOF.
-        let identity = http_identity(cfg.fingerprint());
+        let identity = http_identity(TlsFingerprint::from_config(cfg));
         let mut builder = Request::builder()
             .method(Method::HEAD)
             .uri("/")
             .header(HOST, domain_owned.as_str());
         for (name, value) in request_headers(
             &identity,
-            cfg.user_agent_for(cfg.fingerprint()),
+            TlsFingerprint::user_agent_for(cfg, TlsFingerprint::from_config(cfg)),
             [("Connection", "close".into())],
             true,
         ) {

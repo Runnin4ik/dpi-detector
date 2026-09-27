@@ -13,18 +13,19 @@ use dpi_core::profile::RegionProfile;
 mod args;
 mod i18n;
 mod json;
-mod menu;
 mod render;
 mod runner;
+mod screens;
 mod tui;
 mod update;
 mod views;
 
 use dpi_core::classify::Detail;
-use menu::{
-    apply_interface, burst_settings_menu, default_report_name, export_report, legend_loop,
-    menu_until_something_to_run, read_post_test_action, run_interactive_menu, tui_available, MenuAction,
-    MenuResult, PostTestAction, VersionSlot,
+use screens::{
+    burst::burst_settings_menu,
+    legend::{legend_loop, MenuAction},
+    main::{apply_interface, menu_until_something_to_run, run_interactive_menu, tui_available, MenuResult, VersionSlot},
+    post_run::{default_report_name, export_report, read_post_test_action, PostTestAction},
 };
 use runner::{
     burst_plan_from_cli, burst_targets_after_screen, load_burst_domains, load_domains,
@@ -532,7 +533,7 @@ async fn run() {
     };
     let mut concurrency = cfg.max_concurrent;
     let mut ip_version = cfg.ip_version.clone();
-    let mut tls_fingerprint = cfg.fingerprint();
+    let mut tls_fingerprint = TlsFingerprint::from_config(&cfg);
 
     // Initial badge: wait up to 4 s only in non-interactive mode
     let mut badge = msg.checking_updates.to_string();
@@ -671,7 +672,7 @@ async fn run() {
         }
     }
     if !args.json {
-        println_out(&render_fingerprint_header(cfg.fingerprint(), &msg));
+        println_out(&render_fingerprint_header(TlsFingerprint::from_config(&cfg), &msg));
     }
 
     // Test 6 fires at its own shipped hosts: the two tests ask opposite questions

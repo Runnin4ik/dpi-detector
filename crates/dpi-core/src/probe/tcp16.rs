@@ -22,9 +22,9 @@ use crate::classify::{
     DpiStatus, ProbeStage,
 };
 use crate::config::AppConfig;
-use crate::net::fingerprint::http_identity;
+use crate::net::fingerprint::{http_identity, TlsFingerprint};
 use crate::net::http::{
-    http_err_info, negotiated_h2, request_headers, HttpRequest, HttpSender,
+    http_err_info, negotiated_h2, request_headers, BODY_CAP, HttpRequest, HttpSender,
 };
 use crate::net::tcp::{dial_tcp, DialError};
 use crate::net::tls::{create_tls_config, TlsProfile};
@@ -119,7 +119,7 @@ async fn connect_fat_target(
                 Err(_) => ServerName::IpAddress(rustls::pki_types::IpAddr::from(target_ip)),
             }
         };
-        let profile = TlsProfile::insecure(cfg.fingerprint());
+        let profile = TlsProfile::insecure(TlsFingerprint::from_config(cfg));
         let tls_stream = match timeout(
             Duration::from_secs_f64(cfg.fat_connect_timeout),
             TlsConnector::from(create_tls_config(&profile)).connect(server_name, tcp),
@@ -137,7 +137,7 @@ async fn connect_fat_target(
             }
         };
         let alpn_h2 = negotiated_h2(&tls_stream);
-        match HttpSender::handshake(tls_stream, alpn_h2, cfg.fingerprint()).await {
+        match HttpSender::handshake(tls_stream, alpn_h2, TlsFingerprint::from_config(cfg)).await {
             Ok(sender) => Ok(sender),
             Err(e) => {
                 let (msg, os_code, os_kind) = http_err_info(&e);
@@ -147,7 +147,7 @@ async fn connect_fat_target(
         }
     } else {
         // No TLS, so no ALPN: HTTP/1.1 is the only protocol on the wire here.
-        match HttpSender::handshake(tcp, false, cfg.fingerprint()).await {
+        match HttpSender::handshake(tcp, false, TlsFingerprint::from_config(cfg)).await {
             Ok(sender) => Ok(sender),
             Err(e) => {
                 let (msg, os_code, os_kind) = http_err_info(&e);
@@ -161,16 +161,23 @@ async fn connect_fat_target(
 /// KB actually handed to the socket before the failing chunk, rounded up: the
 /// detail reports the chunk the drop happened in, and cutting the remainder
 /// (`i * chunk_size / 1024`) made a 16 KB mark read as `15KB` on the default
+/// One row of test 3's report: the machine-readable shape `--json` carries and
+/// the table renders. It lives here, beside the probe, so a column added for the
+/// table is a change to a contract with a `SCHEMA_VERSION` behind it rather than
+/// a view edit that moves the schema silently.
+#[derive(Clone, serde::Serialize)]
+pub struct Tcp16Row {
+    pub id: String,
+    pub asn: String,
+    pub provider: String,
+    pub status: DpiStatus,
+    pub detail: Detail,
+}
+
 /// 4000-byte chunks.
 fn kb_sent(chunks_sent: usize, chunk_size: usize) -> usize {
     (chunks_sent * chunk_size).div_ceil(1024)
 }
-
-/// The fat probe reads a response only so the connection completes the
-/// round-trip: a HEAD reply carries no body. `Limited` is here because a peer
-/// that streams frames anyway must not make the tool buffer them, and the cap
-/// is the same value `net::http` uses.
-const BODY_CAP: usize = 64 * 1024;
 
 /// Raw FAT probe. Returns (status, detail, rtt_secs).
 pub async fn probe_tcp_16_20(
@@ -214,8 +221,8 @@ pub async fn probe_tcp_16_20(
     // Read once per target instead of once per chunk (and again on the retry):
     // the identity is a `Copy` view of a static table, and the user agent comes
     // from the config.
-    let identity = http_identity(cfg.fingerprint());
-    let user_agent = cfg.user_agent_for(cfg.fingerprint());
+    let identity = http_identity(TlsFingerprint::from_config(cfg));
+    let user_agent = TlsFingerprint::user_agent_for(cfg, TlsFingerprint::from_config(cfg));
 
     let mut sender = match connect_fat_target(addr, target_ip, sni, use_tls, cfg).await {
         Ok(s) => s,

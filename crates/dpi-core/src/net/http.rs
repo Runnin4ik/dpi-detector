@@ -614,7 +614,11 @@ pub(crate) fn negotiated_h2<S>(tls: &tokio_rustls::client::TlsStream<S>) -> bool
     tls.get_ref().1.alpn_protocol() == Some(b"h2")
 }
 
-const BODY_CAP: usize = 64 * 1024;
+/// What a probe HTTP read may buffer before the body is abandoned: a response
+/// larger than this is not one this tool needs, and a hostile or broken peer
+/// must not make it buffer more. Shared by the h1/h2 sender here, the TCP16 and
+/// Telegram probes and the DoH client, so the four cannot drift apart.
+pub(crate) const BODY_CAP: usize = 64 * 1024;
 
 fn strip_www(host: &str) -> &str {
     host.strip_prefix("www.").unwrap_or(host)
@@ -652,6 +656,16 @@ pub(crate) fn parse_host(url_or_host: &str) -> String {
     }
     if let Some(idx) = s.find(['/', '?', '#']) {
         s = s[..idx].to_string();
+    }
+    // A bracketed literal keeps its brackets: this is the authority a request
+    // carries, not the bare host a target list holds, and RFC 3986 spells an
+    // IPv6 host with them. The `:`-count rule below cannot find the port here —
+    // `[::1]:443` has three colons — and trimming the brackets off afterwards
+    // left `::1]:443`, half a literal with a port still on it.
+    if s.starts_with('[') {
+        if let Some(end) = s.find(']') {
+            return s[..=end].to_string();
+        }
     }
     // Strip :port (but not bare IPv6)
     if s.matches(':').count() == 1 {
@@ -873,7 +887,7 @@ pub(crate) async fn check_http(
         // GET with Host = domain, fresh socket per probe (Connection: close).
         // The headers are the profile's identity, so a probe that looks like
         // `curl_chrome107` at the TLS layer looks like it here too.
-        let user_agent = cfg.user_agent_for(fingerprint);
+        let user_agent = TlsFingerprint::user_agent_for(cfg, fingerprint);
         let identity = http_identity(fingerprint);
         let headers = request_headers(
             &identity,
@@ -1162,5 +1176,17 @@ mod tests {
             let got: String = got.iter().map(|b| format!("{b:02x}")).collect();
             assert_eq!(got, want, "{fingerprint:?}");
         }
+    }
+
+    #[test]
+    fn test_parse_host_keeps_a_bracketed_ipv6_literal() {
+        // The `:`-count rule sees three colons in `[::1]:443` and skips the port
+        // strip; trimming the brackets off afterwards used to return `::1]:443`,
+        // half a literal with the port still on it. This is the authority a
+        // request carries, so the brackets stay.
+        assert_eq!(parse_host("[::1]:443"), "[::1]");
+        assert_eq!(parse_host("https://[2001:db8::1]:8443/dns-query"), "[2001:db8::1]");
+        assert_eq!(parse_host("dns.google:443"), "dns.google");
+        assert_eq!(parse_host("::1"), "::1");
     }
 }

@@ -387,7 +387,7 @@ pub async fn check_domain_quic(
     let started = Instant::now();
     let timeout_dur = Duration::from_secs_f64(cfg.quic_timeout.max(0.1));
     let addr = SocketAddr::new(target, QUIC_PORT);
-    let fingerprint = cfg.fingerprint();
+    let fingerprint = TlsFingerprint::from_config(cfg);
     match probe_addr(addr, domain, fingerprint, timeout_dur).await {
         Ok((status, detail)) => QuicCheck { status, detail, elapsed: started.elapsed().as_secs_f64() },
         Err((status, detail)) => QuicCheck { status, detail, elapsed: started.elapsed().as_secs_f64() },
@@ -568,11 +568,6 @@ pub async fn check_quic_all(
         let sem = Arc::clone(sem);
         handles.push(tokio::spawn(async move {
             let _permit = permit(&sem).await;
-            // The experiment: the same column through `quinn`, which needs the
-            // `ring` provider this tree refuses — `probe/quic_quinn.rs`.
-            #[cfg(feature = "quinn-probe")]
-            let check = super::quic_quinn::check(&domain, target, &cfg).await;
-            #[cfg(not(feature = "quinn-probe"))]
             let check = check_domain_quic(&domain, target, &cfg).await;
             (idx, check)
         }));

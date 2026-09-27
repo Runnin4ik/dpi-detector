@@ -20,7 +20,7 @@ use crate::render::{
     panel_to_string, plain_mode, render_banner, strip_ansi_len,
 };
 use crate::tui::input::nav_key;
-use crate::tui::screens::legend::{MenuAction, legend_loop};
+use crate::screens::legend::{MenuAction, legend_loop};
 use crate::update::{ReleaseInfo, version_badge_lang};
 
 #[derive(Debug, Clone)]
@@ -133,7 +133,7 @@ async fn run_menu_loop(
     }
     let mut fp_idx = TlsFingerprint::ALL
         .iter()
-        .position(|&f| f == cfg.fingerprint())
+        .position(|&f| f == TlsFingerprint::from_config(cfg))
         .unwrap_or(0);
     // Interfaces a probe can actually leave through, and index 0 for the routing
     // table — the answer every run gave before this row existed. The list is read

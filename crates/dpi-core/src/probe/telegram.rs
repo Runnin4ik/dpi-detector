@@ -23,6 +23,7 @@ use tokio_rustls::TlsConnector;
 use crate::classify::Detail;
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
+use crate::net::http::BODY_CAP;
 use crate::net::tcp::set_no_delay;
 use crate::net::tls::{create_tls_config, TlsProfile};
 use crate::PhaseProgress;
@@ -389,11 +390,6 @@ impl Body for UploadBody {
         Poll::Ready(Some(Ok(Frame::data(this.chunk.slice(..n)))))
     }
 }
-
-/// The upload response is never read, only awaited to completion, so `Limited`
-/// is here purely to bound what a hostile or broken peer can make the tool
-/// buffer while that await runs; the same value as `net::http`'s `BODY_CAP`.
-const BODY_CAP: usize = 64 * 1024;
 
 /// Upload with stall detection: POSTs `telegram_upload_size_mb` MB of filler to the
 /// configured IP/port over TLS (8 s connect/handshake), sampling the sent counter

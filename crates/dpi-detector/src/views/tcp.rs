@@ -1,19 +1,10 @@
 //! Test 3: the TCP 16-20 KB table.
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
-use dpi_core::classify::*;
+use dpi_core::probe::tcp16::Tcp16Row;
 use crate::i18n::{Messages, detail_text, format_bidi};
 
 use crate::tui::widgets::{cell_color, status_color, table_preset};
-
-#[derive(Clone, serde::Serialize)]
-pub(crate) struct TcpRow {
-    pub id: String,
-    pub asn: String,
-    pub provider: String,
-    pub status: DpiStatus,
-    pub detail: Detail,
-}
 
 fn provider_group(provider: &str) -> String {
     let clean: String = provider.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '.' || *c == '-').collect();
@@ -27,14 +18,14 @@ fn provider_group(provider: &str) -> String {
 /// and not of a row: no `DpiStatus` spells "mixed", so the caller derives it
 /// from the same verdict predicates the summary line is built from, and this
 /// function never reads a badge label to decide anything.
-pub(crate) fn render_tcp_table(rows: &[TcpRow], mixed: bool, msg: &Messages) -> String {
+pub(crate) fn render_tcp_table(rows: &[Tcp16Row], mixed: bool, msg: &Messages) -> String {
     let mut out = String::new();
     // Sort: provider group frequency desc, then group name, then id number.
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for r in rows {
         *counts.entry(provider_group(&r.provider)).or_insert(0) += 1;
     }
-    let mut sorted: Vec<&TcpRow> = rows.iter().collect();
+    let mut sorted: Vec<&Tcp16Row> = rows.iter().collect();
     sorted.sort_by(|a, b| {
         let ga = provider_group(&a.provider);
         let gb = provider_group(&b.provider);

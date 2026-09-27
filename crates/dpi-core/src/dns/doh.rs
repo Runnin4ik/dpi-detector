@@ -19,7 +19,7 @@ use super::wire::{build_dns_query, parse_dns_response, QTYPE_A};
 use crate::classify::ConnectStage;
 use crate::config::AppConfig;
 use crate::net::fingerprint::BASELINE_H2;
-use crate::net::http::{h2_builder, BodyKind, HttpBody};
+use crate::net::http::{h2_builder, BodyKind, HttpBody, BODY_CAP};
 use crate::net::tcp::set_no_delay;
 use crate::net::tls::{create_tls_config, TlsProfile};
 
@@ -191,13 +191,10 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
     Ok((sender, host, url.path().to_string()))
 }
 
-/// A DoH response body *is* one DNS message, and a DNS message is at most
-/// 65 535 bytes on the wire (the 16-bit length prefix of RFC 1035 §4.2.2), so
-/// 64 KiB is the whole of it and anything past that is a broken or hostile
-/// resolver. The cap stops such a server from making the tool buffer an
-/// arbitrary stream; same shape as `net::http_client`'s `MAX_BODY`.
-const MAX_BODY: usize = 1 << 16;
-
+// A DoH response body *is* one DNS message, and a DNS message is at most 65 535
+// bytes on the wire (the 16-bit length prefix of RFC 1035 §4.2.2), so the shared
+// `BODY_CAP` is the whole of it and anything past that is a broken or hostile
+// resolver.
 async fn send_doh(
     sender: &mut DohSender,
     host: &str,
@@ -227,7 +224,7 @@ async fn send_doh(
         .await?;
 
     if resp.status().is_success() {
-        let body = Limited::new(resp.into_body(), MAX_BODY)
+        let body = Limited::new(resp.into_body(), BODY_CAP)
             .collect()
             .await
             .map_err(|e| DnsError::Io(e.to_string()))?
@@ -259,7 +256,7 @@ async fn send_doh(
     if !resp.status().is_success() {
         return Err(DnsError::DohHttp(post_status));
     }
-    let body = Limited::new(resp.into_body(), MAX_BODY)
+    let body = Limited::new(resp.into_body(), BODY_CAP)
         .collect()
         .await
         .map_err(|e| DnsError::Io(e.to_string()))?

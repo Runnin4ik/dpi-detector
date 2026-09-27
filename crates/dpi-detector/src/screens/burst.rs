@@ -19,7 +19,7 @@ use crate::render::{
     strip_ansi_len,
 };
 use crate::tui::input::{nav_key, normalize_key_char};
-use crate::tui::screens::main::pad_width;
+use crate::screens::main::pad_width;
 
 /// What the settings screen hands back to the runner.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -15,6 +15,6 @@ pub(crate) use crate::views::dns::{render_dns_availability, render_dns_endpoints
 pub(crate) use crate::views::domains::{render_dns_resolve_notes, render_domain_table};
 pub(crate) use crate::views::netinfo::{render_netinfo_panel, NetFamilyInfo, NetInfoData, NetTtlb};
 pub(crate) use crate::views::summary::{render_summary, SummaryData};
-pub(crate) use crate::views::tcp::{render_tcp_table, TcpRow};
+pub(crate) use crate::views::tcp::render_tcp_table;
 pub(crate) use crate::views::telegram::render_telegram;
 pub(crate) use crate::views::whitelist::render_whitelist;

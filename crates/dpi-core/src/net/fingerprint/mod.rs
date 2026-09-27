@@ -236,6 +236,31 @@ pub enum TlsFingerprint {
 }
 
 impl TlsFingerprint {
+    /// The profile a configuration selects.
+    ///
+    /// Parsed here rather than in `AppConfig`: `config` is the layer the probes
+    /// read, and a `TlsFingerprint` in its signature would make the two mutually
+    /// dependent. An unknown value has already been reset with a warning by
+    /// `AppConfig::clamp`, so the fallback below is unreachable from a loaded
+    /// configuration.
+    pub fn from_config(cfg: &crate::config::AppConfig) -> Self {
+        Self::parse(&cfg.tls_fingerprint).unwrap_or_default()
+    }
+
+    /// The `User-Agent` a probe presents under `cfg` and this profile.
+    ///
+    /// A configured `user_agent` wins — it is the operator saying what the tool
+    /// should look like. Left at the built-in default it is the placeholder
+    /// `config` ships, so this profile's own UA takes over instead: sending
+    /// `Chrome/133` behind a `chrome107` ClientHello is a mismatch a
+    /// header-matching middlebox reads in one packet.
+    pub fn user_agent_for(cfg: &crate::config::AppConfig, fingerprint: Self) -> &str {
+        if cfg.user_agent != crate::config::DEFAULT_USER_AGENT {
+            return &cfg.user_agent;
+        }
+        http_identity(fingerprint).user_agent.unwrap_or(crate::config::DEFAULT_USER_AGENT)
+    }
+
     /// This profile's record. `SHAPES` holds one row per variant, which
     /// `tests::fingerprint_table_is_total` pins in both directions: a variant
     /// without a row is a suite failure, not a silent fallback.

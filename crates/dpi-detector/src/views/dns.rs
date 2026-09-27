@@ -10,7 +10,7 @@ use dpi_core::probe::dns_avail::{
 };
 use std::net::IpAddr;
 
-use crate::tui::widgets::{asc, cell_color, join_cell_colored, table_preset, warn_mark};
+use crate::tui::widgets::{asc, cell_color, join_cell_colored, status_color, table_preset, warn_mark};
 
 pub(crate) fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> String {
     let mut out = String::new();
@@ -87,17 +87,6 @@ pub(crate) fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> S
     out
 }
 
-/// Fail-token color, chosen by verdict rather than by the badge text: a DNS
-/// failure is yellow, every other fail token red. `DpiStatus` is in hand at
-/// every call site, so the color no longer follows a string a rename or a new
-/// status could silently move.
-fn fail_color(status: DpiStatus) -> Color {
-    match status {
-        DpiStatus::DnsFail => Color::Yellow,
-        _ => Color::Red,
-    }
-}
-
 /// The console label of a transport: `DoH`, `DoT`, `UDP`. `--json` carries the
 /// machine tokens (`doh_wire`, `dot`, `udp`) and a table heads its columns with
 /// these, so the mapping lives here once — a second copy would let a bullet list
@@ -154,7 +143,7 @@ fn dns_latency_lines(
             } else {
                 report.fail_reasons.get(&key).map_or(DpiStatus::Timeout, |reason| reason.status)
             };
-            lines.push((status.display_label().to_string(), fail_color(status)));
+            lines.push((status.display_label().to_string(), status_color(status)));
             continue;
         }
         let min = vals.iter().cloned().reduce(f64::min).unwrap_or(0.0);
@@ -209,7 +198,7 @@ fn render_dns_failure_details(report: &DnsAvailReport, msg: &Messages) -> String
             f.provider,
             proto_label(f.kind),
             f.endpoint,
-            cell_color(reason.label(), fail_color(reason.status)),
+            cell_color(reason.label(), status_color(reason.status)),
             detail_text(&reason.detail, msg.lang),
         ));
     }
