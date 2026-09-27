@@ -394,6 +394,29 @@ pub async fn check_domain_quic(
     }
 }
 
+/// The verdict of a socket error on this path.
+///
+/// A UDP socket reports "nothing listens there" through the same errnos a TCP
+/// one uses for a refused or reset connect — on Windows the ICMP
+/// port-unreachable arrives as `ConnectionReset`, on Linux a *connected* socket
+/// hands it to the next operation after the datagram that provoked it, so the
+/// second packet of a flight is where a closed port surfaces. The classifier
+/// reads all of them; what this adds is the mapping to this column's vocabulary,
+/// and one copy of it: a `send` that failed used to be reported as a generic
+/// error while the identical errno on the receive path read `REFUSED`.
+fn quic_socket_verdict(
+    error: &std::io::Error,
+    icmp: Option<crate::classify::IcmpCode>,
+) -> (DpiStatus, Detail) {
+    let (status, detail) = classify_connect_error_icmp(error, icmp, 0, ProbeStage::TcpConnect);
+    match status {
+        DpiStatus::Refused | DpiStatus::TcpRst | DpiStatus::TcpAbort => {
+            (DpiStatus::Refused, Detail::QuicPortUnreachable)
+        }
+        other => (other, detail),
+    }
+}
+
 /// One address: the datagram, the window, and the verdict.
 ///
 /// `Err` is a transport failure — the socket's own error — and `Ok` a verdict
@@ -425,17 +448,11 @@ async fn probe_addr(
         .map_err(|error| (DpiStatus::Err, Detail::Other(error.to_string())))?;
     // Connected, so the kernel hands the ICMP verdict of this destination to
     // this socket instead of to whoever reads next.
-    socket
-        .connect(addr)
-        .await
-        .map_err(|error| (DpiStatus::Err, Detail::Other(error.to_string())))?;
+    socket.connect(addr).await.map_err(|error| quic_socket_verdict(&error, None))?;
     // A browser hello is bigger than one datagram, so the flight is usually two
     // or three packets; they go out in order, as the CRYPTO offsets expect.
     for datagram in &flight {
-        socket
-            .send(datagram)
-            .await
-            .map_err(|error| (DpiStatus::Err, Detail::Other(error.to_string())))?;
+        socket.send(datagram).await.map_err(|error| quic_socket_verdict(&error, None))?;
     }
 
     // The watcher is opened before the first packet can fail, the way `dial_tcp`
@@ -505,24 +522,7 @@ async fn probe_addr(
             }
             Ok(Err(error)) => {
                 let icmp = crate::net::icmp_err::verdict_wait(addr.ip()).await;
-                let (status, detail) =
-                    classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect);
-                // A UDP socket reports "nothing listens there" through the same
-                // errnos a TCP one uses for a refused or reset connect — on
-                // Windows the ICMP port-unreachable arrives as `ConnectionReset`
-                // — so the TCP wording would be wrong for all of them. Only a
-                // port with no listener produces them on UDP.
-                let detail = match status {
-                    DpiStatus::Refused | DpiStatus::TcpRst | DpiStatus::TcpAbort => {
-                        Detail::QuicPortUnreachable
-                    }
-                    _ => detail,
-                };
-                let status = match status {
-                    DpiStatus::Refused | DpiStatus::TcpRst | DpiStatus::TcpAbort => DpiStatus::Refused,
-                    other => other,
-                };
-                return Err((status, detail));
+                return Err(quic_socket_verdict(&error, icmp));
             }
         }
     }
@@ -970,5 +970,25 @@ mod tests {
             entries[0].quic.detail.code()
         );
         assert_eq!(entries[1].quic.status, DpiStatus::Unknown, "a fake-IP row is not probed");
+    }
+
+    /// A closed port must read `REFUSED` whichever path noticed it.
+    ///
+    /// Linux hands a *connected* UDP socket the ICMP port-unreachable of the
+    /// datagram that provoked it, so the second packet of a flight fails with
+    /// `ECONNREFUSED` (111) — while the receive path classified the identical
+    /// errno as `REFUSED` and the send path reported a generic `ERR`. Windows
+    /// reports the same event as `ConnectionReset` (10054), which is why the
+    /// mismatch never showed there. The numbers are asserted rather than the
+    /// `ErrorKind`s because they are what the classifier keys on, and 111 is not
+    /// a Windows errno at all.
+    #[test]
+    fn a_refused_socket_error_is_the_ports_verdict_not_a_generic_one() {
+        for errno in [111, 10054] {
+            let error = std::io::Error::from_raw_os_error(errno);
+            let (status, detail) = quic_socket_verdict(&error, None);
+            assert_eq!(status, DpiStatus::Refused, "errno {errno}");
+            assert_eq!(detail, Detail::QuicPortUnreachable, "errno {errno}");
+        }
     }
 }
