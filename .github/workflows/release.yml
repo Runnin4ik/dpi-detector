@@ -84,9 +84,46 @@ jobs:
   # The two third-party actions below are pinned by commit: a tag can be moved to
   # another commit, and this is the workflow that publishes a release — the
   # `actions/*` ones stay on their major tags, as in `check.yml`.
+  # The tag is cut from a commit `check.yml` tested on push — unless the tag was
+  # pushed on its own: a tag matches `branches: ['**']` nowhere, so no job ever
+  # compiled the commit this release is built from. `check.yml`'s own comment
+  # already records that `release.yml` runs no tests; this job is that gate, and
+  # it holds the same bar: build, test and clippy with `-D warnings`.
+  verify:
+    name: Test & lint (the tagged commit)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      # The same key `check.yml` uses: both jobs run on the same runner image, so
+      # a warm cache from the push that preceded the tag is reused rather than
+      # rebuilt from scratch.
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --workspace --locked
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
   build:
     name: Build ${{ matrix.name }}
-    needs: version
+    needs: [version, verify]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:

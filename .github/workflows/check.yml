@@ -92,8 +92,9 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # The `live-network` test is compiled by no other step: the run above cannot
-      # see it (the feature is off there), and `release.yml` does not run tests at
-      # all. Without this, a signature change in `dns/doh.rs` would surface the day
+      # see it (the feature is off there), and `release.yml`'s `verify` job runs
+      # the same default set with the feature off as well. Without this, a
+      # signature change in `dns/doh.rs` would surface the day
       # someone runs the test against the real `dns.google`. `--no-run` builds the
       # harness and stops short of dialling anything, so this step needs no egress
       # either.
