@@ -6,6 +6,7 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyM
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dpi_core::config::AppConfig;
 use crate::i18n::{Language, Messages, fingerprint_label, format_bidi, get_messages};
+use crate::state::SavedState;
 use dpi_core::net::fingerprint::TlsFingerprint;
 use dpi_core::net::netinfo::ipv6_supported;
 use dpi_core::profile::RegionProfile;
@@ -50,6 +51,9 @@ pub(crate) fn apply_interface(selection: &MenuSelection) {
 
 pub(crate) enum MenuResult {
     Run(MenuSelection),
+    /// Leaving the menu without a run. Nothing is recorded here: the file is
+    /// written where a run starts, so looking through the options and pressing
+    /// `Q` leaves it exactly as it was.
     Quit,
 }
 
@@ -69,10 +73,13 @@ pub(crate) async fn run_interactive_menu(
     initial_lang: Language,
     profile: RegionProfile,
     cfg: &AppConfig,
+    saved: &SavedState,
+    tests_start: &str,
     badge: &str,
     latest_slot: &VersionSlot,
 ) -> MenuResult {
     if enable_raw_mode().is_err() {
+        // No terminal to draw on: no menu was shown, so no run was chosen.
         return MenuResult::Quit;
     }
     let mut out = std::io::stdout();
@@ -81,7 +88,7 @@ pub(crate) async fn run_interactive_menu(
     // screen and in the scrollback.
     let _ = execute!(out, crossterm::cursor::Hide);
 
-    let result = run_menu_loop(initial_lang, profile, cfg, badge, latest_slot).await;
+    let result = run_menu_loop(initial_lang, profile, cfg, saved, tests_start, badge, latest_slot).await;
 
     let _ = execute!(out, crossterm::cursor::Show);
     let _ = disable_raw_mode();
@@ -107,6 +114,8 @@ async fn run_menu_loop(
     initial_lang: Language,
     profile: RegionProfile,
     cfg: &AppConfig,
+    saved: &SavedState,
+    tests_start: &str,
     badge: &str,
     latest_slot: &VersionSlot,
 ) -> MenuResult {
@@ -131,10 +140,14 @@ async fn run_menu_loop(
     if conc_idx >= presets.len() {
         conc_idx = 0;
     }
-    let mut fp_idx = TlsFingerprint::ALL
-        .iter()
-        .position(|&f| f == TlsFingerprint::from_config(cfg))
-        .unwrap_or(0);
+    // The saved profile when there is one, else the configured one: the menu is
+    // the last place the user chose it, and `config.yml` is the fallback.
+    let fp_start = saved
+        .fingerprint
+        .as_deref()
+        .and_then(TlsFingerprint::parse)
+        .unwrap_or_else(|| TlsFingerprint::from_config(cfg));
+    let mut fp_idx = TlsFingerprint::ALL.iter().position(|&f| f == fp_start).unwrap_or(0);
     // Interfaces a probe can actually leave through, and index 0 for the routing
     // table — the answer every run gave before this row existed. The list is read
     // once: it cannot change while the menu is open in any way that matters, and
@@ -153,7 +166,11 @@ async fn run_menu_loop(
         .unwrap_or(0);
     let v6_supported = ipv6_supported();
 
-    let mut selected_tests: HashSet<char> = HashSet::new(); // empty by default
+    // What the run was asked for: the flag or the menu's last selection, already
+    // resolved by `main.rs` — a `--domain` run must not be re-ticked from the
+    // file, so this is the resolved string and not the raw state.
+    let mut selected_tests: HashSet<char> =
+        tests_start.chars().filter(|c| ('0'..='7').contains(c)).collect();
 
     // Paint state: a full clear+redraw several times a second flickers, so
     // repaint only on the first paint, a keypress, or a badge/row change.
@@ -373,10 +390,10 @@ async fn run_menu_loop(
                     });
                 }
 
-                // Quit: 'q' or Esc
-                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
-                    return MenuResult::Quit;
-                }
+                // Quit: 'q' or Esc. Nothing is recorded here — the state file is
+                // written where a run starts, so a look through the options that
+                // ends in `Q` leaves it as it was.
+                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => return MenuResult::Quit,
                 _ => {}
             }
     }
@@ -639,20 +656,25 @@ pub(crate) async fn menu_until_something_to_run(
     lang: Language,
     profile: RegionProfile,
     cfg: &AppConfig,
+    saved: &SavedState,
+    tests_start: &str,
     badge: &str,
     version_slot: &VersionSlot,
-) -> Option<MenuSelection> {
+) -> MenuResult {
     loop {
-        let chosen = match run_interactive_menu(lang, profile, cfg, badge, version_slot).await {
+        let chosen =
+            match run_interactive_menu(lang, profile, cfg, saved, tests_start, badge, version_slot).await {
             MenuResult::Run(chosen) => chosen,
-            MenuResult::Quit => return None,
+            MenuResult::Quit => return MenuResult::Quit,
         };
         if !TestSelection::parse(&chosen.selected_tests).only_legend {
-            return Some(chosen);
+            return MenuResult::Run(chosen);
         }
         match legend_loop(chosen.language, &get_messages(chosen.language)) {
             MenuAction::Menu => continue,
-            MenuAction::Quit => return None,
+            // The legend was left for good without a run: the selection stays
+            // unrecorded, exactly as if the menu itself had been quit.
+            MenuAction::Quit => return MenuResult::Quit,
         }
     }
 }

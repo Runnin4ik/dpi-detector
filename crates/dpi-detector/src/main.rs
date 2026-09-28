@@ -16,6 +16,7 @@ mod json;
 mod render;
 mod runner;
 mod screens;
+mod state;
 mod tui;
 mod update;
 mod views;
@@ -306,8 +307,12 @@ async fn run() {
     #[cfg(not(windows))]
     let plain = legacy_console || no_color;
     set_plain_mode(plain);
+    // Precedence: `--lang`, then the language the menu was last left in, then
+    // the system's. The file records a *choice*, so it outranks autodetection —
+    // but not a flag typed for this run.
+    let saved = state::load();
     let mut lang = if args.lang == "auto" {
-        Language::autodetect()
+        saved.language.unwrap_or_else(Language::autodetect)
     } else {
         match Language::from_code(&args.lang) {
             Some(lang) => lang,
@@ -373,13 +378,17 @@ async fn run() {
     // Which interface the probes leave through. A name that matches nothing is
     // fatal: carrying on would test the routing table while the user believes the
     // tunnel is being tested, and that is a wrong answer rather than a warning.
-    if let Some(sel) = &args.iface {
+    // `--iface` wins; the saved choice is the fallback, and an interface that no
+    // longer exists is not an error when it came from the file — the run falls
+    // back to the routing table instead of refusing to start.
+    if let Some(sel) = args.iface.as_deref().or(saved.interface.as_deref()) {
         match dpi_core::net::bind::resolve(sel) {
             Some(target) => dpi_core::net::bind::set_target(Some(target)),
-            None => {
+            None if args.iface.is_some() => {
                 eprintln!("{}", msg.iface_unknown.replacen("{}", sel, 1));
                 std::process::exit(2);
             }
+            None => {}
         }
     }
 
@@ -529,11 +538,21 @@ async fn run() {
     } else if args.tcp16.is_some() {
         "3".to_string()
     } else {
-        "123".to_string()
+        // No flag said which tests to run: the menu's last selection, else the
+        // shipped default. A `--domain` above is a deliberate "test 2" and the
+        // file does not override it.
+        saved.tests.clone().unwrap_or_else(|| "123".to_string())
     };
-    let mut concurrency = cfg.max_concurrent;
-    let mut ip_version = cfg.ip_version.clone();
-    let mut tls_fingerprint = TlsFingerprint::from_config(&cfg);
+    // The menu's last choices sit between the flags and `config.yml`: a flag is
+    // this run's word, the file is the last thing the user chose, and the config
+    // is what the operator wrote down.
+    let mut concurrency = saved.concurrency.unwrap_or(cfg.max_concurrent);
+    let mut ip_version = saved.ip_version().unwrap_or_else(|| cfg.ip_version.clone());
+    let mut tls_fingerprint = saved
+        .fingerprint
+        .as_deref()
+        .and_then(TlsFingerprint::parse)
+        .unwrap_or_else(|| TlsFingerprint::from_config(&cfg));
 
     // Initial badge: wait up to 4 s only in non-interactive mode
     let mut badge = msg.checking_updates.to_string();
@@ -567,12 +586,13 @@ async fn run() {
                 badge = version_badge_lang(latest.as_ref(), lang);
             }
         }
-        match run_interactive_menu(lang, profile, &cfg, &badge, &version_slot).await {
+        match run_interactive_menu(lang, profile, &cfg, &saved, &tests_str, &badge, &version_slot).await {
             MenuResult::Run(sel) => {
                 // The row is what the user just chose, so it has the last word
                 // over `--iface`; `None` means the routing table and clears any
                 // target the flag had set. Before the fields move out of `sel`.
                 apply_interface(&sel);
+                state::save(&state::SavedState::remember(&sel));
                 tests_str = sel.selected_tests;
                 concurrency = sel.concurrency;
                 ip_version = sel.ip_version;
@@ -622,9 +642,10 @@ async fn run() {
         }
         match legend_loop(lang, &msg) {
             MenuAction::Menu if is_interactive => {
-                match menu_until_something_to_run(lang, profile, &cfg, &badge, &version_slot).await {
-                    Some(chosen) => {
+                match menu_until_something_to_run(lang, profile, &cfg, &saved, &tests_str, &badge, &version_slot).await {
+                    MenuResult::Run(chosen) => {
                         apply_interface(&chosen);
+                        state::save(&state::SavedState::remember(&chosen));
                         tests_str = chosen.selected_tests;
                         concurrency = chosen.concurrency;
                         ip_version = chosen.ip_version;
@@ -632,7 +653,7 @@ async fn run() {
                         lang = chosen.language;
                         msg = get_messages(lang);
                     }
-                    None => return,
+                    MenuResult::Quit => return,
                 }
             }
             _ => return,
@@ -796,8 +817,8 @@ async fn run() {
                             badge = version_badge_lang(latest.as_ref(), lang);
                         }
                     }
-                    match menu_until_something_to_run(lang, profile, &cfg, &badge, &version_slot).await {
-                        Some(chosen) => {
+                    match menu_until_something_to_run(lang, profile, &cfg, &saved, &selection, &badge, &version_slot).await {
+                        MenuResult::Run(chosen) => {
                             // Everything the first menu applies, in the same shape:
                             // the run reads the local `ip_version` while the core
                             // reads `cfg`, so a site that updates one and not the
@@ -805,6 +826,7 @@ async fn run() {
                             // chose. The interface (process-wide) and the IP version
                             // were the two that did.
                             apply_interface(&chosen);
+                            state::save(&state::SavedState::remember(&chosen));
                             selection = chosen.selected_tests;
                             concurrency = chosen.concurrency;
                             ip_version = chosen.ip_version.clone();
@@ -813,7 +835,7 @@ async fn run() {
                             lang = chosen.language;
                             msg = get_messages(lang);
                         }
-                        None => return,
+                        MenuResult::Quit => return,
                     }
                     should_repeat = true;
                 }

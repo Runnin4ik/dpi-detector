@@ -125,6 +125,7 @@ registry/env keys, `Detail` codes, raw error text appended after a localized lab
 - `crates/dpi-detector/src/runner.rs` — `run_test_suite`: orchestration, list loaders, `Report` serialization.
 - `crates/dpi-detector/src/json.rs` — `--json` payload, `SCHEMA_VERSION`.
 - `crates/dpi-detector/src/args.rs` — `CliArgs` + runtime-built clap `Command` (localized help).
+- `crates/dpi-detector/src/state.rs` — what the interactive menu remembers between runs: `state.json` in the per-OS config dir, then `$PREFIX/etc` on Entware, then beside the binary. Written where a run starts — never on a quit, never by a non-interactive run; CLI flags outrank it, `config.yml` is the fallback.
 - `crates/dpi-core/src/classify/classifier.rs` — error ⇒ verdict decisions.
 - `config.yml` (root, 430 lines) — shipped default runtime config, embedded via `include_str!`.
 - `domains.txt`, `burst-domains.txt`, `tcp16.json`, `whitelist_sni.txt` — per-test target lists, all embedded; test 6 keeps its own on purpose.
