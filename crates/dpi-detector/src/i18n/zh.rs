@@ -317,8 +317,8 @@ pub(crate) fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("REDIR", "红色 — 重定向至外部陌生域名 (可疑)；重定向至同一主域名/子域名时显示为 OK"),
         ]),
         ("— TCP 16-20KB 测试 —", vec![
-            ("16KB DROP", "在 14–36 KB 窗口内读取被切断; 详情显示 READ TIMEOUT at N KB"),
-            ("DETECTED", "同一 14–36 KB 窗口内的发送被切断 — 即 16 KB 测试的 16KB DROP (该测试发送而非读取)"),
+            ("16KB DROP", "在 12–36 KB 窗口内读取被切断; 详情显示 READ TIMEOUT at N KB"),
+            ("DETECTED", "同一 12–36 KB 窗口内的发送被切断 — 即 16 KB 测试的 16KB DROP (该测试发送而非读取)"),
             ("OK", "所有 10 次请求 (最高 40 KB) 均正常传输无阻断"),
         ]),
         ("— QUIC —", vec![

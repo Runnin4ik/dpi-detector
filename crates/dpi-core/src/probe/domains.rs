@@ -10,6 +10,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use http_body_util::BodyExt;
 use hyper::body::Bytes;
 use hyper::header::HOST;
 use hyper::{Method, Request};
@@ -28,7 +29,7 @@ use crate::PhaseProgress;
 use crate::net::connector::RustlsConnector;
 use crate::net::fingerprint::{http_identity, TlsFingerprint};
 use crate::net::http::{
-    check_http, classify_redirect, inner_hyper, parse_host, request_headers,
+    check_http, classify_redirect, fat_read_verdict, inner_hyper, parse_host, request_headers, BODY_CAP,
 };
 use crate::net::connector::DpiTlsConnector;
 use crate::net::tcp::{dial_tcp, DialError};
@@ -227,13 +228,23 @@ pub async fn check_domain_tls(
 }
 
 
-/// Plain-HTTP injection check: HEAD to port 80 of the resolved IP with
+/// Plain-HTTP injection check: GET to `port` of the resolved IP with
 /// Host = domain; a known provider stub IP short-circuits to `IspPage`.
+///
+/// The request is a GET rather than a HEAD because the answer differs: a censor
+/// that intercepts plain HTTP answers a HEAD with a synthetic "go to https"
+/// bounce on the same host — a normal redirect by every rule this tool has —
+/// while the same GET gets the blockpage, on a foreign host. Measured against a
+/// live lawfilter: HEAD `301 → https://<site>/`, GET
+/// `307 → http://lawfilter.ertelecom.ru/`.
+///
+/// The port is a parameter because test 2 checks 80 and a test cannot bind it.
 pub async fn check_http_injection(
     domain: &str,
     target: Option<IpAddr>,
     cfg: &AppConfig,
     stub_ips: &HashSet<IpAddr>,
+    port: u16,
 ) -> HttpCheck {
     if let Some(ip) = target {
         if stub_ips.contains(&ip) {
@@ -256,7 +267,7 @@ pub async fn check_http_injection(
                 }
             },
         };
-        let addr = SocketAddr::new(host_ip, 80);
+        let addr = SocketAddr::new(host_ip, port);
         let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.connect_timeout)).await {
             Ok(s) => s,
             Err(DialError::Io { error, icmp }) => {
@@ -284,7 +295,7 @@ pub async fn check_http_injection(
         // with `Connection: close` so the response ends with an EOF.
         let identity = http_identity(TlsFingerprint::from_config(cfg));
         let mut builder = Request::builder()
-            .method(Method::HEAD)
+            .method(Method::GET)
             .uri("/")
             .header(HOST, domain_owned.as_str());
         for (name, value) in request_headers(
@@ -349,6 +360,36 @@ pub async fn check_http_injection(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
+
+        // The body is read for the reason test 3 reads one: a DPI that cuts a
+        // transfer cuts it inside a window of the stream, and where it died is
+        // the verdict. A redirect carries a line of HTML, so on every other
+        // answer this costs a frame or two, and a body that is not cut ends at
+        // EOF or at the shared cap.
+        let mut body = resp.into_body();
+        let mut bytes_read: usize = 0;
+        loop {
+            match timeout(Duration::from_secs_f64(cfg.read_timeout), body.frame()).await {
+                Ok(Some(Ok(frame))) => {
+                    if let Some(data) = frame.data_ref() {
+                        bytes_read += data.len();
+                        if bytes_read >= BODY_CAP {
+                            break;
+                        }
+                    }
+                }
+                Ok(Some(Err(e))) => {
+                    let (s, d) =
+                        inner_hyper(&e, ProbeStage::ReadingData, bytes_read, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                    return HttpCheck { status: s, detail: d };
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    let (s, d) = fat_read_verdict(bytes_read, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                    return HttpCheck { status: s, detail: d };
+                }
+            }
+        }
 
         if status == 451 {
             return HttpCheck { status: DpiStatus::Blocked, detail: Detail::HttpStatus(451) };
@@ -579,7 +620,7 @@ pub async fn check_http_all(
         let stub_ips = Arc::clone(&stub_ips);
         handles.push(tokio::spawn(async move {
             let _permit = crate::probe::permit(&sem).await;
-            let r = check_http_injection(&domain, target, &cfg, &stub_ips).await;
+            let r = check_http_injection(&domain, target, &cfg, &stub_ips, 80).await;
             (idx, r)
         }));
     }
@@ -777,6 +818,7 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Dp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn test_fake_ip_type() {
@@ -962,5 +1004,85 @@ mod tests {
             // A legitimate redirect counts as success, a foreign one does not.
             assert_eq!(s.is_ok_status(), *want != DpiStatus::RedirSuspect, "{base} + {location}");
         }
+    }
+
+    /// A local plain-HTTP server answering one request, for the leg's tests.
+    ///
+    /// Port 80 is not a port a test may bind, which is why the leg takes its
+    /// port: this stands in for the far end, censor or site.
+    async fn serve_once(
+        head: &'static [u8],
+        body: Option<(usize, Duration)>,
+    ) -> (SocketAddr, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("a listener");
+        let addr = listener.local_addr().expect("its address");
+        let handle = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.expect("one connection");
+            let mut buf = vec![0u8; 4096];
+            let n = sock.read(&mut buf).await.expect("a request");
+            let seen = String::from_utf8_lossy(&buf[..n]).to_string();
+            sock.write_all(head).await.expect("the response head");
+            if let Some((len, stall)) = body {
+                sock.write_all(&vec![b'x'; len]).await.expect("the body");
+                sock.flush().await.expect("a flush");
+                tokio::time::sleep(stall).await;
+            }
+            seen
+        });
+        (addr, handle)
+    }
+
+    /// The window and the timeouts the leg reads from the config, short enough
+    /// that a stalling server does not hold the suite.
+    fn test_cfg(read_timeout: f64) -> AppConfig {
+        AppConfig::from_yaml_str(&format!(
+            "CONNECT_TIMEOUT: 2.0\nREAD_TIMEOUT: {read_timeout}\nTCP_BLOCK_MIN_KB: 12\nTCP_BLOCK_MAX_KB: 36\n"
+        ))
+    }
+
+    #[tokio::test]
+    async fn test_the_plain_http_leg_asks_with_get_and_a_complete_body_is_ok() {
+        // The failure this pins: the leg sent a HEAD, and a censor answers a
+        // HEAD with a synthetic "go to https" bounce instead of its blockpage.
+        // The server here records what arrived, so a return to HEAD fails the
+        // test rather than quietly changing what the far end answers.
+        let (addr, seen) = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n", Some((2, Duration::ZERO))).await;
+        let cfg = test_cfg(2.0);
+        let check = check_http_injection("example.test", Some(addr.ip()), &cfg, &HashSet::new(), addr.port()).await;
+        assert_eq!(check.status, DpiStatus::Ok);
+        assert_eq!(check.detail.code(), "http_200");
+        let request = seen.await.expect("the server saw a request");
+        assert!(request.starts_with("GET / HTTP/1.1\r\n"), "{request}");
+        assert!(request.to_ascii_lowercase().contains("host: example.test"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn test_a_transfer_cut_inside_the_window_is_the_16kb_badge() {
+        // The failure this pins: a DPI that lets the headers through and then
+        // cuts the body — the block test 3 measures on its own stream — was
+        // invisible to test 2, which read no body at all and called the answer
+        // OK. The server sends 20 KB of the 40 KB it promised, then goes quiet.
+        let head = b"HTTP/1.1 200 OK\r\nContent-Length: 40000\r\n\r\n";
+        let (addr, _seen) = serve_once(head, Some((20 * 1024, Duration::from_secs(30)))).await;
+        let cfg = test_cfg(0.3);
+        let check = check_http_injection("example.test", Some(addr.ip()), &cfg, &HashSet::new(), addr.port()).await;
+        assert_eq!(check.status, DpiStatus::Tcp16Range);
+        assert_eq!(check.status.display_label(), "16KB DROP");
+        assert_eq!(check.detail.code(), "read_timeout_word_at_20kb");
+    }
+
+    #[tokio::test]
+    async fn test_a_foreign_redirect_over_plain_http_is_a_suspect() {
+        // What the fix is for: the blockpage a censor serves to a GET is a
+        // redirect to a host that is not the site, and that must read as REDIR
+        // rather than OK. This is the shape the live lawfilter answers with.
+        let response =
+            b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://lawfilter.ertelecom.ru/\r\nContent-Length: 0\r\n\r\n";
+        let (addr, _seen) = serve_once(response, None).await;
+        let cfg = test_cfg(2.0);
+        let check = check_http_injection("example.test", Some(addr.ip()), &cfg, &HashSet::new(), addr.port()).await;
+        assert_eq!(check.status, DpiStatus::RedirSuspect);
+        assert_eq!(check.detail.code(), "redirect_to_host");
+        assert!(!check.status.is_ok_status(), "a foreign redirect is not an OK");
     }
 }
