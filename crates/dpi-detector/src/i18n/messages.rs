@@ -81,7 +81,6 @@ pub(crate) struct Messages {
     pub lang: Language,
     pub replies_label: &'static str,
     pub blocked_short: &'static str,
-    pub mixed_short: &'static str,
     pub legend_title: &'static str,
 
     // Banner & Version
@@ -188,7 +187,6 @@ pub(crate) struct Messages {
 
     // TCP 16KB & Whitelist
     pub tcp16_check_title: &'static str,
-    pub tcp_mixed_warn: &'static str,
     pub no_port_443_targets: &'static str,
     pub no_as_blocked: &'static str,
     pub ban_after_label: &'static str,

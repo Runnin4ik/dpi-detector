@@ -56,7 +56,6 @@ pub(crate) fn messages() -> Messages {
         lang: Language::Zh,
         replies_label: "响应",
         blocked_short: "阻断",
-        mixed_short: "混合",
         legend_title: "\n状态图例说明:\n",
 
         author: "作者:",
@@ -145,7 +144,6 @@ pub(crate) fn messages() -> Messages {
         doh_flush_guide: "建议: 在您的设备和路由器上配置 DoH\n\n配置完成后刷新 DNS 缓存:\nWindows: ipconfig /flushdns\nmacOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\nLinux: sudo resolvectl flush-caches\n",
 
         tcp16_check_title: "TCP 16–20 KB 阻断检查",
-        tcp_mixed_warn: "混合结果表明运营商存在 DPI 负载均衡",
         no_port_443_targets: "没有用于白名单 SNI 测试的 443 端口目标。\n",
         no_as_blocked: "没有 AS 被封锁 — 无需发现白名单 SNI。\n",
         ban_after_label: "  ⚠ 随后封禁",

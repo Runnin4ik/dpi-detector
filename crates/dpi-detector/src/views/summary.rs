@@ -88,14 +88,11 @@ pub(crate) fn render_summary(data: &SummaryData, msg: &Messages) -> String {
         ));
     }
 
-    if let Some((ok, blocked, mixed, total)) = data.tcp {
+    if let Some((ok, blocked, _mixed, total)) = data.tcp {
         let pct = ok.checked_mul(100).and_then(|v| v.checked_div(total)).unwrap_or(0);
         let mut value = format!("\x1b[32m√ {}/{} OK\x1b[0m", ok, total);
         if blocked > 0 {
             value += &format!("  \x1b[31m× {} {}\x1b[0m", blocked, msg.blocked_short);
-        }
-        if mixed > 0 {
-            value += &format!("  \x1b[33m≈ {} {}\x1b[0m", mixed, msg.mixed_short);
         }
         value += &format!("  \x1b[2m({}% OK)\x1b[0m", pct);
         items.push(("TCP 16-20KB".to_string(), value));

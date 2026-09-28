@@ -56,7 +56,6 @@ pub(crate) fn messages() -> Messages {
         lang: Language::En,
         replies_label: "replies",
         blocked_short: "blocked",
-        mixed_short: "mixed",
         legend_title: "\nStatus legend:\n",
 
         author: "Author:",
@@ -149,7 +148,6 @@ pub(crate) fn messages() -> Messages {
         doh_flush_guide: "Recommendation: Configure DoH on your device and router\n\nAfter configuring, flush DNS cache:\nWindows: ipconfig /flushdns\nmacOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\nLinux: sudo resolvectl flush-caches\n",
 
         tcp16_check_title: "TCP 16–20 KB Block Check",
-        tcp_mixed_warn: "Mixed results indicate ISP DPI load balancing",
         no_port_443_targets: "No port 443 targets for whitelist SNI test.\n",
         no_as_blocked: "No AS blocked — SNI discovery not needed.\n",
         ban_after_label: "  ⚠ ban after",

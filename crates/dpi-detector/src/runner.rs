@@ -976,7 +976,7 @@ pub(crate) async fn run_test_suite(
         tcp_summary = Some((ok, blocked, usize::from(mixed), rows.len()));
         live.finish();
         if !args.json {
-            emitter.emit(&render_tcp_table(&rows, mixed, msg));
+            emitter.emit(&render_tcp_table(&rows, msg));
         } else {
             results.tcp16 = Some(rows.clone());
         }

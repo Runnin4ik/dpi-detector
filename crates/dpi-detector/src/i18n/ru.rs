@@ -56,7 +56,6 @@ pub(crate) fn messages() -> Messages {
         lang: Language::Ru,
         replies_label: "ответов",
         blocked_short: "блок.",
-        mixed_short: "смеш.",
         legend_title: "\nЛегенда статусов:\n",
 
         author: "Автор:",
@@ -149,7 +148,6 @@ pub(crate) fn messages() -> Messages {
         doh_flush_guide: "Рекомендация: Настройте DoH на вашем устройстве и роутере\n\nПосле настройки сбросьте кеш DNS:\nWindows: ipconfig /flushdns\nMacOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\nLinux: sudo resolvectl flush-caches\n",
 
         tcp16_check_title: "Проверка TCP 16-20KB блокировки",
-        tcp_mixed_warn: "Смешанные результаты указывают на балансировку DPI у провайдера",
         no_port_443_targets: "Нет целей с портом 443 для теста белых SNI.\n",
         no_as_blocked: "Ни одна AS не заблокирована — перебор SNI не нужен.\n",
         ban_after_label: "  ⚠ бан после",

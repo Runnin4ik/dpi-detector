@@ -11,14 +11,8 @@ fn provider_group(provider: &str) -> String {
     clean.split_whitespace().next().unwrap_or(&clean).to_string()
 }
 
-/// The test 3 block: title, table, and the load-balancing warning when the run
-/// came back both ways.
-///
-/// `mixed` is a property of the run — some targets answered, some were cut —
-/// and not of a row: no `DpiStatus` spells "mixed", so the caller derives it
-/// from the same verdict predicates the summary line is built from, and this
-/// function never reads a badge label to decide anything.
-pub(crate) fn render_tcp_table(rows: &[Tcp16Row], mixed: bool, msg: &Messages) -> String {
+/// The test 3 block: title and table.
+pub(crate) fn render_tcp_table(rows: &[Tcp16Row], msg: &Messages) -> String {
     let mut out = String::new();
     // Sort: provider group frequency desc, then group name, then id number.
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -58,9 +52,6 @@ pub(crate) fn render_tcp_table(rows: &[Tcp16Row], mixed: bool, msg: &Messages) -
     }
     out.push_str(&format!("\n{}\n", msg.tcp16_check_title));
     out.push_str(&format!("{}\n", table));
-    if mixed {
-        out.push_str(&format!("{}\n", msg.tcp_mixed_warn));
-    }
     out
 }
 
