@@ -70,7 +70,6 @@ cargo build --release --target x86_64-pc-windows-msvc                           
 - Iterate with `release-local`; `--release` ONLY for an artifact. Measurements + flag-set/cache trap: `[profile.release-local]` comment in `Cargo.toml`.
 - `cargo test`/`clippy` = third unit set, no shared cache. Dev `opt-level = 0` ⇒ **false timeouts**; timing runs MUST use `release-local`.
 - NEVER run a formatter — house style ≠ rustfmt default. Format by hand; NEVER commit whitespace-only reformat of untouched files.
-- NEVER commit, NEVER post to GitHub, unless asked: show target + exact text, wait for confirmation. "Fix the PR feedback" = draft, not post.
 
 ## Code Conventions & Common Patterns
 
