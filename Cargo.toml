@@ -166,10 +166,18 @@ codegen-units = 16
 opt-level = 2
 incremental = true
 
+# Line tables only for our own crates, measured: a rebuild after editing
+# `dpi-core` takes 3.6 s against 6.0 s with full debuginfo, its rlibs are 140 MiB
+# against 617 MiB, and the `.pdb` is half the size — while a backtrace still names
+# the function and the line. A debug session that needs locals gets the full
+# tables back with `CARGO_PROFILE_DEV_DEBUG=2 cargo build`.
+[profile.dev]
+debug = 1
+
 # `cargo test` and `cargo build` compile 258 locked dependencies before reaching a
 # line of ours, each carrying full debuginfo: 1.1 GiB of rlibs in `target/debug`,
-# none of it a frame this tool's backtraces need. Dependencies drop it; our crates
-# keep the profile default.
+# none of it a frame this tool's backtraces need. Dependencies drop it entirely;
+# our own crates keep line tables, from `[profile.dev]` above.
 #
 # `opt-level` stays at the dev default on purpose: the code a diagnostic run's
 # speed depends on is *ours*, which this table does not cover, so optimizing

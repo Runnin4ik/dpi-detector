@@ -162,6 +162,39 @@ Measured on the target (MT7621, musl, `--release`). §2.5's two guesses about wh
 * **What it buys:** the `h2` fork is gone — its source, its `README-PATCH.md`, its `PATCH.diff` and its `[patch.crates-io]` entry. The three knobs it was patched for (the request's pseudo-header order, the `SETTINGS` order, the stream's priority) are published API of `http2`, h2's own source forked by a maintainer who needed exactly them: the same client, no patch to re-apply. hyper is left `http1`-only and stops compiling its own h2 client, which is what leaves its patch with one hunk (`ext::HeaderCaseMap`, for the request's header casing).
 * **Measured (`release-local`, x86_64-pc-windows-msvc, one tree, A/B):** 5 986 304 bytes against 6 235 648 bytes with the fork and hyper's h2 client in the tree — **249 344 bytes smaller** (243.5 KiB, 4.0% of the file). Same tree, same profile, same target, one difference: the client. The wire is pinned by `net/http.rs::the_h2_wire_is_what_the_profiles_pin` (the preface and the request's `HEADERS` frame as bytes, four profiles), so the bytes a probe sends are unchanged — the size is not bought from the emulation.
 
+### 2.11. The Dev Profile: Line Tables, and Which Knobs Do Not Help
+
+* **Setting:** `[profile.dev] debug = 1` — line tables for our own crates;
+  dependencies stay without debuginfo at all (`[profile.dev.package."*"]`).
+* **Measured** (12 threads, `x86_64-pc-windows-msvc`, each variant warmed up, the
+  same three edits per variant: `dpi-core/src/lib.rs` → build,
+  `dpi-detector/src/main.rs` → build, `dpi-core/src/lib.rs` → `cargo test`):
+
+| `[profile.dev]` | `dpi_core` rlibs | `.pdb` | core → build | binary → build | core → test |
+| --- | --- | --- | --- | --- | --- |
+| `debug = 2` (full) | 617 MiB | 76.6 MB | 6.0 s | 3.0 s | 11.8 s |
+| `debug = 1` (`line-tables-only`) | 140 MiB | 39.7 MB | 3.6 s | 2.1 s | 9.7 s |
+| `debug = 0` | 108 MiB | not measured | 4.1 s | 2.1 s | 9.6 s |
+
+* **Result:** the core edit→build loop is 40 % shorter, our crates' rlibs are
+  4.4× smaller and `target/debug` falls from 4.0 GiB to 1.8 GiB, while a backtrace
+  still names the function and the line — the panic in
+  `examples/tls_fingerprint.rs:278` prints
+  `tls_fingerprint::main::async_block$0::closure$3 at ./crates/dpi-core/examples/tls_fingerprint.rs:278`.
+  `debug = 0` is no faster and loses `file:line`, so it is not used; a debugger
+  session that needs locals gets full tables back with
+  `CARGO_PROFILE_DEV_DEBUG=2 cargo build`.
+* **The other dev knobs were measured, and the defaults win.** `codegen-units`
+  16 and 64 are worse than the default 256 (binary rebuild 2.9 s / 3.0 s against
+  2.1 s, `cargo test` 10.0 s / 10.2 s against 9.7 s). `incremental = false` costs
+  3.4× on the core rebuild (13.6 s) and 2.2× on `cargo test` (20.8 s).
+  `debug-assertions = false` with `overflow-checks = false` buys nothing
+  (4.6 / 2.7 / 10.1 s against 4.1 / 2.1 / 9.7 s) and would weaken the tests that
+  rely on those checks. `opt-level = 1` is mixed at best (5.0 / 1.8 / 8.9 s) in a
+  profile AGENTS.md already marks as unfit for timing runs.
+  `split-debuginfo = "unpacked"` changes nothing on MSVC — the default already
+  writes the `.pdb` separately.
+
 ---
 
 ## 3. Router Specifics (MIPS, ARM, OpenWrt, Keenetic, Entware)
