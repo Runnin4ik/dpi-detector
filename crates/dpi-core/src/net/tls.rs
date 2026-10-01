@@ -9,37 +9,25 @@ use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCert
 use crate::net::fingerprint::{HelloVariant, TlsFingerprint};
 use crate::net::hpke;
 
-/// Returns the shared pure-Rust RustCrypto provider, with this crate's X25519
-/// group in place of the provider's.
+/// Returns the shared `ring` provider.
 ///
 /// Crate-private: no caller outside `dpi-core` picks a provider — the config
 /// builders do ([`create_tls_config`]) — so this stays a detail of how a
 /// `ClientConfig` is assembled.
 ///
-/// The substitution is the one [`crate::net::x25519`] explains: the provider's own
-/// `X25519` completes a key exchange with a low-order peer key, where RFC 8446
-/// §4.2.8.2 requires the handshake to abort. The replacement keeps the name and
-/// the position in `kx_groups`, so nothing else about a ClientHello moves.
+/// `ring`'s own `X25519` aborts a key exchange whose result is the identity,
+/// which is what RFC 8446 §4.2.8.2 requires, so no group substitution is needed
+/// here — the crate carried one while the provider was the pure-Rust
+/// `rustls-rustcrypto`. The provider is also what the *base-form* ClientHello is
+/// built from: its suite order and its advertised groups are part of what the
+/// probes send, which is why `crypto_provider_with_pq` exists and why a provider
+/// change is measured on the wire (docs/PROFILES_AND_PROVIDER.md).
 pub(crate) fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
     static PROVIDER: LazyLock<Arc<rustls::crypto::CryptoProvider>> = LazyLock::new(|| {
-        let upstream = rustls_rustcrypto::provider();
-        let groups: Vec<&'static dyn rustls::crypto::SupportedKxGroup> = upstream
-            .kx_groups
-            .iter()
-            .copied()
-            .map(|group| {
-                if group.name() == rustls::NamedGroup::X25519 {
-                    &crate::net::x25519::ContributoryX25519
-                        as &'static dyn rustls::crypto::SupportedKxGroup
-                } else {
-                    group
-                }
-            })
-            .collect();
-        let provider = rustls::crypto::CryptoProvider { kx_groups: groups, ..upstream };
+        let provider = rustls::crypto::ring::default_provider();
         // Installed as the process default too: a config built without this
-        // provider passed explicitly would otherwise negotiate through the
-        // provider's unguarded group, which is the hole this closes.
+        // provider passed explicitly would otherwise negotiate through a
+        // different one.
         let _ = provider.clone().install_default();
         Arc::new(provider)
     });
@@ -625,15 +613,14 @@ fn offers_version(version: TlsVersion, suite: u16) -> bool {
 
 /// Why the two tests below exist, and why nothing else covers this.
 ///
-/// `vendor/rustls-rustcrypto` is upstream's provider with its `rustls-webpki
-/// 0.102` dependency removed: the OID table it took from `webpki::alg_id` now
-/// comes from `rustls-pki-types` (`vendor/rustls-rustcrypto/README-PATCH.md`).
-/// That table is what the provider reports as the algorithms it can verify, so a
-/// mistake there is invisible to every other test in this crate — JA3 and JA4
-/// hash a ClientHello and never verify anything, and the probes'
-/// `TlsProfile::insecure` accepts any certificate. It surfaces in the field as a
-/// site that opens in a browser and not here, which is the one failure this tool
-/// must never report as censorship.
+/// The algorithms a provider reports it can verify are what certificate
+/// verification rests on, and a mistake there is invisible to every other test in
+/// this crate — JA3 and JA4 hash a ClientHello and never verify anything, and the
+/// probes' `TlsProfile::insecure` accepts any certificate. It surfaces in the
+/// field as a site that opens in a browser and not here, which is the one failure
+/// this tool must never report as censorship. The provider is `ring` now and its
+/// table comes from `webpki::ring`, but what these tests pin is the provider's
+/// answer, not the crate that gives it.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -843,14 +830,13 @@ mod tests {
         assert!(err.contains("UnknownIssuer"), "{name} leaf: {err}");
     }
 
-    /// The group the provider offers under `X25519` is this crate's, and every
-    /// probe that negotiates X25519 goes through it: [`crate::net::x25519`] carries
-    /// the check and the reason it cannot live in the provider. This test is the
-    /// wiring — it asks the composed provider rather than the group, so a
-    /// substitution dropped in [`crypto_provider`] fails here.
+    /// The group the provider offers under `X25519` rejects a peer key whose
+    /// result is the identity, as RFC 8446 §4.2.8.2 requires — `ring` does that
+    /// itself, so there is no substitution to wire up any more. The test still
+    /// asks the composed provider rather than the group, which is what makes it
+    /// fail if a provider swapped into [`crypto_provider`] ever stopped checking.
     ///
-    /// `net::x25519`'s own tests cover the seven low-order encodings and a real
-    /// peer, and `net::pq_kx`'s two paths are covered by
+    /// `net::pq_kx`'s two X25519 paths are covered by
     /// `rejects_a_low_order_x25519_share`.
     #[test]
     fn provider_x25519_group_rejects_a_low_order_peer_key() {

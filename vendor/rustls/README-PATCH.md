@@ -10,7 +10,7 @@ extensions its hello carries. It is wired in the root `Cargo.toml` as
 rustls = { path = "vendor/rustls" }
 ```
 
-so that `tokio-rustls`, `hyper` and `rustls-rustcrypto` all resolve to this one
+so that `tokio-rustls` and `hyper` both resolve to this one
 instance. `exclude = ["vendor/rustls"]` keeps it out of the workspace (its tests
 and examples are upstream's, not ours).
 
@@ -28,15 +28,16 @@ browser-only extensions are never emitted (rustls maintainers rejected such hook
 in rustls#1421 and rustls#1932).
 
 The ready-made crates were evaluated and each one fails a hard requirement of
-this project (pure Rust, no C toolchain, `mipsel-unknown-linux-musl` targets, and
-`DpiProbeStream` stage tracking must survive):
+this project: the probe MUST control the ClientHello shape (`rustls` gives no
+control over it, and the vendored patch is what adds it), `DpiProbeStream` stage
+tracking MUST survive, and no second HTTP client may replace the probe path:
 
 | Candidate | Why not |
 | --- | --- |
-| `wreq`, `rquest`, `reqwest-impersonate` | BoringSSL via `boring-sys` — C code, rules out the router targets; they are HTTP clients, so the probe stream (and with it stage classification) is lost |
+| `wreq`, `rquest`, `reqwest-impersonate` | Full HTTP clients built on BoringSSL: they replace the probe path, so the probe stream (and with it stage classification) is lost |
 | `impit` (Apify) | A full HTTP client on a patched rustls; patches four crates (`h2`, `rustls`, `tower-http`, `hyper-util`) and replaces the transport |
 | `craftls` | Rustls **0.22** fork, last commit 2024-01-19 — cannot patch into our 0.23 stack |
-| `apify/rustls` | Tracks **0.24.0-dev**; incompatible with `tokio-rustls 0.26` / `rustls-rustcrypto 0.0.2-alpha`; profiles live in `impit`, not in the crate |
+| `apify/rustls` | Tracks **0.24.0-dev**; incompatible with `tokio-rustls 0.26` / `rustls 0.23`; profiles live in `impit`, not in the crate |
 | `ja-tools` + `XOR-op/rustls.delta` | Works, but pins rustls to a fork at **0.23.12** (~2 years behind) with no `X25519MLKEM768` support, i.e. no JA3 parity with a modern browser |
 
 `webclaw-tls` is the cautionary precedent: its author archived the project after
@@ -101,7 +102,7 @@ patch -p1 -d vendor/rustls < PATCH.diff      # expect hunks only in the files ab
    advisory by itself — a `[patch.crates-io]` path dependency has no `source` in
    the lock, so the advisory check skipped the crate it was pinning;
    `scripts/vendor-advisories.sh` asks the same database about the vendored
-   crates by their published names and versions, and runs in the `policy` job.
+   crates by their published names and versions.
 
    One thing that rebase made visible, and that is deliberately left alone:
    upstream's TLS-1.2 signature-scheme filter (in `emit_client_hello_for_retry`)
@@ -160,7 +161,7 @@ Binary size, measured (release, `opt-level = "z"`, LTO): pre-patch 3.17 MB;
 with this patch and `ml-kem` but without the compression features 3.25 MB; with
 `brotli` + `zlib` enabled — which the profile needs to decode the
 `CompressedCertificate` Cloudflare sends once extension 27 is advertised —
-4.32 MB. The budget is 3–6 MB. Dropping the two features is possible: it costs
+4.32 MB. Dropping the two features is possible: it costs
 1.07 MB less and one extension of fidelity, because the profile must then stop
 advertising `compress_certificate`.
 
@@ -292,8 +293,8 @@ failing handshake or a real mismatched fingerprint, not a theoretical concern:
   `encrypted_client_hello` (65037) as GREASE: the body is a freshly generated
   HPKE encapsulation plus a random payload, which is why no two connections share
   one. rustls builds that shape in `ClientHelloProfile`'s ECH path only when it
-  can reach an `Hpke` implementation, and this build's provider
-  (`rustls-rustcrypto`) has none — so `crates/dpi-core/src/net/hpke.rs`
+  can reach an `Hpke` implementation, and this build's provider (`ring`) has none
+  — so `crates/dpi-core/src/net/hpke.rs`
   implements RFC 9180 base mode over the primitives already in the graph
   (`x25519-dalek`, `hkdf`, `aes-gcm`, `chacha20poly1305`), verified against the
   RFC's appendix A.1 vectors. A *hand-built* substitute does not work: three

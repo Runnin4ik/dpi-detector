@@ -184,6 +184,10 @@ jobs:
             use_cross: true
             has_upx: true
             qemu: arm
+            # The 32-bit router rows build with `release-router` (-Oz + fat LTO,
+            # CPU and RSS first); every other row builds with `release` (O3 + thin
+            # LTO). Measured in docs/PROFILES_AND_PROVIDER.md §8.
+            profile: release-router
 
           # 5. MIPS Little-Endian Routers (Keenetic Giga KN-1011, Viva, Xiaomi 3G/4A, MikroTik hEX)
           - os: ubuntu-26.04
@@ -192,6 +196,7 @@ jobs:
             use_cross: true
             has_upx: true
             qemu: mipsel
+            profile: release-router
             # `-Z build-std` (set in Cross.toml for this target) is nightly-only,
             # so this row names the toolchain on the command line instead of
             # using the pinned one.
@@ -208,6 +213,7 @@ jobs:
             use_cross: true
             has_upx: true
             qemu: mips
+            profile: release-router
             use_nightly: true
             cross_args: "+nightly-2026-09-17"
             rustflags: "-C target-feature=+crt-static -C link-self-contained=no -L /target/static-unwind-mips-unknown-linux-musl"
@@ -325,25 +331,29 @@ jobs:
         # `--locked` is what the tag is cut from: without it cargo is free to
         # resolve a `Cargo.toml` that disagrees with `Cargo.lock` and ship a
         # dependency set no commit ever built.
-        run: cross ${{ matrix.cross_args }} build --release --target ${{ matrix.target }} --locked
+        #
+        # `--profile`, not `--release`: the three 32-bit router rows name
+        # `release-router` in the matrix, and a row that names nothing gets
+        # `release` — the two differ in codegen knobs only (docs/…/§8).
+        run: cross ${{ matrix.cross_args }} build --profile ${{ matrix.profile || 'release' }} --target ${{ matrix.target }} --locked
 
       - name: Build with cargo
         if: "!matrix.use_cross"
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
-        run: cargo ${{ matrix.cargo_args }} build --release --target ${{ matrix.target }} --locked
+        run: cargo ${{ matrix.cargo_args }} build --profile ${{ matrix.profile || 'release' }} --target ${{ matrix.target }} --locked
 
       - name: Prepare binary artifact (Windows)
         if: runner.os == 'Windows'
         run: |
           New-Item -ItemType Directory -Force -Path dist
-          Copy-Item target/${{ matrix.target }}/release/dpi-detector.exe dist/${{ matrix.name }}
+          Copy-Item target/${{ matrix.target }}/${{ matrix.profile || 'release' }}/dpi-detector.exe dist/${{ matrix.name }}
 
       - name: Prepare binary artifact (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/dpi-detector dist/${{ matrix.name }}
+          cp target/${{ matrix.target }}/${{ matrix.profile || 'release' }}/dpi-detector dist/${{ matrix.name }}
           chmod +x dist/${{ matrix.name }}
 
       # The foreign-architecture musl binaries are the artifacts nothing has ever
@@ -365,11 +375,12 @@ jobs:
           "qemu-${{ matrix.qemu }}" "dist/${{ matrix.name }}" --version
           "qemu-${{ matrix.qemu }}" "dist/${{ matrix.name }}" --legend > /dev/null
 
-      # The artifact that ships is built by the one profile nothing else runs
-      # under — fat LTO, `opt-level = "z"`, `panic = "abort"` — and no job had
-      # ever started one: a binary that links but dies before printing its banner
-      # was first seen by whoever ran the installer. `smoke` marks the rows whose
-      # artifact the runner can actually start — same architecture as the runner,
+      # The artifacts that ship are built by the two profiles nothing else runs
+      # under — `release` (O3, thin LTO) and `release-router` (`-Oz`, fat LTO),
+      # both `panic = "abort"` — and no job had ever started one: a binary that
+      # links but dies before printing its banner was first seen by whoever ran
+      # the installer. `smoke` marks the rows whose artifact the runner can
+      # actually start — same architecture as the runner,
       # no container — which excludes the six cross targets and the win7
       # `build-std` row (a second std, built on nightly). `--version` is
       # deliberately the same contract `install.sh` verifies a download with.

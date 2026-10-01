@@ -237,15 +237,16 @@ as Chrome 133–146 in §1, not a divergence from the source.
 
 ## 6. What is out of scope
 
-* **QUIC/HTTP-3.** In `vendor/rustls-rustcrypto/src/quic.rs` there are stubs, and
-  every TLS 1.3 suite has `quic: None`. As long as that is so, no h3 profile is
-  possible, regardless of `quinn`/`h3`. A record's `quic` flag
+* **QUIC/HTTP-3.** `ring` does ship QUIC key material — the vendored rustls builds
+  every TLS 1.3 suite with `quic: Some(…)` (`src/crypto/ring/tls13.rs`) — but
+  nothing in this tree drives a QUIC handshake: the QUIC column hand-rolls one
+  padded Initial and reads the reply without TLS state, so no h3 profile is
+  possible yet, regardless of `quinn`/`h3`. A record's `quic` flag
   (`ClientHelloProfile::quic`, the patched hook) only empties `legacy_session_id`
   the way RFC 9001 §8.4 requires, which is what test 2's QUIC column needs — the
   handshake still does not run over QUIC. The order of work, if one takes this on:
-  header protection per RFC 9001 §5.4 with the §A.2 test vectors, `quinn` without the
-  default `rustls-ring`, a transport parameters patch, and an `http3` feature
-  (off by default — Rule 2).
+  header protection per RFC 9001 §5.4 with the §A.2 test vectors, a transport
+  parameters patch, and an `http3` feature (off by default — Rule 2).
 * **Real ECH configured from DNS.** Deliberately not done: it makes the hello depend
   on the *host*, whereas the rest of a record's fields depend on the client, and the
   wrapper does not send it. It adds nothing for diagnostics (a censor cannot tell

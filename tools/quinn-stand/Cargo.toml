@@ -5,22 +5,20 @@ edition = "2021"
 publish = false
 
 # Not a workspace member on purpose: this is an experiment about a dependency
-# the workspace deliberately does not have (`quinn`), and it must not enter the
-# root lock file or the policy job's graph. The empty table below is what keeps
-# cargo from adopting the root workspace.
+# the workspace does not ship (`quinn`), and it must not enter the root lock
+# file. The empty table below is what keeps cargo from adopting the root
+# workspace.
 [workspace]
 
 [dependencies]
 # `quinn`'s default features are the point of the measurement: they bring
-# `rustls-ring`, the provider the workspace refuses (Rule 1) - see README.md.
+# `rustls-ring`, the same provider the workspace uses - see README.md.
 quinn = "0.11"
 # `ring`, explicitly, and **not** rustls's default features: 0.23 defaults
 # include `aws_lc_rs`, so asking for `ring` beside them resolved and committed
 # both providers - `aws-lc-sys` is cmake, C and assembly (two mentions in the
-# lock), the opposite of the pure-Rust policy this stand exists to price. That
-# it *builds* on x86_64 is not the argument: the policy, not the platform, is
-# what rules it out, and the manifest must say which provider it is measuring.
-# `std` because quinn's own rustls dependency (`default-features = false`) asks
-# for it.
+# lock). The manifest must say which provider it is measuring, so it names
+# `ring` alone. `std` because quinn's own rustls dependency
+# (`default-features = false`) asks for it.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

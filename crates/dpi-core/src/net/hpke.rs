@@ -2,9 +2,11 @@
 //!
 //! rustls ships the ECH client — `EchConfig`, `EchGreaseConfig` and the inner
 //! hello — but leaves the `Hpke` trait to the crypto provider, and the provider
-//! this build uses, `rustls-rustcrypto`, has no HPKE: rustls itself implements it
-//! only against `aws-lc-rs`, which Rule 1 puts out of reach. This module is that
-//! implementation.
+//! this build uses, `ring`, has no HPKE: rustls itself implements it only
+//! against `aws-lc-rs`, whose provider this tree does not take — it advertises
+//! the post-quantum group and ML-DSA schemes in every ClientHello, which moves
+//! the verdicts the base-form probes report (docs/PROFILES_AND_PROVIDER.md).
+//! This module is that implementation.
 //!
 //! The suites are the ones an ECH config in the wild is published with, all
 //! sharing one KEM and one KDF: DHKEM(X25519, HKDF-SHA256) with HKDF-SHA256 and

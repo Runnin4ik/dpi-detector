@@ -5,12 +5,10 @@ measurement instead of an argument: **what does a ready-made QUIC stack see on
 the host list test 2 already covers?**
 
 It is a standalone cargo project, not a workspace member (the empty `[workspace]`
-table in `Cargo.toml` keeps it out): `quinn`'s default features pull
-`rustls-ring`, and neither may enter the `policy` CI job's graph. `ring` is a
-*lock entry* all the same — the vendored `rustls-rustcrypto` names it as an
-optional feature, and a lockfile covers every feature — but `cargo tree -i ring`
-prints nothing, so no build of this workspace reaches it. Building the stand here
-also measures that cost, which is the second thing the experiment is for.
+table in `Cargo.toml` keeps it out): it exists to price a dependency the workspace
+does not ship (`quinn`), and it must not enter the root lock file. Building the
+stand here also measures that cost, which is the second thing the experiment is
+for.
 
 What it does: for every host in `scripts/quic/hosts.txt`, connect over QUIC with
 ALPN `h3`, an 8-second idle timeout (the value measured for the probe), and a
@@ -70,9 +68,12 @@ also implemented through quinn behind a `quinn-probe` feature):
   `-C target-feature=+crt-static`;
 * `cargo tree --target all -e normal,build -i ring` puts **`ring` in the shipped
   graph**, both through `quinn-proto` and through the vendored `rustls`:
-  `ring ← quinn-proto ← quinn ← dpi-core ← dpi-detector`. That is what the
-  `policy` job checks, so the feature cannot be enabled in this repository —
-  `ring` is assembly, and there is no MIPS target for it.
+  `ring ← quinn-proto ← quinn ← dpi-core ← dpi-detector` — but that is no longer a
+  reason to keep the feature out, because `ring` is the workspace's provider now.
+  What keeps `quinn-probe` disabled is the +20 % above, weighed against a
+  hand-written probe this stand has already validated: the close codes map one to
+  one, the vocabulary is the same, and the rows where the two disagree are
+  recorded above.
 
 **What the branch proved anyway**: the column run through quinn reports
 `QUIC OK` for `www.apkmirror.com` and `www.facebook.com` and

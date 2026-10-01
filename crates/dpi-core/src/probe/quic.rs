@@ -24,7 +24,8 @@
 //! * `DROP` — nothing came back, the silence `SYN DROP` is for TCP.
 //!
 //! What it does *not* say: that the site answers HTTP/3 with `:status 200`. That
-//! needs the whole handshake and a request, which needs a QUIC-capable provider
+//! needs the whole handshake and a request, which nothing in this tree drives —
+//! the provider ships QUIC key material, but no TLS state is run over QUIC
 //! (`docs/ADDING_A_PROFILE.md` §6) — and a domain whose QUIC endpoint is simply
 //! absent is the ordinary case, not a finding: the column is read against the
 //! TLS columns beside it.

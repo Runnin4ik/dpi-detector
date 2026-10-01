@@ -1,10 +1,12 @@
 //! `X25519MLKEM768` key exchange, pure Rust (draft-ietf-tls-ecdhe-mlkem).
 //!
-//! rustls ships this group only in its `aws-lc-rs` provider, which links C code
-//! and therefore cannot be used here (rule 1: no C dependencies). The protocol
-//! side already exists in rustls — `NamedGroup::X25519MLKEM768` is in its enum —
-//! and `CryptoProvider::kx_groups` is a public field, so the group can be
-//! supplied without forking the provider.
+//! rustls ships this group only in its `aws-lc-rs` provider, which this tree does
+//! not take: that provider advertises the post-quantum group and the ML-DSA
+//! schemes in every ClientHello, and on the test network that moved the verdicts
+//! of 19 of 105 endpoints (docs/PROFILES_AND_PROVIDER.md). The protocol side
+//! already exists in rustls — `NamedGroup::X25519MLKEM768` is in its enum — and
+//! `CryptoProvider::kx_groups` is a public field, so the group can be supplied
+//! without forking the provider.
 //!
 //! # Wire layout (PQ first, per the draft)
 //!
@@ -101,8 +103,8 @@ impl ActiveKeyExchange for ActiveX25519MlKem768 {
         // RFC 8446 §4.2.8.2 through the draft: a peer key of low order yields the
         // all-zero secret, and the handshake must abort instead of deriving keys
         // from it. x25519-dalek reports that as `was_contributory` rather than
-        // failing on its own, and the bare X25519 group is this crate's own for
-        // the same reason (`net/x25519.rs`).
+        // failing on its own — the provider's own X25519 group, `ring`'s, does
+        // the same check itself.
         if !x_dh.was_contributory() {
             return Err(invalid_key_share());
         }

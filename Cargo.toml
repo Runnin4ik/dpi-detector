@@ -3,25 +3,24 @@ resolver = "2"
 members = [
     "crates/dpi-core",
     "crates/dpi-detector",
-    # The crypto provider is the one vendored crate that IS a member: it performs
-    # certificate signature verification, so it has to be built, linted and tested
-    # in the configuration that ships. See vendor/rustls-rustcrypto/README-PATCH.md.
-    "vendor/rustls-rustcrypto",
 ]
 # The vendored crates are patched upstream sources (see
 # vendor/*/README-PATCH.md): rustls with a ClientHello-profile hook, and hyper
 # with the original header casing a browser writes over HTTP/1.1. They must NOT
-# be workspace members (their tests/examples are upstream's, not ours). The
-# provider above is the exception.
+# be workspace members (their tests/examples are upstream's, not ours).
 #
-# There were four: `h2` carried the request shape a browser puts in its h2
-# preface until `http2` — h2's own source, forked and published by a maintainer
-# who needs exactly those knobs — took that job as a plain dependency, so the
-# tree, its patch and the `[patch]` entry below all went.
+# There were five. `rustls-rustcrypto` was the one exception, a member because it
+# performed certificate signature verification and had to be built, linted and
+# tested in the configuration that ships — the provider is `ring` now, so the
+# crate and its fork are gone (docs/PROFILES_AND_PROVIDER.md). `h2` carried the
+# request shape a browser puts in its h2 preface until `http2` — h2's own source,
+# forked and published by a maintainer who needs exactly those knobs — took that
+# job as a plain dependency, so the tree, its patch and the `[patch]` entry below
+# all went.
 exclude = ["vendor/rustls", "vendor/hyper"]
 
-# Fingerprint hooks, applied through `[patch]` so that tokio-rustls /
-# hyper / hyper-util / rustls-rustcrypto keep resolving to one instance of each.
+# Fingerprint hooks, applied through `[patch]` so that tokio-rustls / hyper /
+# hyper-util keep resolving to one instance of each.
 [patch.crates-io]
 rustls = { path = "vendor/rustls" }
 hyper = { path = "vendor/hyper" }
@@ -34,7 +33,7 @@ license = "MIT"
 
 [workspace.dependencies]
 tokio = { version = "1.40", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "macros", "io-util", "sync", "process"] }
-rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
 # RFC 8879 certificate decompression, decoder side only (see
 # `dpi_core::net::cert_compression`): rustls's own `brotli`/`zlib` features would
 # also link the matching *compressors*, which this tool never calls.
@@ -42,20 +41,18 @@ brotli-decompressor = "5"
 zlib-rs = "0.6"
 # RFC 8878, decoder side only: Firefox advertises `zlib, brotli, zstd` and a
 # server may then compress with zstd, which `net::cert_compression` has to read.
-# `zstd`/`zstd-safe` wrap the C library and are barred by the pure-Rust rule;
-# `ruzstd` is the decoder in Rust (MIT).
+# `zstd`/`zstd-safe` wrap the C library; `ruzstd` is the decoder in Rust (MIT)
+# and the only one this tree needs — a C zstd would be a second C dependency for
+# one decode path.
 ruzstd = "0.8"
 # RFC 9180, for the ECH greeting: `net::hpke` is the `Hpke` implementation the
-# provider lacks. All three are already in the graph through `rustls-rustcrypto`
-# (aes-gcm and chacha20poly1305 for TLS 1.3's AEADs, hkdf through `elliptic-curve`),
-# so naming them here compiles nothing new.
+# provider lacks — `aes-gcm` and `chacha20poly1305` for the suites' AEADs, `hkdf`
+# for the KDF. The provider is `ring`, which is C and brings none of them, so
+# these names are what keeps them in the graph.
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
 chacha20poly1305 = { version = "0.10", default-features = false }
 hkdf = "0.12"
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
-# Vendored and patched (the `rustls-webpki 0.102` dependency is gone):
-# see vendor/rustls-rustcrypto/README-PATCH.md.
-rustls-rustcrypto = { path = "vendor/rustls-rustcrypto" }
 webpki-roots = "1.0"
 # HTTP/1.1 only, and hyper-util for its `TokioIo`: HTTP/2 is the `http2` client
 # below, driven directly, so hyper never compiles its own h2 client — which is
@@ -88,9 +85,8 @@ unicode-width = "0.2"
 rand = "0.8"
 ml-kem = "0.3"
 x25519-dalek = "2"
-# The `channel_id` follow-up signs a P-256 assertion (see `net::follow_up`).
-# Already in the graph through `rustls-rustcrypto`, so naming it here compiles
-# nothing new.
+# The `channel_id` follow-up signs a P-256 assertion (see `net::follow_up`),
+# which is where this crate is used.
 p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 thiserror = "1.0"
 base64 = "0.22"
@@ -102,14 +98,15 @@ rustix = { version = "0.38", default-features = false, features = ["use-libc", "
 # platform but the one it was written for.
 #
 # `time`, not `chrono`: chrono's `clock` feature pulls `iana-time-zone`, which
-# pulls `iana-time-zone-haiku` and through it `cc` — a C compiler in the graph
-# for a target we never build, which the dependency-policy job (AGENTS.md Rule 1)
-# rejects, and rightly: the rule is that no crate here needs a C toolchain. `time`
-# reads the offset through `libc::localtime_r` on unix and a hand-declared
+# pulls `iana-time-zone-haiku` and through it a C compiler for a target this tree
+# never ships. `cc` is in the graph now anyway — the `ring` provider builds C —
+# but a dependency that reaches for it on a platform nobody here can test is a
+# build-script and a target-specific failure mode for no gain. `time` reads the
+# offset through `libc::localtime_r` on unix and a hand-declared
 # `SystemTimeToTzSpecificLocalTime` on Windows: no build script, no C, and the
 # same six fields. `formatting` and `serde` stay off — the stamp is six integers,
 # and the feature list is what keeps a date crate's formatting machinery and its
-# lookup tables out of a binary whose size is a budget (docs/OPTIMIZATIONS.md).
+# lookup tables out of the binary (docs/OPTIMIZATIONS.md).
 time = { version = "0.3", default-features = false, features = ["std", "local-offset"] }
 
 # The lint posture lives in the manifest, not only on the CI command line, so that
@@ -118,8 +115,8 @@ time = { version = "0.3", default-features = false, features = ["std", "local-of
 # `dpi-core` takes it from here with `[lints] workspace = true`; `dpi-detector`
 # has to repeat the table locally, because Cargo refuses a local entry next to
 # `workspace = true` and that crate needs one (its manifest says which and why).
-# `vendor/rustls-rustcrypto` does not opt in at all: its crate root already
-# declares its own table, and upstream's suppressions are upstream's to make.
+# The vendored crates do not opt in at all: their crate roots declare their own
+# tables, and upstream's suppressions are upstream's to make.
 [workspace.lints.rust]
 # `pub` on an item no path from the crate root can reach is a refactor leftover:
 # the item is `pub` only because it once was exported. Hoisted from
@@ -140,9 +137,8 @@ unreachable_pub = "warn"
 # `// SAFETY:` note on every block besides. `forbid` would take that door
 # away and break all three at once.
 #
-# `vendor/rustls-rustcrypto` is a workspace member but does not opt into this
-# table, so the patched provider is untouched — which is the point: it is
-# upstream's code, and `vendor/rustls` already carries `forbid(unsafe_code)`.
+# The vendored crates do not opt into this table either — they are upstream's
+# code, and `vendor/rustls` already carries `forbid(unsafe_code)`.
 unsafe_code = "deny"
 # `dead_code_pub_in_binary` is deliberately NOT set here, though the rule it
 # enforces (a `pub` item must not hide dead code in a crate that ships as a
@@ -170,22 +166,44 @@ unsafe_code = "deny"
 # those files are touched for another reason.
 all = "deny"
 
+# Desktop and every non-router release row: speed first, and the fastest to build
+# — measured, the O3 + thin-LTO build recompiles all ~250 dependencies and still
+# finishes before the -Oz + fat-LTO one, because fat LTO is a single whole-program
+# pass at link time (docs/PROFILES_AND_PROVIDER.md §7).
 [profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
+opt-level = 3
+lto = "thin"
+codegen-units = 16
 panic = "abort"
 strip = true
 
-# Local iteration: the codegen knobs of `release` minus the whole-program LTO
-# pass, which alone costs ~1.5 min of every edit→build cycle here, plus parallel
-# codegen units and rustc's incremental cache. ~7x faster rebuilds at ~46%
-# larger binary (6.6 MiB vs 4.5 MiB), so releases still ship `--release`:
+# The 32-bit router rows (`armv7`, `mipsel`, `mips`; `release.yml` names it per
+# row): CPU first, then RSS, then size. Fat LTO and one codegen unit keep the code
+# smallest, and `package.ring` below buys the C compiler a real `-O` — Cargo's
+# `OPT_LEVEL` is what reaches `cc`, and `-Oz` would hand it `-Os`.
+[profile.release-router]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+
+[profile.release-router.package.ring]
+opt-level = 3
+
+# Local iteration: the codegen knobs of `release` minus the LTO pass, plus
+# parallel codegen units and rustc's incremental cache:
 #   cargo build --profile release-local --target x86_64-pc-windows-msvc -p dpi-detector
 #
-# Measured per changed file: 52 s under `release` against 1.28 s here, so
-# rebuilding `--release` to "check that it compiles" burns ~40x the time for
-# nothing. A no-op `--release` rebuild is 0.45 s — the cost is the LTO relink.
+# Measured per changed file: 53 s under `release` (36 s when the change is in the
+# binary alone, the rest being `dpi-core`) against 1.58 s here, so rebuilding
+# `release` to "check that it compiles" burns ~30x the time for nothing. A no-op
+# `release` rebuild is 0.47 s — the cost is the LTO relink.
+#
+# The artifact is *smaller* here, not larger: 6 157 312 B against 6 955 520 B
+# under `release` (measured 2026-10-01, `x86_64-pc-windows-msvc` with
+# `+crt-static`), because `opt-level = 2` unrolls and inlines less than 3 does.
+# Releases still ship `release` / `release-router`: what they buy is speed, and
+# this profile is for the edit→run loop.
 #
 # Never alternate flag sets inside one target directory. Cargo keys a unit's
 # fingerprint on the full rustc invocation, `RUSTFLAGS` included, so switching
@@ -206,14 +224,13 @@ incremental = true
 # Dependencies drop it; our own crates keep the profile default.
 #
 # `opt-level` stays at the dev default on purpose. The code whose speed a
-# diagnostic run depends on is *ours* — dpi-core and the vendored provider, which
-# is a workspace member and therefore not covered by this table — so optimizing
-# dependencies would cost edit→test time without addressing the false timeouts
-# the dev profile is documented to produce (AGENTS.md, "Development Commands").
-# Timing runs belong to `release-local`.
+# diagnostic run depends on is *ours* — `dpi-core` and `dpi-detector`, which this
+# table does not cover — so optimizing dependencies would cost edit→test time
+# without addressing the false timeouts the dev profile is documented to produce
+# (AGENTS.md, "Development Commands"). Timing runs belong to `release-local`.
 #
 # `panic` is deliberately not set here: Cargo ignores it for the test profile, so
 # a dev-profile `panic = "abort"` would build the dependency graph twice, once per
-# panic strategy. Only `release` sets it.
+# panic strategy. Only the release profiles set it.
 [profile.dev.package."*"]
 debug = false

@@ -25,7 +25,6 @@ tokio = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 webpki-roots = { workspace = true }
-rustls-rustcrypto = { workspace = true }
 hyper = { workspace = true }
 http2 = { workspace = true }
 hyper-util = { workspace = true }

@@ -17,18 +17,22 @@ does not describe a shape the binary no longer produces.
 
 They MUST NOT be violated in any phase:
 
-* **Rust only.** No crates with a C/C++ build (`openssl`, `curl-sys`,
-  `ring`-compatible wrappers) — the target devices are
-  `mipsel-unknown-linux-musl` routers with no dynamic linker.
-* **Memory budget.** Release binary 3–6 MB (`opt-level = "z"`, `lto = true`,
-  `codegen-units = 1`, `panic = "abort"`, `strip = true`), RSS 3–6 MB. No
-  unbounded allocations, no temporary files without an explicit CLI argument.
+* **Memory discipline.** Streams and slices, never a whole stream held in memory;
+  no temporary files without an explicit CLI argument; decoders are capped — the
+  zstd reader refuses a window above 1 MiB before `ruzstd` is allowed to allocate.
+  Size and RSS are measured and logged (docs/OPTIMIZATIONS.md): a goal, not a rule.
+* **Acyclic modules.** `classify → net → dns → probe`, each layer using the one
+  before it and none of them reaching back; `config` and `profile` sit beside that
+  chain and the binary's `i18n` sits outside the core entirely. §3 names the one
+  deliberate `config → net` edge.
 * **Stage classification.** Every TCP/TLS probe is wrapped in `DpiProbeStream`;
   a reset or EOF after ClientHello is `DpiStatus::TlsRst`, a connect timeout is
   `DpiStatus::SynDropped`.
 * **Badges and protocols are Latin-script** in every language (`OK`, `BLOCKED`,
   `TLS RST`, `SNI`, `ClientHello`); only headings, banners, menus and `--legend`
   are translated.
+* **Machine output is language-independent.** `--json` never follows `--lang`:
+  `status` and `detail` are the same snake_case tokens in every language.
 * **All interface text lives in `dpi-detector::i18n`** (four blocks: `En`, `Ru`,
   `Zh`, `Fa`); not a single human-facing string is written at the call site. There
   is no text in the core — see phase **P5** below.

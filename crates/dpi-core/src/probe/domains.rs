@@ -767,22 +767,34 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Dp
     {
         problems.push(("HTTP", e.http.detail.clone()));
     }
-    if !t12_ok && e.t12.detail != Detail::None && !is_timeout_detail(&e.t12.detail) {
-        problems.push(("T1.2", e.t12.detail.clone()));
-    }
-    if !t13_ok && e.t13.detail != Detail::None && !is_timeout_detail(&e.t13.detail) {
-        problems.push(("T1.3", e.t13.detail.clone()));
-    }
     // `DROP` keeps its line: unlike the TLS timeouts, the badge does not say
     // why nothing came back, and "no reply to the Initial" is the whole finding.
     if quic_failed && e.quic.detail != Detail::None {
         problems.push(("QUIC", e.quic.detail.clone()));
     }
 
+    // TLS 1.2 and 1.3 are one stage while they agree — one `TLS:` line says it
+    // once — and two stages the moment they disagree: a reader looking at
+    // `TLS RST` beside `DROP` has to know which version did what, so each line
+    // then carries its own version and a shared detail is not folded across them.
     let mut details: Vec<DetailLine> = Vec::new();
-    if problems.len() == 1 {
-        details.push((None, problems[0].1.clone()));
+    let tls_agree = e.t12.status == e.t13.status && e.t12.detail == e.t13.detail;
+    if tls_agree {
+        if !t12_ok && e.t12.detail != Detail::None && !is_timeout_detail(&e.t12.detail) {
+            details.push((Some("TLS"), e.t12.detail.clone()));
+        }
     } else {
+        if !t12_ok && e.t12.detail != Detail::None && !is_timeout_detail(&e.t12.detail) {
+            details.push((Some("TLS12"), e.t12.detail.clone()));
+        }
+        if !t13_ok && e.t13.detail != Detail::None && !is_timeout_detail(&e.t13.detail) {
+            details.push((Some("TLS13"), e.t13.detail.clone()));
+        }
+    }
+
+    if details.is_empty() && problems.len() == 1 {
+        details.push((None, problems[0].1.clone()));
+    } else if !problems.is_empty() {
         // Same detail from several protocols shares one line; a single one keeps
         // its protocol tag so the reader knows which stage failed.
         let mut grouped: Vec<(Detail, Vec<&'static str>)> = Vec::new();
@@ -808,7 +820,7 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Dp
         }
         if let Some(min) = times.iter().cloned().reduce(f64::min) {
             details.clear();
-            details.push((None, Detail::Elapsed(min)));
+            details.push((Some("TLS"), Detail::Elapsed(min)));
         }
     }
 
@@ -839,7 +851,7 @@ mod tests {
         assert_eq!(http_s.display_label(), "TIMEOUT");
         assert_eq!(t12_s, DpiStatus::Ok);
         assert_eq!(t13_s, DpiStatus::Ok);
-        assert_eq!(details, vec![(None, Detail::Elapsed(0.28))]); // Elapsed time, no "Timeout"
+        assert_eq!(details, vec![(Some("TLS"), Detail::Elapsed(0.28))]); // Elapsed time, no "Timeout"
     }
 
     #[test]
@@ -854,8 +866,9 @@ mod tests {
         assert_eq!(http_s.display_label(), "TIMEOUT");
         assert_eq!(t12_s, DpiStatus::TlsRst);
         assert_eq!(t13_s, DpiStatus::TlsRst);
-        // Only TLS RST is shown, NO "HTTP:Timeout"
-        assert_eq!(details, vec![(None, Detail::RstHello)]);
+        // Only TLS RST is shown, NO "HTTP:Timeout" — and the versions agree, so
+        // one `TLS:` line carries it.
+        assert_eq!(details, vec![(Some("TLS"), Detail::RstHello)]);
     }
 
     #[test]
@@ -870,8 +883,29 @@ mod tests {
         assert_eq!(http_s.display_label(), "TIMEOUT");
         assert_eq!(t12_s, DpiStatus::TlsDropped);
         assert_eq!(t13_s, DpiStatus::TlsDropped);
-        // Only TLS Handshake timeout is shown, NO "HTTP:Timeout"
-        assert_eq!(details, vec![(None, Detail::TlsHandshakeTimeout)]);
+        // Only TLS Handshake timeout is shown, NO "HTTP:Timeout" — the two
+        // versions agree, so the line is tagged once.
+        assert_eq!(details, vec![(Some("TLS"), Detail::TlsHandshakeTimeout)]);
+    }
+
+    #[test]
+    fn test_tls_versions_that_disagree_keep_their_own_tags() {
+        // The other half of the rule: with the versions apart, a shared `TLS:`
+        // line would hide which one failed — the columns say `TLS RST` beside
+        // `DROP`, and the detail has to say which is which.
+        let mut entry = DomainEntry::pending("example.test".to_string(), None, None);
+        entry.http = HttpCheck { status: DpiStatus::Ok, detail: Detail::None };
+        entry.t12 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, elapsed: 0.1 };
+        entry.t13 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, elapsed: 5.0 };
+
+        let (_http, _t12, _t13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(
+            details,
+            vec![
+                (Some("TLS12"), Detail::RstHello),
+                (Some("TLS13"), Detail::TlsHandshakeTimeout),
+            ]
+        );
     }
 
     #[test]

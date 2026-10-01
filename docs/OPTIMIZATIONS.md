@@ -2,6 +2,8 @@
 
 This document records the architectural decisions and compilation profiles applied to minimize the size of the `dpi-detector` executable on desktop and embedded platforms (Windows, Linux x86_64, ARM, MIPS / OpenWrt / Keenetic).
 
+Size is a measured goal, not a budget: the desktop `release` profile trades some of it for speed, the router rows keep the size-first one, and every figure below is a measurement rather than a target.
+
 ---
 
 ## 1. Summary Results (Windows x86_64)
@@ -22,20 +24,23 @@ This document records the architectural decisions and compilation profiles appli
 * **Solution:** The file was rebuilt with the standard matrix of crisp resolutions: `16x16, 24x24, 32x32, 48x48, 64x64, 128x128, 256x256` with PNG compression.
 * **Result:** The `.ico` size was reduced from 920 KB to 191 KB; the savings in the `.rsrc` section amounted to **~746 KB**.
 
-### 2.2. Compiler Profile: `opt-level = "z"`
+### 2.2. Compiler Profile: `opt-level = "z"` on the router rows
 * **File:** `Cargo.toml`
-* **Setting:**
+* **Setting:** the three 32-bit router rows build `release-router`; the desktop `release`
+  profile no longer uses these knobs (see the last bullet).
   ```toml
-  [profile.release]
+  [profile.release-router]
+  inherits = "release"
   opt-level = "z"
   lto = true
   codegen-units = 1
-  panic = "abort"
-  strip = true
   ```
+  (`panic = "abort"` and `strip = true` are inherited from `[profile.release]`.)
 * **Mechanics:** The `"z"` mode makes LLVM aggressively cut code bloat (loop unrolling, vectorization, excessive function inlining), targeting the minimum instruction weight.
 * **Result:** Compression of the machine code section `.text` by **~500 KB**.
-* **Rejected:** `opt-level = "s"` — the previous variant, superseded by `"z"`. In `docs/REFACTORING.md` it is still named as the active one; `"z"` is what gets built, do not revert.
+* **Rejected:** `opt-level = "s"` — the previous variant, superseded by `"z"` on the router rows; `"z"` is what they build, do not revert.
+* **The desktop profile trades size for speed, and that is deliberate.** `[profile.release]` is `opt-level = 3` with thin LTO and `codegen-units = 16`: measured on the same tree, the desktop artifact is 6 955 520 B under it against 4 400 640 B under `-Oz` + fat LTO with the same provider, and it is the fastest profile both to build and to run (docs/PROFILES_AND_PROVIDER.md §6). Size is a measured goal here, not a rule.
+* **The speed side of this knob is measured elsewhere.** `-Oz` is the right setting wherever size and resident memory are the constraint, and it is what the router rows keep — but it is the slow end of that trade. Under the `ring` provider the profile change is small on a single handshake (0.427 ms under `-Oz` + fat LTO against 0.399 ms under O3 + thin LTO) while the artifact grows as above; the ×8.3 handshake win this knob used to be worth belonged to the pure-Rust crypto crates, which the C provider replaced. `ring`'s own C code is built size-optimized under `-Oz` too (Cargo's `OPT_LEVEL` reaches `cc`), which is why the router rows pin `[profile.release-router.package.ring] opt-level = 3`. The per-platform profile settings, the measurements and the provider decision are in `docs/PROFILES_AND_PROVIDER.md`.
 * **Re-checked on the target, and it stands.** All three settings were built for
   `mipsel-unknown-linux-musl` and run on the router (MT7621, four hardware
   threads), two passes each, interleaved, resident memory sampled from
@@ -43,7 +48,7 @@ This document records the architectural decisions and compilation profiles appli
 
 | `opt-level` | file | peak RSS: test 0 / 2 / 1 | processor time: test 0 / 1 |
 | --- | --- | --- | --- |
-| `"z"` (ships) | 5.37 MB | 7120 / 8344 / 8244 kB | 2.7–3.8 s / 36.0 s |
+| `"z"` (router rows) | 5.37 MB | 7120 / 8344 / 8244 kB | 2.7–3.8 s / 36.0 s |
 | `"s"` | 5.81 MB | 7384 / 8816 / 8876 kB | 2.4–3.0 s / 31.2 s |
 | `3` | 7.64 MB | 8672 / 10020 / 10208 kB | 1.7–2.7 s / 27.6 s |
 
@@ -146,10 +151,10 @@ Measured on the target (MT7621, musl, `--release`). §2.5's two guesses about wh
 
 * **Files:** `Cargo.toml` (`[workspace.dependencies]`), `crates/dpi-detector/Cargo.toml`, `crates/dpi-detector/src/tui/screens/post_run.rs`
 * **What it buys:** the report the binary writes for itself — the post-run `S` export, when no `-o` path was given — is named `dpi_detector_results-20260925-020115.txt`, so a second export is a second file instead of the first one overwritten. The offset has to come from the OS: a fixed one is wrong across a DST change, and this is the only clock in the tree that has to agree with the one on the desk.
-* **`time`, not `chrono`:** chrono's `clock` feature pulls `iana-time-zone`, which pulls `iana-time-zone-haiku` and through it `cc` — a C compiler in the dependency graph, for a target this project never builds. The dependency-policy job rejects exactly that (`AGENTS.md` Rule 1, and it is right to: no crate in this tree may need a C toolchain, on any target), so the clock moved to `time`, which reads the offset through `libc::localtime_r` on unix and a hand-declared `SystemTimeToTzSpecificLocalTime` on Windows — no build script, no C, and the same six fields. A machine that cannot name its offset (a stripped router image with no `/etc/localtime`) falls back to UTC rather than to a name without a stamp.
+* **`time`, not `chrono`:** chrono's `clock` feature pulls `iana-time-zone`, which pulls `iana-time-zone-haiku` and through it `cc` — a C compiler in the dependency graph, for a target this project never builds. `cc` is in the graph now anyway (the `ring` provider builds C), but a dependency that reaches for it on a platform nobody here can test is a build script and a target-specific failure mode for no gain, so the clock moved to `time`, which reads the offset through `libc::localtime_r` on unix and a hand-declared `SystemTimeToTzSpecificLocalTime` on Windows — no build script, no C, and the same six fields. A machine that cannot name its offset (a stripped router image with no `/etc/localtime`) falls back to UTC rather than to a name without a stamp.
 * **Features:** `default-features = false, features = ["std", "local-offset"]`. `formatting`, `serde` and `macros` stay off: the stamp is six integer fields read off `OffsetDateTime::now_local()`, and the formatting machinery with its tables is what a default build would have carried.
 * **Measured (`release-local`, x86_64-pc-windows-msvc, one tree, A/B):** 5 963 776 bytes with `time` against 5 986 304 bytes with `chrono` in the same tree — 22 528 bytes smaller, and the dependency is the only difference between the two builds. The numbers this entry was written with (6 233 600 against 6 242 304, the clock against a stubbed `default_report_name()`) are superseded by these; §2.10's "after" number is the same tree as the 5 986 304 here.
-* **Rejected:** a hand-rolled `GetLocalTime`/`localtime_r`, i.e. two new platform blocks of `unsafe`, which would stop `src/tui/backend.rs` being the crate's only FFI module (both the lint posture in `Cargo.toml` and that module's own comment name it as the one) — more code, two platforms, the same information. Rejected too: a UTC stamp, which reads at an offset from the wall clock of the machine the report is opened on. Rejected as well, once the `cc` showed up: keeping `chrono` and narrowing the policy job to the targets this project builds, because the rule is about the graph, and an exception there would be one the next crate with a C build script could hide behind.
+* **Rejected:** a hand-rolled `GetLocalTime`/`localtime_r`, i.e. two new platform blocks of `unsafe`, which would stop `src/tui/backend.rs` being the crate's only FFI module (both the lint posture in `Cargo.toml` and that module's own comment name it as the one) — more code, two platforms, the same information. Rejected too: a UTC stamp, which reads at an offset from the wall clock of the machine the report is opened on. Rejected as well: keeping `chrono` and accepting its `cc` edge, because that build script exists for a target this tree never ships — an untestable failure mode and a second way to reach `cc`, for no gain.
 
 ### 2.10. The HTTP/2 Client Is a Crate, Not a Fork (`http2`)
 

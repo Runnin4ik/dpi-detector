@@ -1712,7 +1712,7 @@ enum Unimplemented {
 /// or reset it is rather than as a block.
 const UNIMPLEMENTED: &[(Unimplemented, u16, &str)] = &[
     // --- AES-CBC under ECDHE: the provider carries AEAD suites only (three
-    // per key-exchange family), and no CBC suite is in rustls-rustcrypto.
+    // per key-exchange family), and `ring` ships no CBC suite.
     (Unimplemented::Cipher, 0xc009, "ECDHE-ECDSA-AES128-CBC-SHA: no CBC suite in the provider"),
     (Unimplemented::Cipher, 0xc00a, "ECDHE-ECDSA-AES256-CBC-SHA: no CBC suite in the provider"),
     (Unimplemented::Cipher, 0xc013, "ECDHE-RSA-AES128-CBC-SHA: no CBC suite in the provider"),

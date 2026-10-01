@@ -40,14 +40,13 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --no-deps
 
 ## What will not be merged
 
-Six system rules — in full in `AGENTS.md`, in brief here:
+Five system rules — in full in `AGENTS.md`, in brief here:
 
-1. **No C/C++ in the dependency graph.** Target devices are `mipsel-unknown-linux-musl` routers with no working C cross-compiler, and `ring` has no MIPS target. `openssl`, `aws-lc-rs`, `curl-sys`, `zstd-sys` and the like are rejected.
-2. **No unbounded allocations, no temporary files.** The budget is 3–6 MB for the binary and for RSS.
-3. **No error classification outside the connection stages.** Every TCP/TLS probe wraps its connection in `DpiProbeStream`: a reset or EOF after ClientHello is `TlsRst`, a connect timeout is `SynDropped`.
-4. **No translated badges or protocol tokens.** `OK`, `TLS RST`, `SNI` stay Latin in every language.
-5. **No language in machine output.** `--json` does not depend on `--lang`.
-6. **No interface strings outside `i18n`.** New text means a `Messages` field filled in all four languages; otherwise it does not compile.
+1. **No unbounded allocations, no temporary files.** Streams are processed in slices, never buffered whole, and decoders are capped.
+2. **No error classification outside the connection stages.** Every TCP/TLS probe wraps its connection in `DpiProbeStream`: a reset or EOF after ClientHello is `TlsRst`, a connect timeout is `SynDropped`.
+3. **No translated badges or protocol tokens.** `OK`, `TLS RST`, `SNI` stay Latin in every language.
+4. **No language in machine output.** `--json` does not depend on `--lang`.
+5. **No interface strings outside `i18n`.** New text means a `Messages` field filled in all four languages; otherwise it does not compile.
 
 ## Documentation
 

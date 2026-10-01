@@ -393,9 +393,10 @@ async fn probe_egress(
 }
 
 /// Downscales a configured concurrency gate to what the local CPU can
-/// sustain in parallel TLS handshakes (pure-Rust crypto, no acceleration
-/// on MIPS/weak ARM cores). Downscale-only: never raises explicit values,
-/// strong machines keep their configured limits.
+/// sustain in parallel TLS handshakes (the provider has no MIPS assembly —
+/// `ring` falls back to its generic C path there — and the ARM cores these
+/// routers use are slow whatever they run). Downscale-only: never raises
+/// explicit values, strong machines keep their configured limits.
 /// Proven: 20-wide gates starve a 2-core MIPS box into 5s tail timeouts
 /// (DoT TIMEOUTs that vanish at 6-wide); x86 is unaffected in verdicts.
 fn auto_gate(configured: usize) -> usize {
