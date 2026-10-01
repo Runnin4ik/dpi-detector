@@ -4,19 +4,10 @@ members = [
     "crates/dpi-core",
     "crates/dpi-detector",
 ]
-# The vendored crates are patched upstream sources (see
-# vendor/*/README-PATCH.md): rustls with a ClientHello-profile hook, and hyper
-# with the original header casing a browser writes over HTTP/1.1. They must NOT
-# be workspace members (their tests/examples are upstream's, not ours).
-#
-# There were five. `rustls-rustcrypto` was the one exception, a member because it
-# performed certificate signature verification and had to be built, linted and
-# tested in the configuration that ships — the provider is `ring` now, so the
-# crate and its fork are gone (docs/PROFILES_AND_PROVIDER.md). `h2` carried the
-# request shape a browser puts in its h2 preface until `http2` — h2's own source,
-# forked and published by a maintainer who needs exactly those knobs — took that
-# job as a plain dependency, so the tree, its patch and the `[patch]` entry below
-# all went.
+# Patched upstream sources (see vendor/*/README-PATCH.md): rustls with the
+# ClientHello-profile hook, hyper with the header casing a browser writes over
+# HTTP/1.1. Not workspace members — their tests and examples are upstream's, and
+# a change goes back to the fork, never into the vendored copy.
 exclude = ["vendor/rustls", "vendor/hyper"]
 
 # Fingerprint hooks, applied through `[patch]` so that tokio-rustls / hyper /
@@ -34,41 +25,35 @@ license = "MIT"
 [workspace.dependencies]
 tokio = { version = "1.40", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "macros", "io-util", "sync", "process"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
-# RFC 8879 certificate decompression, decoder side only (see
-# `dpi_core::net::cert_compression`): rustls's own `brotli`/`zlib` features would
-# also link the matching *compressors*, which this tool never calls.
+# RFC 8879 decompression, decoder side only (`net::cert_compression`): rustls's
+# own `brotli`/`zlib` features would also link the *compressors*, never called.
 brotli-decompressor = "5"
 zlib-rs = "0.6"
-# RFC 8878, decoder side only: Firefox advertises `zlib, brotli, zstd` and a
-# server may then compress with zstd, which `net::cert_compression` has to read.
-# `zstd`/`zstd-safe` wrap the C library; `ruzstd` is the decoder in Rust (MIT)
-# and the only one this tree needs — a C zstd would be a second C dependency for
-# one decode path.
+# RFC 8878, same reason: Firefox advertises `zlib, brotli, zstd`, and a server may
+# answer with a zstd frame this decoder has to read. `zstd`/`zstd-safe` wrap the C
+# library; `ruzstd` is the Rust decoder (MIT) and the only one needed.
 ruzstd = "0.8"
 # RFC 9180, for the ECH greeting: `net::hpke` is the `Hpke` implementation the
-# provider lacks — `aes-gcm` and `chacha20poly1305` for the suites' AEADs, `hkdf`
-# for the KDF. The provider is `ring`, which is C and brings none of them, so
-# these names are what keeps them in the graph.
+# provider lacks (`ring` is C and brings no Rust AEAD or KDF), so these names are
+# what keeps the suites' primitives in the graph.
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
 chacha20poly1305 = { version = "0.10", default-features = false }
 hkdf = "0.12"
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
 webpki-roots = "1.0"
-# HTTP/1.1 only, and hyper-util for its `TokioIo`: HTTP/2 is the `http2` client
-# below, driven directly, so hyper never compiles its own h2 client — which is
-# what left its patch (vendor/hyper/README-PATCH.md) with one hunk instead of
-# three.
+# HTTP/1.1 only: HTTP/2 is the `http2` client below, driven directly, so hyper
+# never compiles its own h2 client — which is what left its patch
+# (vendor/hyper/README-PATCH.md) with one hunk instead of three.
 hyper = { version = "1.4", default-features = false, features = ["client", "http1"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
-# The h2 fork that carries those knobs as published API (h2's own source, MIT).
-# (`unstable` is h2's own feature, and it is what exposes `frame`: the shape types
-# (`PseudoOrder`, `SettingsOrder`, `StreamDependency`) live there, as they do for
-# every client that needs them. This replaced `h2` and its vendored patch — same
-# lineage, no patch to re-apply.
+# The h2 fork that carries those knobs as published API (h2's own source, MIT);
+# its `unstable` feature is what exposes the shape types (`PseudoOrder`,
+# `SettingsOrder`, `StreamDependency`). Same lineage as the patch it replaced,
+# with nothing to re-apply.
 http2 = { version = "0.5", features = ["unstable"] }
 http-body-util = "0.1"
-# The `Body` trait itself: `net::http` implements it once for the two clients'
-# response bodies, and the DoH client reads them through `Limited`.
+# The trait `net::http` implements for both clients' response bodies, read
+# through `Limited` by the DoH client.
 http-body = "1"
 bytes = "1.7"
 serde = { version = "1.0", features = ["derive"] }
@@ -91,78 +76,48 @@ p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 thiserror = "1.0"
 base64 = "0.22"
 sha2 = "0.10"
-# The name of the report the binary writes for itself carries the run's local
-# date and time (`tui/screens/post_run.rs`), and the offset has to come from the
-# OS — a fixed one is wrong across DST and a hand-rolled one is wrong on every
-# platform but the one it was written for.
-#
-# `time`, not `chrono`: chrono's `clock` feature pulls `iana-time-zone`, which
-# pulls `iana-time-zone-haiku` and through it a C compiler for a target this tree
-# never ships. `cc` is in the graph now anyway — the `ring` provider builds C —
-# but a dependency that reaches for it on a platform nobody here can test is a
-# build-script and a target-specific failure mode for no gain. `time` reads the
-# offset through `libc::localtime_r` on unix and a hand-declared
-# `SystemTimeToTzSpecificLocalTime` on Windows: no build script, no C, and the
-# same six fields. `formatting` and `serde` stay off — the stamp is six integers,
-# and the feature list is what keeps a date crate's formatting machinery and its
-# lookup tables out of the binary (docs/OPTIMIZATIONS.md).
+# The report's own stamp carries the run's local date and time
+# (`tui/screens/post_run.rs`), and the offset has to come from the OS: a fixed one
+# is wrong across DST, a hand-rolled one is wrong off the platform it was written
+# for. `time`, not `chrono` — chrono's `clock` feature pulls a build script
+# (`iana-time-zone-haiku`) for a target this tree never ships, while `time` reads
+# the offset through `libc::localtime_r` on unix and `SystemTimeToTzSpecificLocalTime`
+# on Windows: no build script, the same six fields. `formatting` and `serde`
+# stay off — the stamp is six integers, and the feature list is what keeps a date
+# crate's formatting tables out of the binary (docs/OPTIMIZATIONS.md).
 time = { version = "0.3", default-features = false, features = ["std", "local-offset"] }
 
-# The lint posture lives in the manifest, not only on the CI command line, so that
-# a bare `cargo build`/`cargo test` — both of which `check.yml` runs — carries it
-# too, and so that a single non-default lint has somewhere to be turned on.
-# `dpi-core` takes it from here with `[lints] workspace = true`; `dpi-detector`
-# has to repeat the table locally, because Cargo refuses a local entry next to
-# `workspace = true` and that crate needs one (its manifest says which and why).
-# The vendored crates do not opt in at all: their crate roots declare their own
-# tables, and upstream's suppressions are upstream's to make.
+# The lint posture lives in the manifest, not only on the CI command line, so a
+# bare `cargo build`/`cargo test` carries it too. `dpi-core` inherits it with
+# `[lints] workspace = true`; `dpi-detector` repeats the table locally, because
+# Cargo refuses a local entry beside `workspace = true` and it needs one.
 [workspace.lints.rust]
-# `pub` on an item no path from the crate root can reach is a refactor leftover:
-# the item is `pub` only because it once was exported. Hoisted from
-# `crates/dpi-core/src/lib.rs`, which carried it alone.
+# `pub` on an item no path from the crate root can reach is a refactor leftover.
 unreachable_pub = "warn"
-# §11 of the guidelines: `unsafe` is a decision, not a default. Before this the
-# tree's 29 blocks were held by review alone — rustc's default is `allow` and
-# neither `clippy -D warnings` nor the rustdoc step turns this lint on — so a
-# new block in ordinary code compiled everywhere without a word.
-#
-# `deny` rather than `forbid`, because the blocks are legitimate where they are:
-# `net/bind.rs` and `net/icmp_err.rs` in `dpi-core`, and `src/tui/backend.rs` in
-# `dpi-detector`, are OS FFI — three modules, not four: `src/terminal.rs` held
-# nothing but `detect_vt`, which moved into `backend.rs`. Each is allowed at the
-# scope that is FFI — a module-level `#![allow(unsafe_code, reason = "...")]`, or
-# one per Win32 function where the file also holds safe code. The `reason` names
-# the call and the invariant the scope holds, and every module carries a
-# `// SAFETY:` note on every block besides. `forbid` would take that door
-# away and break all three at once.
-#
-# The vendored crates do not opt into this table either — they are upstream's
-# code, and `vendor/rustls` already carries `forbid(unsafe_code)`.
+# §11 of the guidelines: `unsafe` is a decision, not a default. `deny`, not
+# `forbid`: the legitimate blocks are OS FFI — `net/bind.rs` and `net/icmp_err.rs`
+# in `dpi-core`, `src/tui/backend.rs` in `dpi-detector` — and each is allowed at
+# its own scope with a `reason` and a `// SAFETY:` note per block. The vendored
+# crates do not opt into this table; `vendor/rustls` carries its own
+# `forbid(unsafe_code)`.
 unsafe_code = "deny"
-# `dead_code_pub_in_binary` is deliberately NOT set here, though the rule it
-# enforces (a `pub` item must not hide dead code in a crate that ships as a
-# binary) is one this project wants. `cargo test` compiles every library's test
-# target as a *binary harness*, so under `--all-targets` the lint fires on every
-# `pub` item a library exports for its dependents — 68 errors in `dpi-core`
-# alone, all of them used by `dpi-detector`. The rule is enforced where it can
-# hold instead: `crates/dpi-detector/Cargo.toml` sets it in its own table.
+# `dead_code_pub_in_binary` is deliberately NOT set here, though the rule is one
+# this project wants: `cargo test` compiles every library's test target as a
+# *binary harness*, so under `--all-targets` it fires on every `pub` item a library
+# exports for its dependents (68 errors in `dpi-core` alone). It is set where it
+# can hold — `crates/dpi-detector/Cargo.toml`.
 
 [workspace.lints.clippy]
-# Equivalent to the `-- -D warnings` the CI clippy step passes — the whole
-# `clippy::all` group, which rustc leaves at `warn`. `pedantic` and `nursery` stay
-# off deliberately: their 196 members against a `-D warnings` tree fail on the
-# first run, and the per-lint entries this project does want are one line each.
+# Equivalent to the `-- -D warnings` the CI clippy step passes. `pedantic` and
+# `nursery` stay off: their 196 members against a `-D warnings` tree fail on the
+# first run, and the per-lint entries wanted here are one line each.
 #
-# `cast_lossless` is the entry that looks like it should be here and is not, so
-# the measurement is recorded rather than rediscovered: turning it on today
-# reports over thirty sites across a dozen files — the byte and `u16` reads in
-# `dns/wire.rs`, `dns/socks.rs`, `dns/dot.rs`, `net/ja3.rs`, `net/ja4.rs`,
-# `net/icmp_err.rs`, `net/cert_compression.rs`, `net/fingerprint/variant.rs`,
-# `probe/tcp16.rs`, `probe/burst.rs`, the fingerprint tests and
-# `examples/tls_fingerprint.rs`, plus the `char as u32` in the i18n and input
-# helpers — each of which would have to become `usize::from(..)`. That is a
-# rewrite of the parsers for no behaviour change, so the lint stays off until
-# those files are touched for another reason.
+# `cast_lossless` is the entry that looks like it belongs here and is not: it
+# reports over thirty sites across a dozen files — the byte and `u16` reads in the
+# DNS wire/socks/DoT parsers, `net/ja3.rs`, `net/ja4.rs`, `net/icmp_err.rs`,
+# `net/cert_compression.rs`, `probe/tcp16.rs`, `probe/burst.rs`, the fingerprint
+# tests — each of which would become `usize::from(..)`. A rewrite of the parsers
+# for no behaviour change, so it stays off until those files are touched anyway.
 all = "deny"
 
 # Desktop and every non-router release row: speed first, and the fastest to build
@@ -189,27 +144,21 @@ codegen-units = 1
 [profile.release-router.package.ring]
 opt-level = 3
 
-# Local iteration: the codegen knobs of `release` minus the LTO pass, plus
-# parallel codegen units and rustc's incremental cache:
+# Local iteration: `release`'s codegen knobs minus the LTO pass, plus parallel
+# codegen units and rustc's incremental cache.
 #   cargo build --profile release-local --target x86_64-pc-windows-msvc -p dpi-detector
 #
-# Measured per changed file: 53 s under `release` (36 s when the change is in the
-# binary alone, the rest being `dpi-core`) against 1.58 s here, so rebuilding
-# `release` to "check that it compiles" burns ~30x the time for nothing. A no-op
-# `release` rebuild is 0.47 s — the cost is the LTO relink.
+# Measured per changed file: 53 s under `release` against 1.58 s here, so
+# rebuilding `release` to "check that it compiles" burns ~30x the time for nothing.
+# The artifact is smaller here too — 6 157 312 B against 6 955 520 B
+# (`x86_64-pc-windows-msvc`, `+crt-static`) — because `opt-level = 2` unrolls and
+# inlines less than 3 does. Releases ship `release` / `release-router` for speed;
+# this profile is the edit→run loop.
 #
-# The artifact is *smaller* here, not larger: 6 157 312 B against 6 955 520 B
-# under `release` (measured 2026-10-01, `x86_64-pc-windows-msvc` with
-# `+crt-static`), because `opt-level = 2` unrolls and inlines less than 3 does.
-# Releases still ship `release` / `release-router`: what they buy is speed, and
-# this profile is for the edit→run loop.
-#
-# Never alternate flag sets inside one target directory. Cargo keys a unit's
+# Never alternate flag sets inside one target directory: cargo keys a unit's
 # fingerprint on the full rustc invocation, `RUSTFLAGS` included, so switching
-# `+crt-static` on and off — or running `release-local` after a differently
-# flagged build of it — recompiles every dependency: measured 88 s for what
-# should have been a 1.3 s rebuild. Run the release row exactly as written, in
-# the same shell, every time.
+# `+crt-static` on and off recompiles every dependency — measured 88 s for what
+# should have been a 1.3 s rebuild. Run the release row exactly as written.
 [profile.release-local]
 inherits = "release"
 lto = false
@@ -217,19 +166,17 @@ codegen-units = 16
 opt-level = 2
 incremental = true
 
-# `cargo test` and `cargo build` compile 258 locked dependencies before they
-# reach a line of ours, and each of them carried full debuginfo: 1.1 GiB of
-# rlibs in `target/debug` here, none of it a frame this tool's backtraces need.
-# Dependencies drop it; our own crates keep the profile default.
+# `cargo test` and `cargo build` compile 258 locked dependencies before reaching a
+# line of ours, each carrying full debuginfo: 1.1 GiB of rlibs in `target/debug`,
+# none of it a frame this tool's backtraces need. Dependencies drop it; our crates
+# keep the profile default.
 #
-# `opt-level` stays at the dev default on purpose. The code whose speed a
-# diagnostic run depends on is *ours* — `dpi-core` and `dpi-detector`, which this
-# table does not cover — so optimizing dependencies would cost edit→test time
-# without addressing the false timeouts the dev profile is documented to produce
-# (AGENTS.md, "Development Commands"). Timing runs belong to `release-local`.
+# `opt-level` stays at the dev default on purpose: the code a diagnostic run's
+# speed depends on is *ours*, which this table does not cover, so optimizing
+# dependencies would cost edit→test time without addressing the false timeouts the
+# dev profile produces (AGENTS.md). Timing runs belong to `release-local`.
 #
 # `panic` is deliberately not set here: Cargo ignores it for the test profile, so
-# a dev-profile `panic = "abort"` would build the dependency graph twice, once per
-# panic strategy. Only the release profiles set it.
+# a dev-profile `panic = "abort"` would build the graph twice, once per strategy.
 [profile.dev.package."*"]
 debug = false
