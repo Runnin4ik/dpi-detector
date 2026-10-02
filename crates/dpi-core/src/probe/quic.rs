@@ -103,10 +103,19 @@ const CID_LEN: usize = 8;
 const READ_BUF: usize = 2048;
 
 /// How long the probe waits for an answer before repeating its Initial, and how
-/// many times it repeats. RFC 9002 §6.2 sets the first timeout at twice the
-/// initial round-trip estimate (333 ms, §6.2.1) while no sample exists and
-/// doubles it after that — `0.67 s, 1.33 s, 2.67 s`, which is what aioquic's
-/// `get_probe_timeout` computes and what a stock client was measured to send.
+/// many times it repeats. The wait doubles after every repeat — RFC 9002 §6.2
+/// makes that backoff a MUST (`0.67 s, 1.33 s, 2.67 s`), and it is what aioquic
+/// computes (`get_probe_timeout() * 2**pto_count`).
+///
+/// The first value is deliberately not the RFC's own. §6.2.1 with the §6.2.2
+/// initial RTT gives `333 + 4 * 166.5 = 999 ms` — "handshakes starting with a PTO
+/// of 1 second" — while `2 * initial_rtt`, the form aioquic uses before the first
+/// sample, gives 666 ms. The shorter first wait is what the window can pay for:
+/// the ladder below spends `1 + 2 + 4` of them (4.66 s) and the reply to the last
+/// repeat needs two more, so nine PTOs are 5.99 s and fit the default 6 s window
+/// ([`MIN_WINDOW`]); at the RFC's 1 s they would need 9 s and every QUIC probe
+/// would outlive the timeout it was configured with.
+///
 /// Three repeats inside the window is what the measured endpoints needed: an
 /// edge that answers the first flight with a packet no key opens sent its
 /// ServerHello only to a later one.
