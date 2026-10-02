@@ -1,19 +1,24 @@
-"""What does a site support, independent of our own network?
+"""Does a site serve HTTP/3 at all, independent of our own network?
 
-The column measures the *path from here*; this asks the other question — does the
-host serve HTTP/3 at all — from two third-party testers on networks that are not
-ours, so a disagreement separates "the site has no HTTP/3" from "our path to it
-does not work". Measured: `gateway.discord.gg`, `hub.docker.com` and `x.com` are answered by
-intodns's own QUIC probe (`quic=ok`) while `http3check.net` reports no HTTP/3 for
-them, and our path to all three ends in a TLS `handshake_failure` (296) — the
-disagreement keeps them out of `quic_unsupported.txt`, which is exactly the
-difference a censored user needs to see.
+The column measures the *path from here*; this asks the other question. What a
+browser acts on is the *advertisement*: `Alt-Svc` on the HTTPS response, and the
+RFC 9460 HTTPS record. A host that names neither is never told to use HTTP/3, and
+a QUIC handshake answering is not support. Measured: `gateway.discord.gg` and
+`hub.docker.com` answer a handshake and advertise `alpn=h2` only, `x.com` has no
+HTTPS record at all — no browser uses HTTP/3 on any of the three, which four
+other checkers and a browser agree with. An earlier version of this script read
+the answering handshake as support through `intodns.ai` and was wrong, so that
+column is gone.
 
-Two testers, because one is one implementation:
-  * `intodns.ai/api/web/http3` — JSON: Alt-Svc, the RFC 9460 HTTPS record, and a
-    QUIC probe from their host.
+Sources:
+  * the host's own advertisement — `Alt-Svc` from a plain HTTPS request, and the
+    HTTPS record through a third-party resolver (`cloudflare-dns.com`, DoH JSON;
+    no QUIC involved, so a stripped header on our path is not the whole answer);
   * `http3check.net` — LiteSpeed's, which runs the handshake itself and reports
     whether QUIC and HTTP/3 are supported.
+
+A host is `no` only when neither source advertises `h3`. That is what
+`quic_unsupported.txt` lists.
 
 Writes `target/validation/online-h3.txt` and prints the same table.
 
@@ -30,22 +35,22 @@ import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 OUT = ROOT / "target" / "validation" / "online-h3.txt"
-INTODNS = "https://intodns.ai/api/web/http3?domain={}"
+DOH = "https://cloudflare-dns.com/dns-query?name={}&type=HTTPS"
 HTTP3CHECK = "https://http3check.net/?host={}"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) dpi-detector-quic-stand"
 
 
-def fetch(url, timeout=30):
-    request = urllib.request.Request(url, headers={"User-Agent": UA})
+def fetch(url, timeout=30, headers=None):
+    request = urllib.request.Request(url, headers={"User-Agent": UA, **(headers or {})})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode("utf-8", "replace")
 
 
-def retrying(url, attempts=4, pause=8.0):
+def retrying(url, attempts=4, pause=8.0, headers=None):
     """Third-party APIs rate-limit: back off on 429 rather than reporting a gap."""
     for attempt in range(attempts):
         try:
-            return fetch(url)
+            return fetch(url, headers=headers)
         except urllib.error.HTTPError as error:
             if error.code == 429 and attempt + 1 < attempts:
                 time.sleep(pause * (attempt + 1))
@@ -56,25 +61,40 @@ def retrying(url, attempts=4, pause=8.0):
     return "ERROR retries exhausted"
 
 
-def intodns(host):
-    body = retrying(INTODNS.format(host))
-    if body.startswith("ERROR"):
-        return body, "-", "-", "-"
+def advertisement(host):
+    """What the host tells a browser: `Alt-Svc` on the response, and its HTTPS RR.
+
+    Both are the browser's own inputs, and a host naming neither `h3` is never
+    asked for HTTP/3. The record comes from a third-party resolver, so a header
+    stripped on our path cannot be the whole answer.
+    """
     try:
-        payload = json.loads(body)
-    except ValueError:
-        return "ERROR parse", "-", "-", "-"
-    record = payload.get("httpsRecord") or {}
-    probe = payload.get("quicProbe") or {}
-    methods = payload.get("detectionMethods") or {}
-    probe_state = "ok" if probe.get("success") else ("inconclusive" if probe.get("inconclusive") else "fail")
-    alpn = ",".join(record.get("alpn") or []) or "-"
-    return (
-        "yes" if payload.get("http3Supported") else "no",
-        f"alt-svc={methods.get('altSvc')}",
-        f"alpn={alpn}",
-        f"quic={probe_state}",
-    )
+        request = urllib.request.Request(f"https://{host}/", headers={"User-Agent": UA})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            alt_svc = response.headers.get("Alt-Svc") or "none"
+    except urllib.error.HTTPError as error:
+        # A 404 is still an answer, and the headers are what we came for.
+        alt_svc = error.headers.get("Alt-Svc") or "none"
+    except Exception as error:  # noqa: BLE001
+        alt_svc = f"ERROR {type(error).__name__}"
+
+    body = retrying(DOH.format(host), headers={"accept": "application/dns-json"})
+    if body.startswith("ERROR"):
+        alpn = body
+    else:
+        try:
+            answer = json.loads(body).get("Answer") or []
+        except ValueError:
+            answer = []
+        tokens = sorted({
+            token
+            for item in answer
+            for token in re.findall(r"alpn=([a-z0-9,\-]+)", item.get("data", ""))
+        })
+        alpn = ",".join(tokens) or "none"
+
+    advertises = "h3" in alt_svc or "h3" in alpn
+    return ("yes" if advertises else "no"), f"alt-svc={alt_svc}", f"alpn={alpn}"
 
 
 def http3check(host):
@@ -99,12 +119,19 @@ def http3check(host):
 
 
 def main(hosts):
-    rows = [f"{'host':24} {'intodns':8} {'http3check':10} detail"]
+    rows = [f"{'host':24} {'advertised':11} {'http3check':10} detail"]
     for host in hosts:
-        first, alt_svc, alpn, probe = intodns(host)
+        advertised, alt_svc, alpn = advertisement(host)
         time.sleep(1.0)
-        second, versions = http3check(host)
-        rows.append(f"{host:24} {first:8} {second:10} {alt_svc} {alpn} {probe} | {versions}")
+        check, versions = http3check(host)
+        if advertised == "yes" or check == "yes":
+            verdict = "yes"
+        elif advertised == "no" and check == "no":
+            verdict = "no"
+        else:
+            # One source silent: the host stays probed rather than listed.
+            verdict = "unknown"
+        rows.append(f"{host:24} {verdict:11} {check:10} {alt_svc} {alpn} | {versions}")
         print(rows[-1], flush=True)
         time.sleep(1.0)
     OUT.parent.mkdir(parents=True, exist_ok=True)

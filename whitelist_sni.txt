@@ -70,9 +70,7 @@ favicon.yandex.net
 favicon.yandex.ru
 filekeeper-vod.2gis.com
 frontend.vh.yandex.ru
-gateway.discord.gg
 gosuslugi.ru
-hub.docker.com
 i0.photo.2gis.com
 i1.photo.2gis.com
 i2.photo.2gis.com
@@ -177,7 +175,6 @@ www.ozon.ru
 www.rzd.ru
 www.vtb.ru
 www.wildberries.ru
-x.com
 xapi.ozon.ru
 yabro-wbplugin.edadeal.yandex.ru
 yabs.yandex.ru

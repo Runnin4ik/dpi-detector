@@ -18,7 +18,7 @@ under test.
 | `bracket.py` | For the whole host list in one window: a stock client, then the detector **once for all hosts**, then the stock client again. A verdict that disagrees with the stock client *in the same window* is the question the other scripts answer. `JOBS = 8`: a 34-host sweep is about a minute |
 | `variants.py` | A stock client with one property of the detector's hello at a time (zeroed flow control, 1200-byte datagrams): the experiment that showed Cloudflare closing a zero-limit client with `Error opening control stream` |
 | `browser_check.py` | Drives a headless Chrome with QUIC forced for one origin and reports what the endpoint did with a **browser's** hello — the reference the column actually claims |
-| `online_h3.py` | Two third-party testers (`intodns.ai`, `http3check.net`) answer the *other* question — does the host serve HTTP/3 at all, from networks that are not ours — and writes `target/validation/online-h3.txt` |
+| `online_h3.py` | Answers the *other* question — would a browser ever use HTTP/3 here — from what the host advertises (`Alt-Svc`, and its HTTPS record through a third-party resolver) plus `http3check.net`, and writes `target/validation/online-h3.txt` |
 | `hosts.txt` | The host list `crosscheck.py`, `bracket.py` and `online_h3.py` default to |
 
 **Every QUIC verdict measured in this file before 2026-10-02 was taken with a
@@ -280,36 +280,39 @@ browser hides the gate rather than paying it.
 
 ### Does the host support HTTP/3, independent of our network
 
-Two third-party testers (`online_h3.py`, full output in
-`target/validation/online-h3.txt`) answer the other question from networks that
-are not ours, and they agree on 31 of 34 rows:
+`online_h3.py` (full output in `target/validation/online-h3.txt`) answers the
+other question — would a browser ever use HTTP/3 here — from what the host
+advertises: `Alt-Svc` on its HTTPS response, and its RFC 9460 HTTPS record through
+a third-party resolver, with `http3check.net` corroborating. 17 of the 34 rows
+advertise HTTP/3:
 
-* **20 hosts announce or serve HTTP/3**: `amnezia.org`, `danbooru.donmai.us`,
-  `discord.com`, `gateway.discord.gg`, `holod.media`, `hub.docker.com`,
-  `media.discordapp.net`, `meduza.io`, `nnmclub.to`, `www.apkmirror.com`,
-  `www.dw.com`, `www.euronews.com`, `www.facebook.com`, `www.google.com`,
-  `www.instagram.com`, `www.intel.com`, `www.linkedin.com`, `www.messenger.com`,
-  `www.youtube.com`, `x.com`.
-* **14 do not**: `aws.amazon.com`, `browserleaks.com`, `protonvpn.com`,
-  `shikimori.io`, `soundcloud.com`, `vk.ru`, `www.canva.com`, `www.cdn77.com`,
-  `www.coursera.org`, `www.currenttime.tv`, `www.linuxserver.io`,
-  `www.svoboda.org`, `www.themoscowtimes.com`, `www.torproject.org`.
+* **17 advertise it**: `amnezia.org`, `danbooru.donmai.us`, `discord.com`,
+  `holod.media`, `media.discordapp.net`, `meduza.io`, `nnmclub.to`,
+  `www.apkmirror.com`, `www.dw.com`, `www.euronews.com`, `www.facebook.com`,
+  `www.google.com`, `www.instagram.com`, `www.intel.com`, `www.linkedin.com`,
+  `www.messenger.com`, `www.youtube.com`.
+* **17 advertise nothing**, and are what `quic_unsupported.txt` lists:
+  `aws.amazon.com`, `browserleaks.com`, `gateway.discord.gg`, `hub.docker.com`,
+  `protonvpn.com`, `shikimori.io`, `soundcloud.com`, `vk.ru`, `www.canva.com`,
+  `www.cdn77.com`, `www.coursera.org`, `www.currenttime.tv`, `www.linuxserver.io`,
+  `www.svoboda.org`, `www.themoscowtimes.com`, `www.torproject.org`, `x.com`.
 
-The three rows where the testers disagree are the useful ones, because the
-disagreement is the definition of the question: `gateway.discord.gg`,
-`hub.docker.com` and `x.com` answer `intodns.ai`'s QUIC handshake (`quic=ok`)
-while advertising nothing, so `http3check.net` — which requires an advertised
-alternative service — says no. **Serving HTTP/3 when asked** and **a browser
-discovering HTTP/3** are two different facts, and this column is about the first.
+`gateway.discord.gg`, `hub.docker.com` and `x.com` are the rows that used to be
+counted as serving, and that reading was wrong: their endpoints answer a forced
+QUIC handshake, but they advertise nothing — `alpn=h2` only, and `x.com` has no
+HTTPS record at all — so no browser is ever told to use HTTP/3 there, which four
+other checkers and a browser agree with. **Serving HTTP/3 when asked** and **a
+browser discovering HTTP/3** are two different facts, and this column is about the
+second: what the host tells a client, not what it would do if one insisted.
 
 A third fact separates them further: a headless Chrome with QUIC *forced*
-(`browser_check.py`) completes the handshake with five hosts the testers call
-"no HTTP/3" — `aws.amazon.com`, `soundcloud.com`, `vk.ru`, `www.currenttime.tv`,
+(`browser_check.py`) completes the handshake with five hosts that advertise no
+HTTP/3 — `aws.amazon.com`, `soundcloud.com`, `vk.ru`, `www.currenttime.tv`,
 `www.svoboda.org` — because forcing skips discovery. Their endpoints do speak
 HTTP/3; they just never tell a browser to use it.
 
 The detector ships this table's verdict as data: `quic_unsupported.txt` holds the
-hosts **both** testers call "no HTTP/3", and test 2 does not probe their QUIC
+hosts that advertise no HTTP/3, and test 2 does not probe their QUIC
 column at all — the cell prints a dash and the summary counts the column out of
 the hosts that can answer it (`--legend` describes the badge, `README.md` the
 file and the rule). Regenerating the list means re-running this script.
@@ -330,17 +333,17 @@ hello edits above:
 | `www.canva.com` | `quic_answered_without_handshake` | `quic_closed(quic_close_296)`, as the stock client reads it |
 
 Measured after the fix: twelve runs out of twelve on those four hosts, and a full
-34-host sweep with no regression. The sweep agrees with both online testers on
-which hosts serve HTTP/3 — but a row that is not `quic_ok` is not thereby one the
-testers call "no HTTP/3": `x.com` closes this probe with 296 in the same window
-above and both testers list it as serving, because reading a close is a
-different fact from being refused a handshake.
+34-host sweep with no regression. The sweep agrees with the advertisement on
+which hosts serve HTTP/3 — but a row that is not `quic_ok` is not thereby a host
+that advertises none: `x.com` closes this probe with 296 in the same window above
+and advertises nothing, because reading a close is a different fact from being
+refused a handshake.
 
 What is left is a lower class — `aws.amazon.com`, `soundcloud.com`,
 `www.currenttime.tv`, `www.svoboda.org`, `www.coursera.org` — where a *forced*
 Chrome completes the handshake while the probe reads a close (296/336). None of
-them advertises HTTP/3, so no browser reaches them over QUIC at all; the forced
-check bypasses discovery, and both testers call them "no HTTP/3" too.
+them advertises HTTP/3, so no browser reaches them over QUIC at all: the forced
+check bypasses discovery.
 
 
 The four hosts in that table were the ones where the *stock client* and a

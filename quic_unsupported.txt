@@ -1,14 +1,17 @@
-# Hosts whose endpoint serves no HTTP/3 at all, so test 2 does not probe their
-# QUIC column: the cell prints a dash, the row keeps its TCP verdicts, and the
-# summary counts the QUIC column out of the hosts that can answer it instead of
-# the whole list.
+# Hosts a browser never reaches over HTTP/3 — their endpoint advertises none — so
+# test 2 does not probe their QUIC column: the cell prints a dash, the row keeps
+# its TCP verdicts, and the summary counts the QUIC column out of the hosts that
+# can answer it instead of the whole list.
 #
-# The rule is the two third-party testers agreeing on "no HTTP/3"
-# (`scripts/quic/online_h3.py` — intodns.ai and http3check.net, probing from
-# networks that are not ours; run 2026-10-02). A row where they disagree stays
-# probed: the disagreement is exactly the question this column asks.
+# The rule is what a browser is told: no `Alt-Svc` naming h3, and no `alpn=h3` in
+# the host's HTTPS record, with http3check.net agreeing on "no HTTP/3"
+# (`scripts/quic/online_h3.py`; run 2026-10-02). A QUIC handshake answering is not
+# support: `intodns.ai` read one as support and was wrong for three hosts that
+# four other checkers and a browser agree serve no HTTP/3, so that column is gone.
+# A host either source is silent about stays probed — silence is not an answer,
+# and the question this column asks is exactly that difference.
 #
-# Caveat, recorded in scripts/quic/README.md: five of these hosts
+# Note, recorded in scripts/quic/README.md: five of these hosts
 # (aws.amazon.com, soundcloud.com, vk.ru, www.currenttime.tv, www.svoboda.org)
 # do answer a handshake when one is forced on them — they just never advertise
 # HTTP/3, and a browser that is never told does not use it. They stay listed.
@@ -19,6 +22,8 @@
 # (case-insensitive) against the domain's host part.
 aws.amazon.com
 browserleaks.com
+gateway.discord.gg
+hub.docker.com
 protonvpn.com
 shikimori.io
 soundcloud.com
@@ -31,3 +36,4 @@ www.linuxserver.io
 www.svoboda.org
 www.themoscowtimes.com
 www.torproject.org
+x.com
