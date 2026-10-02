@@ -17,7 +17,7 @@ rustls = { path = "vendor/rustls" }
 hyper = { path = "vendor/hyper" }
 
 [workspace.package]
-version = "5.0.0-alpha.20"
+version = "5.0.0-alpha.21"
 edition = "2021"
 authors = ["runnin"]
 license = "MIT"
