@@ -29,11 +29,26 @@ pub(crate) struct MenuSelection {
     pub selected_tests: String,
     pub ip_version: String, // "ipv4" or "ipv6"
     pub concurrency: usize,
+    /// Seconds one phase of a probe waits, HTTP/TLS/QUIC alike: the value the
+    /// menu's Timeout row was left on (`AppConfig::timeout`).
+    pub timeout: f64,
     pub language: Language,
     pub tls_fingerprint: TlsFingerprint,
     /// The interface the probes leave through, when the user picked one: `None`
     /// is the routing table.
     pub interface: Option<String>,
+}
+
+/// The Timeout row steps one second at a time inside this range. Both ends are
+/// the practical ones: a second is the shortest window a router link answers in,
+/// a minute the longest a silent target is worth waiting out.
+pub(crate) const TIMEOUT_MIN_SECS: f64 = 1.0;
+pub(crate) const TIMEOUT_MAX_SECS: f64 = 60.0;
+
+/// The timeout as the menu prints it: whole seconds without a trailing `.0`, in
+/// the spelling the rest of the tool uses for seconds (`0.2s`).
+fn timeout_value(timeout: f64) -> String {
+    format!("{}s", timeout)
 }
 
 /// Applies the interface a menu selection carries to the process-wide bind.
@@ -165,6 +180,10 @@ async fn run_menu_loop(
         })
         .unwrap_or(0);
     let v6_supported = ipv6_supported();
+    // The menu's last timeout, else the configured one, kept inside the row's
+    // range: a config or a hand-edited state file must not put the row outside
+    // what the arrows can step through.
+    let mut timeout = saved.timeout().unwrap_or(cfg.timeout).clamp(TIMEOUT_MIN_SECS, TIMEOUT_MAX_SECS);
 
     // What the run was asked for: the flag or the menu's last selection, already
     // resolved by `main.rs` — a `--domain` run must not be re-ticked from the
@@ -187,7 +206,7 @@ async fn run_menu_loop(
     let mut notice: Option<String> = None;
     let mut reader = EventStream::new();
     loop {
-        let offset = 5;
+        let offset = 6;
         let test_options = get_test_options(&msg);
         let total_rows = offset + test_options.len();
 
@@ -199,6 +218,7 @@ async fn run_menu_loop(
                 current_lang,
                 &ip_version,
                 presets[conc_idx],
+                timeout,
                 &presets,
                 TlsFingerprint::ALL[fp_idx],
                 v6_supported,
@@ -293,6 +313,8 @@ async fn run_menu_loop(
                         conc_idx = (conc_idx + presets.len() - 1) % presets.len();
                     } else if cursor == 4 {
                         fp_idx = (fp_idx + TlsFingerprint::ALL.len() - 1) % TlsFingerprint::ALL.len();
+                    } else if cursor == 5 {
+                        timeout = (timeout - 1.0).max(TIMEOUT_MIN_SECS);
                     } else if cursor >= offset {
                         let t_idx = cursor - offset;
                         if t_idx < test_options.len() {
@@ -325,6 +347,8 @@ async fn run_menu_loop(
                         conc_idx = (conc_idx + 1) % presets.len();
                     } else if cursor == 4 {
                         fp_idx = (fp_idx + 1) % TlsFingerprint::ALL.len();
+                    } else if cursor == 5 {
+                        timeout = (timeout + 1.0).min(TIMEOUT_MAX_SECS);
                     } else if cursor >= offset {
                         let t_idx = cursor - offset;
                         if t_idx < test_options.len() {
@@ -353,6 +377,8 @@ async fn run_menu_loop(
                         conc_idx = (conc_idx + 1) % presets.len();
                     } else if cursor == 4 {
                         fp_idx = (fp_idx + 1) % TlsFingerprint::ALL.len();
+                    } else if cursor == 5 {
+                        timeout = (timeout + 1.0).min(TIMEOUT_MAX_SECS);
                     } else if cursor >= offset {
                         let t_idx = cursor - offset;
                         if t_idx < test_options.len() {
@@ -381,6 +407,7 @@ async fn run_menu_loop(
                         selected_tests: sorted_selection(&selected_tests),
                         ip_version: ip_version.clone(),
                         concurrency: presets[conc_idx],
+                        timeout,
                         language: current_lang,
                         tls_fingerprint: TlsFingerprint::ALL[fp_idx],
                         interface: iface_idx
@@ -428,6 +455,7 @@ fn menu_rows(
     current_lang: Language,
     ip_version: &str,
     concurrency: usize,
+    timeout: f64,
     presets: &[usize],
     fingerprint: TlsFingerprint,
     v6_supported: bool,
@@ -437,7 +465,7 @@ fn menu_rows(
     iface_value: &str,
 ) -> Vec<String> {
     let mut lines = Vec::new();
-    let offset = 5;
+    let offset = 6;
 
     // Language row
     let lang_opts = Language::ALL
@@ -506,6 +534,17 @@ fn menu_rows(
     let fp_cursor = if cursor == 4 { "►" } else { " " };
     let fp_lbl = format!("{}:", msg.fingerprint_label.trim_end_matches(':'));
     lines.push(format!("  {} {} {}", fp_cursor, pad_width(&fp_lbl, 16), fp_opt));
+    // Timeout row: a stepper, not a cycler — every second from 1 to 60 is a value
+    // a user may want, so the arrows move by one instead of jumping between
+    // presets. The value is one window for HTTP, TLS and QUIC alike.
+    let timeout_cursor = if cursor == 5 { "►" } else { " " };
+    let timeout_lbl = format!("{}:", msg.timeout_label.trim_end_matches(':'));
+    lines.push(format!(
+        "  {} {} < {} >",
+        timeout_cursor,
+        pad_width(&timeout_lbl, 16),
+        timeout_value(timeout)
+    ));
     lines.push(format!("  {}", "─".repeat(BOX_WIDTH - 8)));
     for (i, (digit, label)) in test_options.iter().enumerate() {
         let is_selected = selected_tests.contains(digit);
@@ -534,6 +573,7 @@ fn draw_menu(
     current_lang: Language,
     ip_version: &str,
     concurrency: usize,
+    timeout: f64,
     presets: &[usize],
     fingerprint: TlsFingerprint,
     v6_supported: bool,
@@ -556,6 +596,7 @@ fn draw_menu(
         current_lang,
         ip_version,
         concurrency,
+        timeout,
         presets,
         fingerprint,
         v6_supported,
@@ -736,6 +777,7 @@ mod tests {
             selected_tests: "123".to_string(),
             ip_version: "ipv4".to_string(),
             concurrency: 50,
+            timeout: 8.0,
             language: Language::Ru,
             tls_fingerprint: TlsFingerprint::Rustls,
             interface: None,
@@ -756,6 +798,7 @@ mod tests {
             selected_tests: "1".to_string(),
             ip_version: "ipv4".to_string(),
             concurrency: 50,
+            timeout: 8.0,
             language: Language::Ru,
             tls_fingerprint: TlsFingerprint::Rustls,
             interface: None,
@@ -780,6 +823,36 @@ mod tests {
         sel.interface = Some("no-such-interface-2791".to_string());
         apply_interface(&sel);
         assert!(bind::target().is_none(), "a name that resolves to nothing binds nothing");
+    }
+
+    /// The Timeout row: the seconds the run will use, with the cursor marker on
+    /// it only while the cursor is there.
+    #[test]
+    fn test_the_timeout_row_shows_the_seconds_the_run_will_use() {
+        let msg = get_messages(Language::En);
+        let test_options = get_test_options(&msg);
+        let selected: HashSet<char> = ['2'].into_iter().collect();
+        let row = |cursor: usize| {
+            menu_rows(
+                cursor,
+                Language::En,
+                "ipv4",
+                50,
+                15.0,
+                &[1, 5, 20, 50, 100],
+                TlsFingerprint::Rustls,
+                true,
+                &test_options,
+                &selected,
+                &msg,
+                "auto",
+            )
+            .into_iter()
+            .find(|line| line.contains("15s"))
+            .expect("the timeout row is drawn")
+        };
+        assert!(row(5).contains('►'), "the cursor row is marked");
+        assert!(!row(0).contains('►'), "a row the cursor is away from is not marked");
     }
 
     /// The menu is a fixed-width box and every row in it is exactly that wide. The
@@ -818,6 +891,7 @@ mod tests {
                                 lang,
                                 ip_version,
                                 50,
+                                8.0,
                                 &presets,
                                 TlsFingerprint::Chrome146,
                                 v6_supported,
@@ -846,6 +920,7 @@ mod tests {
                     lang,
                     "ipv4",
                     100,
+                    60.0,
                     &presets,
                     fingerprint,
                     true,

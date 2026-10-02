@@ -55,15 +55,15 @@ pub enum ProgressBlock {
     Dot,
     /// Egress fingerprint probes (`whoami.akamai.net`)
     Egress,
-    /// Test 2 stage 0: DNS resolve of the target domains
+    /// Test 2 column: DNS resolve of the target domains
     DomainDns,
-    /// Test 2 stage 1: TLS 1.3 handshakes
+    /// Test 2 column: TLS 1.3 handshakes
     DomainTls13,
-    /// Test 2 stage 2: TLS 1.2 handshakes
+    /// Test 2 column: TLS 1.2 handshakes
     DomainTls12,
-    /// Test 2 stage 3: plain HTTP requests
+    /// Test 2 column: plain HTTP requests
     DomainHttp,
-    /// Test 2 stage 4: QUIC Initials on UDP 443
+    /// Test 2 column: QUIC Initials on UDP 443
     DomainQuic,
 }
 
@@ -84,10 +84,11 @@ impl ProgressBlock {
 }
 
 impl PhaseId {
-    /// The counter this phase owns on a line shared with other stages, for the
-    /// phases that run one after another inside one test (test 2: DNS →
-    /// TLS 1.3 → TLS 1.2 → HTTP → QUIC). Phases that own a whole line return
-    /// `None`.
+    /// The counter this phase owns on a line shared with other columns of the
+    /// same test: test 2's five columns (DNS → TLS 1.3 → TLS 1.2 → HTTP → QUIC)
+    /// share one line and are declared together before the run starts, because
+    /// the columns advance at once rather than one after another. Phases that
+    /// own a whole line return `None`.
     pub fn stage_block(self) -> Option<ProgressBlock> {
         match self {
             PhaseId::DomainDns => Some(ProgressBlock::DomainDns),

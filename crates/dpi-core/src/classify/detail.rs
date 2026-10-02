@@ -100,6 +100,27 @@ pub enum Detail {
     /// filter. Kept apart from [`Detail::HostUnreach`] because the two arrive as
     /// the same errno.
     IcmpAdminProhibited,
+    /// ICMP time-exceeded: a router on the path expired the datagram's hop
+    /// limit, and the kernel handed that ICMP to the sender's socket — so the
+    /// probe reads a socket error where the wire was silent. Measured with a
+    /// local `nfqws2` QUIC desync whose fake carried `ip_ttl`: the fake has to
+    /// borrow the client's 5-tuple to fool the filter, so the ICMP for the fake
+    /// lands on the probe's own socket. Windows reports that class as
+    /// `WSAENETRESET` (10052) and carries no message; the unix half reads the
+    /// ICMP itself (`net::icmp_err`), and both end at this detail.
+    IcmpTimeExceeded,
+    /// ICMP fragmentation needed (type 3 code 4, RFC 1191), or the local send
+    /// that failed because of it: the datagram does not fit the path's MTU.
+    /// Worth its own name because the QUIC probe *must* send a 1200-byte
+    /// datagram (RFC 9000 §14.1), so on a path narrower than that — PPPoE, a
+    /// tunnel — the honest verdict is "the path cannot carry this", not a bare
+    /// `EMSGSIZE`. The errno is `EMSGSIZE` on unix and `WSAEMSGSIZE` (10040) on
+    /// Windows; the ICMP is read on the wire where the platform allows it.
+    IcmpFragNeeded,
+    /// ICMP parameter problem (type 12): a header field was unacceptable to some
+    /// router. Rare on a working path, and in the injection vocabulary beside a
+    /// forged unreachable, so it is named rather than left as an errno.
+    IcmpParameterProblem,
     UnknownConnectionFailure,
     Ipv6Unsupported,
 
@@ -358,6 +379,9 @@ impl Detail {
             NetUnreach => Cow::Borrowed("net_unreachable"),
             HostUnreach => Cow::Borrowed("host_unreachable"),
             IcmpAdminProhibited => Cow::Borrowed("icmp_admin_prohibited"),
+            IcmpTimeExceeded => Cow::Borrowed("icmp_time_exceeded"),
+            IcmpFragNeeded => Cow::Borrowed("icmp_frag_needed"),
+            IcmpParameterProblem => Cow::Borrowed("icmp_parameter_problem"),
             UnknownConnectionFailure => Cow::Borrowed("unknown_connection_failure"),
             Ipv6Unsupported => Cow::Borrowed("ipv6_unsupported"),
             QuicServerHello => Cow::Borrowed("quic_server_hello"),

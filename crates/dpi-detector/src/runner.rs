@@ -11,8 +11,9 @@ use std::time::{Duration, Instant};
 use dpi_core::classify::Detail;
 use dpi_core::config::{
     clean_domain, embedded_burst_domains, embedded_domains,
-    embedded_tcp16_targets, embedded_whitelist_sni, load_domains_from_file,
-    load_tcp16_targets_from_file, load_whitelist_sni, resource_path, AppConfig, Tcp16Target,
+    embedded_quic_unsupported, embedded_tcp16_targets, embedded_whitelist_sni,
+    load_domains_from_file, load_quic_unsupported, load_tcp16_targets_from_file,
+    load_whitelist_sni, resource_path, AppConfig, Tcp16Target,
 };
 use dpi_core::probe::tcp16::Tcp16Row;
 use dpi_core::probe::dns_avail::check_dns_availability;
@@ -27,11 +28,11 @@ use dpi_core::probe::burst::{
 };
 use dpi_core::dns::cymru::{fetch_ip_cymru, IpCymruInfo};
 use dpi_core::probe::domains::{
-    check_http_all, check_tls_all, collect_stub_ips, domain_stats, resolve_all, IpFamily,
+    check_domains, collect_stub_ips, domain_stats, IpFamily,
 };
 use dpi_core::probe::telegram::run_telegram_full;
 use dpi_core::probe::whitelist::run_whitelist_sni;
-use dpi_core::probe::{check_quic_all, check_tcp_16_20, domains};
+use dpi_core::probe::{check_tcp_16_20, domains};
 use dpi_core::profile::RegionProfile;
 use dpi_core::{PhaseProgress, ProgressTick};
 use tokio::sync::Semaphore;
@@ -174,6 +175,28 @@ pub(crate) fn load_whitelist_sni_list(cfg: &AppConfig, msg: &Messages) -> Vec<(S
     };
     if from_file.is_empty() {
         embedded_whitelist_sni()
+    } else {
+        from_file
+    }
+}
+
+pub(crate) fn load_quic_unsupported_list(cfg: &AppConfig, msg: &Messages) -> Vec<String> {
+    let path = resource_path(&cfg.quic_unsupported_file);
+    let from_file = match load_quic_unsupported(&path) {
+        Ok(list) => list,
+        Err(err) => {
+            if err.kind() != io::ErrorKind::NotFound {
+                eprintln!(
+                    "{}",
+                    msg.quic_unsupported_load_failed
+                        .replacen("{}", &format!("{}: {err}", path.display()), 1)
+                );
+            }
+            Vec::new()
+        }
+    };
+    if from_file.is_empty() {
+        embedded_quic_unsupported()
     } else {
         from_file
     }
@@ -848,7 +871,7 @@ pub(crate) async fn run_test_suite(
                 msg.ip_col,
                 if cfg.ip_version == "ipv6" { "IPv6" } else { "IPv4" },
                 msg.timeout_label,
-                cfg.connect_timeout
+                cfg.timeout
             ));
         }
         // Silent stub collection with its own timeout.
@@ -859,9 +882,18 @@ pub(crate) async fn run_test_suite(
         .await
         .unwrap_or_default();
 
-        // All four stages are on the road from the first second (test 1
-        // style), so the run reads as one progressing line rather than four
-        // headers that scroll away.
+        // The hosts whose endpoint serves no HTTP/3: no Initial goes out for
+        // them, their cell is a dash, and the QUIC column — the live line and the
+        // summary alike — counts only the rows that can answer it.
+        let quic_unsupported = load_quic_unsupported_list(cfg, msg);
+        let quic_total = domains
+            .iter()
+            .filter(|d| domains::quic_applicable(d, &quic_unsupported))
+            .count();
+
+        // Every column is on the road from the first second: the five stages are
+        // pipelined per domain, so there is no stage start to announce — the line
+        // reads as one progressing run, not as five that scroll away.
         if !args.json {
             live.begin_stages(
                 msg.stages_label.to_string(),
@@ -870,15 +902,12 @@ pub(crate) async fn run_test_suite(
                     (dpi_core::ProgressBlock::DomainTls13, domains.len()),
                     (dpi_core::ProgressBlock::DomainTls12, domains.len()),
                     (dpi_core::ProgressBlock::DomainHttp, domains.len()),
-                    (dpi_core::ProgressBlock::DomainQuic, domains.len()),
+                    (dpi_core::ProgressBlock::DomainQuic, quic_total),
                 ],
             );
         }
-        let mut entries = resolve_all(domains, family, &stub_ips, &sem, phases.clone()).await;
-        check_tls_all(&mut entries, false, cfg, &sem, phases.clone()).await;
-        check_tls_all(&mut entries, true, cfg, &sem, phases.clone()).await;
-        check_http_all(&mut entries, cfg, &stub_ips, &sem, phases.clone()).await;
-        check_quic_all(&mut entries, cfg, &sem, phases.clone()).await;
+        let entries =
+            check_domains(domains, family, cfg, &stub_ips, &quic_unsupported, &sem, phases.clone()).await;
         live.finish();
 
         let stats = domain_stats(&entries);
@@ -933,6 +962,7 @@ pub(crate) async fn run_test_suite(
             let item = item.clone();
             let cfg_c = Arc::clone(&cfg_arc);
             let sem_c = Arc::clone(&sem);
+            let tick = tcp_tick.clone();
             handles.push(tokio::spawn(async move {
                 let port = item.port;
                 let sni = if port == 80 {
@@ -946,15 +976,16 @@ pub(crate) async fn run_test_suite(
                 let elapsed = t0.elapsed().as_secs_f64();
                 let detail = tcp16_detail(detail, elapsed);
                 let asn_str = item.display_asn();
+                // Ticked by the probe itself, never by the collector loop: the
+                // counter is a live reading and a slow target must not hold it.
+                if let Some(t) = tick.as_ref() {
+                    t();
+                }
                 (item.id, asn_str, item.provider, status, detail)
             }));
         }
         for h in handles {
-            let done = h.await;
-            if let Some(t) = tcp_tick.as_ref() {
-                t();
-            }
-            if let Ok((id, asn, provider, status, detail)) = done {
+            if let Ok((id, asn, provider, status, detail)) = h.await {
                 rows.push(Tcp16Row { id, asn, provider, status, detail });
             }
         }

@@ -667,7 +667,7 @@ fn answered(axis: BurstTlsVersion, negotiated: Option<ProtocolVersion>) -> (DpiS
 }
 
 /// Runs the attempt: the handshake, and — when it completes — the request under
-/// `cfg.read_timeout` ([`check_http`]). The clock covers the whole attempt, dial
+/// `cfg.timeout` ([`check_http`]). The clock covers the whole attempt, dial
 /// excluded: what the reported duration compares across attempts is the answer
 /// the host gave, not how long the previous one took.
 async fn handshake_attempt(
@@ -700,7 +700,7 @@ async fn handshake_attempt(
             // answered and then cut, redirected or blocked the moment the
             // request goes out, and that is exactly what the test is for.
             let http = match timeout(
-                Duration::from_secs_f64(cfg.read_timeout),
+                Duration::from_secs_f64(cfg.timeout),
                 check_http(stream, domain, cfg, fingerprint, &stage, false),
             )
             .await

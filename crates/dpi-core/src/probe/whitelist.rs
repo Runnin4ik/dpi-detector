@@ -113,6 +113,7 @@ pub async fn run_whitelist_sni(
         let item = (*item).clone();
         let cfg = Arc::clone(&cfg_arc);
         let sem = Arc::clone(sem);
+        let tick = tick_base.clone();
         handles.push(tokio::spawn(async move {
             let default_sni = if cfg.fat_default_sni.is_empty() {
                 "example.com".to_string()
@@ -122,16 +123,17 @@ pub async fn run_whitelist_sni(
             let sni = item.sni.clone().unwrap_or(default_sni);
             let (status, detail, rtt) =
                 check_tcp_16_20(&item.ip, 443, &sni, &cfg, &sem, None).await;
+            // Ticked by the probe itself, never by the collector loop: the
+            // counter is a live reading and a slow IP must not hold it back.
+            if let Some(t) = tick.as_ref() {
+                t();
+            }
             (item, status, detail, rtt)
         }));
     }
     let mut base_rows = Vec::new();
     for h in handles {
-        let done = h.await;
-        if let Some(t) = tick_base.as_ref() {
-            t();
-        }
-        if let Ok(r) = done {
+        if let Ok(r) = h.await {
             base_rows.push(r);
         }
     }

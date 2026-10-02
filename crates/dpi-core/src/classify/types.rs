@@ -162,6 +162,26 @@ impl IcmpCode {
     /// Destination unreachable / administratively prohibited: something on the
     /// path refused the flow by policy — in practice a provider's filter.
     pub const ADMIN_PROHIBITED: Self = Self { icmp_type: 3, icmp_code: 13 };
+
+    /// Time exceeded: a router on the path expired the datagram's hop limit.
+    /// The code is the RFC 792 one for "time to live exceeded in transit".
+    pub const TIME_EXCEEDED: Self = Self { icmp_type: 11, icmp_code: 0 };
+
+    /// Fragmentation needed and the datagram asked not to be fragmented
+    /// (RFC 1191): the path's MTU is smaller than the datagram.
+    pub const FRAG_NEEDED: Self = Self { icmp_type: 3, icmp_code: 4 };
+
+    /// Parameter problem: a header field was unacceptable on the path.
+    pub const PARAMETER_PROBLEM: Self = Self { icmp_type: 12, icmp_code: 0 };
+
+    /// Whether this is an "administratively prohibited" verdict — the family a
+    /// provider's filter answers with. RFC 1812 §4.3.3.1 groups the
+    /// net/host/communication codes (9, 10, 13) as one meaning, and the three
+    /// arrive as the same errno, so the code is what separates them from the
+    /// rest of the unreachable family.
+    pub fn is_admin_prohibited(self) -> bool {
+        self.icmp_type == 3 && matches!(self.icmp_code, 9 | 10 | 13)
+    }
 }
 
 /// Probe statuses. `display_label()` is the Latin uppercase badge (Rule 4 — the
@@ -243,6 +263,14 @@ pub enum DpiStatus {
     QuicSpoof,
     /// Nothing came back within the window: the silence `SYN DROP` is for TCP.
     QuicDrop,
+    /// The endpoint does not serve HTTP/3 at all, so no Initial was sent for
+    /// this row: the QUIC cell prints a dash and the summary counts the row out
+    /// of the column's own total instead of the row count. The list is the
+    /// shipped `quic_unsupported.txt`, built from the two third-party testers
+    /// (`scripts/quic/online_h3.py`); a host that serves HTTP/3 when asked stays
+    /// probed even when it never advertises it, because that is the fact this
+    /// column measures.
+    QuicUnsupported,
     Err,
     Unknown,
 }
@@ -290,6 +318,7 @@ impl DpiStatus {
         DpiStatus::QuicVn,
         DpiStatus::QuicSpoof,
         DpiStatus::QuicDrop,
+        DpiStatus::QuicUnsupported,
         DpiStatus::Err,
         DpiStatus::Unknown,
     ];
@@ -332,6 +361,7 @@ impl DpiStatus {
             Self::QuicVn => "quic_vn",
             Self::QuicSpoof => "quic_spoof",
             Self::QuicDrop => "quic_drop",
+            Self::QuicUnsupported => "quic_unsupported",
             Self::Err => "err",
             Self::Unknown => "unknown",
         }
@@ -375,6 +405,7 @@ impl DpiStatus {
             Self::QuicVn => "VN",
             Self::QuicSpoof => "SPOOF",
             Self::QuicDrop => "DROP",
+            Self::QuicUnsupported => "—",
             Self::Err => "ERR",
             Self::Unknown => "UNKNOWN",
         }
@@ -492,7 +523,7 @@ mod tests {
     /// none, so the ones that drifted are the ones named here.
     ///
     /// The QUIC column's members are pinned here for the same reason: row
-    /// verdicts (five) and skipped-row statuses (three) all reach `--json`
+    /// verdicts (five) and skipped-row statuses (four) all reach `--json`
     /// through this pair, and nothing else would fail if one of them were
     /// renamed.
     #[test]
@@ -510,6 +541,9 @@ mod tests {
             (DpiStatus::QuicVn, "quic_vn"),
             (DpiStatus::QuicSpoof, "quic_spoof"),
             (DpiStatus::QuicDrop, "quic_drop"),
+            // The dash: no Initial was sent because the endpoint serves no
+            // HTTP/3 (the shipped `quic_unsupported.txt`).
+            (DpiStatus::QuicUnsupported, "quic_unsupported"),
             // What the cell carries on a row the DNS phase already decided
             // (`probe/domains.rs`): the same status the TLS and HTTP cells do.
             (DpiStatus::DnsFail, "dns_fail"),

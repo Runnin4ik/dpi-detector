@@ -1,9 +1,14 @@
-//! Test 2: domain availability — DNS resolve + TLS 1.3 + TLS 1.2 + HTTP.
+//! Test 2: domain availability — DNS resolve + TLS 1.3 + TLS 1.2 + HTTP + QUIC.
 //!
-//! Phase 0 resolves every domain (family from config) and marks ISP stubs;
-//! phases 1–2 probe TLS 1.3 / TLS 1.2 with SNI pinned to the resolved IP;
-//! phase 3 checks plain-HTTP injection. Result rows are
-//! (domain, http, tls1.2, tls1.3, details).
+//! One task per domain. It resolves first (with the IPv6 fallback that tells
+//! "no IPv6" from "no such host"), and the moment its own lookup returns it
+//! starts that row's probes: the QUIC Initial goes out beside the TCP chain, and
+//! TLS 1.3, TLS 1.2 and plain HTTP follow one another against the resolved
+//! address with SNI pinned to it. Every probe takes a permit from the run's own
+//! gate, so the columns advance together instead of one after another, and a step
+//! that hangs costs one permit rather than the rest of its column
+//! ([`check_domains`]). Result rows are (domain, http, tls1.2, tls1.3, quic,
+//! details).
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -26,6 +31,7 @@ use crate::classify::{
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
 use crate::PhaseProgress;
+use crate::ProgressTick;
 use crate::net::connector::RustlsConnector;
 use crate::net::fingerprint::{http_identity, TlsFingerprint};
 use crate::net::http::{
@@ -130,6 +136,16 @@ pub struct TlsCheck {
 pub struct HttpCheck {
     pub status: DpiStatus,
     pub detail: Detail,
+    /// Seconds the leg took. Stamped by `check_http_injection`, which owns the
+    /// clock: the verdicts the leg builds on the way out carry a zero until then.
+    pub elapsed: f64,
+}
+
+impl HttpCheck {
+    /// One verdict of the leg while it is being built.
+    fn at(status: DpiStatus, detail: Detail) -> Self {
+        Self { status, detail, elapsed: 0.0 }
+    }
 }
 
 /// Single TLS check against `target` with SNI/host = `domain`: TCP connect, a
@@ -141,16 +157,16 @@ pub async fn check_domain_tls(
     cfg: &AppConfig,
 ) -> TlsCheck {
     let start = Instant::now();
-    let total_timeout = Duration::from_secs_f64(cfg.connect_timeout + cfg.read_timeout);
+    let total_timeout = Duration::from_secs_f64(cfg.timeout * 2.0);
     let stage = Arc::new(Mutex::new(ProbeStage::TcpConnect));
     let addr = SocketAddr::new(target, 443);
 
     let fut = async {
-        let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.connect_timeout)).await {
-            Ok(s) => s,
+        let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.timeout)).await {
+            Ok(stream) => stream,
             Err(DialError::Io { error, icmp }) => {
-                let (s, d) = classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect);
-                return (s, d, 0usize);
+                let (status, detail) = classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect);
+                return (status, detail, 0usize);
             }
             Err(DialError::Timeout) => {
                 return (DpiStatus::SynDropped, Detail::TcpSynTimeout, 0usize);
@@ -175,26 +191,26 @@ pub async fn check_domain_tls(
         let tracker = crate::classify::DpiProbeTracker::new();
         let probe_stream = crate::classify::DpiProbeStream::new(tcp, tracker.clone());
         let tls_stream = match timeout(
-            Duration::from_secs_f64(cfg.connect_timeout),
+            Duration::from_secs_f64(cfg.timeout),
             rustls_conn.connect(server_name, probe_stream),
         )
         .await
         {
-            Ok(Ok(s)) => s,
+            Ok(Ok(stream)) => stream,
             Ok(Err(e)) => {
                 let st = tracker.state.lock();
-                if let Some(s) = st.last_status {
-                    let d = st.last_error_msg.clone().unwrap_or(Detail::RstHello);
-                    return (s, d, 0usize);
+                if let Some(status) = st.last_status {
+                    let detail = st.last_error_msg.clone().unwrap_or(Detail::RstHello);
+                    return (status, detail, 0usize);
                 }
                 drop(st);
                 let msg = e.to_string();
-                let (s, d) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, ProbeStage::TlsHandshake);
-                if s != DpiStatus::Unknown {
-                    return (s, d, 0usize);
+                let (status, detail) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, ProbeStage::TlsHandshake);
+                if status != DpiStatus::Unknown {
+                    return (status, detail, 0usize);
                 }
-                let (s2, d2) = classify_ssl_error(&msg, 0, ConnectionStage::TlsClientHelloSent);
-                return (s2, d2, 0usize);
+                let (ssl_status, ssl_detail) = classify_ssl_error(&msg, 0, ConnectionStage::TlsClientHelloSent);
+                return (ssl_status, ssl_detail, 0usize);
             }
             Err(_) => {
                 return (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout, 0usize);
@@ -208,21 +224,21 @@ pub async fn check_domain_tls(
     };
 
     match timeout(total_timeout, fut).await {
-        Ok((s, d, _)) => TlsCheck { status: s, detail: d, elapsed: start.elapsed().as_secs_f64() },
+        Ok((status, detail, _)) => TlsCheck { status, detail, elapsed: start.elapsed().as_secs_f64() },
         Err(_) => {
             // An outer timeout is a failure of whatever stage the check had
             // reached, read the same way the classifier reads it: the two dial
             // stages have verdicts of their own, and everything past the
             // handshake is the read that never finished. `ProbeStage` is `Copy`,
             // so the guard is held only for the read.
-            let (s, d) = match *stage.lock() {
+            let (status, detail) = match *stage.lock() {
                 ProbeStage::TlsHandshake => (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout),
                 ProbeStage::TcpConnect => (DpiStatus::SynDropped, Detail::TcpSynTimeout),
                 ProbeStage::TlsConnected | ProbeStage::SendingData | ProbeStage::ReadingData => {
                     (DpiStatus::ReadTimeout, Detail::ReadTimeoutWord)
                 }
             };
-            TlsCheck { status: s, detail: d, elapsed: start.elapsed().as_secs_f64() }
+            TlsCheck { status, detail, elapsed: start.elapsed().as_secs_f64() }
         }
     }
 }
@@ -246,15 +262,17 @@ pub async fn check_http_injection(
     stub_ips: &HashSet<IpAddr>,
     port: u16,
 ) -> HttpCheck {
+    let started = Instant::now();
     if let Some(ip) = target {
         if stub_ips.contains(&ip) {
             return HttpCheck {
                 status: DpiStatus::IspPage,
                 detail: Detail::IspBlockpage { arrow: false, ip: ip.to_string() },
+                elapsed: started.elapsed().as_secs_f64(),
             };
         }
     }
-    let total_timeout = Duration::from_secs_f64(cfg.connect_timeout + cfg.read_timeout);
+    let total_timeout = Duration::from_secs_f64(cfg.timeout * 2.0);
     let domain_owned = domain.to_string();
 
     let fut = async {
@@ -263,19 +281,19 @@ pub async fn check_http_injection(
             None => match resolve_ip(domain_owned.as_str(), IpFamily::V4).await {
                 Some(ip) => ip,
                 None => {
-                    return HttpCheck { status: DpiStatus::DnsFail, detail: Detail::DomainNotFound };
+                    return HttpCheck::at(DpiStatus::DnsFail, Detail::DomainNotFound);
                 }
             },
         };
         let addr = SocketAddr::new(host_ip, port);
-        let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.connect_timeout)).await {
-            Ok(s) => s,
+        let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.timeout)).await {
+            Ok(stream) => stream,
             Err(DialError::Io { error, icmp }) => {
-                let (s, d) = classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect);
-                return HttpCheck { status: s, detail: d };
+                let (status, detail) = classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect);
+                return HttpCheck::at(status, detail);
             }
             Err(DialError::Timeout) => {
-                return HttpCheck { status: DpiStatus::SynDropped, detail: Detail::TcpSynTimeout };
+                return HttpCheck::at(DpiStatus::SynDropped, Detail::TcpSynTimeout);
             }
         };
 
@@ -283,8 +301,8 @@ pub async fn check_http_injection(
         let (mut sender, conn) = match hyper::client::conn::http1::handshake(io).await {
             Ok(v) => v,
             Err(e) => {
-                let (s, d) = inner_hyper(&e, ProbeStage::TcpConnect, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
-                return HttpCheck { status: s, detail: d };
+                let (status, detail) = inner_hyper(&e, ProbeStage::TcpConnect, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                return HttpCheck::at(status, detail);
             }
         };
         tokio::spawn(async move {
@@ -314,14 +332,14 @@ pub async fn check_http_injection(
         let req = match builder.body(http_body_util::Full::new(Bytes::new())) {
             Ok(req) => req,
             Err(e) => {
-                return HttpCheck {
-                    status: DpiStatus::Err,
-                    detail: Detail::Other(format!("bad request: {}", e)),
-                };
+                return HttpCheck::at(
+                    DpiStatus::Err,
+                    Detail::Other(format!("bad request: {}", e)),
+                );
             }
         };
 
-        let resp = match timeout(Duration::from_secs_f64(cfg.read_timeout), sender.send_request(req)).await {
+        let resp = match timeout(Duration::from_secs_f64(cfg.timeout), sender.send_request(req)).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
                 let msg = e.to_string().to_ascii_lowercase();
@@ -333,23 +351,23 @@ pub async fn check_http_injection(
                     } else {
                         DpiStatus::ReadTimeout
                     };
-                    return HttpCheck {
-                        status: kind,
-                        detail: if kind == DpiStatus::SendTimeout {
+                    return HttpCheck::at(
+                        kind,
+                        if kind == DpiStatus::SendTimeout {
                             Detail::at_kb(Detail::WriteTimeoutWord, 0.0)
                         } else {
                             Detail::at_kb(Detail::ReadTimeoutWord, 0.0)
                         },
-                    };
+                    );
                 }
-                let (s, d) = inner_hyper(&e, ProbeStage::ReadingData, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
-                return HttpCheck { status: s, detail: d };
+                let (status, detail) = inner_hyper(&e, ProbeStage::ReadingData, 0, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                return HttpCheck::at(status, detail);
             }
             Err(_) => {
-                return HttpCheck {
-                    status: DpiStatus::ReadTimeout,
-                    detail: Detail::at_kb(Detail::ReadTimeoutWord, 0.0),
-                };
+                return HttpCheck::at(
+                    DpiStatus::ReadTimeout,
+                    Detail::at_kb(Detail::ReadTimeoutWord, 0.0),
+                );
             }
         };
 
@@ -369,7 +387,7 @@ pub async fn check_http_injection(
         let mut body = resp.into_body();
         let mut bytes_read: usize = 0;
         loop {
-            match timeout(Duration::from_secs_f64(cfg.read_timeout), body.frame()).await {
+            match timeout(Duration::from_secs_f64(cfg.timeout), body.frame()).await {
                 Ok(Some(Ok(frame))) => {
                     if let Some(data) = frame.data_ref() {
                         bytes_read += data.len();
@@ -379,38 +397,40 @@ pub async fn check_http_injection(
                     }
                 }
                 Ok(Some(Err(e))) => {
-                    let (s, d) =
+                    let (status, detail) =
                         inner_hyper(&e, ProbeStage::ReadingData, bytes_read, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
-                    return HttpCheck { status: s, detail: d };
+                    return HttpCheck::at(status, detail);
                 }
                 Ok(None) => break,
                 Err(_) => {
-                    let (s, d) = fat_read_verdict(bytes_read, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
-                    return HttpCheck { status: s, detail: d };
+                    let (status, detail) = fat_read_verdict(bytes_read, cfg.tcp_block_min_kb, cfg.tcp_block_max_kb);
+                    return HttpCheck::at(status, detail);
                 }
             }
         }
 
         if status == 451 {
-            return HttpCheck { status: DpiStatus::Blocked, detail: Detail::HttpStatus(451) };
+            return HttpCheck::at(DpiStatus::Blocked, Detail::HttpStatus(451));
         }
         if !location.is_empty() && (300..400).contains(&status) {
-            let (s, d) = classify_redirect(&domain_owned, &format!("http://{}", domain_owned), status, &location, true);
-            return HttpCheck { status: s, detail: d };
+            let (status, detail) = classify_redirect(&domain_owned, &format!("http://{}", domain_owned), status, &location, true);
+            return HttpCheck::at(status, detail);
         }
         if (300..400).contains(&status) {
-            return HttpCheck { status: DpiStatus::Ok, detail: Detail::HttpStatus(status) };
+            return HttpCheck::at(DpiStatus::Ok, Detail::HttpStatus(status));
         }
-        HttpCheck { status: DpiStatus::Ok, detail: Detail::HttpStatus(status) }
+        HttpCheck::at(DpiStatus::Ok, Detail::HttpStatus(status))
     };
 
-    match timeout(total_timeout, fut).await {
+    let mut check = match timeout(total_timeout, fut).await {
         Ok(r) => r,
-        Err(_) => HttpCheck {
-            status: DpiStatus::ReadTimeout,
-            detail: Detail::at_kb(Detail::ReadTimeoutWord, 0.0),
-        },
-    }
+        Err(_) => HttpCheck::at(
+            DpiStatus::ReadTimeout,
+            Detail::at_kb(Detail::ReadTimeoutWord, 0.0),
+        ),
+    };
+    check.elapsed = started.elapsed().as_secs_f64();
+    check
 }
 
 #[derive(Debug, Clone)]
@@ -435,10 +455,19 @@ impl DomainEntry {
             dns_fake,
             t13: dash.clone(),
             t12: dash,
-            http: HttpCheck { status: DpiStatus::Unknown, detail: Detail::None },
+            http: HttpCheck::at(DpiStatus::Unknown, Detail::None),
             quic: crate::probe::quic::QuicCheck::pending(),
         }
     }
+}
+
+/// Whether the QUIC column probes this host at all: a host listed in
+/// `quic_unsupported.txt` serves no HTTP/3, so its cell is a dash and the column
+/// counts it nowhere. The list holds hosts, the row may hold a URL path
+/// (`domains.txt` does for `x.com`), and DNS names are case-insensitive.
+pub fn quic_applicable(domain: &str, unsupported: &[String]) -> bool {
+    let host = parse_host(domain);
+    !unsupported.iter().any(|h| h.eq_ignore_ascii_case(&host))
 }
 
 /// The QUIC cell of a row whose probe never ran because the DNS phase already
@@ -453,186 +482,247 @@ impl DomainEntry {
 /// also keeps one reason on one line instead of adding a second `QUIC` line.
 ///
 /// A row that is resolved cleanly does not come through here: it keeps
-/// [`QuicCheck::pending`](crate::probe::quic::QuicCheck::pending) until
-/// `check_quic_all` fills it.
+/// [`QuicCheck::pending`](crate::probe::quic::QuicCheck::pending) until the row's
+/// own pipeline walks up to the QUIC step (`check_domains`).
 fn skipped_quic(status: DpiStatus, detail: Detail) -> crate::probe::quic::QuicCheck {
     crate::probe::quic::QuicCheck { status, detail, elapsed: 0.0 }
 }
 
-/// Phase 0: resolves every domain under the semaphore (IPv6 mode re-probes over IPv4
-/// to tell "IPv6 unsupported" from "domain not found") and records its IP and fake-IP class.
-pub async fn resolve_all(
+/// The row as DNS leaves it: the address, the fake-IP class, and — for a row no
+/// protocol probe can run against — the verdict all four protocol columns carry.
+///
+/// `v4_fallback` is whether a second lookup over IPv4 answered a host IPv6 could
+/// not resolve: that reads "no IPv6 here", not "no such host". An ISP stub-IP or
+/// a local/relay address is `Some(true)`, a clean answer `Some(false)`, and no
+/// answer at all `None`.
+fn entry_for(
+    domain: &str,
+    resolved: Option<IpAddr>,
+    v4_fallback: bool,
+    stub_ips: &HashSet<IpAddr>,
+) -> DomainEntry {
+    let Some(ip) = resolved else {
+        let mut e = DomainEntry::pending(domain.to_string(), None, None);
+        let detail = if v4_fallback { Detail::Ipv6Unsupported } else { Detail::DomainNotFound };
+        e.t13 = TlsCheck { status: DpiStatus::DnsFail, detail: detail.clone(), elapsed: 0.0 };
+        e.t12 = e.t13.clone();
+        e.http = HttpCheck::at(DpiStatus::DnsFail, detail);
+        e.quic = skipped_quic(DpiStatus::DnsFail, e.http.detail.clone());
+        return e;
+    };
+    let mut ftype = fake_ip_type(&ip);
+    if ftype != FakeIpType::FakeIp && stub_ips.contains(&ip) {
+        ftype = FakeIpType::Isp;
+    }
+    match ftype {
+        FakeIpType::Isp => {
+            let mut e = DomainEntry::pending(domain.to_string(), Some(ip), Some(true));
+            let detail = Detail::IspBlockpage { arrow: true, ip: ip.to_string() };
+            e.t13 = TlsCheck { status: DpiStatus::DnsFake, detail: detail.clone(), elapsed: 0.0 };
+            e.t12 = e.t13.clone();
+            e.http = HttpCheck::at(DpiStatus::DnsFake, detail);
+            e.quic = skipped_quic(DpiStatus::DnsFake, e.http.detail.clone());
+            e
+        }
+        FakeIpType::Local => {
+            let mut e = DomainEntry::pending(domain.to_string(), Some(ip), Some(true));
+            let detail = Detail::LocalIp { ip: ip.to_string() };
+            e.t13 = TlsCheck { status: DpiStatus::LocalIp, detail: detail.clone(), elapsed: 0.0 };
+            e.t12 = e.t13.clone();
+            e.http = HttpCheck::at(DpiStatus::LocalIp, detail);
+            e.quic = skipped_quic(DpiStatus::LocalIp, e.http.detail.clone());
+            e
+        }
+        _ => DomainEntry::pending(domain.to_string(), Some(ip), Some(false)),
+    }
+}
+
+/// The five column counters of one run, all declared before the first probe goes
+/// out: the columns no longer run one after another, so there is no "its stage
+/// started" moment to declare one at.
+#[derive(Clone)]
+struct Ticks {
+    dns: Option<ProgressTick>,
+    t13: Option<ProgressTick>,
+    t12: Option<ProgressTick>,
+    http: Option<ProgressTick>,
+    quic: Option<ProgressTick>,
+}
+
+impl Ticks {
+    /// `total` is every row; `quic_total` is the rows whose endpoint serves
+    /// HTTP/3 at all — the QUIC column is the one counter that does not run over
+    /// the whole list, because a host that serves no HTTP/3 cannot move it.
+    fn declare(phases: Option<&PhaseProgress>, total: usize, quic_total: usize) -> Self {
+        let Some(p) = phases else {
+            return Self { dns: None, t13: None, t12: None, http: None, quic: None };
+        };
+        Self {
+            dns: Some((p.on_phase)(crate::PhaseId::DomainDns, total)),
+            t13: Some((p.on_phase)(crate::PhaseId::DomainTls13, total)),
+            t12: Some((p.on_phase)(crate::PhaseId::DomainTls12, total)),
+            http: Some((p.on_phase)(crate::PhaseId::DomainHttp, total)),
+            quic: Some((p.on_phase)(crate::PhaseId::DomainQuic, quic_total)),
+        }
+    }
+
+    /// One tick, if this run is drawing a live line at all.
+    fn fire(&self, tick: &Option<ProgressTick>) {
+        if let Some(t) = tick.as_ref() {
+            t();
+        }
+    }
+}
+
+/// Test 2's whole run — resolve, TLS 1.3, TLS 1.2, HTTP, QUIC — pipelined per
+/// domain instead of one barrier per column.
+///
+/// One task walks one domain from its own resolve to its last verdict. The
+/// resolve comes first because every other step needs the address it returns;
+/// from there the row's QUIC Initial runs beside its TCP chain, and the chain's
+/// three steps — TLS 1.3, TLS 1.2, HTTP — follow one another, each holding one
+/// permit for as long as the probe takes. The tasks themselves run at once and
+/// every probe takes a permit from the same gate, so a domain that hangs in one
+/// step holds one permit rather than the column: the permits it and its
+/// neighbours release are picked up by whichever probe needs one next. The gate
+/// therefore stays as full as the work allows, and no column waits for the
+/// slowest probe of the column before it.
+///
+/// Every column counts `domains.len()` except QUIC, which counts the rows whose
+/// endpoint serves HTTP/3 at all (`quic_unsupported.txt` is what says so): a row
+/// DNS already settled (NXDOMAIN, an ISP stub, a local address) is decided by
+/// that verdict, and the columns it never reached are decided by it too.
+/// `--json` and the table still carry the per-row detail, which is where "this
+/// row was never probed" is readable.
+///
+/// The rows come back sorted by domain, the order the table prints them in.
+pub async fn check_domains(
     domains: &[String],
     family: IpFamily,
+    cfg: &AppConfig,
     stub_ips: &HashSet<IpAddr>,
+    unsupported: &[String],
     sem: &Arc<Semaphore>,
     phases: Option<PhaseProgress>,
 ) -> Vec<DomainEntry> {
-    let tick = phases
-        .as_ref()
-        .map(|p| (p.on_phase)(crate::PhaseId::DomainDns, domains.len()));
-    // The stub set is read-only for the whole phase, so share it instead of
-    // deep-cloning a `HashSet` per domain while the tasks wait on the gate.
+    // One config and one stub set for every task: each clone carries the whole
+    // DNS server list, and the clones pile up while the tasks wait on the gate
+    // (`probe/whitelist.rs` shares them the same way).
+    let cfg = Arc::new(cfg.clone());
     let stub_ips = Arc::new(stub_ips.clone());
+    let unsupported = Arc::new(unsupported.to_vec());
+    let quic_total = domains.iter().filter(|d| quic_applicable(d, &unsupported)).count();
+    let ticks = Ticks::declare(phases.as_ref(), domains.len(), quic_total);
     let mut handles = Vec::new();
     for domain in domains {
         let domain = domain.clone();
-        let sem = Arc::clone(sem);
+        let cfg = Arc::clone(&cfg);
         let stub_ips = Arc::clone(&stub_ips);
+        let unsupported = Arc::clone(&unsupported);
+        let sem = Arc::clone(sem);
+        let ticks = ticks.clone();
         handles.push(tokio::spawn(async move {
-            let _permit = crate::probe::permit(&sem).await;
-            let clean_domain = parse_host(&domain);
-            let resolved = resolve_ip(&clean_domain, family).await;
-            // IPv6 mode: IPv4 fallback distinguishes NXDOMAIN from no-v6
-            let v4_fallback = if resolved.is_none() && family == IpFamily::V6 {
-                resolve_ip(&domain, IpFamily::V4).await
-            } else {
-                None
-            };
-            match resolved {
-                None => {
-                    let mut e = DomainEntry::pending(domain, None, None);
-                    let detail = if v4_fallback.is_some() {
-                        Detail::Ipv6Unsupported
-                    } else {
-                        Detail::DomainNotFound
-                    };
-                    e.t13 = TlsCheck { status: DpiStatus::DnsFail, detail: detail.clone(), elapsed: 0.0 };
-                    e.t12 = e.t13.clone();
-                    e.http = HttpCheck { status: DpiStatus::DnsFail, detail };
-                    e.quic = skipped_quic(DpiStatus::DnsFail, e.http.detail.clone());
-                    e
-                }
-                Some(ip) => {
-                    let mut ftype = fake_ip_type(&ip);
-                    if ftype != FakeIpType::FakeIp && stub_ips.contains(&ip) {
-                        ftype = FakeIpType::Isp;
-                    }
-                    match ftype {
-                        FakeIpType::Isp => {
-                            let mut e = DomainEntry::pending(domain, Some(ip), Some(true));
-                            let detail = Detail::IspBlockpage { arrow: true, ip: ip.to_string() };
-                            e.t13 = TlsCheck { status: DpiStatus::DnsFake, detail: detail.clone(), elapsed: 0.0 };
-                            e.t12 = e.t13.clone();
-                            e.http = HttpCheck { status: DpiStatus::DnsFake, detail };
-                            e.quic = skipped_quic(DpiStatus::DnsFake, e.http.detail.clone());
-                            e
-                        }
-                        FakeIpType::Local => {
-                            let mut e = DomainEntry::pending(domain, Some(ip), Some(true));
-                            let detail = Detail::LocalIp { ip: ip.to_string() };
-                            e.t13 = TlsCheck { status: DpiStatus::LocalIp, detail: detail.clone(), elapsed: 0.0 };
-                            e.t12 = e.t13.clone();
-                            e.http = HttpCheck { status: DpiStatus::LocalIp, detail };
-                            e.quic = skipped_quic(DpiStatus::LocalIp, e.http.detail.clone());
-                            e
-                        }
-                        _ => DomainEntry::pending(domain, Some(ip), Some(false)),
-                    }
-                }
-            }
+            probe_domain(domain, family, &cfg, &stub_ips, &unsupported, &sem, &ticks).await
         }));
     }
     let mut out = Vec::new();
     for h in handles {
-        let done = h.await;
-        if let Some(t) = tick.as_ref() {
-            t();
-        }
-        if let Ok(e) = done {
+        if let Ok(e) = h.await {
             out.push(e);
         }
     }
     out.sort_by(|a, b| a.domain.cmp(&b.domain));
     out
 }
-pub async fn check_tls_all(
-    entries: &mut [DomainEntry],
-    tls12_only: bool,
-    cfg: &AppConfig,
-    sem: &Arc<Semaphore>,
-    phases: Option<PhaseProgress>,
-) {
-    let total = entries.iter().filter(|e| e.dns_fake == Some(false)).count();
-    let pid = if tls12_only { crate::PhaseId::DomainTls12 } else { crate::PhaseId::DomainTls13 };
-    let tick = phases.as_ref().map(|p| (p.on_phase)(pid, total));
-    // One config for every task instead of one per domain: each deep clone
-    // carries the whole DNS server list, and the clones pile up while the tasks
-    // wait on the gate (`probe/whitelist.rs` shares it the same way).
-    let cfg = Arc::new(cfg.clone());
-    let mut handles = Vec::new();
-    for (idx, e) in entries.iter().enumerate() {
-        if e.dns_fake != Some(false) {
-            continue;
-        }
-        let domain = e.domain.clone();
-        // The loop above skips every entry whose DNS answer is missing or fake.
-        let Some(target) = e.resolved else { continue };
-        let cfg = Arc::clone(&cfg);
-        let sem = Arc::clone(sem);
-        handles.push(tokio::spawn(async move {
-            let _permit = crate::probe::permit(&sem).await;
-            let r = check_domain_tls(&domain, target, tls12_only, &cfg).await;
-            (idx, r)
-        }));
-    }
-    for h in handles {
-        let done = h.await;
-        if let Some(t) = tick.as_ref() {
-            t();
-        }
-        if let Ok((idx, r)) = done {
-            if tls12_only {
-                entries[idx].t12 = r;
-            } else {
-                entries[idx].t13 = r;
-            }
-        }
-    }
-}
 
-/// HTTP phase: runs the plain-HTTP injection check for every entry that resolved to a
-/// clean IP (fake-IP and stub rows are skipped) and stores the result back into the row.
-pub async fn check_http_all(
-    entries: &mut [DomainEntry],
-    cfg: &AppConfig,
-    stub_ips: &HashSet<IpAddr>,
+/// One domain's walk down the five columns, one permit per probe.
+async fn probe_domain(
+    domain: String,
+    family: IpFamily,
+    cfg: &Arc<AppConfig>,
+    stub_ips: &Arc<HashSet<IpAddr>>,
+    unsupported: &Arc<Vec<String>>,
     sem: &Arc<Semaphore>,
-    phases: Option<PhaseProgress>,
-) {
-    let total = entries.iter().filter(|e| e.dns_fake == Some(false)).count();
-    let tick = phases
-        .as_ref()
-        .map(|p| (p.on_phase)(crate::PhaseId::DomainHttp, total));
-    // Same as `check_tls_all`: the config and the stub set are read-only for
-    // the whole phase, so one `Arc` serves every task.
-    let cfg = Arc::new(cfg.clone());
-    let stub_ips = Arc::new(stub_ips.clone());
-    let mut handles = Vec::new();
-    for (idx, e) in entries.iter().enumerate() {
-        if e.dns_fake != Some(false) {
-            continue;
+    ticks: &Ticks,
+) -> DomainEntry {
+    let applicable = quic_applicable(&domain, unsupported);
+    let mut entry = {
+        let _permit = crate::probe::permit(sem).await;
+        let clean_domain = parse_host(&domain);
+        let resolved = resolve_ip(&clean_domain, family).await;
+        // IPv6 mode: an IPv4 fallback tells "IPv6 unsupported" from "not found".
+        let v4_fallback = if resolved.is_none() && family == IpFamily::V6 {
+            resolve_ip(&domain, IpFamily::V4).await.is_some()
+        } else {
+            false
+        };
+        entry_for(&domain, resolved, v4_fallback, stub_ips)
+    };
+    ticks.fire(&ticks.dns);
+    let target = match (entry.dns_fake, entry.resolved) {
+        (Some(false), Some(ip)) => ip,
+        // A row DNS already settled has no peer to probe: `entry_for` wrote the
+        // verdict its four protocol columns carry, and they are decided by it.
+        _ => {
+            for tick in [&ticks.t13, &ticks.t12, &ticks.http] {
+                ticks.fire(tick);
+            }
+            // The QUIC cell carries the DNS verdict, and whether that is a tick
+            // of the QUIC column is the column's own total to decide: a host that
+            // serves no HTTP/3 is outside it.
+            if applicable {
+                ticks.fire(&ticks.quic);
+            }
+            return entry;
         }
-        let domain = e.domain.clone();
-        let target = e.resolved;
-        let cfg = Arc::clone(&cfg);
-        let sem = Arc::clone(sem);
-        let stub_ips = Arc::clone(&stub_ips);
-        handles.push(tokio::spawn(async move {
-            let _permit = crate::probe::permit(&sem).await;
-            let r = check_http_injection(&domain, target, &cfg, &stub_ips, 80).await;
-            (idx, r)
-        }));
+    };
+    // The QUIC Initial does not wait for the TCP columns: it needs the resolved
+    // address and nothing else, so it goes out with its row's TLS probes instead
+    // of after them. A host that drops the TCP side spends one timeout per TCP
+    // step in series; the UDP probe spends its own window alongside them, and the
+    // column ticks from inside the task (`Ticks`).
+    let quic = if applicable {
+        Some(tokio::spawn({
+            let domain = domain.clone();
+            let cfg = Arc::clone(cfg);
+            let sem = Arc::clone(sem);
+            let ticks = ticks.clone();
+            async move {
+                let _permit = crate::probe::permit(&sem).await;
+                let check = crate::probe::quic::check_domain_quic(&domain, target, &cfg).await;
+                ticks.fire(&ticks.quic);
+                check
+            }
+        }))
+    } else {
+        // The endpoint serves no HTTP/3, so no Initial goes out and the column
+        // does not count this row: the cell is the dash and the tick is spent
+        // here rather than by a probe that would have nothing to answer.
+        entry.quic = crate::probe::quic::QuicCheck::unsupported();
+        ticks.fire(&ticks.quic);
+        None
+    };
+    entry.t13 = {
+        let _permit = crate::probe::permit(sem).await;
+        check_domain_tls(&domain, target, false, cfg).await
+    };
+    ticks.fire(&ticks.t13);
+    entry.t12 = {
+        let _permit = crate::probe::permit(sem).await;
+        check_domain_tls(&domain, target, true, cfg).await
+    };
+    ticks.fire(&ticks.t12);
+    entry.http = {
+        let _permit = crate::probe::permit(sem).await;
+        check_http_injection(&domain, Some(target), cfg, stub_ips, 80).await
+    };
+    ticks.fire(&ticks.http);
+    // A join error (panic or a shut-down runtime) leaves the cell `Unknown`, the
+    // same state a row no probe reached is drawn in.
+    if let Some(handle) = quic {
+        entry.quic = handle.await.unwrap_or_else(|_| crate::probe::quic::QuicCheck::pending());
     }
-    for h in handles {
-        let done = h.await;
-        if let Some(t) = tick.as_ref() {
-            t();
-        }
-        if let Ok((idx, r)) = done {
-            entries[idx].http = r;
-        }
-    }
+    entry
 }
 
 /// Silently collects provider stub IPs: queries the configured UDP resolvers (2 s
@@ -696,6 +786,13 @@ pub struct DomainStats {
     pub http_ok: usize,
     pub t12_ok: usize,
     pub t13_ok: usize,
+    /// The rows whose QUIC Initial got an answer (`QuicOk`): a closed or silent
+    /// endpoint is a verdict, not a pass, and `is_ok_status` knows only `Ok`.
+    pub quic_ok: usize,
+    /// The rows the QUIC column applies to at all: `total` minus the hosts whose
+    /// endpoint serves no HTTP/3 (`quic_unsupported.txt`). The column's own
+    /// denominator — a dash is not a failure and must not sit in a ratio.
+    pub quic_total: usize,
 }
 
 fn is_timeout_status(s: DpiStatus) -> bool {
@@ -725,12 +822,24 @@ pub fn domain_stats(entries: &[DomainEntry]) -> DomainStats {
         http_ok: entries.iter().filter(|e| col_ok(e.http.status)).count(),
         t12_ok: entries.iter().filter(|e| is_ok_t12(e)).count(),
         t13_ok: entries.iter().filter(|e| is_ok_t13(e)).count(),
+        quic_ok: entries.iter().filter(|e| e.quic.status == DpiStatus::QuicOk).count(),
+        quic_total: entries
+            .iter()
+            .filter(|e| e.quic.status != DpiStatus::QuicUnsupported)
+            .count(),
     }
 }
 
-/// One line of a domain row's detail cell: an optional protocol tag (Latin in
-/// every language, Rule 4) and the detail itself.
-pub type DetailLine = (Option<&'static str>, Detail);
+/// One line of a domain row's detail cell.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DetailLine {
+    /// An optional protocol tag (Latin in every language, Rule 4) and the detail
+    /// it explains.
+    Tagged(Option<&'static str>, Detail),
+    /// Every protocol of the row passed: the four stage timings, in the order
+    /// the columns are printed — HTTP, TLS 1.2, TLS 1.3, QUIC.
+    Timings([f64; 4]),
+}
 
 /// Details that describe "nothing came back in time" rather than a verdict: they
 /// are dropped from a row's detail cell (the badge already says `TIMEOUT`).
@@ -755,9 +864,13 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Dp
     let http_ok = col_ok(e.http.status);
     let t12_ok = col_ok_t12(e.t12.status);
     let t13_ok = col_ok_t12(e.t13.status);
-    // `Unknown` is "not measured", not a failure: a row whose QUIC probe did not
-    // run must not hide the elapsed time of the columns that did.
-    let quic_failed = !matches!(e.quic.status, DpiStatus::Unknown | DpiStatus::QuicOk);
+    // `Unknown` is "not measured" and `QuicUnsupported` is "not applicable":
+    // neither is a failure, so a row whose QUIC probe did not run must not hide
+    // the elapsed time of the columns that did.
+    let quic_failed = !matches!(
+        e.quic.status,
+        DpiStatus::Unknown | DpiStatus::QuicOk | DpiStatus::QuicUnsupported
+    );
 
     let mut problems: Vec<(&'static str, Detail)> = Vec::new();
     if !http_ok
@@ -781,36 +894,45 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Dp
     let tls_agree = e.t12.status == e.t13.status && e.t12.detail == e.t13.detail;
     if tls_agree {
         if !t12_ok && e.t12.detail != Detail::None && !is_timeout_detail(&e.t12.detail) {
-            details.push((Some("TLS"), e.t12.detail.clone()));
+            details.push(DetailLine::Tagged(Some("TLS"), e.t12.detail.clone()));
         }
     } else {
         if !t12_ok && e.t12.detail != Detail::None && !is_timeout_detail(&e.t12.detail) {
-            details.push((Some("TLS12"), e.t12.detail.clone()));
+            details.push(DetailLine::Tagged(Some("TLS12"), e.t12.detail.clone()));
         }
         if !t13_ok && e.t13.detail != Detail::None && !is_timeout_detail(&e.t13.detail) {
-            details.push((Some("TLS13"), e.t13.detail.clone()));
+            details.push(DetailLine::Tagged(Some("TLS13"), e.t13.detail.clone()));
         }
     }
 
     if details.is_empty() && problems.len() == 1 {
-        details.push((None, problems[0].1.clone()));
+        details.push(DetailLine::Tagged(None, problems[0].1.clone()));
     } else if !problems.is_empty() {
         // Same detail from several protocols shares one line; a single one keeps
         // its protocol tag so the reader knows which stage failed.
         let mut grouped: Vec<(Detail, Vec<&'static str>)> = Vec::new();
-        for (proto, d) in &problems {
-            match grouped.iter_mut().find(|(g, _)| g == d) {
+        for (proto, detail) in &problems {
+            match grouped.iter_mut().find(|(known, _)| known == detail) {
                 Some((_, protos)) => protos.push(proto),
-                None => grouped.push((d.clone(), vec![proto])),
+                None => grouped.push((detail.clone(), vec![proto])),
             }
         }
         for (detail, protos) in grouped {
             let tag = if protos.len() == 1 { Some(protos[0]) } else { None };
-            details.push((tag, detail));
+            details.push(DetailLine::Tagged(tag, detail));
         }
     }
 
-    if t12_ok && t13_ok && !quic_failed {
+    // Everything passed: the cell is the four stage timings and nothing else,
+    // one per column in the order the table prints them. `Unknown` is not a pass
+    // — a QUIC probe that never ran leaves the row without a timing line rather
+    // than with a zero in it.
+    if http_ok && t12_ok && t13_ok && e.quic.status == DpiStatus::QuicOk {
+        details.clear();
+        details.push(DetailLine::Timings([e.http.elapsed, e.t12.elapsed, e.t13.elapsed, e.quic.elapsed]));
+    } else if t12_ok && t13_ok && !quic_failed {
+        // One protocol is missing its pass but TLS is not it: the best TLS time
+        // stands alone, as it did before the four-timing line.
         let mut times: Vec<f64> = Vec::new();
         if e.t12.elapsed > 0.0 {
             times.push(e.t12.elapsed);
@@ -820,7 +942,7 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Dp
         }
         if let Some(min) = times.iter().cloned().reduce(f64::min) {
             details.clear();
-            details.push((Some("TLS"), Detail::Elapsed(min)));
+            details.push(DetailLine::Tagged(Some("TLS"), Detail::Elapsed(min)));
         }
     }
 
@@ -839,53 +961,187 @@ mod tests {
         assert_eq!(fake_ip_type(&"192.168.1.1".parse().unwrap()), FakeIpType::Local);
         assert_eq!(fake_ip_type(&"8.8.8.8".parse().unwrap()), FakeIpType::Clean);
     }
+
+    /// The dash is decided before any probe goes out: the list holds hosts, a row
+    /// may hold a URL path (`domains.txt` does for `x.com`), and DNS names are
+    /// case-insensitive.
+    #[test]
+    fn test_quic_applicable_matches_the_host_part() {
+        let list = vec!["www.canva.com".to_string(), "www.dw.com".to_string()];
+        assert!(!quic_applicable("www.canva.com", &list));
+        assert!(!quic_applicable("WWW.Canva.COM", &list));
+        assert!(!quic_applicable("www.canva.com/some/path", &list));
+        assert!(!quic_applicable("x.com/i/api/1.1/graphql/user_flow.json", &["x.com".to_string()]));
+        assert!(quic_applicable("danbooru.donmai.us", &list));
+        // A host is matched whole: a lookalike is a different host.
+        assert!(quic_applicable("www.canva.com.evil.example", &list));
+        assert!(quic_applicable("www.canva.com", &[]));
+    }
+
+    /// The dash is neither a pass nor a failure: it stays out of the column's
+    /// ratio and out of the details cell, while a row that answered still counts.
+    #[test]
+    fn test_quic_unsupported_stays_out_of_the_column() {
+        let answered = |domain: &str| {
+            let mut e = entry_for(
+                domain,
+                Some("203.0.113.7".parse().unwrap()),
+                false,
+                &HashSet::new(),
+            );
+            e.http = HttpCheck::at(DpiStatus::Ok, Detail::HttpStatus(200));
+            e.t13 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.31 };
+            e.t12 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.32 };
+            e
+        };
+
+        let mut dashed = answered("www.canva.com");
+        dashed.quic = crate::probe::quic::QuicCheck::unsupported();
+        let (_, _, _, quic, details) = build_domain_row(&dashed);
+        assert_eq!(quic, DpiStatus::QuicUnsupported);
+        // No `QUIC` problem line and no four-timing line with a zero in the QUIC
+        // slot: the best TLS time stands alone, as it does for a missing pass.
+        assert_eq!(details, vec![DetailLine::Tagged(Some("TLS"), Detail::Elapsed(0.31))]);
+
+        let mut ok = answered("danbooru.donmai.us");
+        ok.quic.status = DpiStatus::QuicOk;
+        ok.quic.detail = Detail::QuicServerHello;
+        ok.quic.elapsed = 0.54;
+
+        let stats = domain_stats(&[dashed, ok]);
+        assert_eq!(stats.total, 2);
+        assert_eq!(stats.quic_ok, 1);
+        assert_eq!(stats.quic_total, 1, "the dash is not a row the QUIC column can answer");
+    }
+
+    /// The row DNS hands to the pipeline, and the one rule the pipeline reads off
+    /// it: `Some(false)` is the only class with a peer of its own to probe.
+    ///
+    /// The other three are decided before a probe could run, and every protocol
+    /// column carries the verdict that decided them — `Unknown` there would
+    /// paint the row red and write `"unknown"` into `--json` beside the
+    /// `dns_fail` that describes the whole row.
+    #[test]
+    fn test_entry_for_decides_every_row_dns_can_settle() {
+        let none: HashSet<IpAddr> = HashSet::new();
+
+        // No answer at all: the four columns carry the DNS failure.
+        let miss = entry_for("gone.example", None, false, &none);
+        assert_eq!(miss.dns_fake, None);
+        assert_eq!(miss.resolved, None);
+        assert_eq!(miss.t13.status, DpiStatus::DnsFail);
+        assert_eq!(miss.t12.status, DpiStatus::DnsFail);
+        assert_eq!(miss.http.status, DpiStatus::DnsFail);
+        assert_eq!(miss.quic.status, DpiStatus::DnsFail);
+        assert_eq!(miss.http.detail, Detail::DomainNotFound);
+        assert_eq!(miss.quic.detail, miss.http.detail);
+
+        // The IPv4 fallback answered: "no IPv6 here", not "no such host".
+        let v6 = entry_for("v6.example", None, true, &none);
+        assert_eq!(v6.http.detail, Detail::Ipv6Unsupported);
+
+        // An ISP stub address (CGNAT), and a clean-class address the resolver
+        // handed out for many domains — the stub set overrides the class.
+        let stub = entry_for("stub.example", Some("100.64.0.5".parse().unwrap()), false, &none);
+        assert_eq!(stub.dns_fake, Some(true));
+        assert_eq!(stub.t13.status, DpiStatus::DnsFake);
+        assert_eq!(stub.quic.status, DpiStatus::DnsFake);
+        assert_eq!(stub.quic.detail, stub.http.detail);
+        let counted: HashSet<IpAddr> = ["203.0.113.7".parse().unwrap()].into_iter().collect();
+        let shared = entry_for("shared.example", Some("203.0.113.7".parse().unwrap()), false, &counted);
+        assert_eq!(shared.dns_fake, Some(true));
+        assert_eq!(shared.t13.status, DpiStatus::DnsFake);
+
+        // A local or relay address: the reply is our own box, not the site.
+        let local = entry_for("local.example", Some("192.168.1.1".parse().unwrap()), false, &none);
+        assert_eq!(local.dns_fake, Some(true));
+        assert_eq!(local.t13.status, DpiStatus::LocalIp);
+        assert_eq!(local.http.detail, Detail::LocalIp { ip: "192.168.1.1".to_string() });
+
+        // A real address: nothing settled, every column waits for its probe.
+        let real = entry_for("real.example", Some("203.0.113.7".parse().unwrap()), false, &none);
+        assert_eq!(real.dns_fake, Some(false));
+        assert_eq!(real.t13.status, DpiStatus::Unknown);
+        assert_eq!(real.t12.status, DpiStatus::Unknown);
+        assert_eq!(real.http.status, DpiStatus::Unknown);
+        assert_eq!(real.quic.status, DpiStatus::Unknown);
+    }
+
     #[test]
     fn test_build_domain_row_http_timeout_tls_ok_shows_time() {
         let mut entry = DomainEntry::pending("browserleaks.com".to_string(), None, None);
-        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: Detail::TimeoutWord };
+        entry.http = HttpCheck::at(DpiStatus::ReadTimeout, Detail::TimeoutWord);
         entry.t12 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.35 };
         entry.t13 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.28 };
 
-        let (http_s, t12_s, t13_s, _quic_s, details) = build_domain_row(&entry);
-        assert_eq!(http_s, DpiStatus::ReadTimeout);
-        assert_eq!(http_s.display_label(), "TIMEOUT");
-        assert_eq!(t12_s, DpiStatus::Ok);
-        assert_eq!(t13_s, DpiStatus::Ok);
-        assert_eq!(details, vec![(Some("TLS"), Detail::Elapsed(0.28))]); // Elapsed time, no "Timeout"
+        let (http, tls12, tls13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(http, DpiStatus::ReadTimeout);
+        assert_eq!(http.display_label(), "TIMEOUT");
+        assert_eq!(tls12, DpiStatus::Ok);
+        assert_eq!(tls13, DpiStatus::Ok);
+        // The HTTP leg failed, so the cell is the failing reason — not timings.
+        assert_eq!(details, vec![DetailLine::Tagged(Some("TLS"), Detail::Elapsed(0.28))]);
+    }
+
+    /// Every protocol passed: the cell is the four stage timings, in the columns'
+    /// order (HTTP, TLS 1.2, TLS 1.3, QUIC) and with nothing else in it.
+    #[test]
+    fn test_build_domain_row_all_ok_shows_the_four_stage_timings() {
+        let mut entry = DomainEntry::pending("www.google.com".to_string(), None, None);
+        entry.http = HttpCheck { status: DpiStatus::Ok, detail: Detail::HttpStatus(200), elapsed: 0.21 };
+        entry.t12 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.32 };
+        entry.t13 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.43 };
+        entry.quic = crate::probe::quic::QuicCheck {
+            status: DpiStatus::QuicOk,
+            detail: Detail::QuicServerHello,
+            elapsed: 0.54,
+        };
+
+        let (_http, _tls12, _tls13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(details, vec![DetailLine::Timings([0.21, 0.32, 0.43, 0.54])]);
+
+        // A QUIC endpoint that answered with a close is not a pass: the row keeps
+        // its per-protocol lines instead of a timing line.
+        entry.quic.status = DpiStatus::QuicClosed;
+        let (_http, _tls12, _tls13, _quic, details) = build_domain_row(&entry);
+        assert!(
+            details.iter().all(|line| matches!(line, DetailLine::Tagged(..))),
+            "{details:?}"
+        );
     }
 
     #[test]
     fn test_build_domain_row_http_timeout_tls_rst_omits_http_timeout() {
         let mut entry = DomainEntry::pending("danbooru.donmai.us".to_string(), None, None);
-        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: Detail::TimeoutWord };
+        entry.http = HttpCheck::at(DpiStatus::ReadTimeout, Detail::TimeoutWord);
         entry.t12 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, elapsed: 0.1 };
         entry.t13 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, elapsed: 0.1 };
 
-        let (http_s, t12_s, t13_s, _quic_s, details) = build_domain_row(&entry);
-        assert_eq!(http_s, DpiStatus::ReadTimeout);
-        assert_eq!(http_s.display_label(), "TIMEOUT");
-        assert_eq!(t12_s, DpiStatus::TlsRst);
-        assert_eq!(t13_s, DpiStatus::TlsRst);
+        let (http, tls12, tls13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(http, DpiStatus::ReadTimeout);
+        assert_eq!(http.display_label(), "TIMEOUT");
+        assert_eq!(tls12, DpiStatus::TlsRst);
+        assert_eq!(tls13, DpiStatus::TlsRst);
         // Only TLS RST is shown, NO "HTTP:Timeout" — and the versions agree, so
         // one `TLS:` line carries it.
-        assert_eq!(details, vec![(Some("TLS"), Detail::RstHello)]);
+        assert_eq!(details, vec![DetailLine::Tagged(Some("TLS"), Detail::RstHello)]);
     }
 
     #[test]
     fn test_build_domain_row_tls_drop_omits_http_timeout() {
         let mut entry = DomainEntry::pending("discord.com".to_string(), None, None);
-        entry.http = HttpCheck { status: DpiStatus::ReadTimeout, detail: Detail::TimeoutWord };
+        entry.http = HttpCheck::at(DpiStatus::ReadTimeout, Detail::TimeoutWord);
         entry.t12 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, elapsed: 5.0 };
         entry.t13 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, elapsed: 5.0 };
 
-        let (http_s, t12_s, t13_s, _quic_s, details) = build_domain_row(&entry);
-        assert_eq!(http_s, DpiStatus::ReadTimeout);
-        assert_eq!(http_s.display_label(), "TIMEOUT");
-        assert_eq!(t12_s, DpiStatus::TlsDropped);
-        assert_eq!(t13_s, DpiStatus::TlsDropped);
+        let (http, tls12, tls13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(http, DpiStatus::ReadTimeout);
+        assert_eq!(http.display_label(), "TIMEOUT");
+        assert_eq!(tls12, DpiStatus::TlsDropped);
+        assert_eq!(tls13, DpiStatus::TlsDropped);
         // Only TLS Handshake timeout is shown, NO "HTTP:Timeout" — the two
         // versions agree, so the line is tagged once.
-        assert_eq!(details, vec![(Some("TLS"), Detail::TlsHandshakeTimeout)]);
+        assert_eq!(details, vec![DetailLine::Tagged(Some("TLS"), Detail::TlsHandshakeTimeout)]);
     }
 
     #[test]
@@ -894,7 +1150,7 @@ mod tests {
         // line would hide which one failed — the columns say `TLS RST` beside
         // `DROP`, and the detail has to say which is which.
         let mut entry = DomainEntry::pending("example.test".to_string(), None, None);
-        entry.http = HttpCheck { status: DpiStatus::Ok, detail: Detail::None };
+        entry.http = HttpCheck::at(DpiStatus::Ok, Detail::None);
         entry.t12 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, elapsed: 0.1 };
         entry.t13 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, elapsed: 5.0 };
 
@@ -902,8 +1158,8 @@ mod tests {
         assert_eq!(
             details,
             vec![
-                (Some("TLS12"), Detail::RstHello),
-                (Some("TLS13"), Detail::TlsHandshakeTimeout),
+                DetailLine::Tagged(Some("TLS12"), Detail::RstHello),
+                DetailLine::Tagged(Some("TLS13"), Detail::TlsHandshakeTimeout),
             ]
         );
     }
@@ -1068,9 +1324,9 @@ mod tests {
 
     /// The window and the timeouts the leg reads from the config, short enough
     /// that a stalling server does not hold the suite.
-    fn test_cfg(read_timeout: f64) -> AppConfig {
+    fn test_cfg(timeout: f64) -> AppConfig {
         AppConfig::from_yaml_str(&format!(
-            "CONNECT_TIMEOUT: 2.0\nREAD_TIMEOUT: {read_timeout}\nTCP_BLOCK_MIN_KB: 12\nTCP_BLOCK_MAX_KB: 36\n"
+            "TIMEOUT: {timeout}\nTCP_BLOCK_MIN_KB: 12\nTCP_BLOCK_MAX_KB: 36\n"
         ))
     }
 

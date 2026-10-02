@@ -23,14 +23,14 @@ pub(crate) fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> St
         ]);
 
     for e in entries {
-        let (http_s, t12_s, t13_s, quic_s, raw_details) = dpi_core::probe::domains::build_domain_row(e);
+        let (http, tls12, tls13, quic, raw_details) = dpi_core::probe::domains::build_domain_row(e);
         let details = row_details(&raw_details, msg.lang);
         table.add_row(vec![
             Cell::new(cell_color(&e.domain, Color::Cyan)),
-            Cell::new(cell_color(http_s.display_label(), status_color(http_s))),
-            Cell::new(cell_color(t12_s.display_label(), status_color(t12_s))),
-            Cell::new(cell_color(t13_s.display_label(), status_color(t13_s))),
-            Cell::new(cell_color(quic_s.display_label(), status_color(quic_s))),
+            Cell::new(cell_color(http.display_label(), status_color(http))),
+            Cell::new(cell_color(tls12.display_label(), status_color(tls12))),
+            Cell::new(cell_color(tls13.display_label(), status_color(tls13))),
+            Cell::new(cell_color(quic.display_label(), status_color(quic))),
             Cell::new(details),
         ]);
     }
@@ -44,12 +44,19 @@ pub(crate) fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> St
 /// Detail cell of the domain table: one `<proto>:<detail>` line per failing
 /// protocol, or a single line when the failure is shared. Protocol tags are
 /// canonical Latin tokens (Rule 4) and stay untranslated.
+///
+/// A row where every protocol passed carries the four stage timings instead —
+/// `0.2s,0.2s,0.2s,0.2s`, one per column in the table's order (HTTP, TLS 1.2,
+/// TLS 1.3, QUIC).
 fn row_details(lines: &[DetailLine], lang: Language) -> String {
     lines
         .iter()
-        .map(|(tag, detail)| match tag {
-            Some(tag) => format!("{}:{}", tag, detail_text(detail, lang)),
-            None => detail_text(detail, lang),
+        .map(|line| match line {
+            DetailLine::Tagged(Some(tag), detail) => format!("{}:{}", tag, detail_text(detail, lang)),
+            DetailLine::Tagged(None, detail) => detail_text(detail, lang),
+            DetailLine::Timings([http, tls12, tls13, quic]) => {
+                format!("{:.1}s,{:.1}s,{:.1}s,{:.1}s", http, tls12, tls13, quic)
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")

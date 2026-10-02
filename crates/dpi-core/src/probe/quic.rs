@@ -23,6 +23,10 @@
 //!   that did not come from the endpoint.
 //! * `DROP` — nothing came back, the silence `SYN DROP` is for TCP.
 //!
+//! A sixth state is not a verdict: the dash (`quic_unsupported`) is a row whose
+//! endpoint serves no HTTP/3 at all, known before the probe from the shipped
+//! `quic_unsupported.txt`, so no Initial is sent for it.
+//!
 //! What it does *not* say: that the site answers HTTP/3 with `:status 200`. That
 //! needs the whole handshake and a request, which nothing in this tree drives —
 //! the provider ships QUIC key material, but no TLS state is run over QUIC
@@ -31,10 +35,7 @@
 //! TLS columns beside it.
 
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-use tokio::sync::Semaphore;
 
 use crate::classify::{classify_connect_error_icmp, Detail, DpiStatus, ProbeStage};
 use crate::config::AppConfig;
@@ -45,9 +46,6 @@ use crate::net::fingerprint::{
 };
 use crate::net::quic::{self, CryptoStream, Frame, ServerReply, SERVER_HELLO};
 use crate::net::tls::{hello_record_for, TlsProfile, TlsVersion};
-use crate::probe::domains::DomainEntry;
-use crate::probe::permit;
-use crate::{PhaseId, PhaseProgress};
 
 /// The QUIC transport-parameters extension (RFC 9000 §7.4.1 / RFC 9001 §8.2).
 /// rustls emits it only on a QUIC connection, so it is injected as a raw
@@ -115,6 +113,23 @@ const READ_BUF: usize = 2048;
 const PTO_FIRST: Duration = Duration::from_millis(666);
 const MAX_RETRANSMITS: u32 = 3;
 
+/// The shortest window a QUIC probe accepts, whatever `TIMEOUT` says. The ladder
+/// above spends `1 + 2 + 4` PTOs before the last repeat goes out (4.66 s), and the
+/// reply to that repeat needs a PTO of its own. A shorter window stops the probe
+/// before its last repeat, and the verdict then describes the window instead of
+/// the path: measured with a local `nfqws2` QUIC desync in front of the machine
+/// (`fake:blob=quic_google:repeats=3`), the readable handshake arrived only after
+/// the third repeat, and a 3 s window read the desync's own fake packets as
+/// `CLOSED`/`quic_unreadable_reply`. Nine PTOs = the ladder's seven plus two for
+/// the reply.
+const MIN_WINDOW: Duration = PTO_FIRST.saturating_mul(9);
+
+/// The window one QUIC probe gets: the configured timeout, never shorter than the
+/// ladder the probe itself runs ([`MIN_WINDOW`]).
+fn reply_window(timeout: f64) -> Duration {
+    Duration::from_secs_f64(timeout.max(0.1)).max(MIN_WINDOW)
+}
+
 /// The QUIC column of one domain row.
 #[derive(Debug, Clone)]
 pub struct QuicCheck {
@@ -128,6 +143,14 @@ impl QuicCheck {
     /// skipped (fake-IP, DNS failure) keeps.
     pub fn pending() -> Self {
         Self { status: DpiStatus::Unknown, detail: Detail::None, elapsed: 0.0 }
+    }
+
+    /// The cell of a row whose endpoint serves no HTTP/3 at all (the shipped
+    /// `quic_unsupported.txt`): no Initial was sent, so there is nothing to time
+    /// and nothing to explain — the dash is the whole verdict, and the summary
+    /// counts the row out of this column's total.
+    pub fn unsupported() -> Self {
+        Self { status: DpiStatus::QuicUnsupported, detail: Detail::None, elapsed: 0.0 }
     }
 }
 
@@ -386,7 +409,7 @@ pub async fn check_domain_quic(
     cfg: &AppConfig,
 ) -> QuicCheck {
     let started = Instant::now();
-    let timeout_dur = Duration::from_secs_f64(cfg.quic_timeout.max(0.1));
+    let timeout_dur = reply_window(cfg.timeout);
     let addr = SocketAddr::new(target, QUIC_PORT);
     let fingerprint = TlsFingerprint::from_config(cfg);
     match probe_addr(addr, domain, fingerprint, timeout_dur).await {
@@ -416,6 +439,26 @@ fn quic_socket_verdict(
         }
         other => (other, detail),
     }
+}
+
+/// What a socket error does to a QUIC attempt.
+///
+/// Returns the verdict that ends the attempt, or `None` when the error is waited
+/// out — with the verdict left in `pending` to be reported if nothing better
+/// arrives. One class is waited out: the ICMP a *local* desync puts on this
+/// socket. Its fake has to borrow the flow's 5-tuple to fool a filter, so the
+/// ICMP for a TTL-carrying fake lands on the probe's own socket — and it says
+/// nothing about the probe's datagrams, which carry a normal hop limit. Ending
+/// the attempt on it read as `OS ERR` where the endpoint was about to answer.
+fn on_socket_error(
+    classified: (DpiStatus, Detail),
+    pending: &mut Option<(DpiStatus, Detail)>,
+) -> Option<(DpiStatus, Detail)> {
+    if classified.1 == Detail::IcmpTimeExceeded {
+        *pending = Some(classified);
+        return None;
+    }
+    Some(classified)
 }
 
 /// One address: the datagram, the window, and the verdict.
@@ -474,6 +517,7 @@ async fn probe_addr(
     let mut next_retransmit = Instant::now() + PTO_FIRST;
     let mut retransmits: u32 = 0;
     let mut unreadable: usize = 0;
+    let mut path_error: Option<(DpiStatus, Detail)> = None;
     loop {
         let now = Instant::now();
         let left = deadline.saturating_duration_since(now);
@@ -523,7 +567,11 @@ async fn probe_addr(
             }
             Ok(Err(error)) => {
                 let icmp = crate::net::icmp_err::verdict_wait(addr.ip()).await;
-                return Err(quic_socket_verdict(&error, icmp));
+                let classified = quic_socket_verdict(&error, icmp);
+                if let Some(verdict) = on_socket_error(classified, &mut path_error) {
+                    return Err(verdict);
+                }
+                continue;
             }
         }
     }
@@ -538,50 +586,6 @@ async fn probe_addr(
         return Err((status, detail));
     }
     Ok((status, detail))
-}
-
-/// Test 2's QUIC phase: one Initial per entry that resolved to a clean address,
-/// `concurrency` probes at a time, results written back into the rows.
-///
-/// The same filter the TLS phases use — a fake-IP or stub row has no real peer
-/// to ask — and the same resolved address, so the column describes the peer the
-/// TLS columns describe.
-pub async fn check_quic_all(
-    entries: &mut [DomainEntry],
-    cfg: &AppConfig,
-    sem: &Arc<Semaphore>,
-    phases: Option<PhaseProgress>,
-) {
-    let total = entries.iter().filter(|e| e.dns_fake == Some(false)).count();
-    let tick = phases.as_ref().map(|p| (p.on_phase)(PhaseId::DomainQuic, total));
-    // One config for every task instead of one per domain: each deep clone
-    // carries the whole DNS server list, and the clones pile up while the tasks
-    // wait on the gate (`probe/whitelist.rs` shares it the same way).
-    let cfg = Arc::new(cfg.clone());
-    let mut handles = Vec::new();
-    for (idx, e) in entries.iter().enumerate() {
-        if e.dns_fake != Some(false) {
-            continue;
-        }
-        let Some(target) = e.resolved else { continue };
-        let domain = e.domain.clone();
-        let cfg = Arc::clone(&cfg);
-        let sem = Arc::clone(sem);
-        handles.push(tokio::spawn(async move {
-            let _permit = permit(&sem).await;
-            let check = check_domain_quic(&domain, target, &cfg).await;
-            (idx, check)
-        }));
-    }
-    for h in handles {
-        let done = h.await;
-        if let Some(t) = tick.as_ref() {
-            t();
-        }
-        if let Ok((idx, check)) = done {
-            entries[idx].quic = check;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -930,47 +934,104 @@ mod tests {
         assert_eq!(dropped, Err((DpiStatus::QuicDrop, Detail::QuicTimeout)));
     }
 
-    /// The whole phase, on rows the caller already resolved: the report writes
-    /// into the entries and skips the ones without a clean address.
+    /// The window the probe takes must outlast the probe's own ladder: seven
+    /// PTOs go before the last repeat is even sent, and the reply to it needs a
+    /// PTO more. A `TIMEOUT` of 3 s used to end the probe at the second repeat.
+    #[test]
+    fn the_quic_window_outlasts_the_retransmit_ladder() {
+        let ladder_end = PTO_FIRST * 7; // the 1 + 2 + 4 PTOs before the third repeat
+        for asked in [1.0, 3.0, 8.0] {
+            let window = reply_window(asked);
+            assert!(
+                window >= ladder_end + PTO_FIRST,
+                "{asked}s asked, {window:?} granted, the ladder ends at {ladder_end:?}"
+            );
+        }
+        // The floor raises a short timeout and never shortens a long one.
+        assert_eq!(reply_window(60.0), Duration::from_secs(60));
+    }
+
+    /// An endpoint that answers the first flight with a packet no key opens and
+    /// sends its ServerHello only later — the shape measured against Cloudflare's
+    /// edge. Under a 3 s `TIMEOUT` the probe used to stop at the second repeat
+    /// and report `CLOSED`/`quic_unreadable_reply`, which describes the window
+    /// and not the endpoint: the ServerHello it never waited for is what a stock
+    /// client gets. The floored window outlasts the ladder, so the reply lands.
     #[tokio::test]
-    async fn the_phase_fills_clean_rows_and_skips_the_rest() {
-        use crate::probe::domains::{DomainEntry, HttpCheck, TlsCheck};
+    async fn a_late_server_hello_still_reads_ok_under_a_small_timeout() {
+        let server = tokio::net::UdpSocket::bind("127.0.0.1:0").await.expect("a local socket");
+        let addr = server.local_addr().expect("an address");
+        let started = Instant::now();
+        let answering = tokio::spawn(async move {
+            let mut buf = vec![0u8; 1500];
+            let mut state: Option<(crate::net::quic::InitialKeys, Vec<u8>, Vec<u8>)> = None;
+            while let Ok((len, from)) = server.recv_from(&mut buf).await {
+                if len < 8 {
+                    continue;
+                }
+                if state.is_none() {
+                    // The client's destination connection ID is what both
+                    // directions of the Initial keys come from (RFC 9001 §5.2),
+                    // and its source ID is who the reply is addressed to.
+                    let dcid_len = usize::from(buf[5]);
+                    let dcid = buf[6..6 + dcid_len].to_vec();
+                    let at = 6 + dcid_len;
+                    let scid_len = usize::from(buf[at]);
+                    let scid = buf[at + 1..at + 1 + scid_len].to_vec();
+                    let keys = crate::net::quic::InitialKeys::derive(&dcid).expect("initial keys");
+                    state = Some((keys, dcid, scid));
+                }
+                let (keys, dcid, scid) = state.as_ref().expect("just set");
+                if started.elapsed() < Duration::from_secs(3) {
+                    // A packet no key opens, counted as unreadable rather than
+                    // as silence.
+                    let mut junk = vec![0xc0u8; 1200];
+                    junk[1..5].copy_from_slice(&crate::net::quic::VERSION_1.to_be_bytes());
+                    let _ = server.send_to(&junk, from).await;
+                    continue;
+                }
+                let hello = server_hello([0x11; 32]);
+                let mut frames = vec![0x06]; // CRYPTO
+                crate::net::quic::write_varint(&mut frames, 0);
+                crate::net::quic::write_varint(&mut frames, hello.len() as u64);
+                frames.extend_from_slice(&hello);
+                let packet = crate::net::quic::seal_server_initial(keys, scid, dcid, 0, frames)
+                    .expect("a sealed reply");
+                let _ = server.send_to(&packet, from).await;
+            }
+        });
 
-        let dash = TlsCheck { status: DpiStatus::Unknown, detail: Detail::None, elapsed: 0.0 };
-        let mut entries = vec![
-            DomainEntry {
-                domain: "silent.example".to_string(),
-                resolved: Some("127.0.0.1".parse().expect("a documentation address")),
-                dns_fake: Some(false),
-                t13: dash.clone(),
-                t12: dash.clone(),
-                http: HttpCheck { status: DpiStatus::Unknown, detail: Detail::None },
-                quic: QuicCheck::pending(),
-            },
-            DomainEntry {
-                domain: "stub.example".to_string(),
-                resolved: Some("198.18.5.4".parse().expect("a fake-IP address")),
-                dns_fake: Some(true),
-                t13: dash.clone(),
-                t12: dash.clone(),
-                http: HttpCheck { status: DpiStatus::Unknown, detail: Detail::None },
-                quic: QuicCheck::pending(),
-            },
-        ];
-        let cfg = AppConfig { quic_timeout: 0.4, ..AppConfig::default() };
-        let sem = Arc::new(Semaphore::new(2));
-        check_quic_all(&mut entries, &cfg, &sem, None).await;
-
-        // 127.0.0.1:443 has no QUIC endpoint in a test run: either nothing
-        // answers (a drop) or the port is closed (a refusal). Both are verdicts;
-        // what matters is that the row was probed at all.
-        assert!(
-            matches!(entries[0].quic.status, DpiStatus::QuicDrop | DpiStatus::Refused),
-            "got {:?} / {:?}",
-            entries[0].quic.status,
-            entries[0].quic.detail.code()
+        let verdict = probe_addr(addr, "example.com", TlsFingerprint::Chrome107, reply_window(3.0)).await;
+        answering.abort();
+        assert_eq!(
+            verdict,
+            Ok((DpiStatus::QuicOk, Detail::QuicServerHello)),
+            "the late ServerHello is what the window has to wait for"
         );
-        assert_eq!(entries[1].quic.status, DpiStatus::Unknown, "a fake-IP row is not probed");
+    }
+
+    /// The ICMP a local desync's fake puts on this socket must not end the
+    /// attempt: it is about the fake, not about the probe's datagrams, and
+    /// ending on it read as `OS ERR` where the endpoint was about to answer.
+    #[test]
+    fn a_stray_icmp_does_not_end_the_quic_attempt() {
+        let mut pending = None;
+        assert!(on_socket_error(
+            (DpiStatus::HostUnreach, Detail::IcmpTimeExceeded),
+            &mut pending
+        )
+        .is_none());
+        assert_eq!(pending, Some((DpiStatus::HostUnreach, Detail::IcmpTimeExceeded)));
+
+        // A verdict the probe recognizes still ends it, and leaves nothing to
+        // report in place of it.
+        let mut pending = None;
+        assert!(on_socket_error(
+            (DpiStatus::Refused, Detail::QuicPortUnreachable),
+            &mut pending
+        )
+        .is_some());
+        assert_eq!(pending, None);
     }
 
     /// A closed port must read `REFUSED` whichever path noticed it.

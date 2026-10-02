@@ -235,14 +235,27 @@ cfg_select! {
         const HOST_UNREACH: i32 = 10065; // WSAEHOSTUNREACH
         const NET_DOWN: i32 = 10050; // WSAENETDOWN
         const HOST_DOWN: i32 = 10064; // WSAEHOSTDOWN
+        const MSG_TOO_LONG: i32 = 10040; // WSAEMSGSIZE
     }
     _ => {
         const NET_UNREACH: i32 = libc::ENETUNREACH;
         const HOST_UNREACH: i32 = libc::EHOSTUNREACH;
         const NET_DOWN: i32 = libc::ENETDOWN;
         const HOST_DOWN: i32 = libc::EHOSTDOWN;
+        const MSG_TOO_LONG: i32 = libc::EMSGSIZE;
     }
 }
+
+/// `WSAENETRESET`: what a *connected* socket on Windows reports for an ICMP that
+/// is not a destination-unreachable verdict — a time exceeded among them. There
+/// is no queued message to read on that platform (the watcher in `net::icmp_err`
+/// is Linux-only), so this number is the whole signature there. Measured: a
+/// local `nfqws2` QUIC desync whose fake carried `ip_ttl` produced it, because
+/// the fake borrows the client's 5-tuple and the ICMP for it comes back to the
+/// probe's own socket; the column read `OS ERR / OS errno 10052` until this arm
+/// existed.
+#[cfg(windows)]
+const WSA_NET_RESET: i32 = 10052;
 
 /// Classifies a TCP connection error: pool exhaustion, timeouts, DNS failures,
 /// TLS alerts surfacing inside connect errors, refusals, resets, aborts and
@@ -372,6 +385,19 @@ pub fn classify_connect_error_full(
     if matches!(raw_os_error, Some(HOST_UNREACH) | Some(HOST_DOWN)) || full.contains("no route to host") || full.contains("host is down") {
         return (DpiStatus::HostUnreach, Detail::HostUnreach);
     }
+    // The ICMP the socket was handed, when the platform says so by errno alone.
+    // The same event reads `EHOSTUNREACH` on unix, where the watcher names it.
+    #[cfg(windows)]
+    if matches!(raw_os_error, Some(WSA_NET_RESET)) {
+        return (DpiStatus::HostUnreach, Detail::IcmpTimeExceeded);
+    }
+    // A datagram the path will not carry: the kernel reports the ICMP
+    // fragmentation-needed as this errno on both platforms, and the QUIC probe
+    // sends 1200 bytes by construction, so this is the signature of a path
+    // narrower than the protocol's own minimum.
+    if matches!(raw_os_error, Some(MSG_TOO_LONG)) || full.contains("message too long") {
+        return (DpiStatus::OsErr, Detail::IcmpFragNeeded);
+    }
 
     if let Some(code) = raw_os_error {
         return (DpiStatus::OsErr, Detail::Other(format!("OS errno {}", code)));
@@ -394,22 +420,36 @@ pub fn classify_connect_error_icmp(
     bytes_read: usize,
     stage: ProbeStage,
 ) -> (DpiStatus, Detail) {
-    let (status, detail) = classify_connect_error_full(
+    let (mut status, mut detail) = classify_connect_error_full(
         &err.to_string(),
         err.raw_os_error(),
         Some(err.kind()),
         bytes_read,
         stage,
     );
-    let refined = match (icmp, status) {
-        (Some(code), DpiStatus::HostUnreach | DpiStatus::NetUnreach)
-            if code == IcmpCode::ADMIN_PROHIBITED =>
+    // The path named the reason itself, and the errno cannot: `EHOSTUNREACH`
+    // covers the whole destination-unreachable family, `EMSGSIZE` a datagram the
+    // path will not carry, `EPROTO` a header a router refused. The message is
+    // what says which one it was.
+    if let Some(code) = icmp {
+        if code.icmp_type == IcmpCode::TIME_EXCEEDED.icmp_type {
+            // The unreachable family is where a datagram the path could not
+            // deliver belongs, and this event reaches the socket as
+            // `EHOSTUNREACH` on unix but `WSAENETRESET` on Windows, so the pair
+            // is set rather than only refined.
+            status = DpiStatus::HostUnreach;
+            detail = Detail::IcmpTimeExceeded;
+        } else if code == IcmpCode::FRAG_NEEDED {
+            detail = Detail::IcmpFragNeeded;
+        } else if code.icmp_type == IcmpCode::PARAMETER_PROBLEM.icmp_type {
+            detail = Detail::IcmpParameterProblem;
+        } else if code.is_admin_prohibited()
+            && matches!(status, DpiStatus::HostUnreach | DpiStatus::NetUnreach)
         {
-            Detail::IcmpAdminProhibited
+            detail = Detail::IcmpAdminProhibited;
         }
-        _ => detail,
-    };
-    (status, refined)
+    }
+    (status, detail)
 }
 
 /// Legacy io::Error-based entry point (stage unknown → tcp_connect).
@@ -870,6 +910,68 @@ mod tests {
 
         let (s, d) = classify_connect_error_icmp(&err, None, 0, ProbeStage::TcpConnect);
         assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::HostUnreach));
+    }
+
+    /// The ICMP a path answers with is named rather than left as an errno: a
+    /// time-exceeded (a local desync's TTL-carrying fake puts one on the probe's
+    /// own socket), a datagram the path will not carry, and a header a router
+    /// refused. Measured for the first: with `ip_ttl` on the desync's fake the
+    /// QUIC column read `OS ERR / OS errno 10052` until this arm existed.
+    #[test]
+    fn the_path_s_own_icmp_is_named_not_left_as_an_errno() {
+        // Windows reports the time-exceeded class by errno alone (no watcher
+        // there); unix reads the message, and both must land on one pair.
+        let (s, d) = classify_connect_error_icmp(
+            &io::Error::from_raw_os_error(10052),
+            None,
+            0,
+            ProbeStage::TcpConnect,
+        );
+        #[cfg(windows)]
+        assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::IcmpTimeExceeded));
+        let (s, d) = classify_connect_error_icmp(
+            &io::Error::from_raw_os_error(HOST_UNREACH),
+            Some(IcmpCode::TIME_EXCEEDED),
+            0,
+            ProbeStage::TcpConnect,
+        );
+        assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::IcmpTimeExceeded));
+
+        // A datagram the path will not carry reaches the socket as
+        // `EMSGSIZE`/`WSAEMSGSIZE` on both platforms, and as type 3 code 4 when
+        // the message is read.
+        let (s, d) = classify_connect_error_full("", Some(MSG_TOO_LONG), None, 0, ProbeStage::TcpConnect);
+        assert_eq!((s, d), (DpiStatus::OsErr, Detail::IcmpFragNeeded));
+        let (s, d) = classify_connect_error_icmp(
+            &io::Error::from_raw_os_error(MSG_TOO_LONG),
+            Some(IcmpCode::FRAG_NEEDED),
+            0,
+            ProbeStage::TcpConnect,
+        );
+        assert_eq!((s, d), (DpiStatus::OsErr, Detail::IcmpFragNeeded));
+
+        // A parameter problem is rare and is named when the watcher sees it.
+        let (s, d) = classify_connect_error_icmp(
+            &io::Error::from_raw_os_error(HOST_UNREACH),
+            Some(IcmpCode::PARAMETER_PROBLEM),
+            0,
+            ProbeStage::TcpConnect,
+        );
+        assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::IcmpParameterProblem));
+
+        // The filter's verdict is the whole administratively-prohibited family,
+        // not just the code a provider was measured to send: RFC 1812 §4.3.3.1
+        // groups 9, 10 and 13, and the three arrive as the same errno.
+        for icmp_code in [9, 10, 13] {
+            let code = IcmpCode { icmp_type: 3, icmp_code };
+            let (s, d) = classify_connect_error_icmp(
+                &io::Error::from_raw_os_error(HOST_UNREACH),
+                Some(code),
+                0,
+                ProbeStage::TcpConnect,
+            );
+            assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::IcmpAdminProhibited), "code {icmp_code}");
+        }
     }
 
     /// The message refines an unreachable verdict and nothing else: a reset that

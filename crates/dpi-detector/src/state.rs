@@ -70,6 +70,10 @@ pub(crate) struct SavedState {
     /// The menu's selection string, e.g. `023` — the same shape `--tests` takes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tests: Option<String>,
+    /// Seconds one phase of a probe waits — the menu's Timeout row. One value for
+    /// HTTP, TLS and QUIC, so there is one field and not three.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<f64>,
     /// `None` is the routing table; `Some` is a named interface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface: Option<String>,
@@ -85,6 +89,7 @@ impl SavedState {
             concurrency: Some(selection.concurrency),
             fingerprint: Some(selection.tls_fingerprint.code().to_string()),
             tests: Some(selection.selected_tests.clone()),
+            timeout: Some(selection.timeout),
             interface: selection.interface.clone(),
         }
     }
@@ -98,6 +103,14 @@ impl SavedState {
             Some("ipv6") => Some("ipv6".to_string()),
             _ => None,
         }
+    }
+
+    /// The timeout to start from, ignoring a value the menu could not have
+    /// produced (1–60 seconds): the same rule as `ip_version`, and the window a
+    /// probe waits is not a place for a hand-edited zero or a negative.
+    pub(crate) fn timeout(&self) -> Option<f64> {
+        self.timeout
+            .filter(|secs| (crate::screens::main::TIMEOUT_MIN_SECS..=crate::screens::main::TIMEOUT_MAX_SECS).contains(secs))
     }
 }
 
@@ -262,6 +275,7 @@ mod tests {
             concurrency: Some(20),
             fingerprint: Some("chrome146".to_string()),
             tests: Some("023".to_string()),
+            timeout: Some(15.0),
             interface: Some("eth0".to_string()),
         };
         let text = serde_json::to_string(&state).expect("serializes");
@@ -289,8 +303,21 @@ mod tests {
         let state = SavedState { language: Some(Language::En), ..SavedState::default() };
         let text = serde_json::to_string(&state).expect("serializes");
         assert!(text.contains("\"language\":\"en\""), "{text}");
-        for absent in ["ip_version", "concurrency", "fingerprint", "tests", "interface"] {
+        for absent in ["ip_version", "concurrency", "fingerprint", "tests", "interface", "timeout"] {
             assert!(!text.contains(absent), "{absent} in {text}");
+        }
+    }
+
+    /// The timeout is checked the way the IP version is: the value a hand-edited
+    /// file could carry (zero, negative, an hour) is not one the menu can leave
+    /// behind, and it never reaches a probe.
+    #[test]
+    fn test_a_timeout_outside_the_row_range_is_ignored() {
+        let inside = SavedState { timeout: Some(15.0), ..SavedState::default() };
+        assert_eq!(inside.timeout(), Some(15.0));
+        for outside in [0.0, -5.0, 0.5, 61.0, 3600.0] {
+            let odd = SavedState { timeout: Some(outside), ..SavedState::default() };
+            assert_eq!(odd.timeout(), None, "{outside}");
         }
     }
 
@@ -304,6 +331,7 @@ mod tests {
             selected_tests: "023".to_string(),
             ip_version: "ipv6".to_string(),
             concurrency: 20,
+            timeout: 12.0,
             language: Language::Zh,
             tls_fingerprint: TlsFingerprint::ALL[1],
             interface: None,
@@ -312,6 +340,7 @@ mod tests {
         assert_eq!(state.language, Some(Language::Zh));
         assert_eq!(state.ip_version.as_deref(), Some("ipv6"));
         assert_eq!(state.concurrency, Some(20));
+        assert_eq!(state.timeout, Some(12.0));
         assert_eq!(state.fingerprint.as_deref(), Some(TlsFingerprint::ALL[1].code()));
         assert_eq!(state.tests.as_deref(), Some("023"));
         assert_eq!(state.interface, None, "the routing table is an absent key");

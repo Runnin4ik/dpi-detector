@@ -919,7 +919,7 @@ pub(crate) async fn check_http(
         };
 
         *stage.lock() = ProbeStage::SendingData;
-        let resp = match timeout(Duration::from_secs_f64(cfg.read_timeout), sender.send(req)).await {
+        let resp = match timeout(Duration::from_secs_f64(cfg.timeout), sender.send(req)).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
                 // The stage the request went out under, read out of the guard:
@@ -959,7 +959,7 @@ pub(crate) async fn check_http(
         let mut body = resp.into_body();
         let mut bytes_read: usize = 0;
         loop {
-            match timeout(Duration::from_secs_f64(cfg.read_timeout), body.frame()).await {
+            match timeout(Duration::from_secs_f64(cfg.timeout), body.frame()).await {
                 Ok(Some(Ok(frame))) => {
                     if let Some(data) = frame.data_ref() {
                         bytes_read += data.len();

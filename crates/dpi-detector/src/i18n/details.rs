@@ -89,6 +89,9 @@ pub(crate) fn detail_text(detail: &Detail, lang: Language) -> String {
         Detail::NetUnreach => t4(lang, "Нет маршрута (ICMP unreach)", "Net unreachable", "网络不可达", "Shabake dar dastras nist"),
         Detail::HostUnreach => t4(lang, "Нет маршрута до хоста", "Host unreachable", "主机不可达", "Mizban dar dastras nist"),
         Detail::IcmpAdminProhibited => t4(lang, "ICMP: административно запрещено (фильтр провайдера)", "ICMP administratively prohibited (provider filter)", "ICMP 管理禁止（运营商过滤）", "ICMP admin prohibited (filter-e provider)"),
+        Detail::IcmpTimeExceeded => t4(lang, "ICMP: TTL истёк", "ICMP: TTL exceeded", "ICMP：TTL 超时", "ICMP: TTL tamam shod"),
+        Detail::IcmpFragNeeded => t4(lang, "ICMP: нужна фрагментация", "ICMP: fragmentation needed", "ICMP：需要分片", "ICMP: fragment niaz ast"),
+        Detail::IcmpParameterProblem => t4(lang, "ICMP: ошибка в заголовке (parameter problem)", "ICMP: parameter problem", "ICMP：参数问题", "ICMP: moshkel dar header (parameter problem)"),
         Detail::Ipv6Unsupported => t4(lang, "IPv6 не поддерживается/отключён", "IPv6 not supported/disabled", "IPv6 不受支持或已禁用", "IPv6 poshtibani nemishavad ya ghayr-e fa'al ast"),
         // Composed: the head is itself a detail, the offset keeps its unit.
         Detail::AtKb { head, kb } => {
@@ -108,20 +111,20 @@ pub(crate) fn detail_text(detail: &Detail, lang: Language) -> String {
         Detail::UpgradeHttps { status: Some(code) } => format!("{code} → https"),
         Detail::UpgradeHttps { status: None } => "→ https".to_string(),
         Detail::Elapsed(secs) => format!("{:.1}s", secs),
-        Detail::QuicServerHello => t4(lang, "Сервер ответил на QUIC-рукопожатие (ServerHello)", "The server answered the QUIC handshake (ServerHello)", "服务器回应了 QUIC 握手（ServerHello）", "Server be handshake-e QUIC pasokh dad (ServerHello)"),
-        Detail::QuicRetry => t4(lang, "Сервер запросил Retry-токен (QUIC-путь работает)", "The server asked for a Retry token (the QUIC path works)", "服务器要求 Retry 令牌（QUIC 路径可用）", "Server token-e Retry khast (masir-e QUIC kar mikonad)"),
-        Detail::QuicForgedRetry => t4(lang, "Retry с неверным integrity-тегом — пакет не от сервера", "Retry with a bad integrity tag — the packet is not the server's", "Retry 的完整性标签错误 — 报文不是服务器发出的", "Retry ba integrity tag-e ghalat — packet az server nist"),
+        Detail::QuicServerHello => t4(lang, "ServerHello получен", "ServerHello received", "已收到 ServerHello", "ServerHello daryaft shod"),
+        Detail::QuicRetry => t4(lang, "Retry-токен", "Retry token", "Retry 令牌", "Token-e Retry"),
+        Detail::QuicForgedRetry => t4(lang, "Поддельный Retry", "Fake Retry", "伪造的 Retry", "Retry-e ja'li"),
         Detail::QuicClose { error_code } => format!(
             "{} ({})",
-            t4(lang, "Сервер закрыл QUIC-соединение", "The server closed the QUIC connection", "服务器关闭了 QUIC 连接", "Server ettesal-e QUIC ra bast"),
+            t4(lang, "Закрыто сервером", "Closed by server", "服务器已关闭", "Baste shod az server"),
             error_code
         ),
-        Detail::QuicReset => t4(lang, "Stateless reset: ответил тот, у кого нет состояния этого соединения", "Stateless reset: something answered that has no state for this connection", "无状态重置：回应方没有此连接的状态", "Stateless reset: kasani pasokh dad ke hich state-i baraye in ettesal nadarad"),
-        Detail::QuicVersionNegotiation => t4(lang, "Сервер не поддерживает QUIC v1 (version negotiation)", "The server does not speak QUIC v1 (version negotiation)", "服务器不支持 QUIC v1（version negotiation）", "Server version-e QUIC v1 ra nadarad (version negotiation)"),
-        Detail::QuicTimeout => t4(lang, "Ответа на Initial нет (UDP 443 молчал всё окно)", "No reply to the Initial (UDP 443 stayed silent for the whole window)", "Initial 没有回应（UDP 443 在整个窗口内没有响应）", "Be Initial pasokhi nayamad (UDP 443 dar tamam-e window sokut kard)"),
-        Detail::QuicUnreadableReply => t4(lang, "Ответ пришёл, но не открывается ни одним ключом соединения (так отвечает эдж на первый Initial)", "Something answered, and no key of this connection opens it (what an edge sends to a first Initial)", "有回应，但本连接的任何密钥都无法解开（边缘对首个 Initial 的回应方式）", "Pasokh amad, vali ba hich kelid-e in ettesal baz nemishavad (pasokh-e edge be avvalin Initial)"),
-        Detail::QuicAnsweredWithoutHandshake => t4(lang, "Эндпоинт ответил, но данных рукопожатия не прислал (только подтверждение)", "The endpoint answered, and sent no handshake data at all (an acknowledgement, nothing else)", "端点有回应，但完全没有握手数据（只有确认）", "Endpoint pasokh dad, vali hich dade-ye handshake nafrestad (faghat acknowledgement)"),
-        Detail::QuicPortUnreachable => t4(lang, "ICMP: на UDP-порту никто не слушает", "ICMP says nothing listens on the UDP port", "ICMP 表示该 UDP 端口无人监听", "ICMP migooyad hich kas ru-ye in port-e UDP gush nemidahad"),
+        Detail::QuicReset => t4(lang, "Сброс без состояния", "Stateless reset", "无状态重置", "Reset-e bedun-e state"),
+        Detail::QuicVersionNegotiation => t4(lang, "Нет QUIC v1", "No QUIC v1", "无 QUIC v1", "QUIC v1 nadarad"),
+        Detail::QuicTimeout => t4(lang, "Таймаут Initial", "Initial timeout", "Initial 超时", "Mohlat-e Initial"),
+        Detail::QuicUnreadableReply => t4(lang, "Нечитаемый ответ", "Unreadable reply", "无法解析的回应", "Pasokh baz nemishavad"),
+        Detail::QuicAnsweredWithoutHandshake => t4(lang, "Ответ без handshake", "Reply without handshake", "回应无握手", "Pasokh bedun-e handshake"),
+        Detail::QuicPortUnreachable => t4(lang, "ICMP: порт закрыт", "ICMP: port closed", "ICMP：端口已关闭", "ICMP: port baste"),
         // Free text from the OS or the TLS stack: appended as it came.
         Detail::Other(text) => text.clone(),
     }
@@ -172,11 +175,11 @@ mod tests {
         // once ended in "(transport error" and the number hung outside it).
         assert_eq!(
             detail_text(&Detail::QuicClose { error_code: 10 }, En),
-            "The server closed the QUIC connection (10)"
+            "Closed by server (10)"
         );
         assert_eq!(
             detail_text(&Detail::QuicClose { error_code: 0x12f }, Zh),
-            "服务器关闭了 QUIC 连接 (303)"
+            "服务器已关闭 (303)"
         );
         assert_eq!(detail_text(&Detail::None, Ru), "");
         assert_eq!(detail_text(&Detail::Other("→ https".into()), En), "→ https");
@@ -267,6 +270,9 @@ mod tests {
             Detail::NetUnreach,
             Detail::HostUnreach,
             Detail::IcmpAdminProhibited,
+            Detail::IcmpTimeExceeded,
+            Detail::IcmpFragNeeded,
+            Detail::IcmpParameterProblem,
             Detail::UnknownConnectionFailure,
             Detail::Ipv6Unsupported,
             Detail::QuicServerHello,

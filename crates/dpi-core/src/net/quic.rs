@@ -354,6 +354,31 @@ fn seal_initial(
     packet_number: u64,
     frames: Vec<u8>,
 ) -> Result<Vec<u8>, QuicError> {
+    seal_with(&keys.client, dcid, scid, packet_number, frames)
+}
+
+/// The same sealing on the server half of the keys. Only the tests need it: a
+/// probe that has to answer itself (a fake endpoint on the other end of the
+/// socket) is the only caller that seals what it does not read.
+#[cfg(test)]
+pub(crate) fn seal_server_initial(
+    keys: &InitialKeys,
+    dcid: &[u8],
+    scid: &[u8],
+    packet_number: u64,
+    frames: Vec<u8>,
+) -> Result<Vec<u8>, QuicError> {
+    seal_with(&keys.server, dcid, scid, packet_number, frames)
+}
+
+/// One protected Initial datagram in the direction of `secrets`.
+fn seal_with(
+    secrets: &Secrets,
+    dcid: &[u8],
+    scid: &[u8],
+    packet_number: u64,
+    frames: Vec<u8>,
+) -> Result<Vec<u8>, QuicError> {
     let mut packet = Vec::with_capacity(INITIAL_DATAGRAM);
     packet.push(0xc0 | (PN_LEN as u8 - 1)); // long header, Initial, fixed bit
     packet.extend_from_slice(&VERSION_1.to_be_bytes());
@@ -369,9 +394,9 @@ fn seal_initial(
     // The AEAD covers header + packet number as associated data (RFC 9001 §5.3).
     let aad = packet.clone();
     let mut payload = frames;
-    seal(&keys.client, &aad, packet_number, &mut payload)?;
+    seal(secrets, &aad, packet_number, &mut payload)?;
     packet.extend_from_slice(&payload);
-    protect_header(&keys.client, &mut packet, pn_offset)?;
+    protect_header(secrets, &mut packet, pn_offset)?;
     Ok(packet)
 }
 

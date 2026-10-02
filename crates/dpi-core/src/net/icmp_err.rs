@@ -4,7 +4,10 @@
 //! unreachable" (type 3 code 1), "host administratively prohibited" (type 3
 //! code 13, what a provider's filter answers with) and the rest of the
 //! destination-unreachable codes all arrive as the same number, so the errno
-//! alone cannot say whether the route or a filter refused the flow.
+//! alone cannot say whether the route or a filter refused the flow. A time
+//! exceeded (type 11) is the same story from the other end: a router on the path
+//! expired the datagram, and the errno it produces differs by platform, so the
+//! message is what names it.
 //!
 //! The kernel does not hand that message over for a failed TCP connect: the
 //! socket's error queue stays empty even with `IP_RECVERR` set and the errno
@@ -43,8 +46,11 @@ use parking_lot::Mutex;
 
 use crate::classify::IcmpCode;
 
-/// ICMP type "destination unreachable" — the only type that quotes a packet.
+/// ICMP type "destination unreachable", "time exceeded" and "parameter problem"
+/// — the three types that quote the packet they are about.
 const DEST_UNREACH: u8 = 3;
+const TIME_EXCEEDED: u8 = 11;
+const PARAMETER_PROBLEM: u8 = 12;
 
 /// Offset of the destination address inside a quoted IPv4 header, and the
 /// smallest header that can hold it.
@@ -157,9 +163,9 @@ cfg_select! {
 /// Reads the ICMP type, the code, and the destination of the packet it quotes.
 ///
 /// A raw socket is handed the packet from its IPv4 header, so the ICMP message
-/// starts at the header's length, not at the first byte. Only a
-/// destination-unreachable quotes a packet, and only the quoted header's
-/// destination address is needed to name what the verdict is about.
+/// starts at the header's length, not at the first byte. A destination
+/// unreachable and a time exceeded both quote a packet, and only the quoted
+/// header's destination address is needed to name what the verdict is about.
 fn parse_icmp(packet: &[u8]) -> Option<(Ipv4Addr, IcmpCode)> {
     const ICMP_HEADER: usize = 8;
 
@@ -168,7 +174,7 @@ fn parse_icmp(packet: &[u8]) -> Option<(Ipv4Addr, IcmpCode)> {
         return None;
     }
     let icmp = &packet[ip_len..];
-    if icmp[0] != DEST_UNREACH {
+    if icmp[0] != DEST_UNREACH && icmp[0] != TIME_EXCEEDED && icmp[0] != PARAMETER_PROBLEM {
         return None;
     }
     let quoted = &icmp[ICMP_HEADER..];
@@ -214,6 +220,19 @@ mod tests {
         let (dst, code) = parse_icmp(&unreachable(DEST_UNREACH, 13, [1, 1, 1, 1])).unwrap();
         assert_eq!(dst, Ipv4Addr::new(1, 1, 1, 1));
         assert_eq!(code, IcmpCode::ADMIN_PROHIBITED);
+    }
+
+    /// The three types that quote a packet are read; anything else is not a
+    /// verdict about a flow and must not be recorded as one.
+    #[test]
+    fn the_quoting_types_are_read_and_the_rest_are_not() {
+        for (icmp_type, code) in [(DEST_UNREACH, 4), (TIME_EXCEEDED, 0), (PARAMETER_PROBLEM, 0)] {
+            let parsed = parse_icmp(&unreachable(icmp_type, code, [203, 0, 113, 9]));
+            assert!(parsed.is_some(), "type {icmp_type} quotes a packet");
+            assert_eq!(parsed.unwrap().1, IcmpCode { icmp_type, icmp_code: code });
+        }
+        // An echo request (type 8) carries no quoted packet to name a flow by.
+        assert!(parse_icmp(&unreachable(8, 0, [203, 0, 113, 9])).is_none());
     }
 
     /// A real one, captured on the router: the provider's filter answering a

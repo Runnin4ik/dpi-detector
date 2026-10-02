@@ -132,7 +132,7 @@ registry/env keys, `Detail` codes, raw error text appended after a localized lab
 - `crates/dpi-detector/src/state.rs` — what the interactive menu remembers between runs: `state.json` in the per-OS config dir, then `$PREFIX/etc` on Entware, then beside the binary. Written where a run starts — never on a quit, never by a non-interactive run; CLI flags outrank it, `config.yml` is the fallback.
 - `crates/dpi-core/src/classify/classifier.rs` — error ⇒ verdict decisions.
 - `config.yml` (root, 430 lines) — shipped default runtime config, embedded via `include_str!`.
-- `domains.txt`, `burst-domains.txt`, `tcp16.json`, `whitelist_sni.txt` — per-test target lists, all embedded; test 6 keeps its own on purpose.
+- `domains.txt`, `burst-domains.txt`, `tcp16.json`, `whitelist_sni.txt`, `quic_unsupported.txt` — per-test target lists, all embedded; test 6 keeps its own on purpose, and `quic_unsupported.txt` names the hosts whose QUIC column test 2 does not probe (the cell prints `—` and the summary counts only the rest).
 - `README.md` — user manual (**Russian**), authoritative CLI reference. MUST update in the same commit as a CLI/`--json`/`Detail` change.
 - `Cargo.toml`, `rust-toolchain.toml`, `deny.toml`, `Cross.toml`, `.cargo/config.toml` — build, toolchain, supply-chain, cross-compile policy.
 - `.github/workflows/`, `.omp/rules/`, `.omp/agents/` — what CI runs (explained in `docs/CI.md`); repo-local agent rules and profiles.

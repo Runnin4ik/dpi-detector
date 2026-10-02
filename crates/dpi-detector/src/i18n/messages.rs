@@ -334,6 +334,11 @@ pub(crate) struct Messages {
     /// `{}` is `<path>: <error>`; the embedded list is used instead, and this is
     /// what tells an unreadable file from an absent one.
     pub whitelist_load_failed: &'static str,
+    /// Non-fatal: the QUIC-unsupported list the config named cannot be read.
+    /// `{}` is `<path>: <error>`; the embedded list stands in. The same notice
+    /// the whitelist file gets, for the same reason — an unreadable file must not
+    /// look like an absent one.
+    pub quic_unsupported_load_failed: &'static str,
     /// Fatal: the list `--tcp16` named cannot be read. `{}` is
     /// `<path>: <error>`; the run stops, because the shipped targets would
     /// measure hosts the operator never asked for.

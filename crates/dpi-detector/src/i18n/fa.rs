@@ -252,7 +252,7 @@ pub(crate) fn messages() -> Messages {
         cli_domain: "Domain haye khass baraye barresi (mitavanid tekrar konid: -d vk.com -d ya.ru)",
         cli_output: "Masir-e file baraye zakhire-ye report",
         cli_burst: "Fingerprint/Sibir blocking (test 6): darkhast be har host, hampooshani [1-100, pishfarz: 10]",
-        cli_burst_timeout: "Test 6: timeout-e mosafehe, sanie [pishfarz: 8]; darkhast-e baad az aan montazer-e read_timeout mimanad",
+        cli_burst_timeout: "Test 6: timeout-e mosafehe, sanie [pishfarz: 8]; darkhast-e baad az aan montazer-e TIMEOUT-e moshtarak mimanad",
         cli_burst_gap: "Test 6: ta'khir beyn-e shoroo-e talash ha, ms [0-1000, pishfarz: 20]; 0 yani hame-ye dore dar yek lahze shoroo mishavad",
         cli_burst_profiles: "Fingerprint haye test 6: all ya nam-e profile ha ba kama; list ra --legend chap mikonad [pishfarz: set-e pishfarz]",
         cli_burst_tls: "TLS baraye test 6: 1.3+1.2 (pishnahad-e browser, pasokh bayad 1.3 bashad)|1.3 (faghat 1.3)|1.2 (faghat 1.2) [pishfarz: 1.3+1.2]",
@@ -264,6 +264,7 @@ pub(crate) fn messages() -> Messages {
         domains_load_failed: "List-e target {} sakhte nashod - run-e bedun-e target chizi ra andaze-giri nemikonad, pas motevaqef mishavad",
         domains_list_empty: "{} (hich domain-e ghabele estefade dar an nist)",
         whitelist_load_failed: "File-e whitelist SNI {} khande nashod: list-e dakheli estefade mishavad",
+        quic_unsupported_load_failed: "List-e domain-haye bedun-e QUIC {} khande nashod: list-e dakheli estefade mishavad",
         tcp16_load_failed: "List-e --tcp16 {} khande nashod - target haye dakheli host haye na-khaste ra andaze-giri mikonand, pas motevaqef mishavad",
         cli_domains: "Masir-e file-e list-e domain ha",
         cli_tcp16: "Masir-e file-e target haye TCP16",
@@ -328,6 +329,7 @@ pub(crate) fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("SPOOF", "Retry ba integrity tag-e ghalat: packet az endpoint nayamade, chon tag ra faghat kasani ke Initial ra dideand mitavanand hesab konand"),
             ("DROP", "Be Initial pasokhi nayamad: UDP 443 filter shode ya endpoint kharab ast (haman sokuti ke SYN DROP baraye TCP ast)"),
             ("REFUSED", "ICMP: ru-ye UDP-port hich kas goosh nemidahad - masir kar mikonad va endpoint aslan QUIC nadarad; in block nist (block = DROP)"),
+            ("—", "Endpoint aslan HTTP/3 nadarad, pas Initial ferestade nashod: host dar quic_unsupported.txt-e dakheli ast (har do tester-e khareji hamin ra migooyand) va summary in sotun ra bedun-e an mishomarad"),
         ]),
         ("- Sayer -", vec![
             ("OK", "Site dar dastras ast (kode 200-4xx bedun-e alayem-e filtering)"),
@@ -349,7 +351,10 @@ mod tests {
     /// language uses in the same places.
     #[test]
     fn test_finglish_is_latin_only() {
-        const MARKS: [char; 4] = ['✓', '×', '⚠', '↑'];
+        // The badge glyphs are data, not prose: the legend's term column carries
+        // `DpiStatus::display_label()` verbatim (rule 4), and the dash the QUIC
+        // column prints for a host that serves no HTTP/3 is one of them.
+        const MARKS: [char; 5] = ['✓', '×', '⚠', '↑', '—'];
         let mut texts = vec![format!("{:?}", messages())];
         for (section, entries) in legend_sections_fa() {
             texts.push(section.to_string());

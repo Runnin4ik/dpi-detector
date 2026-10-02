@@ -1,0 +1,33 @@
+# Hosts whose endpoint serves no HTTP/3 at all, so test 2 does not probe their
+# QUIC column: the cell prints a dash, the row keeps its TCP verdicts, and the
+# summary counts the QUIC column out of the hosts that can answer it instead of
+# the whole list.
+#
+# The rule is the two third-party testers agreeing on "no HTTP/3"
+# (`scripts/quic/online_h3.py` — intodns.ai and http3check.net, probing from
+# networks that are not ours; run 2026-10-02). A row where they disagree stays
+# probed: the disagreement is exactly the question this column asks.
+#
+# Caveat, recorded in scripts/quic/README.md: five of these hosts
+# (aws.amazon.com, soundcloud.com, vk.ru, www.currenttime.tv, www.svoboda.org)
+# do answer a handshake when one is forced on them — they just never advertise
+# HTTP/3, and a browser that is never told does not use it. They stay listed.
+#
+# Regenerate the data with:  python scripts/quic/online_h3.py
+#
+# One host per line, `#` starts a comment, the host is matched whole
+# (case-insensitive) against the domain's host part.
+aws.amazon.com
+browserleaks.com
+protonvpn.com
+shikimori.io
+soundcloud.com
+vk.ru
+www.canva.com
+www.cdn77.com
+www.coursera.org
+www.currenttime.tv
+www.linuxserver.io
+www.svoboda.org
+www.themoscowtimes.com
+www.torproject.org

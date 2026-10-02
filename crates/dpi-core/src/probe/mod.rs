@@ -14,7 +14,7 @@ pub mod burst;
 pub mod quic;
 pub mod telegram;
 pub mod whitelist;
-pub use quic::{check_quic_all, QuicCheck};
+pub use quic::QuicCheck;
 pub use burst::{burst_targets, BurstAttempt, BurstProfileReport, BurstReport, BurstSettings, BurstTarget};
 pub use tcp16::check_tcp_16_20;
 pub use telegram::{probe_telegram_all_dcs, probe_telegram_dc, run_download, run_telegram_full, run_telegram_test, run_upload, TelegramDcResult, TelegramFullReport, TelegramReport, TransferStats, TransferStatus};

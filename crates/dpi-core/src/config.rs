@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 fn d_max_concurrent() -> usize { 50 }
 fn d_ip_version() -> String { "ipv4".to_string() }
 fn d_tls_fingerprint() -> String { "rustls".to_string() }
-fn d_connect_timeout() -> f64 { 8.0 }
-fn d_read_timeout() -> f64 { 8.0 }
+fn d_timeout() -> f64 { 8.0 }
 fn d_pool_timeout() -> f64 { 2.0 }
 fn d_stub_ips_timeout() -> f64 { 5.0 }
 fn d_tcp_block_min_kb() -> u64 { 12 }
@@ -53,7 +52,7 @@ fn d_telegram_dc_port() -> u16 { 443 }
 fn d_domains_file() -> String { "domains.txt".to_string() }
 fn d_tcp16_file() -> String { "tcp16.json".to_string() }
 fn d_whitelist_sni_file() -> String { "whitelist_sni.txt".to_string() }
-fn d_quic_timeout() -> f64 { 8.0 }
+fn d_quic_unsupported_file() -> String { "quic_unsupported.txt".to_string() }
 
 fn d_dns_check_domains() -> Vec<String> {
     vec![
@@ -343,10 +342,17 @@ pub struct AppConfig {
     /// Legacy alias: CLI --proxy writes here; holds the same value as proxy_url.
     #[serde(default)]
     pub proxy: Option<String>,
-    #[serde(default = "d_connect_timeout")]
-    pub connect_timeout: f64,
-    #[serde(default = "d_read_timeout")]
-    pub read_timeout: f64,
+    /// Seconds one phase of a probe waits, for every category that speaks to a
+    /// peer: the connection, the reply that follows it, and the QUIC Initial's
+    /// window. One number for HTTP, TLS 1.2, TLS 1.3 and QUIC rather than a
+    /// separate read/write pair, and the value the menu's Timeout row steps
+    /// through, one second at a time from 1 to 60.
+    ///
+    /// A probe's own worst case is twice this: the connection and the reply are
+    /// two phases, each bounded by it. Short enough that a silent target does
+    /// not hold the run, generous enough for a router link.
+    #[serde(default = "d_timeout")]
+    pub timeout: f64,
     #[serde(default = "d_pool_timeout")]
     pub pool_timeout: f64,
     #[serde(default = "d_stub_ips_timeout")]
@@ -448,11 +454,11 @@ pub struct AppConfig {
     pub tcp16_file: String,
     #[serde(default = "d_whitelist_sni_file")]
     pub whitelist_sni_file: String,
-    /// Test 2's QUIC column: seconds one target's Initial waits for a reply. A
-    /// ServerHello needs one round trip, so the default is generous for a router
-    /// link and short enough that a silent target does not hold the run.
-    #[serde(default = "d_quic_timeout")]
-    pub quic_timeout: f64,
+    /// Hosts whose endpoint serves no HTTP/3 (`quic_unsupported.txt`): test 2
+    /// does not probe their QUIC column and the summary counts the column out of
+    /// the rows that can answer it.
+    #[serde(default = "d_quic_unsupported_file")]
+    pub quic_unsupported_file: String,
     #[serde(default)]
     pub debug: bool,
     #[serde(skip)]
@@ -493,8 +499,7 @@ impl Default for AppConfig {
             tls_fingerprint: d_tls_fingerprint(),
             proxy_url: None,
             proxy: None,
-            connect_timeout: d_connect_timeout(),
-            read_timeout: d_read_timeout(),
+            timeout: d_timeout(),
             pool_timeout: d_pool_timeout(),
             stub_ips_timeout: d_stub_ips_timeout(),
             tcp_block_min_kb: d_tcp_block_min_kb(),
@@ -539,7 +544,7 @@ impl Default for AppConfig {
             domains_file: d_domains_file(),
             tcp16_file: d_tcp16_file(),
             whitelist_sni_file: d_whitelist_sni_file(),
-            quic_timeout: d_quic_timeout(),
+            quic_unsupported_file: d_quic_unsupported_file(),
             debug: false,
             config_load_error: None,
             config_warnings: Vec::new(),
@@ -548,7 +553,7 @@ impl Default for AppConfig {
 }
 
 const KNOWN_KEYS: &[&str] = &[
-    "MAX_CONCURRENT", "IP_VERSION", "TLS_FINGERPRINT", "PROXY_URL", "CONNECT_TIMEOUT", "READ_TIMEOUT",
+    "MAX_CONCURRENT", "IP_VERSION", "TLS_FINGERPRINT", "PROXY_URL", "TIMEOUT",
     "POOL_TIMEOUT", "STUB_IPS_TIMEOUT", "TCP_BLOCK_MIN_KB", "TCP_BLOCK_MAX_KB",
     "FAT_DEFAULT_SNI", "FAT_CONNECT_TIMEOUT", "FAT_READ_TIMEOUT", "USER_AGENT",
     "WSAECONNRESET", "WSAECONNREFUSED", "WSAETIMEDOUT", "WSAENETUNREACH",
@@ -564,7 +569,7 @@ const KNOWN_KEYS: &[&str] = &[
     "PIN_CACHE_TTL", "CONCURRENCY_PRESETS", "BYPASS_TOOLS", "DNS_KNOWN_RESOLVER_NAMES",
     "DNS_HIJACK_EXEMPT_RESOLVERS",
     "DNS_STUB_THRESHOLD", "DEBUG", "CYMRU_DOH_SERVERS", "IP4_LOOKUP_URLS",
-    "IP6_LOOKUP_URLS", "IP_LOOKUP_URLS", "QUIC_TIMEOUT",
+    "IP6_LOOKUP_URLS", "IP_LOOKUP_URLS",
 ];
 
 /// True when `value` can be an HTTP header value: `http` refuses every control
@@ -625,15 +630,15 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<Config
                 v.as_u64().is_some_and(|p| (1..=65535).contains(&p))
             }
             "DNS_STUB_THRESHOLD" => v.as_u64().is_some_and(|t| (1..=50).contains(&t)),
-            "CONNECT_TIMEOUT" | "READ_TIMEOUT" | "POOL_TIMEOUT" | "STUB_IPS_TIMEOUT"
+            "TIMEOUT" | "POOL_TIMEOUT" | "STUB_IPS_TIMEOUT"
             | "DNS_CHECK_TIMEOUT" | "DNS_AVAILABILITY_TIMEOUT" | "FAT_CONNECT_TIMEOUT"
             | "FAT_READ_TIMEOUT" | "FAT_CHUNK_DELAY" | "TELEGRAM_MEDIA_SIZE_MB"
             | "TELEGRAM_UPLOAD_SIZE_MB" | "TELEGRAM_STALL_TIMEOUT" | "TELEGRAM_TOTAL_TIMEOUT"
-            | "TELEGRAM_DC_PING_TIMEOUT" | "QUIC_TIMEOUT" => {
+            | "TELEGRAM_DC_PING_TIMEOUT" => {
                 if !is_num(v) || v.as_f64().is_none_or(|f| f <= 0.0) {
                     false
                 } else {
-                    // Normalize ints (e.g. `CONNECT_TIMEOUT: 15`) to f64 so the
+                    // Normalize ints (e.g. `TIMEOUT: 15`) to f64 so the
                     // f64 struct field deserializes instead of failing the file.
                     if v.as_u64().is_some() {
                         if let Some(f) = v.as_f64() {
@@ -913,7 +918,8 @@ impl AppConfig {
 }
 
 /// Shipped lists embedded into the binary (workspace-root config.yml,
-/// domains.txt, burst-domains.txt, tcp16.json, whitelist_sni.txt). External
+/// domains.txt, burst-domains.txt, tcp16.json, whitelist_sni.txt,
+/// quic_unsupported.txt). External
 /// files (cwd, then exe dir) win when present; the embedded copies keep the
 /// standalone binary fully working from any directory, including routers.
 pub const EMBEDDED_CONFIG_YML: &str = include_str!("../../../config.yml");
@@ -921,6 +927,7 @@ const EMBEDDED_DOMAINS_TXT: &str = include_str!("../../../domains.txt");
 const EMBEDDED_BURST_DOMAINS_TXT: &str = include_str!("../../../burst-domains.txt");
 const EMBEDDED_TCP16_JSON: &str = include_str!("../../../tcp16.json");
 const EMBEDDED_WHITELIST_SNI_TXT: &str = include_str!("../../../whitelist_sni.txt");
+const EMBEDDED_QUIC_UNSUPPORTED_TXT: &str = include_str!("../../../quic_unsupported.txt");
 
 /// Locates config.yml: current dir first, then executable dir; `None` when
 /// neither has one.
@@ -1084,6 +1091,30 @@ pub fn embedded_whitelist_sni() -> Vec<(String, usize)> {
     parse_whitelist_sni(EMBEDDED_WHITELIST_SNI_TXT)
 }
 
+/// Loads the hosts whose endpoint serves no HTTP/3. The read error is returned
+/// rather than flattened, for the reason `load_whitelist_sni` documents.
+pub fn load_quic_unsupported(path: impl AsRef<Path>) -> io::Result<Vec<String>> {
+    let content = fs::read_to_string(path)?;
+    Ok(parse_quic_unsupported(&content))
+}
+
+/// Line parsing shared by the file and the embedded list: blank lines and `#`
+/// comments dropped, the rest lowercased (hosts are matched whole, and DNS names
+/// are case-insensitive).
+fn parse_quic_unsupported(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.to_ascii_lowercase())
+        .collect()
+}
+
+/// The QUIC-unsupported list shipped inside the binary.
+pub fn embedded_quic_unsupported() -> Vec<String> {
+    parse_quic_unsupported(EMBEDDED_QUIC_UNSUPPORTED_TXT)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Tcp16Target {
     #[serde(default)]
@@ -1167,7 +1198,7 @@ mod tests {
         let cfg = AppConfig::default();
         assert_eq!(cfg.max_concurrent, 50);
         assert_eq!(cfg.ip_version, "ipv4");
-        assert!(cfg.connect_timeout > 0.0);
+        assert!(cfg.timeout > 0.0);
         assert!(cfg.dns_egress_concurrency > 0);
         assert_eq!(cfg.dns_stub_threshold, 2);
         assert_eq!(cfg.fat_chunks_count, 10);
@@ -1313,27 +1344,27 @@ mod tests {
     /// keeps its default and is named in the warnings.
     #[test]
     fn test_invalid_values_retain_default() {
-        let yaml = "MAX_CONCURRENT: \"one hundred\"\nIP_VERSION: \"ipv5\"\nCONNECT_TIMEOUT: -5.0\nUNKNOWN_SECRET_KEY: 12345\n";
+        let yaml = "MAX_CONCURRENT: \"one hundred\"\nIP_VERSION: \"ipv5\"\nTIMEOUT: -5.0\nUNKNOWN_SECRET_KEY: 12345\n";
         let cfg = AppConfig::from_yaml_str(yaml);
         assert_eq!(cfg.max_concurrent, 50);
         assert_eq!(cfg.ip_version, "ipv4");
-        assert_eq!(cfg.connect_timeout, 8.0);
+        assert_eq!(cfg.timeout, 8.0);
         // Assert the typed warning, not its `Debug` rendering: that derive is
         // not a stable format, and the variant plus its payload is the contract.
         assert!(cfg.config_warnings.contains(&ConfigWarning::InvalidValue { key: "MAX_CONCURRENT".to_string() }));
         assert!(cfg.config_warnings.contains(&ConfigWarning::InvalidValue { key: "IP_VERSION".to_string() }));
-        assert!(cfg.config_warnings.contains(&ConfigWarning::InvalidValue { key: "CONNECT_TIMEOUT".to_string() }));
+        assert!(cfg.config_warnings.contains(&ConfigWarning::InvalidValue { key: "TIMEOUT".to_string() }));
         assert!(cfg.config_warnings.contains(&ConfigWarning::UnknownKey { key: "UNKNOWN_SECRET_KEY".to_string() }));
     }
 
     /// A config whose every key is valid loads with no warnings.
     #[test]
     fn test_valid_custom_config() {
-        let yaml = "MAX_CONCURRENT: 25\nIP_VERSION: \"ipv6\"\nCONNECT_TIMEOUT: 15.0\nDNS_STUB_THRESHOLD: 3\n";
+        let yaml = "MAX_CONCURRENT: 25\nIP_VERSION: \"ipv6\"\nTIMEOUT: 15.0\nDNS_STUB_THRESHOLD: 3\n";
         let cfg = AppConfig::from_yaml_str(yaml);
         assert_eq!(cfg.max_concurrent, 25);
         assert_eq!(cfg.ip_version, "ipv6");
-        assert_eq!(cfg.connect_timeout, 15.0);
+        assert_eq!(cfg.timeout, 15.0);
         assert_eq!(cfg.dns_stub_threshold, 3);
         assert!(cfg.config_warnings.is_empty(), "{:?}", cfg.config_warnings);
     }
@@ -1385,7 +1416,7 @@ mod tests {
         assert!(cfg.dns_known_resolver_names.contains(&"google".to_string()));
         assert!(cfg.dns_known_resolver_names.contains(&"yandex".to_string()));
         assert_eq!(cfg.dns_hijack_exempt_resolvers, vec!["MSK-IX", "НСДИ"]);
-        assert_eq!(cfg.quic_timeout, 8.0);
+        assert_eq!(cfg.timeout, 8.0);
     }
 
     /// No-file fallbacks carry the same lists (embedded use without config.yml).
@@ -1404,7 +1435,7 @@ mod tests {
         assert_eq!(def.dns_known_resolver_names, from_yml.dns_known_resolver_names);
         assert_eq!(def.dns_hijack_exempt_resolvers, from_yml.dns_hijack_exempt_resolvers);
         assert_eq!(def.concurrency_presets, from_yml.concurrency_presets);
-        assert_eq!(def.quic_timeout, from_yml.quic_timeout);
+        assert_eq!(def.timeout, from_yml.timeout);
     }
 
     /// Embedded fallbacks parse to the same lists as the shipped files.
@@ -1427,6 +1458,21 @@ mod tests {
         assert_eq!(embedded_tcp16_targets(), file_targets);
         assert!(!embedded_tcp16_targets().is_empty());
         assert!(!embedded_whitelist_sni().is_empty());
+        // The QUIC-unsupported list: the same invariant (every shipped line
+        // survives parsing) and the one property the column depends on — its
+        // hosts are hosts test 2 actually probes, or the dash never appears.
+        let unsupported = embedded_quic_unsupported();
+        assert!(!unsupported.is_empty(), "the fallback ships a list");
+        assert!(unsupported.contains(&"www.canva.com".to_string()));
+        let shipped_unsupported = EMBEDDED_QUIC_UNSUPPORTED_TXT
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+            .count();
+        assert_eq!(unsupported.len(), shipped_unsupported, "every shipped host survives parsing");
+        assert!(
+            unsupported.iter().any(|h| domains.contains(h)),
+            "the list names hosts the shipped domains.txt probes"
+        );
         // Test 6 ships its own short list of ordinary hosts: same invariant, and
         // it is not the censored-sites list test 2 probes.
         let burst = embedded_burst_domains();

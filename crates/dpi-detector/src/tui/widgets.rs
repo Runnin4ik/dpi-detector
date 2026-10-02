@@ -161,6 +161,9 @@ pub(crate) fn status_color(s: DpiStatus) -> Color {
         DpiStatus::QuicOk => Color::Green,
         DpiStatus::QuicClosed | DpiStatus::QuicVn => Color::Yellow,
         DpiStatus::QuicSpoof | DpiStatus::QuicDrop => Color::Red,
+        // The dash: the endpoint serves no HTTP/3, so there is nothing to read in
+        // this cell — grey, like the other "no verdict here", never red.
+        DpiStatus::QuicUnsupported => Color::DarkGrey,
         // A refusal is the peer *answering*: ECONNREFUSED on TCP is the
         // endpoint's own RST, and on the QUIC column it is the kernel handing up
         // an ICMP "nothing listens on that port". Both say the path works and the

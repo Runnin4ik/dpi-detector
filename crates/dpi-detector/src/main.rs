@@ -547,6 +547,11 @@ async fn run() {
     // this run's word, the file is the last thing the user chose, and the config
     // is what the operator wrote down.
     let mut concurrency = saved.concurrency.unwrap_or(cfg.max_concurrent);
+    // The menu's last timeout sits between the flags (there is none for it) and
+    // `config.yml`: what the user last left the row on is this run's word.
+    if let Some(secs) = saved.timeout() {
+        cfg.timeout = secs;
+    }
     let mut ip_version = saved.ip_version().unwrap_or_else(|| cfg.ip_version.clone());
     let mut tls_fingerprint = saved
         .fingerprint
@@ -593,6 +598,7 @@ async fn run() {
                 // target the flag had set. Before the fields move out of `sel`.
                 apply_interface(&sel);
                 state::save(&state::SavedState::remember(&sel));
+                cfg.timeout = sel.timeout;
                 tests_str = sel.selected_tests;
                 concurrency = sel.concurrency;
                 ip_version = sel.ip_version;
@@ -646,6 +652,7 @@ async fn run() {
                     MenuResult::Run(chosen) => {
                         apply_interface(&chosen);
                         state::save(&state::SavedState::remember(&chosen));
+                        cfg.timeout = chosen.timeout;
                         tests_str = chosen.selected_tests;
                         concurrency = chosen.concurrency;
                         ip_version = chosen.ip_version;
@@ -832,6 +839,7 @@ async fn run() {
                             ip_version = chosen.ip_version.clone();
                             cfg.ip_version = chosen.ip_version.clone();
                             cfg.tls_fingerprint = chosen.tls_fingerprint.code().to_string();
+                            cfg.timeout = chosen.timeout;
                             lang = chosen.language;
                             msg = get_messages(lang);
                         }

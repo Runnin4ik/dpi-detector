@@ -78,13 +78,22 @@ pub(crate) fn render_summary(data: &SummaryData, msg: &Messages) -> String {
     }
 
     if let Some(d) = data.domains {
-        let stat = |label: &str, ok: usize| {
-            let c = frac_sgr(ok, d.total);
-            format!("\x1b[{}m{}/{} {}\x1b[0m", c, ok, d.total, label)
+        let stat = |label: &str, ok: usize, total: usize| {
+            let c = frac_sgr(ok, total);
+            format!("\x1b[{}m{}/{} {}\x1b[0m", c, ok, total, label)
         };
         items.push((
             msg.summary_domains.to_string(),
-            format!("{}  {}  {}", stat("HTTP", d.http_ok), stat("TLS1.2", d.t12_ok), stat("TLS1.3", d.t13_ok)),
+            format!(
+                "{}  {}  {}  {}",
+                stat("HTTP", d.http_ok, d.total),
+                stat("TLS1.2", d.t12_ok, d.total),
+                stat("TLS1.3", d.t13_ok, d.total),
+                // The QUIC column carries its own denominator: a host whose
+                // endpoint serves no HTTP/3 is a dash in the table, not a zero in
+                // this ratio.
+                stat("QUIC", d.quic_ok, d.quic_total),
+            ),
         ));
     }
 
