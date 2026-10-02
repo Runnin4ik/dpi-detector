@@ -113,7 +113,14 @@ def captured_flight(path):
         packet = bytes.fromhex(payload)
         if len(packet) < 20 or packet[0] & 0x80 == 0:
             continue
-        _, dcid, scid, _, _, _ = parse_long_header(packet)
+        try:
+            _, dcid, scid, _, _, _ = parse_long_header(packet)
+        except IndexError:
+            # A Handshake or 0-RTT packet: a long header with no token-length
+            # field, which this parser reads. An endpoint that answers a repeat
+            # sends them beside its ServerHello, so a capture of a *successful*
+            # probe run contains them.
+            continue
         if src.startswith("192.168."):
             client_packets.append((packet, dcid, scid))
         else:
@@ -128,7 +135,10 @@ def describe_reply(packet, dcid):
         return f"{len(packet)} bytes (too short)"
     if packet[0] & 0x80 == 0:
         return f"short header, {len(packet)} bytes (1-RTT or a stateless reset)"
-    _, pdcid, scid, token, length, pn_offset = parse_long_header(packet)
+    try:
+        _, pdcid, scid, token, length, pn_offset = parse_long_header(packet)
+    except IndexError:
+        return f"long header type {(packet[0] & 0x30) >> 4}, {len(packet)} bytes (Handshake or 0-RTT, not an Initial)"
     shape = f"Initial dcid={pdcid.hex() or '(empty)'} scid={scid.hex()} length={length}"
     key, iv, hp = keys_for(dcid)[b"server in"]
     sample = packet[pn_offset + 4:pn_offset + 20]

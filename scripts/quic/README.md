@@ -21,6 +21,12 @@ under test.
 | `online_h3.py` | Two third-party testers (`intodns.ai`, `http3check.net`) answer the *other* question — does the host serve HTTP/3 at all, from networks that are not ours — and writes `target/validation/online-h3.txt` |
 | `hosts.txt` | The host list `crosscheck.py`, `bracket.py` and `online_h3.py` default to |
 
+**Every QUIC verdict measured in this file before 2026-10-02 was taken with a
+local `nfqws2` (zapret2) QUIC desync in front of the machine, so the readings of
+*endpoint* behaviour among them are void — the "unopenable first reply" and the
+"answer only on a repeat" are that desync's fake and its `repeats=3`, not the
+edge. See "Correction, 2026-10-02" below before trusting a row.**
+
 ## What the stand measured
 
 Run against the 34 hosts `hosts.txt` held at the time (2026-09-26, Windows x86_64,
@@ -37,6 +43,16 @@ rows. The disagreements were not noise:
   answered the stock client `HTTP/3 200`.
 
 The cause was in the probe, not in the network:
+
+> **Correction, 2026-10-02:** every measurement below was taken with a local
+> `nfqws2` (zapret2) QUIC desync running on the router —
+> `--filter-udp=443 --filter-l7=quic --payload=quic_initial
+> --lua-desync=fake:blob=quic_google:repeats=3`. The "1200-byte packet that opens
+> under no key" of point 1 is that desync's fake, not the endpoint's answer, and
+> the "endpoint answers only a repeat" of point 2 is the desync's `repeats=3`
+> delaying the real reply. With the desync off the same host answers the **first**
+> flight — see "Correction" below. Point 3 (the probe sent its flight once) still
+> stands, and the probe's repeats are still what a real client does.
 
 1. The endpoint's answer to a **first** Initial is a 1200-byte packet that looks
    like an Initial (long header, a 20-byte source connection ID, a length field)
@@ -76,6 +92,192 @@ are the remaining class: the endpoint answers our hello and a minimal stock hell
 differently, in the same window, and neither the transport parameters nor the
 application settings explain it.
 
+### Correction, 2026-10-02: the unopenable first reply is the local desync
+
+Point 1 above was read as an endpoint behaviour for months. It is not: the machine
+running the stand had a **zapret2 (`nfqws2`) QUIC desync** in front of it for
+every one of those measurements —
+
+```
+--filter-udp=443 --filter-l7=quic --payload=quic_initial \
+  --lua-desync=fake:blob=quic_google:repeats=3
+```
+
+— and the "1200-byte Initial-shaped packet that opens under no key" is that
+desync's fake. Two captures of the same host, minutes apart, one variable
+(`target/validation/quic-danbooru-vpn-off.pcapng` with the desync, ...-zapret-off
+without):
+
+| capture | client packets | packets from the endpoint | what they are |
+|---|---|---|---|
+| desync on | 8 (four flights) | **25** | pairs of identical unopenable Initials at 0.156/0.157 s (empty destination CID, 20-byte source CID, ~20-byte payload, padded to 1200), the readable handshake only at 4.833 s |
+| desync off | 8 (four flights) | **0** | the host is blocked at the ISP: no answer at all |
+
+And on a host the ISP does **not** block, with the desync off
+(`target/validation/quic-shopify-zapret-off.pcapng`), the endpoint answers the
+**first** flight: `decrypt.py` opens frames 3–6 under the client's destination CID
+— `ACK`, `ACK`, `CRYPTO handshake_type=0x02` (ServerHello), `CRYPTO` — with DCID =
+the client's source CID, exactly as RFC 9000 §7.2 requires. No unopenable packet
+appears anywhere in that capture.
+
+The per-host split that looked like a policy — `blog.cloudflare.com` answering at
+0.0 s while `danbooru.donmai.us` needed three repeats, on the same 8.6.112.6 — was
+the desync's **hostlist**: the fake is applied to the flows the config names, not
+to all QUIC. The 4.7 s figure that the probe's window was widened for
+(`MIN_WINDOW`) is that delay, not a property of any endpoint.
+
+What this costs the stand: any measurement of *endpoint* behaviour taken with
+`nfqws2` running is void — the detector's own intercept notice exists for exactly
+this reason, and it was not read before these runs. `crosscheck.py`, `replay.py`
+and `decrypt.py` are still the right instruments; they need the desync off.
+
+### Where the delay comes from: the router's own WAN side, 2026-10-02
+
+`tcpdump -i ppp0 'udp port 443'` on the router, with the probe running from the
+LAN box, answers the last open question — whose silence the 4.7 s is. For
+`danbooru.donmai.us` (`target/validation/router-wan.pcap`, our address
+100.90.18.140, the edge 8.6.112.6):
+
+| t | direction | what |
+|---|---|---|
+| 0.000–0.001 | out | **11 copies of the fake**, SNI `www.google.com`, all with the *same* DCID `78e79846bbf37984` |
+| 0.001 | out | our own Initial, SNI `danbooru.donmai.us`, DCID `9a10528898e086bb` |
+| 0.024 | in | the edge's answer to the fake (2 Initials, its own SCID) |
+| 0.675, 2.011 | out | our repeats — **the edge answers nothing** |
+| 4.686 | out | our fourth send |
+| 4.711 | in | the readable handshake (a *different* SCID: a new connection for our DCID) |
+
+Three facts follow, and they settle the question the stand had left open:
+
+1. **The fake leaves the router with the flow's own 5-tuple** — that is the whole
+   mechanism of the desync, and it is why the ICMP for a TTL-carrying fake lands
+   on the client's socket.
+2. **All copies of the fake carry one DCID** (the blob's), so `repeats=3` and
+   `repeats=11` are the *same single connection* at the edge. Measured: the answer
+   to the fake is 2 packets either way, and the delay is 4.7 s either way — the
+   gate is a timeout, not a count.
+3. **The gate is the edge, not the DPI.** Our real Initials *do* leave (0.001,
+   0.675, 2.011) and are simply not answered for 4.7 s — so the provider's filter
+   is not holding them. The same capture against `www.google.com` and
+   `www.dw.com` (11 fakes sent in both cases, `router-wan-google.pcap`) shows the
+   edge answering the **first** Initial at 0.026 s and 0.140 s: Google's and
+   Akamai's stacks demux strictly by DCID and have no such gate. Cloudflare's
+   edge keeps the tuple for the half-open connection the fake created. That
+   connection's own timeout is what the delay is — and it is **not** 4.7 s: that
+   number is where the *probe's* retransmit ladder happens to land. Three clients,
+   three ladders, one gate:
+
+   | client | Initials sent at | answer |
+   |---|---|---|
+   | the probe (`PTO_FIRST` 666 ms) | 0, 0.67, 2.01, 4.69 s | 4.7 s — the fourth send |
+   | curl 8.22 `--http3-only` (ngtcp2) | 0, ~1, ~3 s | **3.5–3.7 s over eight runs** — the third send |
+   | Chrome, forced QUIC | 0, 0.30, 0.91, 2.12 s | none: it closes itself at 4.004 s of silence, before its next retransmit (~4.3 s) |
+
+   So the edge's state expires ~2.5–3.5 s after the fake, and what a client sees is
+   its first retransmit that lands after that. The probe's ladder is too slow to
+   see the earlier opening, Chrome's 4 s silence deadline is too early, curl's
+   lands in between. Baselines in the same window: `blog.cloudflare.com` (no fake,
+   same edge) answers curl in 0.16–0.27 s, `www.google.com` in 0.23 s.
+
+`exclude.list` on that router holds `cloudflare.com`, which is why
+`cloudflare.com` and `blog.cloudflare.com` — the same edge address as
+`danbooru.donmai.us` — never receive the fake and never pay the delay: the
+per-host split that looked like a policy was the router's own exclusion list.
+
+Which edges gate, measured over the two host lists (the shipped defaults and
+`hosts.txt`, one run each, the desync on with `repeats=11`; the AS is Team
+Cymru's origin lookup, not a guess from the prefix):
+
+| edge | hosts | QUIC column |
+|---|---|---|
+| **AS13335 Cloudflare** | `danbooru.donmai.us`, `meduza.io`, `www.linkedin.com`, `www.shopify.com`, `discord.com`, `media.discordapp.net`, `holod.media`, `nnmclub.to`, `x.com`, `hub.docker.com` | **4.7–4.8 s**, the answer on the fourth send |
+| AS13335 Cloudflare | `www.canva.com` | 0.0 s — the edge answers the *fake's* connection's close to our Initial at once |
+| AS13335 Cloudflare | `www.apkmirror.com` | 0.2 s in one run, 2.0 s in another (the flaky host above) |
+| AS13335 Cloudflare, the `cloudflare.com` zone | `cloudflare.com`, `blog.`, `developers.`, `www.` | 0.0–0.3 s — the fake is not sent at all (the router's `exclude.list`) |
+| AS15169 Google | `www.google.com`, `www.youtube.com`, `*.google.com`, `fonts.gstatic.com` | 0.1–0.3 s |
+| AS16625 Akamai | `www.dw.com`, `www.intel.com` | 0.1–0.3 s |
+| AS54113 Fastly | `www.bbc.com`, `www.cnn.com`, `www.euronews.com`, `www.reddit.com`, `www.spotify.com`, `www.twitch.tv` | 0.1–0.2 s |
+| AS32934 Meta | `www.facebook.com`, `www.instagram.com`, `www.messenger.com` | 0.1–0.3 s |
+| AS16509 Amazon | `amnezia.org`, `www.amazon.com` | 0.1 s |
+| AS19679 Dropbox, AS9002 RETN, AS44386 Ozon, Yandex | `www.dropbox.com`, `www.bing.com`, `www.ozon.ru`, `ya.ru` | 0.0–0.7 s |
+
+So the gate is Cloudflare's, and inside Cloudflare it is not uniform: `canva`
+answers at once (with a close that belongs to the fake's connection — the same
+tuple binding, a different reaction), and `apkmirror` answers early or late
+depending on the run. Every other CDN in the sample answered our **first**
+Initial. For hosts whose verdict is `DROP`/`CLOSED` the column carries no timing,
+so their gate is only visible in a capture — `x.com` and `hub.docker.com` were
+read that way (their answers come at 4.708 s and 4.813 s, after the fourth send,
+and carry our SCID; the fake's answers carry the blob's empty one).
+
+Where the split is *not*: five repeat runs of each host put `danbooru.donmai.us`,
+`meduza.io`, `www.linkedin.com`, `www.shopify.com`, `holod.media` and `nnmclub.to`
+at 4.7–4.8 s every time, and the two hosts sharing an address agree with each
+other (`meduza.io` and `danbooru.donmai.us` on 8.47.69.6; `holod.media` and
+`nnmclub.to` on 188.114.97.1). The `CLOSED` rows were timed by the run's own wall
+clock instead (the QUIC column dominates it): `x.com`, `hub.docker.com`,
+`stackoverflow.com` and `gateway.discord.gg` take 5.2–5.3 s, while `www.canva.com`
+takes 2.6 s and the Amazon-fronted `aws.amazon.com` / `www.coursera.org` — both
+`CLOSED` too — take 1.3–1.8 s, i.e. they answer immediately. So the split is
+**per zone and stable**, not per run and not per client; what the zone's
+difference *is* cannot be seen from the client side. Two reactions are on record:
+silence until the fake's connection expires (then a new connection answers), and
+an immediate close sent from the fake's own connection (`canva`). The blob's fixed
+DCID is a candidate for the second one — every flow's fake claims the same
+connection ID, so the edge's state for it is shared across our flows.
+
+### Rewriting the desync, if the gate has to go
+
+The gate is created by the fake itself, so `repeats` and `cutoff` cannot move it:
+measured, 3 copies and 11 copies both gate for 4.7 s, because every copy carries the
+blob's one DCID and the edge reads them as one connection. zapret2 has no QUIC blob
+modifier either — `fake` takes `blob` and `tls_mod`, and `tls_mod` is the TLS
+ClientHello's (`lua/zapret-antidpi.lua`) — so the fake's identity is the blob file
+and nothing else. Three levers remain, in the order worth trying:
+
+1. **Kill the fake before the edge, keep the bypass.** `badsum` is a standard `fake`
+   argument (`--lua-desync=fake:blob=quic_google:repeats=11:badsum`), plumbed through
+   `reconstruct_opts`: the L4 checksum is made invalid, so the edge's stack drops the
+   packet and never creates the connection, while the DPI still reads it. Untested
+   here, and it needs both halves checked — a WAN capture (the fake must leave with an
+   invalid checksum) and a verdict (the host must still complete QUIC; otherwise the
+   DPI was fooled by nothing). `:ip_ttl=N` / `:ip_autottl=-1,3-20` is the same idea
+   through the IP header; autottl needs an incoming TTL already seen on that rule
+   instance (`apply_fooling`: "cannot apply autottl because incoming ttl unknown"),
+   which the first QUIC flow to a host has not, so pair it with a static TTL.
+2. **Send the fake only where QUIC is blocked.** The fake is what unblocks a host —
+   with the desync off `danbooru.donmai.us` gets no answer at all — and what costs the
+   gated ones 4.7 s (`blog.cloudflare.com`, same edge, no fake: 0.0 s). The honest
+   form of this is a host list built by measurement: run the detector with the host
+   out of the desync and keep the fake only for the hosts that then fail. A CDN name
+   is not the criterion — `danbooru.donmai.us` and `blog.cloudflare.com` are both
+   Cloudflare and differ.
+3. **A fake that creates no state.** RFC 9000 §14.1 requires a server to discard an
+   Initial carried in a datagram smaller than 1200 bytes, so an *unpadded* fake should
+   be dropped without a connection while its ClientHello stays visible to the DPI (the
+   1200 bytes are a server rule, not a DPI rule). Needs a new blob — the shipped
+   `quic_google` is a captured 1200-byte packet — and is untested: a DPI that ignores
+   short Initials would make it useless.
+
+### A browser cannot see the gate, only fail on it
+
+Measured with Chrome (`--origin-to-force-quic-on=danbooru.donmai.us:443`, headless,
+`--log-net-log`, the desync on): the session is created, Initials go out with PTO
+retransmissions, the edge's two 1200-byte replies come back at the **Initial** level
+and Chrome cannot decrypt them (`QUIC_SESSION_DROPPED_UNDECRYPTABLE_PACKET` — the
+fake's connection's keys), and after **4.004 s** of no network activity Chrome closes
+the session itself with `QUIC_NETWORK_IDLE_TIMEOUT` (25). The pool job then reports
+`net_error = -356` (`ERR_QUIC_PROTOCOL_ERROR`) and the page fails.
+
+Chrome loses by *when it sends*, not by the gate's length: its Initials went out at
+0, 0.300, 0.910 and 2.115 s (PTO doubling), so its last one is still before the gate
+opens (~2.5–3.5 s), and the next retransmit was not due until ~4.5 s — while the 4 s
+of received silence expired at 4.004 s, half a second earlier. So Chrome never sent an
+Initial after the gate lifted: a gated host is not loadable over QUIC by a browser at
+all, not slowly but not at all. Without the flag the browser races h3 against h2 and
+TCP wins in milliseconds, which is why a normal visit shows `h2` and no delay: the
+browser hides the gate rather than paying it.
+
 ### Does the host support HTTP/3, independent of our network
 
 Two third-party testers (`online_h3.py`, full output in
@@ -105,6 +307,12 @@ A third fact separates them further: a headless Chrome with QUIC *forced*
 "no HTTP/3" — `aws.amazon.com`, `soundcloud.com`, `vk.ru`, `www.currenttime.tv`,
 `www.svoboda.org` — because forcing skips discovery. Their endpoints do speak
 HTTP/3; they just never tell a browser to use it.
+
+The detector ships this table's verdict as data: `quic_unsupported.txt` holds the
+hosts **both** testers call "no HTTP/3", and test 2 does not probe their QUIC
+column at all — the cell prints a dash and the summary counts the column out of
+the hosts that can answer it (`--legend` describes the badge, `README.md` the
+file and the rule). Regenerating the list means re-running this script.
 
 ## What the probe gets wrong, against a browser
 
