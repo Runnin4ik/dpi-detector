@@ -929,6 +929,11 @@ mod tests {
         );
         #[cfg(windows)]
         assert_eq!((s, d), (DpiStatus::HostUnreach, Detail::IcmpTimeExceeded));
+        // On unix `10052` is not `WSAENETRESET` and no message was read, so the
+        // errno stands alone — the platform difference this test exists to pin,
+        // and the reason the pair cannot be asserted once for both.
+        #[cfg(not(windows))]
+        assert_eq!((s, d), (DpiStatus::OsErr, Detail::Other("OS errno 10052".to_string())));
         let (s, d) = classify_connect_error_icmp(
             &io::Error::from_raw_os_error(HOST_UNREACH),
             Some(IcmpCode::TIME_EXCEEDED),
