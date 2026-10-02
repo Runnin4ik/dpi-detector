@@ -25,19 +25,28 @@ jobs:
   # no later step notices — the installers only check that a download reports
   # *a* version, not which one the tag promised.
   #
-  # The step is tag-gated rather than the job: a manual dispatch is a build
-  # rehearsal, and a skipped job would take every `needs: version` job down with
-  # it, leaving dispatch with nothing to do.
+  # The step is not tag-gated: a manual dispatch releases too, and that is why
+  # this job cuts the tag itself. The version in Cargo.toml is the one input both
+  # events can agree on, so a dispatch names no tag and gets `v<version>` created
+  # at the commit it was dispatched from — the same commit `verify` tests and the
+  # matrix builds. Tagging by hand stays the ordinary path, and then this job is
+  # the check it always was.
   version:
-    name: Check the tag against Cargo.toml
+    name: Resolve the release tag
     runs-on: ubuntu-26.04
     timeout-minutes: 5
+    # Only a manual run writes: it pushes the tag it just cut. A tag push needs
+    # nothing beyond the default read.
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Check the tag names the version in Cargo.toml
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Resolve the tag, and cut it on a manual run
+        id: version
         shell: bash
         run: |
           set -euo pipefail
@@ -45,11 +54,35 @@ jobs:
           # crates take their version from it (`version.workspace = true`), so
           # this is the single literal the binaries are built with.
           version="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["workspace"]["package"]["version"])' Cargo.toml)"
-          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
-            echo "::error file=Cargo.toml::tag ${GITHUB_REF_NAME} does not name workspace.package.version ${version}; this release would publish binaries whose --version is not the tag"
-            exit 1
+          tag="v${version}"
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            if [[ "${GITHUB_REF_NAME}" != "${tag}" ]]; then
+              echo "::error file=Cargo.toml::tag ${GITHUB_REF_NAME} does not name workspace.package.version ${version}; this release would publish binaries whose --version is not the tag"
+              exit 1
+            fi
+            echo "Release version OK: ${GITHUB_REF_NAME} matches Cargo.toml ${version}"
+          else
+            # Idempotent, because a re-run of a dispatch that died halfway must
+            # not fail on the tag its own first attempt created — but a tag
+            # already pointing at another commit is a different release, and
+            # publishing into it would be a silent overwrite.
+            remote_sha="$(git ls-remote --tags origin "refs/tags/${tag}" | awk 'NR==1 {print $1}')"
+            if [ -n "${remote_sha}" ]; then
+              if [ "${remote_sha}" != "${GITHUB_SHA}" ]; then
+                echo "::error::tag ${tag} already points at ${remote_sha}, not at the commit this run was dispatched from (${GITHUB_SHA}); cut the next version instead"
+                exit 1
+              fi
+              echo "Release version OK: ${tag} already points at ${GITHUB_SHA}"
+            else
+              # Pushed with the workflow token, and a push made with it starts no
+              # workflows: the tag this cuts does not begin a second release run.
+              git tag "${tag}" "${GITHUB_SHA}"
+              git push origin "refs/tags/${tag}"
+              echo "Release version OK: cut ${tag} at ${GITHUB_SHA} from Cargo.toml ${version}"
+            fi
           fi
-          echo "Release version OK: ${GITHUB_REF_NAME} matches Cargo.toml ${version}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
           # The two installers carry the version as well, and nothing tied them
           # to the crate before this: bump Cargo.toml, tag, and leave `VERSION=`
@@ -69,8 +102,8 @@ jobs:
               echo "::error file=$file::the installer's default version is not where this check looks for it; update the check with the line"
               exit 1
             fi
-            if [ "$found" != "${GITHUB_REF_NAME}" ]; then
-              echo "::error file=$file::the installer installs ${found}, but this release is ${GITHUB_REF_NAME}"
+            if [ "$found" != "${tag}" ]; then
+              echo "::error file=$file::the installer installs ${found}, but this release is ${tag}"
               exit 1
             fi
           }
@@ -79,7 +112,7 @@ jobs:
           # matching a literal `${`.
           check_installer_version install.sh 's/^  VERSION="[$]{DPI_VERSION:-\([^}]*\)}"$/\1/p'
           check_installer_version install.ps1 's/^.*else { "\(.*\)" }$/\1/p'
-          echo "Release version OK: both installers install ${GITHUB_REF_NAME}"
+          echo "Release version OK: both installers install ${tag}"
 
   # The two third-party actions below are pinned by commit: a tag can be moved to
   # another commit, and this is the workflow that publishes a release — the
@@ -464,7 +497,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     # No status-check function here, and that is the point: `success()` is applied
@@ -473,7 +506,11 @@ jobs:
     # this job publish a release assembled from whichever matrix legs happened to
     # build, with the missing architectures invisible on the release page.
     # Skipping is the failure mode we want: the run names the leg that failed.
-    if: startsWith(github.ref, 'refs/tags/')
+    #
+    # A manual dispatch releases as well — `version` cuts the tag for it — so the
+    # condition admits both events and nothing else; a run from a branch that is
+    # neither is a rehearsal with no release to attach to.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     steps:
@@ -551,10 +588,13 @@ jobs:
         with:
           files: release-files/*
           draft: true
+          # The tag `version` resolved: the pushed one on a tag build, the one it
+          # cut from Cargo.toml on a manual run.
+          tag_name: ${{ needs.version.outputs.tag }}
           # The tag says which line this is: `v5.0.0-alpha.19` is a prerelease,
           # `v5.0.0` is not. A hardcoded `true` would publish the stable line as
           # one.
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(needs.version.outputs.tag, '-') }}
           # An asset that never made it is a failed release, not a release with
           # fewer files in it.
           fail_on_unmatched_files: true
@@ -567,9 +607,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release edit "${GITHUB_REF_NAME}" --draft=false --repo "${GITHUB_REPOSITORY}"
+          gh release edit "${{ needs.version.outputs.tag }}" --draft=false --repo "${GITHUB_REPOSITORY}"
           # Printed because it is the one input above whose effect a draft could
           # change: if the generated notes ever come back empty here, this is
           # where it shows, next to the tag it happened on.
-          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+          gh release view "${{ needs.version.outputs.tag }}" --repo "${GITHUB_REPOSITORY}" \
             --json body --jq '"release body: \(.body | length) characters"'

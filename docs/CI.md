@@ -35,6 +35,11 @@ a runner for the six-hour default.
    MUST match both `workspace.package.version` and the `VERSION` constant in each
    installer. An installer one release behind downloads the previous tag — and its own
    check passes, because it compares the download against its own constant.
+   A manual dispatch has no tag to check, so the job cuts one: `v<version>` at the commit
+   the run was dispatched from, which is the commit `verify` tests and the matrix builds.
+   It is idempotent — a re-run finds the tag it made and carries on — and a tag already
+   pointing at another commit stops the run instead of publishing over it. Everything
+   downstream reads the tag from this job's output, so both events release the same way.
 2. **`verify`** — build, test and clippy with `-D warnings` on the tagged commit, the same
    bar `check.yml` holds on a push. It exists because a tag pushed on its own matches
    `branches: ['**']` nowhere: `check.yml` never runs for it, and without this job the
