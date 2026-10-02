@@ -43,6 +43,14 @@ curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install
 irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | iex
 ```
 
+Аргументы тестеру передаются так же, как на Linux, но `sh -s --` у PowerShell нет: `iex` параметров не принимает вовсе, поэтому установщик вызывается напрямую, а его аргументы идут одним массивом в `-AppArgs`:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1))) -AppArgs '-t','2','-d','danbooru.donmai.us'
+```
+
+Массив обязателен: для скрипта с `[CmdletBinding()]` голое `-d` — это сокращение общего параметра `-Debug`, поэтому `-t 2 -d danbooru.donmai.us` разберётся как «домен — это каталог установки», и тестер уйдёт в каталог `danbooru.donmai.us` без `-d`. Повторный запуск той же версии трафик не тратит: установленный бинарник стартует сразу с переданными аргументами.
+
 ---
 
 ## 📦 Готовые бинарные сборки

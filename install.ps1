@@ -1,3 +1,11 @@
+# `irm <url> | iex` takes no arguments — `iex` has no parameter channel at all —
+# so the tester's flags are passed as an array through `-AppArgs`:
+#
+#   & ([scriptblock]::Create((irm <url>))) -AppArgs '-t','2','-d','example.com'
+#
+# Bare flags do not work: for a `[CmdletBinding()]` script `-d` is an
+# abbreviation of the common parameter `-Debug`, so `-t 2 -d example.com` binds
+# the domain to `-InstallDir` and forwards `-t 2` alone.
 [CmdletBinding()]
 param(
     [string]$InstallDir = "",
