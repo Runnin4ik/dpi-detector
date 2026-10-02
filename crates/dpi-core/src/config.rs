@@ -640,10 +640,10 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<Config
                 } else {
                     // Normalize ints (e.g. `TIMEOUT: 15`) to f64 so the
                     // f64 struct field deserializes instead of failing the file.
-                    if v.as_u64().is_some() {
-                        if let Some(f) = v.as_f64() {
-                            *v = serde_yaml::Value::Number(serde_yaml::Number::from(f));
-                        }
+                    if v.as_u64().is_some()
+                        && let Some(f) = v.as_f64()
+                    {
+                        *v = serde_yaml::Value::Number(serde_yaml::Number::from(f));
                     }
                     true
                 }
@@ -936,12 +936,12 @@ pub fn find_config_file() -> Option<PathBuf> {
     if cwd.exists() {
         return Some(cwd.to_path_buf());
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("config.yml");
-            if p.exists() {
-                return Some(p);
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let p = dir.join("config.yml");
+        if p.exists() {
+            return Some(p);
         }
     }
     None
@@ -965,10 +965,10 @@ pub fn load_config() -> AppConfig {
 
 /// Directory of the running binary, or `.` when it cannot be resolved.
 pub fn base_dir() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            return dir.to_path_buf();
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        return dir.to_path_buf();
     }
     PathBuf::from(".")
 }

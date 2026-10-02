@@ -329,10 +329,10 @@ pub(crate) fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, 
                 let mut fake_n = 0;
                 for d in &report.forbidden {
                     let key = dpi_core::probe::dns_avail::ProbeKey { kind: ProbeKind::Udp, addr: a.clone(), name: name.clone() };
-                    if let Some(DnsAnswer::Ips(ips)) = report.udp_answers.get(&(key, d.clone())) {
-                        if !ips.is_empty() && ips.iter().any(|ip| dpi_core::probe::domains::fake_ip_type(ip) == dpi_core::probe::domains::FakeIpType::FakeIp) {
-                            fake_n += 1;
-                        }
+                    if let Some(DnsAnswer::Ips(ips)) = report.udp_answers.get(&(key, d.clone()))
+                        && !ips.is_empty() && ips.iter().any(|ip| dpi_core::probe::domains::fake_ip_type(ip) == dpi_core::probe::domains::FakeIpType::FakeIp)
+                    {
+                        fake_n += 1;
                     }
                 }
                 let frac = format!("{}/{}", sub, report.forbidden.len());

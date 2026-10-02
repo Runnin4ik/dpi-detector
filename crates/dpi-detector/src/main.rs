@@ -152,10 +152,10 @@ fn prescan_language() -> Language {
                 raw = Some(v.clone());
                 i += 1;
             }
-        } else if let Some(v) = arg.strip_prefix("-l") {
-            if !v.is_empty() {
-                raw = Some(v.to_string());
-            }
+        } else if let Some(v) = arg.strip_prefix("-l")
+            && !v.is_empty()
+        {
+            raw = Some(v.to_string());
         }
         i += 1;
     }
@@ -361,11 +361,11 @@ async fn run() {
             std::process::exit(2);
         }
     }
-    if let Some(c) = args.concurrency {
-        if c < 1 {
-            eprintln!("{}", msg.invalid_concurrency_flag);
-            std::process::exit(2);
-        }
+    if let Some(c) = args.concurrency
+        && c < 1
+    {
+        eprintln!("{}", msg.invalid_concurrency_flag);
+        std::process::exit(2);
     }
 
     let mut cfg = load_config();
@@ -578,18 +578,18 @@ async fn run() {
                 _ = tokio::time::sleep(Duration::from_millis(50)) => {}
             }
         }
-        if let Ok(g) = version_slot.lock() {
-            if let Some(latest) = &*g {
-                badge = version_badge_lang(latest.as_ref(), lang);
-            }
+        if let Ok(g) = version_slot.lock()
+            && let Some(latest) = &*g
+        {
+            badge = version_badge_lang(latest.as_ref(), lang);
         }
     }
     if is_interactive {
         // Poll the version slot for the menu badge without blocking
-        if let Ok(g) = version_slot.lock() {
-            if let Some(ref latest) = *g {
-                badge = version_badge_lang(latest.as_ref(), lang);
-            }
+        if let Ok(g) = version_slot.lock()
+            && let Some(ref latest) = *g
+        {
+            badge = version_badge_lang(latest.as_ref(), lang);
         }
         match run_interactive_menu(lang, profile, &cfg, &saved, &tests_str, &badge, &version_slot).await {
             MenuResult::Run(sel) => {
@@ -609,10 +609,10 @@ async fn run() {
             MenuResult::Quit => return,
         }
         // Refresh badge after menu dwell time
-        if let Ok(g) = version_slot.lock() {
-            if let Some(ref latest) = *g {
-                badge = version_badge_lang(latest.as_ref(), lang);
-            }
+        if let Ok(g) = version_slot.lock()
+            && let Some(ref latest) = *g
+        {
+            badge = version_badge_lang(latest.as_ref(), lang);
         }
     }
     let mut banner_done = is_interactive;
@@ -780,10 +780,10 @@ async fn run() {
         .await;
         banner_done = true;
 
-        if !args.json {
-            if let Some(ref out_path) = result_path {
-                export_report(out_path, &emitter.report, &msg);
-            }
+        if !args.json
+            && let Some(ref out_path) = result_path
+        {
+            export_report(out_path, &emitter.report, &msg);
         }
 
         if !is_interactive {
@@ -819,10 +819,10 @@ async fn run() {
                 PostTestAction::Menu => {
                     println!();
                     // Refresh badge
-                    if let Ok(g) = version_slot.lock() {
-                        if let Some(ref latest) = *g {
-                            badge = version_badge_lang(latest.as_ref(), lang);
-                        }
+                    if let Ok(g) = version_slot.lock()
+                        && let Some(ref latest) = *g
+                    {
+                        badge = version_badge_lang(latest.as_ref(), lang);
                     }
                     match menu_until_something_to_run(lang, profile, &cfg, &saved, &selection, &badge, &version_slot).await {
                         MenuResult::Run(chosen) => {

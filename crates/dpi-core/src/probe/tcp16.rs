@@ -284,12 +284,12 @@ pub async fn probe_tcp_16_20(
         // If connection was closed concurrently between requests, reconnect and retry this chunk once
         if let Ok(Err(ref e)) = res {
             let (emsg, _, _) = http_err_info(e);
-            if e.is_canceled() || emsg.contains("canceled") || sender.is_closed() {
-                if let Ok(new_sender) = connect_fat_target(addr, target_ip, sni, use_tls, cfg).await {
-                    sender = new_sender;
-                    let retry_req = make_req(pad_str);
-                    res = timeout(Duration::from_secs_f64(read_timeout), sender.send(retry_req)).await;
-                }
+            if (e.is_canceled() || emsg.contains("canceled") || sender.is_closed())
+                && let Ok(new_sender) = connect_fat_target(addr, target_ip, sni, use_tls, cfg).await
+            {
+                sender = new_sender;
+                let retry_req = make_req(pad_str);
+                res = timeout(Duration::from_secs_f64(read_timeout), sender.send(retry_req)).await;
             }
         }
 

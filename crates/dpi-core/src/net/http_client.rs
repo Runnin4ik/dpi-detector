@@ -98,11 +98,11 @@ async fn http_get_chain(url_str: &str, timeout_dur: Duration) -> Result<String, 
     let mut url = Url::parse(url_str)?;
     for _ in 0..4 {
         let (status, location, body) = http_get_once(&url, timeout_dur).await?;
-        if (300..400).contains(&status) {
-            if let Some(loc) = location {
-                url = url.join(&loc).map_err(HttpGetError::BadRedirect)?;
-                continue;
-            }
+        if (300..400).contains(&status)
+            && let Some(loc) = location
+        {
+            url = url.join(&loc).map_err(HttpGetError::BadRedirect)?;
+            continue;
         }
         if status != 200 {
             return Err(HttpGetError::Status(status));

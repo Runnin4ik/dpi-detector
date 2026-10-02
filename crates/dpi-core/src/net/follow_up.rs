@@ -78,15 +78,15 @@ impl ClientFollowUp for ProbeFollowUp {
         let mut out = Vec::new();
         // ALPS first: BoringSSL sends the client EncryptedExtensions before the
         // (absent) client certificate, and the `channel_id` message after it.
-        if self.application_settings {
-            if let Some(codepoint) = acknowledged.iter().copied().find(|ext| {
+        if self.application_settings
+            && let Some(codepoint) = acknowledged.iter().copied().find(|ext| {
                 matches!(*ext, EXT_APPLICATION_SETTINGS | EXT_APPLICATION_SETTINGS_NEW)
-            }) {
-                out.push((
-                    HS_ENCRYPTED_EXTENSIONS,
-                    application_settings_message(codepoint),
-                ));
-            }
+            })
+        {
+            out.push((
+                HS_ENCRYPTED_EXTENSIONS,
+                application_settings_message(codepoint),
+            ));
         }
         if self.channel_id && acknowledged.contains(&EXT_FAKE_CHANNEL_ID) {
             out.push((HS_CHANNEL_ID, channel_id_message(transcript_hash)));

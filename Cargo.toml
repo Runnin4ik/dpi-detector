@@ -18,7 +18,16 @@ hyper = { path = "vendor/hyper" }
 
 [workspace.package]
 version = "5.0.0-alpha.21"
-edition = "2021"
+# 2024, from the migration commit: `cargo fix --edition` plus the clippy pass the
+# edition unblocked. The fix pass rewrote two shapes — `unsafe extern "system"` in
+# the Windows console backend, and `use<>` on `probe::telegram::tls_get`'s two
+# RPIT returns, which 2024 would otherwise widen to every in-scope lifetime. The
+# clippy pass is the larger half: `collapsible_if` fires on a nested `if let`
+# only once let-chains are stable, and it named 42 of them, so they are
+# `if let A = x && cond` now. The two POSIX-side ones in `net/sysinfo/os.rs` were
+# collapsed by hand — a Windows clippy cannot compile them, and CI's Linux clippy
+# would have failed on them.
+edition = "2024"
 authors = ["runnin"]
 license = "MIT"
 
@@ -101,6 +110,15 @@ unreachable_pub = "warn"
 # crates do not opt into this table; `vendor/rustls` carries its own
 # `forbid(unsafe_code)`.
 unsafe_code = "deny"
+# `tail_expr_drop_order` is deliberately absent. It is allow-by-default in 2024 —
+# the migration harness force-warns it — and the 35 statements it named during the
+# migration were read one by one: a tail `if let`/`match` condition, a
+# `for h in handles { h.await }` loop, or a `let _permit = probe::permit(sem).await;`
+# followed by a tail `await`. 2024 drops the tail expression's temporaries before
+# the block's locals, which holds the permit, the mutex guard or a socket's close
+# *longer* than 2021 did, never shorter, and nothing there drops a value a live
+# local still needs. No site was rewritten; a future one that does need it will be
+# named by the next migration pass rather than silently missed here.
 # `dead_code_pub_in_binary` is deliberately NOT set here, though the rule is one
 # this project wants: `cargo test` compiles every library's test target as a
 # *binary harness*, so under `--all-targets` it fires on every `pub` item a library

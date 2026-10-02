@@ -738,12 +738,11 @@ pub async fn check_dns_availability(
                         }
                         // First connection-class error wins; later ones do not
                         // overwrite it.
-                        if first_fail.is_none() {
-                            if let Err(e) = &res {
-                                if matches!(e, DnsError::Timeout | DnsError::Io(_) | DnsError::ConnectFault { .. }) {
-                                    first_fail = Some(connect_fail(e));
-                                }
-                            }
+                        if first_fail.is_none()
+                            && let Err(e) = &res
+                            && matches!(e, DnsError::Timeout | DnsError::Io(_) | DnsError::ConnectFault { .. })
+                        {
+                            first_fail = Some(connect_fail(e));
                         }
                         let (l, a) = answer_of(res);
                         if let Some(ans) = a {
@@ -911,10 +910,10 @@ pub async fn check_dns_availability(
     // ── Org names for egress IPs (Team Cymru over DoH): lookups already ran
     // in the background during the DoH/DoT probes. ──
     for h in org_handles {
-        if let Ok((ip, org)) = h.await {
-            if !org.is_empty() {
-                report.org_names.insert(ip.to_string(), org);
-            }
+        if let Ok((ip, org)) = h.await
+            && !org.is_empty()
+        {
+            report.org_names.insert(ip.to_string(), org);
         }
     }
 

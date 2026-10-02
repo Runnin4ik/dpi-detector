@@ -137,10 +137,10 @@ async fn fetch_ip_cymru_one(
     let mut org: Option<String> = None;
     if !asn.is_empty() {
         let as_query = format!("AS{}.asn.cymru.com", asn);
-        if let Ok(as_txts) = query_doh_txt(doh, &as_query, timeout_dur).await {
-            if let Some(as_first) = as_txts.first() {
-                org = Some(parse_cymru_as_name(as_first));
-            }
+        if let Ok(as_txts) = query_doh_txt(doh, &as_query, timeout_dur).await
+            && let Some(as_first) = as_txts.first()
+        {
+            org = Some(parse_cymru_as_name(as_first));
         }
     }
 

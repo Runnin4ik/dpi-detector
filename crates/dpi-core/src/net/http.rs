@@ -662,18 +662,18 @@ pub(crate) fn parse_host(url_or_host: &str) -> String {
     // IPv6 host with them. The `:`-count rule below cannot find the port here —
     // `[::1]:443` has three colons — and trimming the brackets off afterwards
     // left `::1]:443`, half a literal with a port still on it.
-    if s.starts_with('[') {
-        if let Some(end) = s.find(']') {
-            return s[..=end].to_string();
-        }
+    if s.starts_with('[')
+        && let Some(end) = s.find(']')
+    {
+        return s[..=end].to_string();
     }
     // Strip :port (but not bare IPv6)
-    if s.matches(':').count() == 1 {
-        if let Some(idx) = s.rfind(':') {
-            let port = &s[idx + 1..];
-            if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
-                s = s[..idx].to_string();
-            }
+    if s.matches(':').count() == 1
+        && let Some(idx) = s.rfind(':')
+    {
+        let port = &s[idx + 1..];
+        if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
+            s = s[..idx].to_string();
         }
     }
     s.trim_matches(|c| c == '.' || c == '[' || c == ']').to_string()

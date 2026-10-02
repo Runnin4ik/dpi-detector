@@ -657,13 +657,13 @@ pub(crate) async fn run_test_suite(
     // SOCKS. A URL the SOCKS5 code cannot use is a rejected input, so it has to
     // be readable in `--json` too, where the emitter writes nothing — the notice
     // goes to stderr there and stdout stays the machine document.
-    if let Some(url) = cfg.effective_proxy() {
-        if let Err(e) = parse_socks_proxy(url) {
-            let notice = msg.invalid_proxy_err.replacen("{}", url, 1).replacen("{}", &e.to_string(), 1);
-            emitter.emit(&notice);
-            if args.json {
-                eprint!("{}", notice);
-            }
+    if let Some(url) = cfg.effective_proxy()
+        && let Err(e) = parse_socks_proxy(url)
+    {
+        let notice = msg.invalid_proxy_err.replacen("{}", url, 1).replacen("{}", &e.to_string(), 1);
+        emitter.emit(&notice);
+        if args.json {
+            eprint!("{}", notice);
         }
     }
 
@@ -729,37 +729,34 @@ pub(crate) async fn run_test_suite(
             // Upstream router / VPN relay: whoami.akamai.net via local candidates.
             let mut candidates: Vec<IpAddr> = Vec::new();
             for (ip_str, _) in &dns_info.active {
-                if let Ok(ip) = ip_str.parse::<IpAddr>() {
-                    if domains::is_local_or_relay_ip(&ip) && !candidates.contains(&ip) {
-                        candidates.push(ip);
-                    }
+                if let Ok(ip) = ip_str.parse::<IpAddr>()
+                    && domains::is_local_or_relay_ip(&ip) && !candidates.contains(&ip)
+                {
+                    candidates.push(ip);
                 }
             }
-            if let Some(gw) = dns_info.gateway {
-                if domains::is_local_or_relay_ip(&gw) && !candidates.contains(&gw) {
-                    candidates.push(gw);
-                }
+            if let Some(gw) = dns_info.gateway
+                && domains::is_local_or_relay_ip(&gw) && !candidates.contains(&gw)
+            {
+                candidates.push(gw);
             }
             let mut upstream: Option<String> = None;
             for cand in &candidates {
                 let server = SocketAddr::new(*cand, 53);
                 if let Ok((addrs, _)) =
                     probe_udp_dns(server, "whoami.akamai.net", Duration::from_secs(2), None).await
+                    && let Some(up) = addrs.first()
                 {
-                    if let Some(up) = addrs.first() {
-                        let mut text = up.to_string();
-                        if let Some(extra) =
-                            fetch_ip_cymru(up, &cfg.cymru_doh_servers, Duration::from_secs(5)).await
-                        {
-                            if let Some(org) = extra.org.as_ref() {
-                                if !org.is_empty() {
-                                    text += &format!(" ({})", org);
-                                }
-                            }
-                        }
-                        upstream = Some(text);
-                        break;
+                    let mut text = up.to_string();
+                    if let Some(extra) =
+                        fetch_ip_cymru(up, &cfg.cymru_doh_servers, Duration::from_secs(5)).await
+                        && let Some(org) = extra.org.as_ref()
+                        && !org.is_empty()
+                    {
+                        text += &format!(" ({})", org);
                     }
+                    upstream = Some(text);
+                    break;
                 }
             }
             if let Some(up) = upstream {
@@ -783,10 +780,10 @@ pub(crate) async fn run_test_suite(
                 emitter.emit(&render_netinfo_panel(&data, &dns_info, &bypass, msg));
             } else {
                 let mut tun: Vec<String> = Vec::new();
-                if let Some(ref n) = dns_info.active_name {
-                    if is_tun_name(n) && !tun.contains(n) {
-                        tun.push(n.clone());
-                    }
+                if let Some(ref n) = dns_info.active_name
+                    && is_tun_name(n) && !tun.contains(n)
+                {
+                    tun.push(n.clone());
                 }
                 for (_, n) in &dns_info.other_static {
                     if is_tun_name(n) && !tun.contains(n) {

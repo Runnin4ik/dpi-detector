@@ -116,7 +116,7 @@ const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
     reason = "Win32 console FFI — the ANSI-to-console translation for legacy consoles (Windows 7/8). Each block carries its own SAFETY note."
 )]
 fn write_win32_ansi(s: &str) {
-    extern "system" {
+    unsafe extern "system" {
         fn GetStdHandle(nStdHandle: u32) -> isize;
         fn SetConsoleTextAttribute(hConsoleOutput: isize, wAttributes: u16) -> i32;
         fn WriteConsoleW(
@@ -234,7 +234,7 @@ pub(crate) fn frame_home(drawn: u16) {
     reason = "Win32 console FFI — the cursor move a repaint needs on legacy consoles. Each block carries its own SAFETY note."
 )]
 fn win32_frame_home(drawn: u16) {
-    extern "system" {
+    unsafe extern "system" {
         fn GetStdHandle(nStdHandle: u32) -> isize;
         fn GetConsoleScreenBufferInfo(
             hConsoleOutput: isize,
@@ -378,7 +378,7 @@ fn apply_ansi_code(code: &str, mut cur: u16, default_attr: u16) -> u16 {
     reason = "Win32 console FFI — the console-mode and code-page calls that decide whether this terminal can render ANSI. Each block carries its own SAFETY note."
 )]
 pub(crate) fn detect_vt() -> bool {
-    extern "system" {
+    unsafe extern "system" {
         fn GetStdHandle(nStdHandle: u32) -> isize;
         fn GetConsoleMode(hConsoleHandle: isize, lpMode: *mut u32) -> i32;
         fn SetConsoleMode(hConsoleHandle: isize, dwMode: u32) -> i32;

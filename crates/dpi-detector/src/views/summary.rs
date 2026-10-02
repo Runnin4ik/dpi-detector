@@ -107,41 +107,40 @@ pub(crate) fn render_summary(data: &SummaryData, msg: &Messages) -> String {
         items.push(("TCP 16-20KB".to_string(), value));
     }
 
-    if data.run_telegram {
-        if let Some(t) = data.telegram {
-            
-            let tg_row = |label: &str, st: &dpi_core::probe::telegram::TransferStats, speed: f64, size: u64| {
-                // Every state is named: the wildcard this replaced rendered any
-                // state it did not know as `ERROR` in red.
-                let (raw, sgr) = match st.status {
-                    TransferStatus::Ok => ("OK", "32"),
-                    TransferStatus::Stalled => ("STALL", "33"),
-                    TransferStatus::Slow => ("SLOW", "33"),
-                    TransferStatus::Blocked => ("BLOCKED", "31"),
-                    TransferStatus::Error => ("ERROR", "31"),
-                };
-                let mut metrics = format!("{} {}, {}", msg.avg_label, fmt_speed(speed, msg.lang), fmt_size(size, msg.lang));
-                if let Some(sec) = st.drop_at_sec {
-                    metrics += &msg.stall_after.replace("{}", &sec.to_string());
-                }
-                (label.to_string(), format!("\x1b[{}m{:<16}\x1b[0m {}", sgr, raw, metrics))
+    if data.run_telegram
+        && let Some(t) = data.telegram
+    {
+        let tg_row = |label: &str, st: &dpi_core::probe::telegram::TransferStats, speed: f64, size: u64| {
+            // Every state is named: the wildcard this replaced rendered any
+            // state it did not know as `ERROR` in red.
+            let (raw, sgr) = match st.status {
+                TransferStatus::Ok => ("OK", "32"),
+                TransferStatus::Stalled => ("STALL", "33"),
+                TransferStatus::Slow => ("SLOW", "33"),
+                TransferStatus::Blocked => ("BLOCKED", "31"),
+                TransferStatus::Error => ("ERROR", "31"),
             };
-            let (l1, v1) = tg_row(msg.summary_tg_download, &t.download, t.download.avg_bps, t.download.bytes_total);
-            let (l2, v2) = tg_row(msg.summary_tg_upload, &t.upload, t.upload.avg_bps, t.upload.bytes_total);
-            items.push((l1, v1));
-            items.push((l2, v2));
-            let dc_c = if t.dc_reachable == t.dc_total {
-                "32"
-            } else if t.dc_reachable == 0 {
-                "31"
-            } else {
-                "33"
-            };
-            items.push((
-                msg.summary_tg_datacenters.to_string(),
-                format!("\x1b[{}mOK {}/{}\x1b[0m", dc_c, t.dc_reachable, t.dc_total),
-            ));
-        }
+            let mut metrics = format!("{} {}, {}", msg.avg_label, fmt_speed(speed, msg.lang), fmt_size(size, msg.lang));
+            if let Some(sec) = st.drop_at_sec {
+                metrics += &msg.stall_after.replace("{}", &sec.to_string());
+            }
+            (label.to_string(), format!("\x1b[{}m{:<16}\x1b[0m {}", sgr, raw, metrics))
+        };
+        let (l1, v1) = tg_row(msg.summary_tg_download, &t.download, t.download.avg_bps, t.download.bytes_total);
+        let (l2, v2) = tg_row(msg.summary_tg_upload, &t.upload, t.upload.avg_bps, t.upload.bytes_total);
+        items.push((l1, v1));
+        items.push((l2, v2));
+        let dc_c = if t.dc_reachable == t.dc_total {
+            "32"
+        } else if t.dc_reachable == 0 {
+            "31"
+        } else {
+            "33"
+        };
+        items.push((
+            msg.summary_tg_datacenters.to_string(),
+            format!("\x1b[{}mOK {}/{}\x1b[0m", dc_c, t.dc_reachable, t.dc_total),
+        ));
     }
 
     if items.is_empty() {

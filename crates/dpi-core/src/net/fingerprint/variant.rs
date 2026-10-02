@@ -223,10 +223,10 @@ impl HelloVariant {
     pub(crate) fn apply(&self, hello: &mut ClientHelloProfile, alpn_protocols: &mut Vec<Vec<u8>>) {
         match self {
             Self::SigalgSwap => {
-                if let Some(schemes) = hello.signature_schemes.as_mut() {
-                    if schemes.len() > 1 {
-                        schemes.swap(0, 1);
-                    }
+                if let Some(schemes) = hello.signature_schemes.as_mut()
+                    && schemes.len() > 1
+                {
+                    schemes.swap(0, 1);
                 }
             }
             Self::GreaseExtra => {
@@ -259,10 +259,10 @@ impl HelloVariant {
                 // order stay, only the body moves.
                 hello.raw_extensions.retain(|(ext, _)| ext != id);
                 hello.raw_extensions.push((*id, body.clone()));
-                if let Some(order) = hello.extension_order.as_mut() {
-                    if !order.contains(id) {
-                        order.push(*id);
-                    }
+                if let Some(order) = hello.extension_order.as_mut()
+                    && !order.contains(id)
+                {
+                    order.push(*id);
                 }
             }
             Self::DropExtension(id) => {
@@ -280,10 +280,10 @@ impl HelloVariant {
             }
             Self::Padding(floor) => {
                 hello.padding_to = Some(*floor);
-                if let Some(order) = hello.extension_order.as_mut() {
-                    if !order.contains(&EXT_PADDING) {
-                        order.push(EXT_PADDING);
-                    }
+                if let Some(order) = hello.extension_order.as_mut()
+                    && !order.contains(&EXT_PADDING)
+                {
+                    order.push(EXT_PADDING);
                 }
             }
             Self::NoPadding => hello.padding_to = None,

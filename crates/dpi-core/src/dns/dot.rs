@@ -25,10 +25,10 @@ pub fn split_dot_endpoint(addr: &str) -> (String, u16) {
         if let Some(end) = rest.find(']') {
             let host = rest[..end].to_string();
             let tail = &rest[end + 1..];
-            if let Some(port_str) = tail.strip_prefix(':') {
-                if let Ok(port) = port_str.parse::<u16>() {
-                    return (host, port);
-                }
+            if let Some(port_str) = tail.strip_prefix(':')
+                && let Ok(port) = port_str.parse::<u16>()
+            {
+                return (host, port);
             }
             return (host, 853);
         }
@@ -37,10 +37,10 @@ pub fn split_dot_endpoint(addr: &str) -> (String, u16) {
     if s.matches(':').count() >= 2 {
         return (s.to_string(), 853);
     }
-    if let Some((host, port_str)) = s.rsplit_once(':') {
-        if let Ok(port) = port_str.parse::<u16>() {
-            return (host.to_string(), port);
-        }
+    if let Some((host, port_str)) = s.rsplit_once(':')
+        && let Ok(port) = port_str.parse::<u16>()
+    {
+        return (host.to_string(), port);
     }
     (s.to_string(), 853)
 }

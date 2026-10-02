@@ -232,7 +232,7 @@ fn split_url(url: &str) -> Option<(String, String)> {
     Some((host, path))
 }
 
-async fn tls_get(host: &str, path: &str, user_agent: &str) -> Option<(impl Body<Data = Bytes, Error = hyper::Error> + Unpin, impl FnOnce() + Send)> {
+async fn tls_get(host: &str, path: &str, user_agent: &str) -> Option<(impl Body<Data = Bytes, Error = hyper::Error> + Unpin + use<>, impl FnOnce() + Send + use<>)> {
     let addr = resolve_host(host, 443, Duration::from_secs(10)).await.ok()?.into_iter().next()?;
     // Every network step below carries the same 8 s cap run_upload uses. A silently dropped
     // ClientHello — exactly the DPI signature this probe exists to measure — never completes

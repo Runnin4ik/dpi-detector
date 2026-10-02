@@ -47,21 +47,21 @@ pub fn parse_socks_proxy(proxy_url: &str) -> Result<SocksProxyConfig, DnsError> 
     // writes them with `as u8`: a longer credential would wrap to a length
     // that disagrees with the body sent to the proxy, so reject it here rather
     // than send a desynchronised USER/PASS exchange.
-    if let Some(u) = &username {
-        if u.len() > usize::from(u8::MAX) {
-            return Err(DnsError::Socks5(format!(
-                "proxy username is {} bytes, RFC 1929 allows at most 255",
-                u.len()
-            )));
-        }
+    if let Some(u) = &username
+        && u.len() > usize::from(u8::MAX)
+    {
+        return Err(DnsError::Socks5(format!(
+            "proxy username is {} bytes, RFC 1929 allows at most 255",
+            u.len()
+        )));
     }
-    if let Some(p) = &password {
-        if p.len() > usize::from(u8::MAX) {
-            return Err(DnsError::Socks5(format!(
-                "proxy password is {} bytes, RFC 1929 allows at most 255",
-                p.len()
-            )));
-        }
+    if let Some(p) = &password
+        && p.len() > usize::from(u8::MAX)
+    {
+        return Err(DnsError::Socks5(format!(
+            "proxy password is {} bytes, RFC 1929 allows at most 255",
+            p.len()
+        )));
     }
 
     Ok(SocksProxyConfig {

@@ -106,10 +106,10 @@ fn parse_getprop_dns(output: &str) -> Vec<IpAddr> {
             continue;
         }
         let literal = value.split('%').next().unwrap_or(value);
-        if let Ok(ip) = literal.parse::<IpAddr>() {
-            if !servers.contains(&ip) {
-                servers.push(ip);
-            }
+        if let Ok(ip) = literal.parse::<IpAddr>()
+            && !servers.contains(&ip)
+        {
+            servers.push(ip);
         }
     }
     servers
@@ -169,10 +169,10 @@ pub async fn resolve_host(
         .map(|ip| SocketAddr::new(ip, 53))
         .collect();
     for entry in BOOTSTRAP_RESOLVERS {
-        if let Ok(server) = entry.parse::<SocketAddr>() {
-            if !servers.contains(&server) {
-                servers.push(server);
-            }
+        if let Ok(server) = entry.parse::<SocketAddr>()
+            && !servers.contains(&server)
+        {
+            servers.push(server);
         }
     }
     let mut last_err = DnsError::ConnectFault {

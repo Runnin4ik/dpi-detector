@@ -63,10 +63,10 @@ fn adapter_names() -> HashMap<String, String> {
     if let Ok(key) = hklm().open_subkey(NET_CLASS) {
         for guid in key.enum_keys().flatten() {
             let path = format!("{}\\Connection", guid);
-            if let Ok(ck) = key.open_subkey(&path) {
-                if let Ok(name) = ck.get_value::<String, _>("Name") {
-                    names.insert(guid.to_lowercase(), name);
-                }
+            if let Ok(ck) = key.open_subkey(&path)
+                && let Ok(name) = ck.get_value::<String, _>("Name")
+            {
+                names.insert(guid.to_lowercase(), name);
             }
         }
     }
@@ -79,10 +79,10 @@ fn adapter_names() -> HashMap<String, String> {
 fn windows_build() -> u32 {
     if let Ok(k) = hklm().open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion") {
         for val in ["CurrentBuildNumber", "CurrentBuild"] {
-            if let Ok(s) = k.get_value::<String, _>(val) {
-                if let Ok(n) = s.trim().parse::<u32>() {
-                    return n;
-                }
+            if let Ok(s) = k.get_value::<String, _>(val)
+                && let Ok(n) = s.trim().parse::<u32>()
+            {
+                return n;
             }
             if let Ok(n) = k.get_value::<u32, _>(val) {
                 return n;
@@ -119,12 +119,11 @@ fn windows_doh(build: u32) -> HashMap<String, String> {
     if build < 20348 {
         return doh;
     }
-    if let Ok(k) = hklm().open_subkey(r"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient") {
-        if let Ok(policy) = k.get_value::<u32, _>("DoHPolicy") {
-            if policy == 1 {
-                return doh;
-            }
-        }
+    if let Ok(k) = hklm().open_subkey(r"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient")
+        && let Ok(policy) = k.get_value::<u32, _>("DoHPolicy")
+        && policy == 1
+    {
+        return doh;
     }
     let base = r"SYSTEM\CurrentControlSet\Services\Dnscache\InterfaceSpecificParameters";
     if let Ok(key) = hklm().open_subkey(base) {
@@ -179,16 +178,15 @@ fn read_dns_entries(guid: &str) -> Vec<(String, DnsSource)> {
         ] {
             let mut cand: Vec<String> =
                 reg_strings(&key, val).iter().flat_map(|s| split_list(s)).collect();
-            if cand.is_empty() {
-                if let Ok(rv) = key.get_raw_value(val) {
-                    if rv.vtype == REG_BINARY {
-                        for chunk in rv.bytes.chunks(16) {
-                            if chunk.len() == 16 {
-                                if let Ok(arr) = <&[u8; 16]>::try_from(chunk) {
-                                    cand.push(Ipv6Addr::from(*arr).to_string());
-                                }
-                            }
-                        }
+            if cand.is_empty()
+                && let Ok(rv) = key.get_raw_value(val)
+                && rv.vtype == REG_BINARY
+            {
+                for chunk in rv.bytes.chunks(16) {
+                    if chunk.len() == 16
+                        && let Ok(arr) = <&[u8; 16]>::try_from(chunk)
+                    {
+                        cand.push(Ipv6Addr::from(*arr).to_string());
                     }
                 }
             }
@@ -214,12 +212,12 @@ fn default_route() -> (String, String) {
     let mut best: Option<(String, String, u32)> = None;
     for line in out[..cut].lines() {
         let p: Vec<&str> = line.split_whitespace().collect();
-        if p.len() == 5 && p[0] == "0.0.0.0" && p[1] == "0.0.0.0" {
-            if let Ok(metric) = p[4].parse::<u32>() {
-                let better = best.as_ref().is_none_or(|b| metric < b.2);
-                if better {
-                    best = Some((p[2].to_string(), p[3].to_string(), metric));
-                }
+        if p.len() == 5 && p[0] == "0.0.0.0" && p[1] == "0.0.0.0"
+            && let Ok(metric) = p[4].parse::<u32>()
+        {
+            let better = best.as_ref().is_none_or(|b| metric < b.2);
+            if better {
+                best = Some((p[2].to_string(), p[3].to_string(), metric));
             }
         }
     }
@@ -301,14 +299,14 @@ fn active_adapter_guid(live: &HashSet<String>, gw: &str, iface_ip: &str) -> Stri
 /// First gateway value of one interface, read straight from its registry key.
 #[cfg(target_os = "windows")]
 fn interface_gateway(guid: &str) -> String {
-    if let Ok(key) = hklm().open_subkey(TCPIP_BASE) {
-        if let Ok(k) = key.open_subkey(guid) {
-            for val in ["DhcpDefaultGateway", "DefaultGateway"] {
-                for entry in reg_strings(&k, val) {
-                    let first = entry.split(',').next().unwrap_or("").trim();
-                    if !first.is_empty() {
-                        return first.to_string();
-                    }
+    if let Ok(key) = hklm().open_subkey(TCPIP_BASE)
+        && let Ok(k) = key.open_subkey(guid)
+    {
+        for val in ["DhcpDefaultGateway", "DefaultGateway"] {
+            for entry in reg_strings(&k, val) {
+                let first = entry.split(',').next().unwrap_or("").trim();
+                if !first.is_empty() {
+                    return first.to_string();
                 }
             }
         }
@@ -325,10 +323,10 @@ fn flat_nameservers(info: &SystemDnsInfo) -> Vec<IpAddr> {
         .map(|(ip, _)| ip)
         .chain(info.other_static.iter().map(|(ip, _)| ip))
     {
-        if let Ok(addr) = ip.parse::<IpAddr>() {
-            if !out.contains(&addr) {
-                out.push(addr);
-            }
+        if let Ok(addr) = ip.parse::<IpAddr>()
+            && !out.contains(&addr)
+        {
+            out.push(addr);
         }
     }
     out
@@ -423,11 +421,11 @@ pub(super) fn system_dns() -> SystemDnsInfo {
     if let Ok(content) = std::fs::read_to_string("/proc/net/route") {
         for line in content.lines().skip(1) {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 && parts[1] == "00000000" {
-                if let Ok(hex) = u32::from_str_radix(parts[2], 16) {
-                    info.gateway = Some(IpAddr::V4(Ipv4Addr::from(hex.to_be())));
-                    break;
-                }
+            if parts.len() >= 3 && parts[1] == "00000000"
+                && let Ok(hex) = u32::from_str_radix(parts[2], 16)
+            {
+                info.gateway = Some(IpAddr::V4(Ipv4Addr::from(hex.to_be())));
+                break;
             }
         }
     }
@@ -441,24 +439,24 @@ pub(super) fn system_dns() -> SystemDnsInfo {
 #[cfg(not(target_os = "windows"))]
 fn wsl_net_mode() -> String {
     let mut cfg = String::new();
-    if let Ok(home) = std::env::var("USERPROFILE") {
-        if home.len() >= 3 && home.as_bytes()[1] == b':' {
-            let drive = home[..1].to_lowercase();
-            let rest = home[2..].replace('\\', "/");
-            cfg = format!("/mnt/{}/{}/.wslconfig", drive, rest);
-            if !std::path::Path::new(&cfg).exists() {
-                cfg.clear();
-            }
+    if let Ok(home) = std::env::var("USERPROFILE")
+        && home.len() >= 3 && home.as_bytes()[1] == b':'
+    {
+        let drive = home[..1].to_lowercase();
+        let rest = home[2..].replace('\\', "/");
+        cfg = format!("/mnt/{}/{}/.wslconfig", drive, rest);
+        if !std::path::Path::new(&cfg).exists() {
+            cfg.clear();
         }
     }
-    if cfg.is_empty() {
-        if let Ok(dir) = std::fs::read_dir("/mnt/c/Users") {
-            for e in dir.flatten() {
-                let p = format!("{}/.wslconfig", e.path().display());
-                if std::path::Path::new(&p).exists() {
-                    cfg = p;
-                    break;
-                }
+    if cfg.is_empty()
+        && let Ok(dir) = std::fs::read_dir("/mnt/c/Users")
+    {
+        for e in dir.flatten() {
+            let p = format!("{}/.wslconfig", e.path().display());
+            if std::path::Path::new(&p).exists() {
+                cfg = p;
+                break;
             }
         }
     }

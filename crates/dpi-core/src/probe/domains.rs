@@ -263,14 +263,14 @@ pub async fn check_http_injection(
     port: u16,
 ) -> HttpCheck {
     let started = Instant::now();
-    if let Some(ip) = target {
-        if stub_ips.contains(&ip) {
-            return HttpCheck {
-                status: DpiStatus::IspPage,
-                detail: Detail::IspBlockpage { arrow: false, ip: ip.to_string() },
-                elapsed: started.elapsed().as_secs_f64(),
-            };
-        }
+    if let Some(ip) = target
+        && stub_ips.contains(&ip)
+    {
+        return HttpCheck {
+            status: DpiStatus::IspPage,
+            detail: Detail::IspBlockpage { arrow: false, ip: ip.to_string() },
+            elapsed: started.elapsed().as_secs_f64(),
+        };
     }
     let total_timeout = Duration::from_secs_f64(cfg.timeout * 2.0);
     let domain_owned = domain.to_string();
@@ -759,12 +759,12 @@ pub async fn collect_stub_ips(
 
         let mut answered = false;
         for domain in check_domains {
-            if let Ok((ips, _)) = crate::dns::udp::probe_udp_dns(server_addr, domain, timeout_dur, None).await {
-                if !ips.is_empty() {
-                    answered = true;
-                    for ip in ips {
-                        *ip_counts.entry(ip).or_insert(0) += 1;
-                    }
+            if let Ok((ips, _)) = crate::dns::udp::probe_udp_dns(server_addr, domain, timeout_dur, None).await
+                && !ips.is_empty()
+            {
+                answered = true;
+                for ip in ips {
+                    *ip_counts.entry(ip).or_insert(0) += 1;
                 }
             }
         }

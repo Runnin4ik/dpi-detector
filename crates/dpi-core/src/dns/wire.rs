@@ -151,13 +151,13 @@ pub fn parse_dns_response(data: &[u8], expected_tx_id: Option<u16>) -> Result<Dn
     }
 
     let tx_id = u16::from_be_bytes([data[0], data[1]]);
-    if let Some(expected) = expected_tx_id {
-        if tx_id != expected {
-            return Err(DnsError::MismatchedTxId {
-                expected,
-                actual: tx_id,
-            });
-        }
+    if let Some(expected) = expected_tx_id
+        && tx_id != expected
+    {
+        return Err(DnsError::MismatchedTxId {
+            expected,
+            actual: tx_id,
+        });
     }
 
     let flags = u16::from_be_bytes([data[2], data[3]]);

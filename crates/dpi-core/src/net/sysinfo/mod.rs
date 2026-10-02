@@ -87,18 +87,14 @@ pub fn ipv6_supported() -> bool {
         "[2620:fe::fe]:53",
     ];
     for target in targets {
-        if let Ok(addr) = target.parse::<std::net::SocketAddr>() {
-            if let Ok(socket) = std::net::UdpSocket::bind("[::]:0") {
-                if socket.connect(addr).is_ok() {
-                    if let Ok(local_addr) = socket.local_addr() {
-                        if let std::net::IpAddr::V6(v6) = local_addr.ip() {
-                            if is_global_unicast(v6) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
+        if let Ok(addr) = target.parse::<std::net::SocketAddr>()
+            && let Ok(socket) = std::net::UdpSocket::bind("[::]:0")
+            && socket.connect(addr).is_ok()
+            && let Ok(local_addr) = socket.local_addr()
+            && let std::net::IpAddr::V6(v6) = local_addr.ip()
+            && is_global_unicast(v6)
+        {
+            return true;
         }
     }
     false
@@ -143,10 +139,10 @@ mod tests {
         let info = get_system_dns();
         let mut active: Vec<IpAddr> = Vec::new();
         for (ip, _) in &info.active {
-            if let Ok(addr) = ip.parse::<IpAddr>() {
-                if !active.contains(&addr) {
-                    active.push(addr);
-                }
+            if let Ok(addr) = ip.parse::<IpAddr>()
+                && !active.contains(&addr)
+            {
+                active.push(addr);
             }
         }
         assert!(
