@@ -681,27 +681,7 @@ async fn probe_domain(
     // of after them. A host that drops the TCP side spends one timeout per TCP
     // step in series; the UDP probe spends its own window alongside them, and the
     // column ticks from inside the task (`Ticks`).
-    let quic = if applicable {
-        Some(tokio::spawn({
-            let domain = domain.clone();
-            let cfg = Arc::clone(cfg);
-            let sem = Arc::clone(sem);
-            let ticks = ticks.clone();
-            async move {
-                let _permit = crate::probe::permit(&sem).await;
-                let check = crate::probe::quic::check_domain_quic(&domain, target, &cfg).await;
-                ticks.fire(&ticks.quic);
-                check
-            }
-        }))
-    } else {
-        // The endpoint serves no HTTP/3, so no Initial goes out and the column
-        // does not count this row: the cell is the dash and the tick is spent
-        // here rather than by a probe that would have nothing to answer.
-        entry.quic = crate::probe::quic::QuicCheck::unsupported();
-        ticks.fire(&ticks.quic);
-        None
-    };
+    let quic = start_quic(&domain, target, applicable, cfg, sem, ticks, &mut entry);
     entry.t13 = {
         let _permit = crate::probe::permit(sem).await;
         check_domain_tls(&domain, target, false, cfg).await
@@ -723,6 +703,39 @@ async fn probe_domain(
         entry.quic = handle.await.unwrap_or_else(|_| crate::probe::quic::QuicCheck::pending());
     }
     entry
+}
+
+/// The row's QUIC step: an Initial beside the row's TCP probes when the column
+/// counts the row, the dash when the endpoint serves no HTTP/3.
+///
+/// The tick belongs to the counted rows alone, which is why the decision lives
+/// in one place: the column's total is the applicable rows, and a dashed row
+/// that moved the counter is what made a 35-domain run print `QUIC 35/21`.
+fn start_quic(
+    domain: &str,
+    target: IpAddr,
+    applicable: bool,
+    cfg: &Arc<AppConfig>,
+    sem: &Arc<Semaphore>,
+    ticks: &Ticks,
+    entry: &mut DomainEntry,
+) -> Option<tokio::task::JoinHandle<crate::probe::quic::QuicCheck>> {
+    if !applicable {
+        entry.quic = crate::probe::quic::QuicCheck::unsupported();
+        return None;
+    }
+    Some(tokio::spawn({
+        let domain = domain.to_string();
+        let cfg = Arc::clone(cfg);
+        let sem = Arc::clone(sem);
+        let ticks = ticks.clone();
+        async move {
+            let _permit = crate::probe::permit(&sem).await;
+            let check = crate::probe::quic::check_domain_quic(&domain, target, &cfg).await;
+            ticks.fire(&ticks.quic);
+            check
+        }
+    }))
 }
 
 /// Silently collects provider stub IPs: queries the configured UDP resolvers (2 s
@@ -960,6 +973,58 @@ mod tests {
         assert_eq!(fake_ip_type(&"100.64.0.5".parse().unwrap()), FakeIpType::Isp);
         assert_eq!(fake_ip_type(&"192.168.1.1".parse().unwrap()), FakeIpType::Local);
         assert_eq!(fake_ip_type(&"8.8.8.8".parse().unwrap()), FakeIpType::Clean);
+    }
+
+    /// A row the QUIC column dashes is not one of its units: the column's total
+    /// is the rows whose endpoint serves HTTP/3, so a tick fired for a dashed row
+    /// is what made a 35-domain run print `QUIC 35/21`. Regression: the dashed
+    /// branch ticked, and the counter ran past its total by the number of
+    /// `quic_unsupported.txt` rows in the list.
+    #[test]
+    fn the_dashed_row_does_not_move_the_quic_counter() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let ticked = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&ticked);
+        let phases = PhaseProgress {
+            on_phase: Arc::new(move |phase: crate::PhaseId, _total: usize| {
+                let counter = Arc::clone(&counter);
+                Arc::new(move || {
+                    if phase == crate::PhaseId::DomainQuic {
+                        counter.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+            }),
+            on_blocks: Arc::new(|_, _| Arc::new(|_| {})),
+        };
+        // The whole run is this one row, and the column counts none of it.
+        let ticks = Ticks::declare(Some(&phases), 1, 0);
+        let mut entry = entry_for(
+            "www.canva.com",
+            Some("203.0.113.7".parse().unwrap()),
+            false,
+            &HashSet::new(),
+        );
+        let cfg = Arc::new(AppConfig::default());
+        let sem = Arc::new(Semaphore::new(1));
+
+        let started = start_quic(
+            "www.canva.com",
+            "203.0.113.7".parse().unwrap(),
+            false,
+            &cfg,
+            &sem,
+            &ticks,
+            &mut entry,
+        );
+
+        assert!(started.is_none(), "a dashed row starts no Initial");
+        assert_eq!(entry.quic.status, DpiStatus::QuicUnsupported);
+        assert_eq!(
+            ticked.load(Ordering::Relaxed),
+            0,
+            "the dash is not a unit of the QUIC column"
+        );
     }
 
     /// The dash is decided before any probe goes out: the list holds hosts, a row
