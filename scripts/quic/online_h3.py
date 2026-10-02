@@ -3,9 +3,11 @@
 The column measures the *path from here*; this asks the other question — does the
 host serve HTTP/3 at all — from two third-party testers on networks that are not
 ours, so a disagreement separates "the site has no HTTP/3" from "our path to it
-does not work". Measured: `gateway.discord.gg` and `hub.docker.com` answer a
-handshake from the testers' networks and close ours with a TLS `handshake_failure`
-(296), which is exactly the difference a censored user needs to see.
+does not work". Measured: `gateway.discord.gg`, `hub.docker.com` and `x.com` are answered by
+intodns's own QUIC probe (`quic=ok`) while `http3check.net` reports no HTTP/3 for
+them, and our path to all three ends in a TLS `handshake_failure` (296) — the
+disagreement keeps them out of `quic_unsupported.txt`, which is exactly the
+difference a censored user needs to see.
 
 Two testers, because one is one implementation:
   * `intodns.ai/api/web/http3` — JSON: Alt-Svc, the RFC 9460 HTTPS record, and a
