@@ -591,6 +591,12 @@ jobs:
           # The tag `version` resolved: the pushed one on a tag build, the one it
           # cut from Cargo.toml on a manual run.
           tag_name: ${{ needs.version.outputs.tag }}
+          # `target_commitish` is what GitHub stores on the release itself. It
+          # only decides where a tag would be *created*, and the tag always
+          # exists by now — but left empty the action sends the repository's
+          # default branch, and a release whose tag is on another branch then
+          # reads as if it came from `main`.
+          target_commitish: ${{ github.sha }}
           # The tag says which line this is: `v5.0.0-alpha.19` is a prerelease,
           # `v5.0.0` is not. A hardcoded `true` would publish the stable line as
           # one.
