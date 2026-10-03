@@ -46,7 +46,7 @@ measured is marked as such; there is no extrapolated figure presented as data.
 | `webpki-roots` | 1.0 | trust anchors; independent of the provider |
 | `ring` | 0.17.14 | the provider: a normal dependency of `dpi-core` since the switch |
 | `cc` | 1.4.4 in this lock (1.5.1 resolved elsewhere) | `ring`'s build-dependency — enters the graph with `ring` |
-| Toolchain | 1.98.1 (pinned) | `rust-toolchain.toml`; MIPS rows additionally use `nightly-2026-09-17` (`-Z build-std`) |
+| Toolchain | 1.99.0 (pinned) | `rust-toolchain.toml`; MIPS rows additionally use `nightly-2026-09-17` (`-Z build-std`) |
 | `cross` | 0.2.5 | MIPS/ARM release rows |
 | Cross GCC | `mipsel-linux-muslsf-gcc (GCC) 9.2.0` | inside `ghcr.io/cross-rs/mipsel-unknown-linux-musl:0.2.5` |
 | Router under test | Keenetic, MediaTek MT7621, mipsel, 4 cores, Linux 4.9 | binaries run from `/tmp`, measured with busybox `/opt/bin/time -v` |

@@ -15,17 +15,19 @@ linker = "rust-lld"
 
 # Rejected here, with the reason, so nobody re-tries them:
 #
-#   embed-metadata = false  Cargo 1.98.1 reports the key as unused — `cargo
-#                           metadata` prints "unused config key" on every
-#                           invocation, and it is part of the CI cache key, so a
-#                           stray key would bust the runners' caches for nothing.
-#                           The real lever is the nightly-only
-#                           `-Z no-embed-metadata` (cargo 1.98.1 lists it, but
-#                           stable rejects every `-Z` and neither installed
-#                           nightly knows the rustc option). Measured for scale:
-#                           a clean dev build is 1078 MiB, of which 434 MiB is
-#                           `.rlib` and 165 MiB `.rmeta` — the win would be a
-#                           fraction of that, and it cannot ship on the pinned
-#                           toolchain.
+#   embed-metadata = false  Not a config key on the pinned toolchain: 1.99.0
+#                           fails the parse with `expected a table, but found a
+#                           boolean for
+#                           target.x86_64-pc-windows-msvc.embed-metadata` where
+#                           1.98.1 only called it an unused key — which is what
+#                           this note recorded first. The lever itself exists as
+#                           the nightly-only pair `cargo -Z embed-metadata` /
+#                           `rustc -Z embed-metadata=val`, both listed by
+#                           nightly-2026-09-17; stable rejects every `-Z`.
+#                           Measured for scale: a clean dev build is 1078 MiB, of
+#                           which 434 MiB is `.rlib` and 165 MiB `.rmeta` — the
+#                           win is a fraction of that, in intermediate artifacts
+#                           rather than in the shipped binary, so it does not pay
+#                           for a nightly build.
 #   sccache, mold           no benefit at one codegen unit with fat LTO, and
 #                           mold is ELF-only while these rows link with rust-lld.

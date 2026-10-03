@@ -183,9 +183,7 @@ fn read_dns_entries(guid: &str) -> Vec<(String, DnsSource)> {
                 && rv.vtype == REG_BINARY
             {
                 for chunk in rv.bytes.chunks(16) {
-                    if chunk.len() == 16
-                        && let Ok(arr) = <&[u8; 16]>::try_from(chunk)
-                    {
+                    if let Some(arr) = chunk.as_array::<16>() {
                         cand.push(Ipv6Addr::from(*arr).to_string());
                     }
                 }

@@ -2,6 +2,7 @@
 name = "dpi-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 # Never published: this is the engine of a binary that ships as a GitHub release

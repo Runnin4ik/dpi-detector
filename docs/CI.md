@@ -51,7 +51,7 @@ a runner for the six-hour default.
    `--profile release` for the rest — no row builds `--release`. Three rows build on
    `nightly-2026-09-17` with `-Z build-std` (win7 and both MIPS — the flag is
    nightly-only; `+toolchain` overrides `rust-toolchain.toml`, so the rest of the
-   matrix stays on 1.98.1). That date lives in four places — the win7 row's
+   matrix stays on 1.99.0). That date lives in four places — the win7 row's
    `cargo_args`, both MIPS rows' `cross_args`, and the
    `rustup toolchain install` step — move them together. Every built binary is
    smoke-tested by running it (`--version` and `--legend`); foreign architectures run

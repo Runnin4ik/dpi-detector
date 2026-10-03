@@ -169,23 +169,26 @@ fn platform_dirs_unix(xdg: Option<&str>, home: Option<&str>, prefix: Option<&str
 }
 
 /// The directories this build may use, most preferred first.
-#[cfg(windows)]
+///
+/// One `cfg_select!` block rather than three attribute pairs: the arms are the
+/// same call shape, and a half-migrated pair is what a reader cannot see — the
+/// argument `classify/classifier.rs` records for its constant table.
 fn platform_dirs() -> Vec<PathBuf> {
-    platform_dirs_windows(var("APPDATA").as_deref())
-}
-
-#[cfg(target_os = "macos")]
-fn platform_dirs() -> Vec<PathBuf> {
-    platform_dirs_macos(var("HOME").as_deref())
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn platform_dirs() -> Vec<PathBuf> {
-    platform_dirs_unix(
-        var("XDG_CONFIG_HOME").as_deref(),
-        var("HOME").as_deref(),
-        var("PREFIX").as_deref(),
-    )
+    cfg_select! {
+        windows => {
+            platform_dirs_windows(var("APPDATA").as_deref())
+        },
+        target_os = "macos" => {
+            platform_dirs_macos(var("HOME").as_deref())
+        },
+        _ => {
+            platform_dirs_unix(
+                var("XDG_CONFIG_HOME").as_deref(),
+                var("HOME").as_deref(),
+                var("PREFIX").as_deref(),
+            )
+        }
+    }
 }
 
 /// Every directory the file may live in, most preferred first.

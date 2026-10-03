@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/dpi-core",
     "crates/dpi-detector",
@@ -28,6 +28,12 @@ version = "5.0.0-alpha.21"
 # collapsed by hand — a Windows clippy cannot compile them, and CI's Linux clippy
 # would have failed on them.
 edition = "2024"
+# The floor for `resolver = "3"`'s MSRV-aware pick, and a statement of what the
+# sources may use. It is a floor, not the pin: `rust-toolchain.toml` pins the
+# exact compiler the project builds with (1.99.0), which is strictly stronger.
+# Members opt in with `rust-version.workspace = true`; the field is inert in
+# `[workspace.package]` alone.
+rust-version = "1.99"
 authors = ["runnin"]
 license = "MIT"
 

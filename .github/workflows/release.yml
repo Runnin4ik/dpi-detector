@@ -200,8 +200,9 @@ jobs:
             name: dpi-detector-linux-x86_64
             use_cross: false
             smoke: true
-            # `panic = "abort"` already leaves our own code without unwind
-            # tables; this drops the ones codegen would still emit, for size.
+            # Since 1.92 codegen emits unwind tables under `panic = "abort"` on
+            # Linux by default, so this flag is what removes them — load-bearing,
+            # not belt-and-braces (docs/OPTIMIZATIONS.md §2.6).
             rustflags: "-C force-unwind-tables=no"
 
           # 3. ARM64 Routers & SBCs (Keenetic Hopper/Titan 2, Xiaomi AX3000T, Raspberry Pi)

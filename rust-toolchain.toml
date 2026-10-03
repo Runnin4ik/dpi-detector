@@ -15,6 +15,6 @@
 # win7 and `cross +nightly …` for MIPS, whose Cross.toml enables build-std.
 # `+toolchain` overrides this file, which is why those rows still work.
 [toolchain]
-channel = "1.98.1"
+channel = "1.99.0"
 profile = "minimal"
 components = ["clippy"]

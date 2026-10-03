@@ -115,7 +115,7 @@ fn run_cmd(program: &str, args: &[&str], timeout_dur: Duration) -> Option<String
         let _ = tx.send(out);
     });
     match rx.recv_timeout(timeout_dur) {
-        Ok(Ok(o)) => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
+        Ok(Ok(o)) => Some(String::from_utf8_lossy_owned(o.stdout)),
         _ => None,
     }
 }

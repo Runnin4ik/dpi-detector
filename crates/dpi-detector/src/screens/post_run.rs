@@ -148,8 +148,7 @@ mod tests {
     fn the_generated_report_name_carries_the_stamp() {
         let name = default_report_name();
         let stamp = name
-            .strip_prefix("dpi_detector_results-")
-            .and_then(|rest| rest.strip_suffix(".txt"))
+            .strip_circumfix("dpi_detector_results-", ".txt")
             .unwrap_or_else(|| panic!("the name is not the report name plus a stamp: {name}"));
         assert_eq!(stamp.len(), 15, "yyyymmdd-hhmmss: {name}");
         assert!(

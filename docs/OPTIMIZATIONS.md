@@ -127,7 +127,7 @@ Size is a measured goal, not a budget: the desktop `release` profile trades some
 
 ### 2.6. Cutting Stack Unwind Tables on Linux (`-C force-unwind-tables=no`)
 * **File:** `.github/workflows/release.yml` — the `Build with cross` step, whose `RUSTFLAGS` is `--cfg rustix_use_libc -C force-unwind-tables=no ${{ matrix.rustflags }}`. Every `use_cross` row gets it, the four router rows and the two Android ones alike, and `Cross.toml` passes `RUSTFLAGS` into the container. It came in with 2597cc2 and is in the released tag; the x86_64-musl row sets the same flag by itself, because that row does not go through `cross`.
-* **Mechanics:** With `panic = "abort"` the stack unwind tables (`.eh_frame` and `.eh_frame_hdr`) are not used while the program runs, so the flag stops codegen from emitting them.
+* **Mechanics:** With `panic = "abort"` the stack unwind tables (`.eh_frame` and `.eh_frame_hdr`) are never used while the program runs, so the flag stops codegen from emitting them. Since 1.92 that is the *only* thing that stops it: codegen now emits them under `panic = "abort"` on Linux by default, so the flag is load-bearing rather than belt-and-braces. The pinned toolchain (1.99.0) is past 1.92, so every row that passes it is on the new default, and the −352 KB below was measured there.
 * **What it is worth:** measured on the target for `mipsel-unknown-linux-musl` as a local A/B — one tree, built and run with and without the flag, three interleaved passes: the file drops from 5 370 720 to 5 018 392 bytes (**−352 KB**), and the resident memory with it — steady RSS −216, −408 and −388 KB, peak RSS −180, −456 and −696 KB. Processor time unchanged, as it must be for tables that are never executed. No shipped row changed here; the measurement is what the flag is worth.
 * The Windows and macOS rows do not set it, and nothing measured says they should: their tables are the platform's own (SEH on MSVC), produced from the target's CFI rather than by this flag.
 
@@ -194,6 +194,35 @@ Measured on the target (MT7621, musl, `--release`). §2.5's two guesses about wh
   profile AGENTS.md already marks as unfit for timing runs.
   `split-debuginfo = "unpacked"` changes nothing on MSVC — the default already
   writes the `.pdb` separately.
+
+### 2.12. Router Builds: `std` from Source, the Panic Strategy, Jump Tables
+
+* **File:** `Cargo.toml` (`[profile.release-router]`), `.github/workflows/release.yml` (the three router rows), `Cross.toml`.
+* **How it was measured:** one target at a time (`armv7-unknown-linux-musleabihf`, `mipsel-unknown-linux-musl`), `--profile release-router` (`-Oz`, fat LTO, cgu 1, `panic = "abort"`, `strip = true`), `cross` with the workflow's own `RUSTFLAGS`, `stat -c%s` of the linked ELF. Every row of the tables is one tree, one difference from the row above it.
+
+| armv7, `release-router` | file | Δ |
+| --- | --- | --- |
+| 1.98.1, prebuilt `std` (the tree before the pin moved) | 3 762 124 B | — |
+| 1.99.0, prebuilt `std` | 3 766 284 B | +4 160 (+0.1 %) |
+| nightly-2026-09-17, prebuilt `std` | 3 766 292 B | +8 (the nightly itself is worth nothing) |
+| nightly + `-Z build-std=std,panic_abort` | 3 569 644 B | −196 648 (−5.2 %) |
+| nightly + `-Z build-std=std,panic_abort` + `-Cpanic=immediate-abort` | 3 162 620 B | −407 024 (−11.4 %), −599 504 (−15.9 %) against 1.99.0 |
+| 1.99.0 + `-Cjump-tables=no` (its own A/B, not a step of the chain above) | 3 647 500 B | −118 784 against 1.99.0 (−3.2 %) |
+
+| mipsel, `release-router` | file | Δ |
+| --- | --- | --- |
+| nightly + `-Z build-std` (`Cross.toml`, as shipped) | 4 804 684 B | — |
+| + `-Cjump-tables=no` | 4 657 220 B | −147 464 (−3.1 %) |
+| + `-Cpanic=immediate-abort` | 4 135 460 B | −521 760 (−11.2 %) against the row above, −669 224 (−13.9 %) against the baseline |
+
+* **The toolchain bump is free on this row, and it does not make it static-PIE.** 1.99.0 against 1.98.1 on armv7: +4 160 B (+0.1 %) — and the nightly-2026-09-17 row with the shipped `std` lands 8 B away, so the +4 160 B is the toolchain rather than the three std-API edits of the commit that moved the pin (the 1.98.1 row is the tree before them: `from_utf8_lossy_owned` is 1.99-only, so it cannot be built there). `file` still reports `ELF 32-bit LSB executable, ARM … statically linked`: 1.99's `static_position_independent_executables` on the gnu/musl targets did not change this artifact's shape.
+* **Every armv7 row was measured twice — once while the review's edits were still landing, once on the frozen tree — and the three sizes are byte-identical across the two passes** (3 766 284 / 3 647 500 / 3 162 620). The mipsel rows were built after the edits and only once; their two deltas are each a single flag against the row above.
+* **`std` from source is worth 5.2 %.** `-Z build-std=std,panic_abort` rebuilds `std`/`core` with the profile's `-Oz` + fat LTO + one codegen unit instead of the shipped `std`'s own flags. `armv7` is the row that does not use it; both MIPS rows already do (`Cross.toml`).
+* **The panic strategy is the larger half, and since 1.99 it is a strategy, not a feature.** `-Z build-std-features=panic_immediate_abort` now fails inside `core` with `panic_immediate_abort is now a real panic strategy! Enable it with panic = "immediate-abort" in Cargo.toml, or with the compiler flags -Zunstable-options -Cpanic=immediate-abort`. The profile spelling additionally needs `cargo-features = ["panic-immediate-abort"]` — nightly **cargo** for every build of that profile; the flag spelling needs nightly rustc only.
+* **The mechanism, read off the bytes rather than argued:** the shipped `mipsel` binary carries `panicked at`, `RUST_BACKTRACE` (×3), `index out of bounds`, `capacity overflow` and `crates/dpi-core/src/net/tls.rs`; the `immediate-abort` `armv7` binary carries none of them. One `panicked at ` fragment survives because `main.rs`'s panic hook calls `PanicHookInfo::to_string()` — `set_hook` keeps that formatting reachable although the immediate strategy never calls the hook.
+* **`-Cjump-tables=no` is a size win on both router arches** (−3.2 % / −3.1 %; 1.93 stabilized the flag, it was `-Zno-jump-tables`). It cannot be a profile key, so it belongs in a row's `rustflags` — never in `.cargo/config.toml`'s `[build] rustflags`, which would hit dev and test builds too.
+* **None of the three is adopted yet, and not for a size reason.** The panic strategy takes the panic message, `dpi_detector_crash.log` and the terminal restore with it — a product decision, not a codegen one. `-Cjump-tables=no` and `-Z build-std` either move a row onto a nightly toolchain or trade the row's stated priority (`CPU first, then RSS, then size`) for a size win whose **CPU half is unmeasured**: the numbers here are file sizes, and what would let them land is a router pass of §2.6's shape — one tree, built and run with and without the flag, tests 1/2/6, CPU + RSS + file.
+* **The nightly pin and the cross image do not currently agree for the MIPS rows.** `ghcr.io/cross-rs/mipsel-unknown-linux-musl:0.2.5` ships glibc 2.27 while `nightly-2026-09-17`'s host `std` needs ≥ 2.30 (`gettid@GLIBC_2.30`, the thread ID 1.91 added to panic messages), so the row's *build scripts* cannot run inside the container and the build fails there — from a Windows box and from CI alike, since both mount that toolchain into that image. `nightly-2026-09-02` builds both tables above, so the fix is the pin (four places, `docs/CI.md` §3) or the image.
 
 ---
 
