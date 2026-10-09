@@ -68,19 +68,29 @@ fn ttlb_str(t: &NetTtlb, msg: &Messages) -> String {
 }
 
 /// DNS block: label, comma-joined addresses in cyan and a tail, wrapped at 70 columns.
-/// Widths are char counts; the tail glues to the last chunk when it fits.
+///
+/// Widths are display columns, not chars (`strip_ansi_len`): a Chinese label is
+/// three characters and six columns. Continuation rows are indented by the
+/// label's own width, so every row's addresses line up under the first one —
+/// the shipped labels run from 9 columns (`非活动 DNS: `) to 21
+/// (`DNS-e gheyr-e fa'al: `), and a fixed 15 could only be right for one of
+/// them. It was 15, and the `16` the caller passed for the rows after the
+/// first was the Russian label's width alone: English, Chinese and Farsi rows
+/// were indented by 2, 7 and −5 columns, and Farsi's first row ran to 71.
 fn dns_block_lines(label: &str, ips: &[String], tail: &str) -> Vec<String> {
     const W: usize = 70;
-    const IND: usize = 15;
-    let n = |s: &str| s.chars().count();
+    let n = strip_ansi_len;
+    let indent = n(label);
     let joined = ips.join(", ");
-    if n(label) + n(&joined) + n(tail) <= W {
+    if indent + n(&joined) + n(tail) <= W {
         return vec![format!("{}{}{}", label, cyan_val(&joined), tail)];
     }
-    let mut limit_end = W.saturating_sub(IND + n(tail));
+    // Every row is `indent + chunk`, so the budget is what the label leaves.
+    let budget = W.saturating_sub(indent);
+    let mut limit_end = budget.saturating_sub(n(tail));
     let tail_own = limit_end < 8;
     if tail_own {
-        limit_end = W - IND;
+        limit_end = budget;
     }
     let mut end_chunk = String::new();
     let mut rest: Vec<&String> = ips.iter().collect();
@@ -97,7 +107,7 @@ fn dns_block_lines(label: &str, ips: &[String], tail: &str) -> Vec<String> {
     let mut cur = String::new();
     for ip in rest {
         let piece = if cur.is_empty() { (*ip).clone() } else { format!("{}, {}", cur, ip) };
-        if n(&piece) <= W - IND {
+        if n(&piece) <= budget {
             cur = piece;
         } else {
             chunks.push(cur);
@@ -117,16 +127,16 @@ fn dns_block_lines(label: &str, ips: &[String], tail: &str) -> Vec<String> {
     let last = chunks.len() - 1;
     for (i, c) in chunks.iter().enumerate() {
         if i == last && !tail_own {
-            out.push(format!("{}{}{}", " ".repeat(IND), cyan_val(c), tail));
+            out.push(format!("{}{}{}", " ".repeat(indent), cyan_val(c), tail));
         } else {
-            out.push(format!("{}{}", " ".repeat(IND), cyan_val(c)));
+            out.push(format!("{}{}", " ".repeat(indent), cyan_val(c)));
         }
     }
     if let Some(first) = out.first_mut() {
         *first = format!("{}{}", label, cyan_val(&chunks[0]));
     }
     if tail_own {
-        out.push(format!("{}{}", " ".repeat(IND), tail));
+        out.push(format!("{}{}", " ".repeat(indent), tail));
     }
     out
 }
@@ -293,8 +303,14 @@ pub(crate) fn render_netinfo_panel(
                     v.push(ip.clone());
                 }
             }
+            // Rows after the first carry the label's width as blanks, so their
+            // wrapped addresses line up under the first row's. The width is
+            // measured, not guessed: the label is translated, and a hardcoded
+            // stand-in can only match one language.
+            let first_label = format!("{} ", msg.inactive_dns);
+            let cont_label = " ".repeat(strip_ansi_len(&first_label));
             for (k, n) in order.iter().enumerate() {
-                let label = if k == 0 { format!("{} ", msg.inactive_dns) } else { " ".repeat(16) };
+                let label = if k == 0 { first_label.clone() } else { cont_label.clone() };
                 if let Some(v) = by_name.get(*n) {
                     lines.extend(dns_block_lines(&label, &mark(v), &format!(" ({})", n)));
                 }
@@ -510,7 +526,41 @@ mod tests {
         let lines = dns_block_lines("Системный DNS: ", &ips, " (DHCP)");
         assert!(lines.len() > 1, "long server list wraps");
         assert!(lines[0].starts_with("Системный DNS: "), "first line keeps the label");
-        assert!(lines[1].starts_with("               "), "continuation indented by 15");
         assert!(lines.last().unwrap().ends_with(" (DHCP)"), "tail glued to last chunk");
+    }
+
+    /// A wrapped block stays inside the 70-column budget and its addresses line
+    /// up under the first row's, in every language.
+    ///
+    /// The failure this pins: the indent was the constant 15 while the labels
+    /// are translated, so the second row of an English, Chinese or Farsi block
+    /// was indented by 2, 7 or −5 columns off, and Farsi's first row ran to 71
+    /// columns because the chunk budget ignored the label's width. The old test
+    /// fed a 16-column Russian label and asserted a 15-column indent, which is
+    /// how the mismatch passed for as long as it did.
+    #[test]
+    fn a_dns_block_wraps_inside_its_budget_in_every_language() {
+        use crate::i18n::{Language, get_messages};
+        let ips: Vec<String> = (0..12).map(|i| format!("2001:db8::{:x}", i)).collect();
+        for lang in Language::ALL {
+            let msg = get_messages(lang);
+            for label in [format!("{} ", msg.system_dns), format!("{} ", msg.inactive_dns)] {
+                let lines = dns_block_lines(&label, &ips, " (static)");
+                assert!(lines.len() > 1, "{:?}: the list wraps", lang);
+                let indent = strip_ansi_len(&label);
+                for (i, l) in lines.iter().enumerate() {
+                    assert!(
+                        strip_ansi_len(l) <= 70,
+                        "{:?} row {i} is {} columns: {l:?}",
+                        lang,
+                        strip_ansi_len(l)
+                    );
+                    if i > 0 {
+                        let lead = l.chars().take_while(|c| *c == ' ').count();
+                        assert_eq!(lead, indent, "{:?} row {i} lines up with the label: {l:?}", lang);
+                    }
+                }
+            }
+        }
     }
 }
