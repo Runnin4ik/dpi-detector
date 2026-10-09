@@ -42,7 +42,10 @@ impl Language {
     pub(crate) fn label_ascii(&self) -> &'static str {
         match self {
             Self::En => "English",
-            Self::Ru => "Русский",
+            // Latin, like the other three: this is the string the `--ascii`
+            // path shows on a console that cannot render anything else, and
+            // `Русский` is exactly what that console cannot render.
+            Self::Ru => "Russian",
             Self::Zh => "Chinese",
             Self::Fa => "Farsi",
         }
@@ -241,6 +244,31 @@ mod tests {
         assert_eq!(Language::from_code("zh"), Some(Language::Zh));
         assert_eq!(Language::from_code("fa"), Some(Language::Fa));
         assert_eq!(Language::from_code("unknown"), None);
+    }
+
+    /// Every string the ASCII path prints must itself be ASCII.
+    ///
+    /// The failure this pins: `label_ascii()` returned `Русский` for Russian —
+    /// the same text as `label()` — and Russian's `unavailable_ascii` was
+    /// `недоступен`. Both are drawn under `if ascii_mode()`, which is on either
+    /// because `--ascii` was passed or because the console has no VT support at
+    /// all (`!has_vt`), so the one console class the mode exists for was the one
+    /// that got the Cyrillic.
+    #[test]
+    fn the_ascii_mode_strings_are_ascii() {
+        for lang in Language::ALL {
+            assert!(
+                lang.label_ascii().is_ascii(),
+                "{lang:?} label_ascii is {:?}",
+                lang.label_ascii()
+            );
+            let msg = get_messages(lang);
+            assert!(
+                msg.unavailable_ascii.is_ascii(),
+                "{lang:?} unavailable_ascii is {:?}",
+                msg.unavailable_ascii
+            );
+        }
     }
 
     /// The live progress line must name what it is counting. Test 1 is labelled

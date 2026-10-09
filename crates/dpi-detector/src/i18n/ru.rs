@@ -199,7 +199,7 @@ pub(crate) fn messages() -> Messages {
         invalid_concurrency_flag: "Параметр --concurrency должен быть целым числом >= 1.",
         tui_unavailable: "\r\nИнтерактивное меню (TUI) недоступно в этом терминале [{}].\r\nЗапустите диагностику с параметрами:\r\n\x1b[36m  dpi-detector -t 1\x1b[0m       — проверка DNS-серверов\r\n\x1b[36m  dpi-detector -t 1,2,3\x1b[0m   — базовые тесты (DNS + сайты + TCP16)\r\n\x1b[36m  dpi-detector -t 12345\x1b[0m   — все тесты\r\n\x1b[36m  dpi-detector --help\x1b[0m     — список всех параметров\r\n\r\n",
 
-        unavailable_ascii: "недоступен",
+        unavailable_ascii: "unavailable",
         proxy_in_use: "Используется прокси",
         tui_reason_stdin: "stdin не является терминалом (pipe или перенаправление)",
         tui_reason_raw_mode: "терминал не поддерживает raw mode",
