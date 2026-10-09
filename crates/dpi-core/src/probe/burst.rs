@@ -45,8 +45,8 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 use crate::classify::{
-    classify_connect_error_full, classify_connect_error_icmp, classify_ssl_error, ConnectionStage,
-    DpiProbeStream, DpiProbeTracker, Detail, DpiStatus, ProbeStage,
+    classify_connect_error_full, classify_ssl_error, ConnectionStage, DpiProbeStream,
+    DpiProbeTracker, Detail, DpiStatus, ProbeStage,
 };
 use crate::config::AppConfig;
 use crate::net::fingerprint::{HelloVariant, TlsFingerprint};
@@ -54,7 +54,7 @@ use crate::net::connector::{DpiTlsConnector, RustlsConnector};
 use crate::probe::domains::{resolve_ip, IpFamily};
 use crate::net::http::check_http;
 use parking_lot::Mutex;
-use crate::net::tcp::{dial_tcp, DialError};
+use crate::net::tcp::dial_tcp;
 use crate::net::tls::TlsProfile;
 
 /// Port every attempt dials (the probes' TLS column uses the same one).
@@ -612,15 +612,10 @@ async fn connect_attempt(
             let tracker = DpiProbeTracker::new();
             Ok((DpiProbeStream::new(stream, tracker.clone()), tracker))
         }
-        Err(DialError::Io { error, icmp }) => {
-            let (status, detail) = classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect);
+        Err(e) => {
+            let (status, detail) = e.verdict();
             Err(BurstAttempt { status, detail, ms: ms(started) })
         }
-        Err(DialError::Timeout) => Err(BurstAttempt {
-            status: DpiStatus::SynDropped,
-            detail: Detail::TcpSynTimeout,
-            ms: ms(started),
-        }),
     }
 }
 

@@ -25,8 +25,7 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 use crate::classify::{
-    classify_connect_error_full, classify_connect_error_icmp, classify_ssl_error, ConnectionStage,
-    Detail, DpiStatus, ProbeStage,
+    classify_connect_error_full, classify_ssl_error, ConnectionStage, Detail, DpiStatus, ProbeStage,
 };
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
@@ -38,7 +37,7 @@ use crate::net::http::{
     check_http, classify_redirect, fat_read_verdict, inner_hyper, parse_host, request_headers, BODY_CAP,
 };
 use crate::net::connector::DpiTlsConnector;
-use crate::net::tcp::{dial_tcp, DialError};
+use crate::net::tcp::dial_tcp;
 use crate::net::tls::TlsProfile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,12 +163,9 @@ pub async fn check_domain_tls(
     let fut = async {
         let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.timeout)).await {
             Ok(stream) => stream,
-            Err(DialError::Io { error, icmp }) => {
-                let (status, detail) = classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect);
+            Err(e) => {
+                let (status, detail) = e.verdict();
                 return (status, detail, 0usize);
-            }
-            Err(DialError::Timeout) => {
-                return (DpiStatus::SynDropped, Detail::TcpSynTimeout, 0usize);
             }
         };
 
@@ -288,12 +284,9 @@ pub async fn check_http_injection(
         let addr = SocketAddr::new(host_ip, port);
         let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.timeout)).await {
             Ok(stream) => stream,
-            Err(DialError::Io { error, icmp }) => {
-                let (status, detail) = classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect);
+            Err(e) => {
+                let (status, detail) = e.verdict();
                 return HttpCheck::at(status, detail);
-            }
-            Err(DialError::Timeout) => {
-                return HttpCheck::at(DpiStatus::SynDropped, Detail::TcpSynTimeout);
             }
         };
 

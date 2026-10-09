@@ -6,7 +6,9 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-use crate::classify::IcmpCode;
+use crate::classify::{
+    DpiStatus, Detail, IcmpCode, ProbeStage, classify_connect_error_icmp,
+};
 use crate::net::icmp_err;
 
 /// Why a dial failed: the deadline, or the OS.
@@ -22,6 +24,27 @@ pub enum DialError {
     /// verdicts, and only the message itself separates a routing failure from a
     /// filter on the path.
     Io { error: io::Error, icmp: Option<IcmpCode> },
+}
+
+impl DialError {
+    /// The verdict for a connect that did not come up.
+    ///
+    /// Every probe that dials reports this the same way, and four of them used
+    /// to spell it out: the same `classify_connect_error_icmp(&error, icmp, 0,
+    /// ProbeStage::TcpConnect)` for an OS error and the same
+    /// `(SynDropped, TcpSynTimeout)` for the deadline. Only the wrapper around
+    /// the pair differed — a tuple here, `HttpCheck::at` there, a
+    /// `BurstAttempt` in the third — so the one place that decides what a
+    /// refused connect *means* was four places, and a change to any of them
+    /// would have had to find the other three.
+    pub fn verdict(self) -> (DpiStatus, Detail) {
+        match self {
+            DialError::Io { error, icmp } => {
+                classify_connect_error_icmp(&error, icmp, 0, ProbeStage::TcpConnect)
+            }
+            DialError::Timeout => (DpiStatus::SynDropped, Detail::TcpSynTimeout),
+        }
+    }
 }
 
 /// Dials `addr`, giving up after `timeout_dur`, with Nagle disabled.

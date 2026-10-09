@@ -18,15 +18,14 @@ use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
 use crate::classify::{
-    classify_connect_error_full, classify_connect_error_icmp, classify_read_error, Detail,
-    DpiStatus, ProbeStage,
+    classify_connect_error_full, classify_read_error, Detail, DpiStatus, ProbeStage,
 };
 use crate::config::AppConfig;
 use crate::net::fingerprint::{http_identity, TlsFingerprint};
 use crate::net::http::{
     http_err_info, negotiated_h2, request_headers, BODY_CAP, HttpRequest, HttpSender,
 };
-use crate::net::tcp::{dial_tcp, DialError};
+use crate::net::tcp::dial_tcp;
 use crate::net::tls::{create_tls_config, TlsProfile};
 
 /// The X-Pad bytes. Seeded from the OS once per run: a constant seed made
@@ -98,16 +97,9 @@ async fn connect_fat_target(
     use_tls: bool,
     cfg: &AppConfig,
 ) -> Result<HttpSender, (DpiStatus, Detail)> {
-    let connect_stage = ProbeStage::TcpConnect;
     let tcp = match dial_tcp(&addr, Duration::from_secs_f64(cfg.fat_connect_timeout)).await {
         Ok(s) => s,
-        Err(DialError::Io { error, icmp }) => {
-            let (s, d) = classify_connect_error_icmp(&error, icmp, 0, connect_stage);
-            return Err((s, d));
-        }
-        Err(DialError::Timeout) => {
-            return Err((DpiStatus::SynDropped, Detail::TcpSynTimeout));
-        }
+        Err(e) => return Err(e.verdict()),
     };
 
     if use_tls {
