@@ -54,15 +54,6 @@ pub struct TelegramDcResult {
     pub error: Option<Detail>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct TelegramReport {
-    pub dc_results: Vec<TelegramDcResult>,
-    pub dcs_available: usize,
-    pub dcs_total: usize,
-    pub download_speed_kbps: Option<f64>,
-    pub download_ok: bool,
-}
-
 /// Probes a single Telegram DC endpoint via raw TCP handshake (L4).
 pub async fn probe_telegram_dc(dc: &TelegramDc, timeout_dur: Duration) -> TelegramDcResult {
     let addr_str = format!("{}:{}", dc.ip, dc.port);
@@ -130,20 +121,6 @@ pub async fn probe_telegram_all_dcs(timeout_dur: Duration) -> Vec<TelegramDcResu
     }
     results.sort_by(|a, b| a.name.cmp(&b.name));
     results
-}
-
-/// Legacy simple report (DC ping + naive download), kept for compat.
-pub async fn run_telegram_test(timeout_dur: Duration) -> TelegramReport {
-    let dc_results = probe_telegram_all_dcs(timeout_dur).await;
-    let dcs_available = dc_results.iter().filter(|r| r.available).count();
-    let dcs_total = dc_results.len();
-    TelegramReport {
-        dc_results,
-        dcs_available,
-        dcs_total,
-        download_speed_kbps: None,
-        download_ok: false,
-    }
 }
 
 // ─── Transfer stats and outcome classification ───────────────────────────────

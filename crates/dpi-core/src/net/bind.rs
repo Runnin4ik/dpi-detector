@@ -377,7 +377,6 @@ pub fn resolve(sel: &str) -> Option<BindTarget> {
         // and the address stays as the fallback the kernel's refusal leaves.
         Some(iface) => {
             let device = device_bindable(&iface.name);
-            tracing::warn!("PROBE {} -> device={device}", iface.name);
             target_of(iface, device)
         }
         None => by_addr().and_then(|iface| target_of(iface, false)),
