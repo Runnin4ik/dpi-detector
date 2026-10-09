@@ -15,8 +15,10 @@ pub(crate) struct CliArgs {
     pub profile: String,
     pub legend: bool,
     pub proxy: Option<String>,
-    /// Interface probes leave through: a device name (`wg0`, `opkgtun10`) or one
-    /// of its addresses. Unset means the routing table decides.
+    /// Interface probes leave through: a device name (`wg0`, `opkgtun10`), which
+    /// binds the sockets to that device the way `curl --interface` does, or one of
+    /// its addresses, which binds the source and leaves the device to the routing
+    /// table. Unset means the routing table decides.
     pub iface: Option<String>,
     pub concurrency: Option<usize>,
     pub domain: Vec<String>,

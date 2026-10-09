@@ -246,7 +246,7 @@ pub(crate) fn messages() -> Messages {
         cli_profile: "Profile-e mantaghe-i-e sansur (ru, ir, cn, global)",
         cli_legend: "Namayesh-e rahnemaye vaziyat ha va khorooj",
         cli_proxy: "URL-e proxy-e SOCKS5 (mesal: socks5://127.0.0.1:1080)",
-        cli_iface: "Interface-e barresi ha: nam-e device ya yeki az address-haye aan; pishfarz ra jadval-e route entekhab mikonad (--iface wg0, --iface 172.16.0.2)",
+        cli_iface: "Interface-e barresi ha: nam-e device socket ha ra be aan mibandad, mesl-e curl --interface; yeki az address-haye aan faghat manba ra mibandad va entekhab-e device ra be jadval-e route miseporad; pishfarz ra jadval-e route entekhab mikonad (--iface wg0, --iface 172.16.0.2)",
         iface_unknown: "Interface-e '{}' peyda nashod: --iface nam-e device ya yeki az address-haye aan ra migirad, menue barname list ra chap mikonad",
         cli_concurrency: "Hadde aksar-e darkhast haye hamzaman",
         cli_domain: "Domain haye khass baraye barresi (mitavanid tekrar konid: -d vk.com -d ya.ru)",

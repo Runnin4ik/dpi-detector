@@ -252,7 +252,7 @@ pub(crate) fn messages() -> Messages {
         cli_profile: "Regional censorship profile (ru, ir, cn, global)",
         cli_legend: "Display diagnostic status legend and exit",
         cli_proxy: "SOCKS5 proxy URL (e.g. socks5://127.0.0.1:1080)",
-        cli_iface: "Interface the probes leave through: a device name or one of its addresses; the routing table picks by default (--iface wg0, --iface 172.16.0.2)",
+        cli_iface: "Interface the probes leave through: a device name binds the sockets to it, as curl --interface does; one of its addresses binds the source and leaves the device to the routing table. By default the routing table picks (--iface wg0, --iface 172.16.0.2)",
         iface_unknown: "Interface '{}' not found: --iface takes a device name or one of its addresses, and the menu lists them",
         cli_concurrency: "Concurrency limit for parallel requests",
         cli_domain: "Specific domain(s) to test (repeat the flag: -d vk.com -d ya.ru)",

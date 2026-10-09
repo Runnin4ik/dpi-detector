@@ -808,6 +808,7 @@ mod tests {
             v4: Some("192.0.2.9".parse().expect("documentation address")),
             v6: None,
             label: "example0 (192.0.2.9)".to_string(),
+            device: false,
         }));
         apply_interface(&sel);
         assert!(bind::target().is_none(), "an empty row clears the bind");

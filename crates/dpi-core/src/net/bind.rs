@@ -4,19 +4,30 @@
 //! this module existed: `target()` returns `None` and each dial takes the path it
 //! always took, so nothing here can change a run that did not ask for it.
 //!
-//! A chosen interface binds every socket to one of its addresses before the
-//! connect, and that address is the whole mechanism: the source of a packet is
-//! what the OS routes by — the routing table on a plain box, the policy rules on a
-//! router that splits traffic by source — so binding it is what makes the probes
-//! leave through that interface. It needs no privilege and behaves the same on
-//! Windows and on the Entware/MIPS builds.
+//! A chosen interface reaches a socket the way `curl --interface` reaches one, in
+//! the same order: the device first, the interface's address only when the kernel
+//! refuses the device.
 //!
-//! `SO_BINDTODEVICE` was tried as well and removed: it restricts the route lookup
-//! to that device, which *overrides* the policy rules a Keenetic uses to send a
-//! tunnel's traffic — a tunnel with no route of its own in the main table then
-//! fails with `Network is unreachable` (measured on the router, 2026-09-18) where
-//! the address bind alone lets the policy pick the tunnel. It also wants
-//! `CAP_NET_RAW`, which the address bind does not.
+//! A *name* is a device bind (`SO_BINDTODEVICE`, Linux only): the route lookup is
+//! restricted to that device, so the probes leave through it whatever the routing
+//! table or a router's policy rules say, and a device with no route to the
+//! destination fails with `Network is unreachable` instead of quietly taking the
+//! default one. That is the point of naming a device: measured on the router
+//! 2026-10-05, `curl --interface ppp0` leaves through ppp0 while the same host with
+//! t2s0 as its default interface sends everything else there. The kernel refuses
+//! the bind without `CAP_NET_RAW` — Linux 4.9 and older always, newer kernels only
+//! for a socket that is already bound to a device — so an unprivileged run falls
+//! back to the address bind and keeps the behaviour it had before.
+//!
+//! An *address* is the address bind and nothing else: the source of a packet is
+//! what the OS routes by — the routing table on a plain box, the policy rules on a
+//! router that splits traffic by source — so a Keenetic still sends a tunnel's
+//! traffic into the tunnel when the interface is named by one of its addresses.
+//! That is how a tunnel with no route of its own in the main table is tested;
+//! naming that tunnel instead forces the device and fails with `Network is
+//! unreachable` (measured on the router 2026-09-18, when the device bind was tried
+//! and dropped as the only mechanism; restored on request 2026-10-05, with the
+//! address form kept as the way to ask for the old behaviour).
 //!
 //! The choice is process-wide and set once at startup, the way the VT/ASCII mode
 //! is: a run probes one network, and the probes that dial through
@@ -34,6 +45,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::RwLock;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
@@ -69,8 +81,8 @@ impl Interface {
     }
 }
 
-/// What a chosen interface means for a socket: the addresses to bind and the
-/// device to name on Linux.
+/// What a chosen interface means for a socket: the device to name on Linux and
+/// the addresses to bind when the kernel refuses it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindTarget {
     pub name: String,
@@ -78,6 +90,12 @@ pub struct BindTarget {
     pub v6: Option<Ipv6Addr>,
     /// Kept as the interface's label for the messages that report the choice.
     pub label: String,
+    /// True when the kernel let a probe socket bind this device: every socket then
+    /// leaves through `name` whatever the routing table says, and the source
+    /// address is the device's. False means the interface's address is the bind
+    /// and the routing table picks the device — what an address selection asks
+    /// for, and what an unprivileged process gets for a name.
+    pub device: bool,
 }
 
 impl BindTarget {
@@ -110,10 +128,17 @@ pub fn target() -> Option<BindTarget> {
 /// Chooses the interface for this process. Called once at startup, before the
 /// first probe; `None` puts the run back on the routing table.
 pub fn set_target(next: Option<BindTarget>) {
+    FALLBACK_WARNED.store(false, Ordering::Relaxed);
     *TARGET.write() = next;
 }
 
 static TARGET: LazyLock<RwLock<Option<BindTarget>>> = LazyLock::new(|| RwLock::new(None));
+
+/// A refused device bind is a fact about the run rather than about one socket, so
+/// the fallback is reported once: `WARN` is the level a run shows without `-v`,
+/// and the same line per dial would bury every other log. Cleared with the choice
+/// so a second menu run reports its own fallback.
+static FALLBACK_WARNED: AtomicBool = AtomicBool::new(false);
 
 /// Every interface the OS reports, the ones that are up first: a machine with
 /// Hyper-V or WSL installed reports a dozen adapters nobody asked for, and the
@@ -314,6 +339,10 @@ mod platform {
 /// Resolves what the user typed — an interface name, or one of its addresses —
 /// into the bind every socket will use. `None` when nothing matches, which is
 /// what makes a typo visible instead of silently testing the default route.
+///
+/// A name asks for the device bind, the way `curl --interface <name>` does, and
+/// falls back to the address bind when the kernel refuses the device; an address
+/// asks for the address bind alone.
 pub fn resolve(sel: &str) -> Option<BindTarget> {
     let want = sel.trim();
     if want.is_empty() {
@@ -342,11 +371,21 @@ pub fn resolve(sel: &str) -> Option<BindTarget> {
             })
         })
     };
-    target_of(named.or_else(by_addr)?)
+    match named {
+        // A name is a device bind. An interface without an address is still
+        // selectable then — a tunnel between two of its own addresses has none —
+        // and the address stays as the fallback the kernel's refusal leaves.
+        Some(iface) => {
+            let device = device_bindable(&iface.name);
+            tracing::warn!("PROBE {} -> device={device}", iface.name);
+            target_of(iface, device)
+        }
+        None => by_addr().and_then(|iface| target_of(iface, false)),
+    }
 }
 
-fn target_of(iface: &Interface) -> Option<BindTarget> {
-    if iface.v4.is_empty() && iface.v6.is_empty() {
+fn target_of(iface: &Interface, device: bool) -> Option<BindTarget> {
+    if iface.v4.is_empty() && iface.v6.is_empty() && !device {
         return None;
     }
     Some(BindTarget {
@@ -354,20 +393,101 @@ fn target_of(iface: &Interface) -> Option<BindTarget> {
         v4: iface.v4.first().copied(),
         v6: iface.v6.first().copied(),
         label: iface.label(),
+        device,
     })
+}
+
+/// Whether the kernel lets this process bind a socket to a device: one throwaway
+/// socket and the `setsockopt` every dial would make. The answer cannot change
+/// while the process runs, so it is asked once per choice.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn device_bindable(name: &str) -> bool {
+    // SAFETY: `socket` returns a fresh descriptor or -1; `setsockopt_device` reads
+    // the name for the length it is given; the descriptor is closed either way.
+    unsafe {
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+        if fd < 0 {
+            return false;
+        }
+        let bindable = setsockopt_device(fd, name).is_ok();
+        libc::close(fd);
+        bindable
+    }
+}
+
+/// Every other target has no `SO_BINDTODEVICE`, so the address is the mechanism
+/// there — which is what `curl --interface` does off Linux as well.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn device_bindable(_name: &str) -> bool {
+    false
+}
+
+/// Binds a socket to a device — the one syscall `SO_BINDTODEVICE` is.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn setsockopt_device(fd: std::os::fd::RawFd, name: &str) -> std::io::Result<()> {
+    // SAFETY: `fd` is a socket this process owns and `name` is a string of
+    // `name.len() + 1` bytes whose last byte is a NUL the call only reads.
+    let ret = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_BINDTODEVICE,
+            name.as_ptr().cast(),
+            name.len() as libc::socklen_t + 1,
+        )
+    };
+    if ret == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+}
+
+/// Puts a fresh socket on the chosen device when that is the mechanism, and says
+/// whether it did: `false` means the caller binds the interface's address instead,
+/// which is the order curl uses and the fallback an unprivileged run gets.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn bind_device<F: std::os::fd::AsRawFd>(socket: &F) -> bool {
+    // Read through the guard: the name is only borrowed, and no await may happen
+    // while the lock is held.
+    let target = TARGET.read();
+    let Some(name) = target.as_ref().filter(|t| t.device).map(|t| t.name.as_str()) else {
+        return false;
+    };
+    match setsockopt_device(socket.as_raw_fd(), name) {
+        Ok(()) => {
+            tracing::warn!("socket bound to device {name}");
+            true
+        }
+        Err(error) => {
+            if !FALLBACK_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!("SO_BINDTODEVICE {name} refused ({error}): the interface's address is bound instead and the routing table picks the device");
+            }
+            false
+        }
+    }
+}
+
+/// Only Linux has `SO_BINDTODEVICE`, and `resolve` leaves `device` false off it,
+/// so this never binds anything there: the address is the mechanism.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn bind_device<F>(_socket: &F) -> bool {
+    false
 }
 
 /// Connects to `addr` through the chosen interface, or the way the OS would have
 /// connected without one.
 pub async fn tcp_connect(addr: &SocketAddr) -> std::io::Result<TcpStream> {
-    let Some(local) = local_for(addr) else {
+    if TARGET.read().is_none() {
         return TcpStream::connect(addr).await;
-    };
+    }
     let socket = match addr {
         SocketAddr::V4(_) => TcpSocket::new_v4()?,
         SocketAddr::V6(_) => TcpSocket::new_v6()?,
     };
-    socket.bind(local)?;
+    if !bind_device(&socket) {
+        // The address bind: the source decides the route, which is what a tunnel
+        // chosen by its address needs and what an unprivileged name gets.
+        if let Some(local) = local_for(addr) {
+            socket.bind(local)?;
+        }
+    }
     socket.connect(*addr).await
 }
 
@@ -402,6 +522,9 @@ pub async fn udp_socket(peer: &SocketAddr) -> std::io::Result<UdpSocket> {
         SocketAddr::V6(_) => SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)),
     });
     let socket = UdpSocket::bind(bind_addr).await?;
+    // The device takes the socket when the kernel allows the bind; the address
+    // bound above is the interface's own, so both mechanisms agree when it does.
+    let _ = bind_device(&socket);
     Ok(socket)
 }
 
@@ -420,24 +543,48 @@ mod tests {
     }
 
     /// Whatever the OS lists with an address can be chosen by its name or by that
-    /// address, and the two agree: the menu row and `--iface` are one choice
-    /// spelled two ways.
+    /// address, and the two agree on the interface: the menu row and `--iface` are
+    /// one choice spelled two ways. The mechanism differs — a name asks for the
+    /// device, an address never does, which is the way back to the source bind.
     #[test]
     fn a_listed_interface_resolves_by_name_and_by_address() {
         for iface in interfaces() {
             let Some(target) = resolve(&iface.name) else {
-                continue; // an interface with no address is not selectable
+                // An interface with no address resolves only where the device
+                // bind works, so whether it resolves here is that answer, not
+                // this test's business.
+                continue;
             };
             assert_eq!(target.name, iface.name);
             let addr = iface
                 .addrs()
                 .first()
                 .copied()
-                .expect("resolving means it had an address");
+                .expect("resolving by a name without the device bind means it had an address");
             let by_addr = resolve(&addr.to_string())
                 .unwrap_or_else(|| panic!("{addr} belongs to {} and must resolve", iface.name));
             assert_eq!(by_addr.name, iface.name, "{addr}");
+            assert!(!by_addr.device, "{addr} is an address: the source bind, never the device");
         }
+    }
+
+    /// An interface the OS lists without an address — a tunnel between two of its
+    /// own addresses — is selectable by name only when the device bind works, and
+    /// then binds nothing: the kernel takes the source from the device.
+    #[test]
+    fn a_name_without_an_address_needs_the_device_bind() {
+        let iface = Interface {
+            name: "example0".to_string(),
+            v4: Vec::new(),
+            v6: Vec::new(),
+            up: true,
+        };
+        assert!(target_of(&iface, false).is_none(), "nothing to bind and no device to name");
+        let target = target_of(&iface, true).expect("the device bind needs no address");
+        assert!(target.device);
+        assert_eq!(target.label, "example0");
+        let v4: SocketAddr = "192.0.2.1:443".parse().expect("documentation address");
+        assert!(target.local(&v4).is_none(), "an address this interface does not have");
     }
 
     /// Without a target no local address is produced, so every socket keeps the
@@ -457,12 +604,16 @@ mod tests {
             v4: Some("192.0.2.7".parse().expect("documentation address")),
             v6: None,
             label: "example0 (192.0.2.7)".to_string(),
+            device: false,
         };
         set_target(Some(chosen));
         assert_eq!(local_for(&v4), Some("192.0.2.7:0".parse().expect("documentation address")));
         assert!(local_for(&v6).is_none(), "this interface has no v6 address to bind");
+        let socket = TcpSocket::new_v4().expect("a socket to ask about the device bind");
+        assert!(!bind_device(&socket), "a target that asked for the address never names a device");
 
         set_target(None);
-        assert!(local_for(&v4).is_none(), "clearing the target puts the sockets back");
+        assert!(local_for(&v6).is_none(), "clearing the target puts the sockets back");
+        assert!(!bind_device(&socket), "no choice means no device to name");
     }
 }

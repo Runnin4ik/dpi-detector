@@ -286,10 +286,15 @@ pub async fn nfqws2(family: Family, target: Option<SocketAddr>) -> Option<Interc
         let pid = pidfile_pid()?;
         // Where our traffic actually goes for this target, then the tunnel
         // question answers itself: a per-destination route into a VPN leaves the
-        // interface the rules were hooked to.
-        let our_interface = match target {
-            Some(target) => route_interface_for(target.ip()),
-            None => route_interface_for(if v6 { IpAddr::V6(Ipv6Addr::UNSPECIFIED) } else { IpAddr::V4(Ipv4Addr::UNSPECIFIED) }),
+        // interface the rules were hooked to. A chosen interface outranks the
+        // route table: the device bind is what the probes leave through, and it
+        // decides the egress whatever the table says.
+        let our_interface = match crate::net::bind::target() {
+            Some(chosen) => Some(chosen.name),
+            None => match target {
+                Some(target) => route_interface_for(target.ip()),
+                None => route_interface_for(if v6 { IpAddr::V6(Ipv6Addr::UNSPECIFIED) } else { IpAddr::V4(Ipv4Addr::UNSPECIFIED) }),
+            },
         };
         Some((pid, our_interface))
     })

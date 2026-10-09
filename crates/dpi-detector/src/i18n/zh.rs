@@ -248,7 +248,7 @@ pub(crate) fn messages() -> Messages {
         cli_profile: "地区审查配置文件（ru、ir、cn、global）",
         cli_legend: "显示状态图例并退出",
         cli_proxy: "SOCKS5 代理 URL（例如 socks5://127.0.0.1:1080）",
-        cli_iface: "探测使用的接口: 设备名或其地址; 默认由路由表决定 (--iface wg0, --iface 172.16.0.2)",
+        cli_iface: "探测使用的接口: 设备名会把套接字绑定到该设备（与 curl --interface 相同），其地址只绑定源地址、出口设备由路由表决定; 默认由路由表决定 (--iface wg0, --iface 172.16.0.2)",
         iface_unknown: "未找到接口 '{}': --iface 接受设备名或其地址, 菜单会列出可选接口",
         cli_concurrency: "并行请求的并发上限",
         cli_domain: "要测试的指定域名（可重复指定: -d vk.com -d ya.ru）",
