@@ -25,7 +25,19 @@ fn t4(lang: Language, ru: &str, en: &str, zh: &str, fa: &str) -> String {
 }
 
 /// Display text of one detail, in `lang`.
+///
+/// The result is sanitized: several `Detail` variants carry a value a peer
+/// chose — `Redirect`'s host comes from a `Location` header, `Other` from a
+/// library or a server — and a terminal acts on the escapes in it (see
+/// [`super::sanitize_peer_text`]). No wording here needs a control byte, so the
+/// whole string is passed through rather than each variant separately: a new
+/// variant that carries a peer value cannot reopen the hole.
 pub(crate) fn detail_text(detail: &Detail, lang: Language) -> String {
+    super::sanitize_peer_text(&detail_wording(detail, lang))
+}
+
+/// The wording of one detail, before the peer-controlled bytes are dropped.
+fn detail_wording(detail: &Detail, lang: Language) -> String {
     let msg = get_messages(lang);
     match detail {
         Detail::None => String::new(),
@@ -193,6 +205,35 @@ mod tests {
             assert!(text.contains("TLS"), "{text}");
             assert!(!text.is_empty());
         }
+    }
+
+    /// The two `Detail` variants that carry a value a peer chose must not put
+    /// its escapes on the screen. The failure this pins: a `302` whose
+    /// `Location` host held `OSC 0` used to set the window title of the machine
+    /// running the probe, and `Detail::Other` did the same for any library or
+    /// server text that reached it.
+    #[test]
+    fn a_peer_value_loses_its_escapes_on_the_way_to_the_table() {
+        let poisoned = [
+            Detail::Redirect { host: "evil\x1b]0;PWNED\x07.example".into() },
+            Detail::Redirect { host: "x\x1b[?1049h.example".into() },
+            Detail::Other("peer\x1b]8;;http://evil\x07link".into()),
+            Detail::Other("bell\x07and\x08back".into()),
+        ];
+        for detail in poisoned {
+            for lang in [En, Ru, Zh, Fa] {
+                let text = detail_text(&detail, lang);
+                assert!(
+                    !text.contains('\x1b') && !text.contains('\x07') && !text.contains('\x08'),
+                    "{lang:?}: {text:?}"
+                );
+            }
+        }
+        // The host itself still reads, so the report names where it went.
+        assert_eq!(
+            detail_text(&Detail::Redirect { host: "evil\x1b]0;X\x07.example".into() }, En),
+            "→ evil.example"
+        );
     }
 
     /// A named alert shows the description the peer sent, in every language,

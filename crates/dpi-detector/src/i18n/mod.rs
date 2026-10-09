@@ -6,10 +6,12 @@ mod en;
 mod fa;
 mod messages;
 mod ru;
+mod sanitize;
 mod zh;
 
 pub(crate) use details::detail_text;
 pub(crate) use messages::Messages;
+pub(crate) use sanitize::sanitize_peer_text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

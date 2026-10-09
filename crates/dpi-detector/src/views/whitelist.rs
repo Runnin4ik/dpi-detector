@@ -1,6 +1,6 @@
 //! Test 4: SNI discovery per autonomous system.
 
-use crate::i18n::Messages;
+use crate::i18n::{Messages, sanitize_peer_text};
 use dpi_core::probe::whitelist::{AsVerdict, NO_SNI_TAG, WhitelistReport};
 
 use crate::tui::widgets::{asc, warn_mark};
@@ -16,6 +16,11 @@ pub(crate) fn render_whitelist(report: &WhitelistReport, targets_total: usize, m
         return out;
     }
     for row in &report.rows {
+        // The provider and ASN labels are a resolver's answer, and the ban
+        // detail is the block page's own words: none of them is ours, so none
+        // reaches the terminal unexamined (see `i18n::sanitize_peer_text`).
+        let provider = sanitize_peer_text(&row.provider);
+        let asn = sanitize_peer_text(&row.asn_str);
         match &row.verdict {
             AsVerdict::Found { snis, ban_after } => {
                 let parts: Vec<String> = snis
@@ -40,18 +45,18 @@ pub(crate) fn render_whitelist(report: &WhitelistReport, targets_total: usize, m
                 };
                 out.push_str(&asc(&format!(
                     "  \x1b[36m{}\x1b[0m \x1b[2m{}\x1b[0m  \x1b[32m✓\x1b[0m {}{}\n",
-                    row.provider,
-                    row.asn_str,
+                    provider,
+                    asn,
                     parts.join("  "),
                     suffix
                 )));
             }
             AsVerdict::Banned { detail } => {
-                let clean = strip_brackets(detail);
+                let clean = sanitize_peer_text(&strip_brackets(detail));
                 out.push_str(&asc(&format!(
                     "  \x1b[36m{}\x1b[0m \x1b[2m{}\x1b[0m  \x1b[33m{} {}\x1b[0m \x1b[2m({})\x1b[0m\n",
-                    row.provider,
-                    row.asn_str,
+                    provider,
+                    asn,
                     warn_mark(),
                     msg.ban_rate_limit,
                     clean
@@ -60,7 +65,7 @@ pub(crate) fn render_whitelist(report: &WhitelistReport, targets_total: usize, m
             AsVerdict::NotFound => {
                 out.push_str(&asc(&format!(
                     "  \x1b[36m{}\x1b[0m \x1b[2m{}\x1b[0m  \x1b[31m{}\x1b[0m\n",
-                    row.provider, row.asn_str, msg.sni_not_found
+                    provider, asn, msg.sni_not_found
                 )));
             }
         }
