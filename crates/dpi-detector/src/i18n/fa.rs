@@ -243,7 +243,7 @@ pub(crate) fn messages() -> Messages {
         cli_json: "Khorooj-e JSON (machine-readable)",
         cli_verbose: "Faal kardan-e log-e verbose/debug",
         cli_lang: "Zaban-e barname (ru, en, zh, fa, auto). Pishfarz: auto",
-        cli_profile: "Profile-e mantaghe-i-e sansur (ru, ir, cn, global)",
+        cli_profile: "Profile-e mantaghe-i-e sansur (ru, ir, cn, global) [pishfarz: ru]",
         cli_legend: "Namayesh-e rahnemaye vaziyat ha va khorooj",
         cli_proxy: "URL-e proxy-e SOCKS5 (mesal: socks5://127.0.0.1:1080)",
         cli_iface: "Interface-e barresi ha: nam-e device socket ha ra be aan mibandad, mesl-e curl --interface; yeki az address-haye aan faghat manba ra mibandad va entekhab-e device ra be jadval-e route miseporad; pishfarz ra jadval-e route entekhab mikonad (--iface wg0, --iface 172.16.0.2)",

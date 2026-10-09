@@ -249,7 +249,7 @@ pub(crate) fn messages() -> Messages {
         cli_json: "Emit machine-readable JSON output",
         cli_verbose: "Enable verbose / debug logging",
         cli_lang: "Interface language (ru, en, zh, fa, auto). Default auto",
-        cli_profile: "Regional censorship profile (ru, ir, cn, global)",
+        cli_profile: "Regional censorship profile (ru, ir, cn, global) [default: ru]",
         cli_legend: "Display diagnostic status legend and exit",
         cli_proxy: "SOCKS5 proxy URL (e.g. socks5://127.0.0.1:1080)",
         cli_iface: "Interface the probes leave through: a device name binds the sockets to it, as curl --interface does; one of its addresses binds the source and leaves the device to the routing table. By default the routing table picks (--iface wg0, --iface 172.16.0.2)",

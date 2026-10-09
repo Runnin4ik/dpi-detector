@@ -245,7 +245,7 @@ pub(crate) fn messages() -> Messages {
         cli_json: "输出机器可读的 JSON",
         cli_verbose: "启用详细/调试日志",
         cli_lang: "界面语言（ru、en、zh、fa、auto）。默认 auto",
-        cli_profile: "地区审查配置文件（ru、ir、cn、global）",
+        cli_profile: "地区审查配置文件（ru、ir、cn、global）[默认: ru]",
         cli_legend: "显示状态图例并退出",
         cli_proxy: "SOCKS5 代理 URL（例如 socks5://127.0.0.1:1080）",
         cli_iface: "探测使用的接口: 设备名会把套接字绑定到该设备（与 curl --interface 相同），其地址只绑定源地址、出口设备由路由表决定; 默认由路由表决定 (--iface wg0, --iface 172.16.0.2)",

@@ -85,6 +85,7 @@ pub(crate) fn command(msg: &Messages) -> Command {
                 .long("lang")
                 .value_name("LANG")
                 .default_value("auto")
+                .hide_default_value(true)
                 .help_heading(msg.cli_options_heading)
                 .help(msg.cli_lang),
         )
@@ -93,6 +94,7 @@ pub(crate) fn command(msg: &Messages) -> Command {
                 .long("profile")
                 .value_name("PROFILE")
                 .default_value("ru")
+                .hide_default_value(true)
                 .help_heading(msg.cli_options_heading)
                 .help(msg.cli_profile),
         )
@@ -275,5 +277,59 @@ pub(crate) fn parse_cli(lang: Language) -> CliArgs {
         burst_alpn: m.get_one::<String>("burst-alpn").cloned(),
         burst_variant: m.get_one::<String>("burst-variant").cloned(),
         trace: m.get_one::<String>("trace").cloned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::{Language, get_messages};
+
+    /// The README's pasted `--help` block must be what `--help` prints.
+    ///
+    /// It is the user manual's authoritative CLI reference, and it had drifted
+    /// in six places: `--legend` still promised the profile table, `--proxy`
+    /// lacked its `например`, `--burst-timeout` was missing its `; запрос
+    /// после него ждёт общий TIMEOUT`, `--trace` kept an older wording, and
+    /// `-i` sat in the wrong place with a different sentence. Every one of them
+    /// was a reader being told something the tool no longer does.
+    ///
+    /// The block drops the `about` line the README's own prose covers, so the
+    /// comparison starts at `Использование:`.
+    #[test]
+    fn the_readme_help_block_is_what_help_prints() {
+        let msg = get_messages(Language::Ru);
+        let live: Vec<String> = command(&msg)
+            .render_help()
+            .to_string()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let usage = live
+            .iter()
+            .position(|l| l.starts_with("Использование:"))
+            .expect("the help names its usage");
+        let live = &live[usage..];
+
+        let readme = include_str!("../../../README.md");
+        let block: Vec<String> = readme
+            .lines()
+            .skip_while(|l| l.trim() != "```text")
+            .skip(1)
+            .take_while(|l| l.trim() != "```")
+            .map(str::to_string)
+            .collect();
+
+        assert!(!block.is_empty(), "the README still carries a ```text help block");
+        assert_eq!(
+            block.len(),
+            live.len(),
+            "README block has {} lines, --help prints {}:\n{live:#?}",
+            block.len(),
+            live.len()
+        );
+        for (i, (want, got)) in block.iter().zip(live).enumerate() {
+            assert_eq!(want, got, "README help line {i}");
+        }
     }
 }
