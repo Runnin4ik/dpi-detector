@@ -2,9 +2,9 @@
 
 use crate::i18n::{Messages, fmt_size, fmt_speed};
 use dpi_core::probe::domains::DomainStats;
-use dpi_core::probe::telegram::{TelegramFullReport, TransferStatus};
+use dpi_core::probe::telegram::TelegramFullReport;
 
-use crate::tui::widgets::{BOX_WIDTH, asc, panel_to_string, strip_ansi_len, wrap_ansi};
+use crate::tui::widgets::{BOX_WIDTH, asc, cell_color, panel_to_string, strip_ansi_len, transfer_badge, wrap_ansi};
 
 fn frac_sgr(ok: usize, total: usize) -> &'static str {
     if total == 0 || ok == total {
@@ -111,20 +111,13 @@ pub(crate) fn render_summary(data: &SummaryData, msg: &Messages) -> String {
         && let Some(t) = data.telegram
     {
         let tg_row = |label: &str, st: &dpi_core::probe::telegram::TransferStats, speed: f64, size: u64| {
-            // Every state is named: the wildcard this replaced rendered any
-            // state it did not know as `ERROR` in red.
-            let (raw, sgr) = match st.status {
-                TransferStatus::Ok => ("OK", "32"),
-                TransferStatus::Stalled => ("STALL", "33"),
-                TransferStatus::Slow => ("SLOW", "33"),
-                TransferStatus::Blocked => ("BLOCKED", "31"),
-                TransferStatus::Error => ("ERROR", "31"),
-            };
+            // The badge and its colour come from the one table both screens read.
+            let (raw, color) = transfer_badge(st.status);
             let mut metrics = format!("{} {}, {}", msg.avg_label, fmt_speed(speed, msg.lang), fmt_size(size, msg.lang));
             if let Some(sec) = st.drop_at_sec {
                 metrics += &msg.stall_after.replace("{}", &sec.to_string());
             }
-            (label.to_string(), format!("\x1b[{}m{:<16}\x1b[0m {}", sgr, raw, metrics))
+            (label.to_string(), format!("{} {}", cell_color(&format!("{raw:<16}"), color), metrics))
         };
         let (l1, v1) = tg_row(msg.summary_tg_download, &t.download, t.download.avg_bps, t.download.bytes_total);
         let (l2, v2) = tg_row(msg.summary_tg_upload, &t.upload, t.upload.avg_bps, t.upload.bytes_total);

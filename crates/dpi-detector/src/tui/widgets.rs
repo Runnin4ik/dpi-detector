@@ -4,6 +4,7 @@
 use comfy_table::Color;
 use dpi_core::classify::*;
 use dpi_core::net::netinfo::flag_emoji;
+use dpi_core::probe::telegram::TransferStatus;
 
 use crate::tui::backend::{ascii_mode, plain_mode};
 
@@ -137,6 +138,28 @@ pub(crate) fn warn_mark() -> &'static str {
     }
 }
 pub(crate) const BOX_WIDTH: usize = 71;
+
+/// The badge and colour of one transfer leg's outcome.
+///
+/// Two screens report a leg — the Telegram report and the run summary — and
+/// each carried its own copy of this table: five arms, the same five labels,
+/// the same three colours, kept in step by hand. A sixth `TransferStatus` would
+/// have had to be added to both, and a label that drifted in one of them would
+/// still have compiled.
+///
+/// The labels are protocol tokens (Rule 4): `--json` carries them through
+/// `TransferStatus` and they never change with the language, so they are not
+/// i18n strings. Every variant is named rather than caught by a `_` arm, for the
+/// reason [`status_color`] gives — a new one must fail to build here.
+pub(crate) fn transfer_badge(status: TransferStatus) -> (&'static str, Color) {
+    match status {
+        TransferStatus::Ok => ("OK", Color::Green),
+        TransferStatus::Stalled => ("STALL", Color::Yellow),
+        TransferStatus::Slow => ("SLOW", Color::Yellow),
+        TransferStatus::Blocked => ("BLOCKED", Color::Red),
+        TransferStatus::Error => ("ERROR", Color::Red),
+    }
+}
 
 /// Maps a probe status to its table cell color: green for OK, yellow for the
 /// "no TLS 1.3 / no CA / local IP / DNS fail / NXDOMAIN" outcomes, dark grey

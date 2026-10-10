@@ -2,9 +2,9 @@
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use crate::i18n::{Messages, detail_text, fmt_size, fmt_speed, format_bidi};
-use dpi_core::probe::telegram::{TelegramFullReport, TransferStatus};
+use dpi_core::probe::telegram::TelegramFullReport;
 
-use crate::tui::widgets::{cell_color, table_preset};
+use crate::tui::widgets::{cell_color, table_preset, transfer_badge};
 
 pub(crate) fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> String {
     
@@ -48,15 +48,11 @@ pub(crate) fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> St
 
     // Download / upload verdict lines: label, status, peak, average, size, duration.
     for (label, t) in [(msg.download_label, &report.download), (msg.upload_label, &report.upload)] {
-        // Every state is named: the wildcard this replaced rendered any state it
-        // did not know as `ERROR` in red.
-        let (st_text, color) = match t.status {
-            TransferStatus::Ok => ("OK", Color::Green),
-            TransferStatus::Stalled => ("STALL", Color::Yellow),
-            TransferStatus::Slow => ("SLOW", Color::Yellow),
-            TransferStatus::Blocked => ("BLOCKED", Color::Red),
-            TransferStatus::Error => ("ERROR", Color::Red),
-        };
+        // The label and its colour come from the one table both screens read;
+        // the status token is a protocol token, so it is Latin in every
+        // language and `cell_color` keeps it legible on a legacy console.
+        let (st_text, color) = transfer_badge(t.status);
+        let st_text = cell_color(st_text, color);
         let mut line = format!(
             "  {}: {}  {} {}  {} {}  ({} / {:.0}s",
             label,
@@ -72,7 +68,6 @@ pub(crate) fn render_telegram(report: &TelegramFullReport, msg: &Messages) -> St
             line += &msg.stall_after.replace("{}", &sec.to_string());
         }
         line += ")";
-        let _ = color;
         out.push_str(&format!("{}\n", line));
     }
     out.push('\n');
