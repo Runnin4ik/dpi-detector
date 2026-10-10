@@ -381,12 +381,9 @@ pub async fn run_upload(cfg: &AppConfig) -> TransferStats {
 
     // High-entropy 16 KB upload chunk from a xorshift64* PRNG, reused for every frame
     let mut chunk = vec![0u8; 16384];
-    let mut state: u64 = 0x123456789ABCDEF;
+    let mut rng = crate::net::prng::Xorshift64Star::new(0x123456789ABCDEF);
     for b in chunk.iter_mut() {
-        state ^= state >> 12;
-        state ^= state << 25;
-        state ^= state >> 27;
-        *b = (state.wrapping_mul(0x2545F4914F6CDD1D) >> 33) as u8;
+        *b = (rng.next_u64() >> 33) as u8;
     }
 
     let t0 = Instant::now();

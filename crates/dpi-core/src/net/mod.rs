@@ -15,4 +15,5 @@ pub mod sysinfo;
 pub mod tcp;
 pub mod quic;
 pub mod bind;
+pub mod prng;
 pub(crate) mod icmp_err;

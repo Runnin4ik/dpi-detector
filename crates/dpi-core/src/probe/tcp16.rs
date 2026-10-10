@@ -34,17 +34,10 @@ use crate::net::tls::{create_tls_config, TlsProfile};
 /// traffic it measures.
 fn random_pool(size: usize) -> Vec<u8> {
     // xorshift64* — deterministic PRNG, no extra deps, ASCII alphanumerics
-    let mut state: u64 = rand::random();
-    if state == 0 {
-        // xorshift never leaves zero once there.
-        state = 0x9E3779B97F4A7C15;
-    }
+    let mut rng = crate::net::prng::Xorshift64Star::new(rand::random());
     let mut out = Vec::with_capacity(size);
     while out.len() < size {
-        state ^= state >> 12;
-        state ^= state << 25;
-        state ^= state >> 27;
-        let v = state.wrapping_mul(0x2545F4914F6CDD1D);
+        let v = rng.next_u64();
         for b in v.to_le_bytes() {
             out.push(b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"[(b % 62) as usize]);
             if out.len() >= size {
