@@ -629,25 +629,13 @@ fn draw_menu(
 /// `plain` is passed in rather than read from the global so both branches can
 /// be measured in tests.
 fn hotkey_row(msg: &Messages, lang: Language, plain: bool) -> String {
-    let label = |text: &str| format_bidi(text, lang);
-    let (row, change, tests, start, quit) = (
-        label(msg.menu_hw_row),
-        label(msg.menu_hw_change),
-        label(msg.menu_hw_tests),
-        label(msg.menu_hw_start),
-        label(msg.menu_hw_quit),
-    );
-    if plain {
-        // Brackets delimit the key where the colored branch uses a chip; no bar
-        // separators, so every glyph in the footer is ASCII outside ascii mode.
-        format!("[↑↓/WS] {row} [←→/AD] {change} [0-7] {tests} [Enter] {start} [Q] {quit}")
-    } else {
-        // The chips carry a padding space of their own, so a single plain space
-        // keeps the same visual gap while staying inside 80 columns.
-        format!(
-            "\x1b[1;46;37m ↑↓/WS \x1b[0m {row} \x1b[1;46;37m ←→/AD \x1b[0m {change} \x1b[1;46;37m 0-7 \x1b[0m {tests} \x1b[1;42;37m Enter \x1b[0m {start} \x1b[1;41;37m Q \x1b[0m {quit}"
-        )
-    }
+    super::keycap_row(lang, plain, &[
+        ("↑↓/WS", msg.menu_hw_row, "46"),
+        ("←→/AD", msg.menu_hw_change, "46"),
+        ("0-7", msg.menu_hw_tests, "46"),
+        ("Enter", msg.menu_hw_start, "42"),
+        ("Q", msg.menu_hw_quit, "41"),
+    ])
 }
 
 pub(crate) fn pad_width(s: &str, target_width: usize) -> String {

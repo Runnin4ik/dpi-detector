@@ -521,20 +521,12 @@ fn profiles_for_index(index: usize) -> Vec<TlsFingerprint> {
 /// Footer of the settings screen: the same keycap style as the main menu. The
 /// key legend lives here only — the screen itself carries no second copy of it.
 fn burst_hotkey_row(msg: &Messages, lang: Language, plain: bool) -> String {
-    let label = |text: &str| format_bidi(text, lang);
-    let (row, change, start, quit) = (
-        label(msg.menu_hw_row),
-        label(msg.menu_hw_change),
-        label(msg.menu_hw_start),
-        label(msg.menu_hw_quit),
-    );
-    if plain {
-        format!("[↑↓/WS] {row} [←→/AD] {change} [Enter] {start} [Q] {quit}")
-    } else {
-        format!(
-            "\x1b[1;46;37m ↑↓/WS \x1b[0m {row} \x1b[1;46;37m ←→/AD \x1b[0m {change} \x1b[1;42;37m Enter \x1b[0m {start} \x1b[1;41;37m Q \x1b[0m {quit}"
-        )
-    }
+    super::keycap_row(lang, plain, &[
+        ("↑↓/WS", msg.menu_hw_row, "46"),
+        ("←→/AD", msg.menu_hw_change, "46"),
+        ("Enter", msg.menu_hw_start, "42"),
+        ("Q", msg.menu_hw_quit, "41"),
+    ])
 }
 
 #[cfg(test)]
