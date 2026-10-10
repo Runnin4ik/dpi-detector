@@ -150,56 +150,59 @@ pub(crate) fn load_tcp16_targets(args: &CliArgs, cfg: &AppConfig) -> io::Result<
     Ok(embedded_tcp16_targets())
 }
 
-/// The white-SNI list: the configured file, else the embedded one. There is no
-/// flag for it, and test 4 reports itself unavailable when this is empty.
+/// A list read from the configured file, the embedded one when the file is
+/// absent, empty or unreadable.
+///
+/// Two lists are read this way — the white-SNI list and the hosts that serve no
+/// HTTP/3 — and each carried its own copy of the same twenty lines: the same
+/// `NotFound` silence, the same stderr notice for any other error, the same
+/// fallback. A change to one of them (the notice's shape, what counts as
+/// absent) had to find the other.
 ///
 /// A file that is there but cannot be read is reported and then treated as
 /// absent: the embedded list is the documented fallback, and the notice is what
 /// lets an operator tell an unreadable file from a missing one — which is why a
 /// missing file (the normal case on a router) stays silent. The notice goes to
 /// stderr, so `--json` stdout stays byte-clean.
-pub(crate) fn load_whitelist_sni_list(cfg: &AppConfig, msg: &Messages) -> Vec<(String, usize)> {
-    let path = resource_path(&cfg.whitelist_sni_file);
-    let from_file = match load_whitelist_sni(&path) {
+fn load_or_embedded<T>(
+    path: std::path::PathBuf,
+    load: impl FnOnce(&std::path::Path) -> io::Result<Vec<T>>,
+    embedded: impl FnOnce() -> Vec<T>,
+    unreadable: &str,
+) -> Vec<T> {
+    let from_file = match load(&path) {
         Ok(list) => list,
         Err(err) => {
             if err.kind() != io::ErrorKind::NotFound {
                 eprintln!(
                     "{}",
-                    msg.whitelist_load_failed
-                        .replacen("{}", &format!("{}: {err}", path.display()), 1)
+                    unreadable.replacen("{}", &format!("{}: {err}", path.display()), 1)
                 );
             }
             Vec::new()
         }
     };
-    if from_file.is_empty() {
-        embedded_whitelist_sni()
-    } else {
-        from_file
-    }
+    if from_file.is_empty() { embedded() } else { from_file }
+}
+
+/// The white-SNI list: the configured file, else the embedded one. There is no
+/// flag for it, and test 4 reports itself unavailable when this is empty.
+pub(crate) fn load_whitelist_sni_list(cfg: &AppConfig, msg: &Messages) -> Vec<(String, usize)> {
+    load_or_embedded(
+        resource_path(&cfg.whitelist_sni_file),
+        |p: &std::path::Path| load_whitelist_sni(p),
+        embedded_whitelist_sni,
+        msg.whitelist_load_failed,
+    )
 }
 
 pub(crate) fn load_quic_unsupported_list(cfg: &AppConfig, msg: &Messages) -> Vec<String> {
-    let path = resource_path(&cfg.quic_unsupported_file);
-    let from_file = match load_quic_unsupported(&path) {
-        Ok(list) => list,
-        Err(err) => {
-            if err.kind() != io::ErrorKind::NotFound {
-                eprintln!(
-                    "{}",
-                    msg.quic_unsupported_load_failed
-                        .replacen("{}", &format!("{}: {err}", path.display()), 1)
-                );
-            }
-            Vec::new()
-        }
-    };
-    if from_file.is_empty() {
-        embedded_quic_unsupported()
-    } else {
-        from_file
-    }
+    load_or_embedded(
+        resource_path(&cfg.quic_unsupported_file),
+        |p: &std::path::Path| load_quic_unsupported(p),
+        embedded_quic_unsupported,
+        msg.quic_unsupported_load_failed,
+    )
 }
 
 pub(crate) fn mask_proxy(url: &str) -> String {
