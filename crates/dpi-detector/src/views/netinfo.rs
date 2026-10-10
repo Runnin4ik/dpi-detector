@@ -3,7 +3,7 @@
 use crate::i18n::Messages;
 use dpi_core::net::netinfo::{DnsSource, SystemDnsInfo, is_tun_name};
 use dpi_core::probe::domains::{FakeIpType, fake_ip_type};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::IpAddr;
 
 use crate::tui::widgets::{BOX_WIDTH, geo_country_ascii, panel_with, strip_ansi_len};
@@ -292,17 +292,9 @@ pub(crate) fn render_netinfo_panel(
             lines.push(format!("{} {} ({})", msg.active_interface, cyan_val(&a_ip), a_name));
         }
         if !dns_info.other_static.is_empty() {
-            let mut order: Vec<&String> = Vec::new();
-            let mut by_name: HashMap<&String, Vec<String>> = HashMap::new();
-            for (ip, n) in &dns_info.other_static {
-                if !by_name.contains_key(n) {
-                    order.push(n);
-                    by_name.insert(n, Vec::new());
-                }
-                if let Some(v) = by_name.get_mut(n) {
-                    v.push(ip.clone());
-                }
-            }
+            let (order, by_name) = super::group_in_order(
+                dns_info.other_static.iter().map(|(ip, n)| (n, ip.clone())),
+            );
             // Rows after the first carry the label's width as blanks, so their
             // wrapped addresses line up under the first row's. The width is
             // measured, not guessed: the label is translated, and a hardcoded
@@ -311,7 +303,7 @@ pub(crate) fn render_netinfo_panel(
             let cont_label = " ".repeat(strip_ansi_len(&first_label));
             for (k, n) in order.iter().enumerate() {
                 let label = if k == 0 { first_label.clone() } else { cont_label.clone() };
-                if let Some(v) = by_name.get(*n) {
+                if let Some(v) = by_name.get(n) {
                     lines.extend(dns_block_lines(&label, &mark(v), &format!(" ({})", n)));
                 }
             }

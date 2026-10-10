@@ -57,9 +57,7 @@ pub(crate) fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> S
                 Cell::new(format_bidi(title, msg.lang)),
             ]);
         // Group by provider name preserving order
-        let mut order: Vec<String> = Vec::new();
-        let mut by_name: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-        for (addr, name, port) in servers {
+        let (order, by_name) = super::group_in_order(servers.iter().map(|(addr, name, port)| {
             // The probe vocabulary owns the table; this view only decides how to
             // print a port that is not the kind's default.
             let default_port = kind.default_port();
@@ -68,11 +66,8 @@ pub(crate) fn render_dns_endpoints(report: &DnsAvailReport, msg: &Messages) -> S
             } else {
                 addr.clone()
             };
-            if !by_name.contains_key(name) {
-                order.push(name.clone());
-            }
-            by_name.entry(name.clone()).or_default().push(disp);
-        }
+            (name.clone(), disp)
+        }));
         for name in order {
             let eps = &by_name[&name];
             let cell = if eps.len() > 1 {
