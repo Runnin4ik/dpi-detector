@@ -159,4 +159,47 @@ mod tests {
         assert_eq!(detail_for(UnexpectedMessage).code(), "alert_unexpected_message");
         assert_eq!(detail_for(NoApplicationProtocol).code(), "alert_no_application_protocol");
     }
+
+    /// Every description the vendored rustls declares can be classified.
+    ///
+    /// The table matches on rustls's `Debug` spelling of `AlertDescription`
+    /// (`vendor/rustls/src/enums.rs`), so a rustls upgrade that renames a
+    /// variant would stop matching and reclassify that alert as `FakeTlsAlert`
+    /// — silently, because every other test here feeds a needle back to itself.
+    /// This one takes each name out of the vendored enum and puts it through
+    /// the message rustls actually prints for it.
+    ///
+    /// It is why `UnrecognisedName` carries two needles: rustls spells the
+    /// variant with an `s`, the IANA registry with a `z`, and a message may
+    /// carry either.
+    #[test]
+    fn every_vendored_alert_description_is_matchable() {
+        let source = include_str!("../../../../vendor/rustls/src/enums.rs");
+        let body = source
+            .split("enum AlertDescription {")
+            .nth(1)
+            .expect("the vendored AlertDescription enum")
+            .split('}')
+            .next()
+            .expect("the enum body");
+
+        let mut checked = 0;
+        for line in body.lines() {
+            let Some((name, _)) = line.trim().split_once("=>") else {
+                continue;
+            };
+            let name = name.trim();
+            if name.is_empty() || name.starts_with("//") {
+                continue;
+            }
+            let msg = format!("received fatal alert: {name}").to_ascii_lowercase();
+            assert!(
+                from_message(&msg).is_some(),
+                "rustls spells an alert {name:?} and the table cannot read it: \
+                 {msg:?} now classifies as a fake alert"
+            );
+            checked += 1;
+        }
+        assert!(checked >= 30, "the enum parsed: {checked} descriptions checked");
+    }
 }

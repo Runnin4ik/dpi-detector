@@ -9,8 +9,11 @@
 //! `peer misbehaved: …`, `PeerMisbehaved` and `peermisbehaved` reach the same
 //! value. The needles are the `Display` texts of `rustls::Error` as the vendored
 //! rustls spells them (`vendor/rustls/src/error.rs`); a rustls upgrade that
-//! rewords one is a change to this table, and the tests below pin the wording so
-//! that upgrade fails loudly instead of silently unclassifying the case.
+//! rewords one is a change to this table, and
+//! `every_needle_is_still_in_the_vendored_rustls` reads that file so the
+//! upgrade fails loudly instead of silently unclassifying the case. Nothing
+//! pinned it before: the test that looked like it did compared each literal
+//! with itself, which a reworded rustls passes.
 //!
 //! A message the table does not know is left to the caller, which keeps its own
 //! words (`Detail::Other`) — the long tail of OS and library text stays as it
@@ -107,5 +110,30 @@ mod tests {
             detail_for(InappropriateHandshakeMessage).code(),
             "tls_inappropriate_handshake_message"
         );
+    }
+
+    /// Every needle is still the `Display` text the vendored rustls writes.
+    ///
+    /// This is the mitigation the module comment promises: the table matches on
+    /// rustls's own wording, so a rustls upgrade that rewords a variant would
+    /// stop matching and silently reclassify the case as `Unknown` — no other
+    /// test can see that, because they all feed the needle back to itself. The
+    /// file is read rather than a list restated here, which is what makes the
+    /// upgrade fail at the right moment.
+    #[test]
+    fn every_needle_is_still_in_the_vendored_rustls() {
+        let source = include_str!("../../../../vendor/rustls/src/error.rs");
+        let flat: String = source
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != '_' && *c != '-')
+            .collect::<String>()
+            .to_ascii_lowercase();
+        for (needle, kind) in TABLE {
+            assert!(
+                flat.contains(needle),
+                "{kind:?}'s needle {needle:?} is gone from vendor/rustls/src/error.rs: \
+                 rustls reworded the variant, and the classifier now reads it as Unknown"
+            );
+        }
     }
 }

@@ -86,6 +86,17 @@ pub fn classify_ssl_error(
         .iter()
         .any(|m| msg.contains(m))
     {
+        // A description the peer named is the peer's own report, and the alert
+        // table reads it whole — it drops separators, so the spaced spelling an
+        // OpenSSL-shaped message uses (`ssl alert record overflow`) names
+        // `RecordOverflow` where the needle above only saw the two words. The
+        // four needles that overlap the table (`record overflow`, `illegal
+        // parameter`, `decode error`, `bad record`) are exactly the four
+        // descriptions that used to read as spoofed garbage here while rustls's
+        // own spelling of the same event read as `alert_*` a branch below.
+        if let Some(verdict) = alert_verdict(&msg) {
+            return verdict;
+        }
         return (DpiStatus::TlsSpoof, Detail::GarbageData);
     }
 
@@ -639,6 +650,33 @@ mod tests {
 
         let (s, _) = classify_connect_error(None, true);
         assert_eq!(s, DpiStatus::SynDropped);
+    }
+
+    /// A description names itself whichever way the library spells it.
+    ///
+    /// The failure this pins: `record overflow` is a needle of the spoof
+    /// branch and `recordoverflow` is a needle of the alert table, so the same
+    /// wire event read as `response_spoofing_garbage_data` from an
+    /// OpenSSL-shaped message and as `alert_record_overflow` from rustls's own
+    /// — two frozen `--json` codes for one alert. The four descriptions the two
+    /// needle sets share are the ones checked here.
+    #[test]
+    fn a_spaced_alert_description_names_itself_too() {
+        for (spaced, underscore, want) in [
+            ("ssl alert record overflow", "received fatal alert: RecordOverflow", "alert_record_overflow"),
+            ("tls alert illegal parameter", "received fatal alert: IllegalParameter", "alert_illegal_parameter"),
+            ("alert decode error", "received fatal alert: DecodeError", "alert_decode_error"),
+            ("tls alert bad record mac", "received fatal alert: BadRecordMac", "alert_bad_record_mac"),
+        ] {
+            let (spaced_status, spaced_detail) =
+                classify_ssl_error(spaced, 0, ConnectionStage::TlsClientHelloSent);
+            let (underscored_status, underscored_detail) =
+                classify_ssl_error(underscore, 0, ConnectionStage::TlsClientHelloSent);
+            assert_eq!(spaced_detail.code(), want, "spaced: {spaced}");
+            assert_eq!(underscored_detail.code(), want, "underscore: {underscore}");
+            assert_eq!(spaced_status, underscored_status, "{spaced} vs {underscore}");
+            assert_eq!(spaced_status, DpiStatus::TlsAlert, "{spaced}");
+        }
     }
 
     #[test]
