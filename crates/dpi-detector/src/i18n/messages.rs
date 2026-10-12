@@ -182,6 +182,10 @@ pub(crate) struct Messages {
     /// `NO CA BUNDLE` failures: those two tokens do not say what happened, and
     /// their reason only travelled in `--json` until this block existed.
     pub dns_failure_details_title: &'static str,
+    /// Shown under the DNS table when an endpoint was skipped because its
+    /// certificate chain does not reach a bundled root: it was never measured,
+    /// so it is out of the availability counts. `{}` is how many that was.
+    pub dns_no_ca_bundle_note: &'static str,
     /// Shown when the substitution reference came from DNS_TRUTH_FALLBACK
     /// instead of a live encrypted-DNS answer.
     pub dns_truth_fallback_note: &'static str,

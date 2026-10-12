@@ -163,7 +163,8 @@ pub(crate) fn transfer_badge(status: TransferStatus) -> (&'static str, Color) {
 
 /// Maps a probe status to its table cell color: green for OK, yellow for the
 /// "no TLS 1.3 / no CA / local IP / DNS fail / NXDOMAIN" outcomes, dark grey
-/// for Err, and red for the rest.
+/// for Err and for a cell that holds no verdict at all (the IPv6 fallback, the
+/// QUIC dash), and red for the rest.
 ///
 /// Every variant is named rather than caught by a `_` arm. This is the only
 /// place a verdict's colour is decided, so the wildcard let a newly added
@@ -177,6 +178,10 @@ pub(crate) fn status_color(s: DpiStatus) -> Color {
         DpiStatus::NoTls13 | DpiStatus::NoCa => Color::Yellow,
         DpiStatus::LocalIp | DpiStatus::DnsFail | DpiStatus::NxDomain => Color::Yellow,
         DpiStatus::Err => Color::DarkGrey,
+        // A row that was never measured holds no verdict about the site: the
+        // IPv6-mode fallback has no address family to probe, so its four cells
+        // are grey like the QUIC dash, never a colour that reads as an outcome.
+        DpiStatus::NoIpv6 => Color::DarkGrey,
         // QUIC: green only for an endpoint that answered the handshake. A close
         // or a version negotiation is the path working and the protocol not —
         // yellow, the same "read the detail" colour the TLS columns use for

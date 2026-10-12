@@ -131,6 +131,7 @@ pub(crate) fn messages() -> Messages {
         egress_na: "egress N/A",
         partial_dns_warn: "Serverhaye DNS ba dastrasi-e naghes (az dast raftan-e packet ha):",
         dns_failure_details_title: "Joz'iyat-e khataha-ye UNKNOWN / NO CA BUNDLE:",
+        dns_no_ca_bundle_note: "NO CA BUNDLE: {} endpoint andazegiri nashod - zanjire-ye gavahi be rishe-ye dakhel naresid, pas dar hisab-e dastrasi nemiayand.",
         dns_truth_fallback_note: "IP haye reference baraye barkhi domain ha az DNS_TRUTH_FALLBACK\n(config.yml) miyayand: hich DNS-e encrypted pasokh nadad, pas momken ast ghadimi bashand.",
         dns_fakeip_warn: "[!] Pasokh haye DNS shamel-e FakeIP hastand\nBaraye arzyabi-e daghigh, dar tool-e test proxy/FakeIP ra khamoosh konid.",
         dns_intercept_warn: "[!] ISP shoma porsoju haye DNS ra intercept mikonad\nPasokh haye UDP ba blockpage ya pasokh haye ja'li jaygozin mishavand",
@@ -317,6 +318,7 @@ pub(crate) fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("TIMEOUT", "Kargozar-e DNS dar zaman-e mogharrar pasokh nadad"),
             ("BLOCKED", "Kargozar-e DoH tavasot-e era'e-dahande masdood shode ast"),
             ("NXDOMAIN", "Be gofte-ye in kargozar, domain vojud nadarad"),
+            ("NO IPV6", "Halat-e IPv6: in name adres-e IPv6 nadarad va faghat IPv4 pasokh dad, pas probe ejra nashod - in nabud-e khanevade ast na kharabi-e domain, va dar hich nesbat-e sotun shomorde nemishavad"),
         ]),
         ("- HTTP / Masdoodsazi -", vec![
             ("BLOCKED", "Kode 451 HTTP - be dalayel-e ghanuni dar dastras nist"),

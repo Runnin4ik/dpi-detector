@@ -128,6 +128,7 @@ pub(crate) fn messages() -> Messages {
         egress_na: "出口不可用",
         partial_dns_warn: "部分可用的 DNS 服务器 (丢包):",
         dns_failure_details_title: "UNKNOWN / NO CA BUNDLE 失败的详情:",
+        dns_no_ca_bundle_note: "NO CA BUNDLE: {} 个端点未测量 — 证书链未到达内置根证书，故不计入可用性统计。",
         dns_truth_fallback_note: "部分域名的基准 IP 来自 DNS_TRUTH_FALLBACK\n(config.yml)：本网络加密 DNS 无应答，这些 IP 可能已过期。",
         dns_fakeip_warn: "[!] DNS 响应包含 FakeIP\n为了进行准确的 DNS 评估，请在测试期间关闭代理/FakeIP。",
         dns_intercept_warn: "[!] 您的互联网服务提供商拦截了 DNS 查询\nISP 将 UDP DNS 响应替换为封锁页面或虚假 NXDOMAIN/EMPTY/TIMEOUT",
@@ -317,6 +318,7 @@ pub(crate) fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("TIMEOUT", "DNS 服务器在规定时间内未响应"),
             ("BLOCKED", "DoH 服务器被运营商阻断 (HTTP 请求失败)"),
             ("NXDOMAIN", "该 DNS 服务器确认该域名不存在"),
+            ("NO IPV6", "IPv6 模式: 该域名没有 IPv6 地址，只有 IPv4 应答，因此未进行探测 — 这是缺少地址族，而非域名失败，该行不计入任何列的统计"),
         ]),
         ("— HTTP / 阻断 —", vec![
             ("BLOCKED", "HTTP 451 — 因法律或监管原因不可访问"),

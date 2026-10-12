@@ -86,12 +86,13 @@ pub(crate) fn render_summary(data: &SummaryData, msg: &Messages) -> String {
             msg.summary_domains.to_string(),
             format!(
                 "{}  {}  {}  {}",
-                stat("HTTP", d.http_ok, d.total),
-                stat("TLS1.2", d.t12_ok, d.total),
-                stat("TLS1.3", d.t13_ok, d.total),
-                // The QUIC column carries its own denominator: a host whose
-                // endpoint serves no HTTP/3 is a dash in the table, not a zero in
-                // this ratio.
+                stat("HTTP", d.http_ok, d.measured_total),
+                stat("TLS1.2", d.t12_ok, d.measured_total),
+                stat("TLS1.3", d.t13_ok, d.measured_total),
+                // Every column carries its own denominator: a row the run never
+                // measured (the IPv6-mode fallback) is a dash in the table, not a
+                // zero in these ratios, and the QUIC column adds its own case —
+                // a host whose endpoint serves no HTTP/3.
                 stat("QUIC", d.quic_ok, d.quic_total),
             ),
         ));
@@ -233,6 +234,7 @@ mod tests {
             dot_total: 34,
             udp_ok: 44,
             udp_total: 50,
+            no_ca_bundle: 0,
             hijacked_brands: brands.clone(),
             resolvers_total: 120,
             subst_sub: 43,

@@ -376,6 +376,20 @@ pub(crate) fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, 
     out.push_str(&format!("{}\n", table));
     out.push_str(&render_dns_failure_details(report, msg));
 
+    // The rows above carry a `NO CA BUNDLE` badge, but they are not failures:
+    // the chain stopped at this machine's trust store, so the endpoint was never
+    // measured and `stats.doh_total`/`dot_total` leave it out. A reader
+    // comparing the table with the summary has to know why the numbers differ;
+    // the count is the same one `--json` reports as `no_ca_bundle`.
+    if report.stats.no_ca_bundle > 0 {
+        out.push('\n');
+        out.push_str(&format!(
+            "\x1b[1;33m[{}] {}\x1b[0m\n",
+            warn_mark(),
+            msg.dns_no_ca_bundle_note.replace("{}", &report.stats.no_ca_bundle.to_string())
+        ));
+    }
+
     // The reference was not measured on this network, so a stale configured IP
     // must never look like a measurement.
     if report.truth_fallback_used {
@@ -721,5 +735,32 @@ mod tests {
                 reason.status
             );
         }
+    }
+
+    /// A `NO CA BUNDLE` endpoint is out of the availability denominators, so the
+    /// footer under the table has to say so: the badge stays (the row did fail),
+    /// but a reader comparing the rows with the summary's `N/M DoH` must see why
+    /// one row is not in that count. The number is `stats.no_ca_bundle` — the
+    /// same one `--json` carries — and a run that skipped nothing grows no note.
+    #[test]
+    fn a_skipped_no_ca_endpoint_is_named_under_the_table() {
+        use dpi_core::probe::dns_avail::DnsAvailStats;
+
+        let cfg = AppConfig::default();
+        let ru = crate::i18n::get_messages(crate::i18n::Language::Ru);
+        let report = DnsAvailReport {
+            stats: DnsAvailStats { no_ca_bundle: 2, ..Default::default() },
+            ..Default::default()
+        };
+        let out = render_dns_availability(&report, &cfg, &ru);
+        assert!(
+            out.contains(&ru.dns_no_ca_bundle_note.replace("{}", "2")),
+            "the skipped endpoints and their count are named: {out}"
+        );
+        let clean = render_dns_availability(&DnsAvailReport::default(), &cfg, &ru);
+        assert!(
+            !clean.contains(&ru.dns_no_ca_bundle_note.replace("{}", "0")),
+            "a run that skipped nothing gets no note: {clean}"
+        );
     }
 }

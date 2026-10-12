@@ -87,6 +87,13 @@ pub(crate) struct DnsAvailability {
     pub dot_total: usize,
     pub udp_ok: usize,
     pub udp_total: usize,
+    /// Endpoints not measured because their certificate chain did not reach a
+    /// bundled root: a local trust mismatch (`no_ca_bundle` /
+    /// `no_root_certificates` in `failures`), not a dead resolver. They are out
+    /// of `doh_total`/`dot_total`, so a ratio never reads the trust store as
+    /// the network's verdict, and counted here so they stay visible. Additive,
+    /// so `SCHEMA_VERSION` stands.
+    pub no_ca_bundle: usize,
     pub hijacked_brands: Vec<String>,
     pub resolvers_total: usize,
     pub subst_sub: usize,
@@ -214,6 +221,7 @@ mod tests {
             dot_total: 1,
             udp_ok: 1,
             udp_total: 1,
+            no_ca_bundle: 1,
             hijacked_brands: Vec::new(),
             resolvers_total: 1,
             subst_sub: 0,
@@ -234,5 +242,8 @@ mod tests {
         assert!(text.contains(r#""protocol":"dot""#), "{text}");
         assert!(text.contains(r#""status":"no_ca_bundle""#), "{text}");
         assert!(text.contains(r#""detail":"no_root_certificates""#), "{text}");
+        // The skipped-endpoint counter is a wire key of its own: the ratio it is
+        // kept out of (`doh_total`/`dot_total`) cannot name it.
+        assert!(text.contains(r#""no_ca_bundle":1"#), "{text}");
     }
 }

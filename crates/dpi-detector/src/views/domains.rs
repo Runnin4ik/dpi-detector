@@ -27,10 +27,10 @@ pub(crate) fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> St
         let details = row_details(&raw_details, msg.lang);
         table.add_row(vec![
             Cell::new(cell_color(&e.domain, Color::Cyan)),
-            Cell::new(cell_color(http.display_label(), status_color(http))),
-            Cell::new(cell_color(tls12.display_label(), status_color(tls12))),
-            Cell::new(cell_color(tls13.display_label(), status_color(tls13))),
-            Cell::new(cell_color(quic.display_label(), status_color(quic))),
+            Cell::new(proto_cell(http, &e.http.detail)),
+            Cell::new(proto_cell(tls12, &e.t12.detail)),
+            Cell::new(proto_cell(tls13, &e.t13.detail)),
+            Cell::new(proto_cell(quic, &e.quic.detail)),
             Cell::new(details),
         ]);
     }
@@ -39,6 +39,25 @@ pub(crate) fn render_domain_table(entries: &[DomainEntry], msg: &Messages) -> St
     out.push('\n');
     out.push_str(&format!("{}\n", table));
     out
+}
+
+/// One protocol cell of the domain table.
+///
+/// A cell that was never measured prints the dash, not a verdict. `Unknown` is
+/// that state — `DomainEntry::pending` starts every column as `Unknown` with no
+/// detail, and a scan that is aborted mid-row can reach the table with the row
+/// still in it — and `build_domain_row` reads it the same way when it decides
+/// which details a row carries. `Unknown` *with* a detail is a real
+/// unclassifiable failure and keeps the red `UNKNOWN` it always had.
+///
+/// The dash is the glyph the QUIC column already prints for a host that serves
+/// no HTTP/3: one cell that is not a verdict, one glyph, spelled in one place.
+fn proto_cell(status: DpiStatus, detail: &Detail) -> String {
+    if status == DpiStatus::Unknown && detail.is_none() {
+        cell_color(DpiStatus::QuicUnsupported.display_label(), Color::DarkGrey)
+    } else {
+        cell_color(status.display_label(), status_color(status))
+    }
 }
 
 /// Detail cell of the domain table: one `<proto>:<detail>` line per failing
@@ -68,7 +87,6 @@ pub(crate) fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) 
     let mut out = String::new();
 
     let mut dns_fail: usize = 0;
-    let mut no_ipv6: usize = 0;
     let mut isp_stubs: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut local_stubs: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut fakeip_stubs: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -76,9 +94,6 @@ pub(crate) fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) 
     for e in entries {
         if e.t13.status == DpiStatus::DnsFail || e.t12.status == DpiStatus::DnsFail || e.http.status == DpiStatus::DnsFail {
             dns_fail += 1;
-            if e.t13.detail == Detail::Ipv6Unsupported {
-                no_ipv6 += 1;
-            }
         }
         if let Some(ip) = e.resolved {
             if dpi_core::probe::domains::fake_ip_type(&ip) == FakeIpType::FakeIp {
@@ -95,8 +110,7 @@ pub(crate) fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) 
         }
     }
 
-    let real_dns_fail = dns_fail.saturating_sub(no_ipv6);
-    if isp_stubs.is_empty() && local_stubs.is_empty() && fakeip_stubs.is_empty() && real_dns_fail == 0 {
+    if isp_stubs.is_empty() && local_stubs.is_empty() && fakeip_stubs.is_empty() && dns_fail == 0 {
         return out;
     }
 
@@ -127,12 +141,78 @@ pub(crate) fn render_dns_resolve_notes(entries: &[DomainEntry], msg: &Messages) 
             out.push_str(&format!("{}\n", s));
         }
     }
-    if real_dns_fail > 0 {
-        out.push_str(&format!("{}\n", msg.dns_fail_detected.replace("{}", &real_dns_fail.to_string())));
+    if dns_fail > 0 {
+        out.push_str(&format!("{}\n", msg.dns_fail_detected.replace("{}", &dns_fail.to_string())));
     }
-    if !isp_stubs.is_empty() || real_dns_fail > 0 {
+    if !isp_stubs.is_empty() || dns_fail > 0 {
         out.push_str(msg.doh_flush_guide);
     }
     out.push('\n');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The failure this pins: `DomainEntry::pending` starts every column as
+    /// `Unknown` with no detail, and a row that reached the table in that state
+    /// printed the red `UNKNOWN` a real unclassifiable error gets — a cell that
+    /// was never measured read as a block. The dash is what the QUIC column
+    /// prints for a host that serves no HTTP/3, and it is grey, never red.
+    #[test]
+    fn an_unmeasured_cell_is_the_dash_and_a_real_unknown_error_is_not() {
+        let dash = proto_cell(DpiStatus::Unknown, &Detail::None);
+        assert!(dash.contains(DpiStatus::QuicUnsupported.display_label()), "{dash:?}");
+        assert!(!dash.contains("UNKNOWN"), "{dash:?}");
+
+        // An `Unknown` that carries a detail is a failure, not an absent
+        // measurement, and must keep saying so.
+        let error = proto_cell(DpiStatus::Unknown, &Detail::Other("boom".to_string()));
+        assert!(error.contains("UNKNOWN"), "{error:?}");
+
+        // Measured verdicts are untouched, the QUIC "not applicable" included.
+        assert!(proto_cell(DpiStatus::Ok, &Detail::None).contains("OK"));
+        let unsupported = proto_cell(DpiStatus::QuicUnsupported, &Detail::None);
+        assert!(unsupported.contains(DpiStatus::QuicUnsupported.display_label()), "{unsupported:?}");
+        assert!(proto_cell(DpiStatus::TlsRst, &Detail::RstHello).contains("TLS RST"));
+    }
+
+    /// One row whose four columns all carry `status`/`detail`.
+    fn row(domain: &str, status: DpiStatus, detail: Detail) -> DomainEntry {
+        use dpi_core::probe::domains::{HttpCheck, TlsCheck};
+        use dpi_core::probe::quic::QuicCheck;
+        let tls = TlsCheck { status, detail: detail.clone(), elapsed: 0.0 };
+        DomainEntry {
+            domain: domain.to_string(),
+            resolved: Some("203.0.113.7".parse().unwrap()),
+            dns_fake: Some(false),
+            t13: tls.clone(),
+            t12: tls,
+            http: HttpCheck { status, detail: detail.clone(), elapsed: 0.0 },
+            quic: QuicCheck { status, detail, elapsed: 0.0 },
+        }
+    }
+
+    /// The table is the surface a consumer reads, so the two "not measured"
+    /// shapes are pinned there and not only in the cell helper: a row that never
+    /// ran shows the dash rather than a verdict, and a row whose address family
+    /// this run could not reach is named `NO IPV6` instead of `DNS FAIL`.
+    #[test]
+    fn the_table_names_a_missing_family_and_shows_no_verdict_for_an_unmeasured_row() {
+        use crate::i18n::get_messages;
+        let msg = get_messages(Language::En);
+
+        let pending =
+            render_domain_table(&[row("never.example", DpiStatus::Unknown, Detail::None)], &msg);
+        assert!(!pending.contains("UNKNOWN"), "{pending}");
+        assert!(pending.contains(DpiStatus::QuicUnsupported.display_label()), "{pending}");
+
+        let v6 = render_domain_table(
+            &[row("v6.example", DpiStatus::NoIpv6, Detail::Ipv6Unsupported)],
+            &msg,
+        );
+        assert!(v6.contains("NO IPV6"), "{v6}");
+        assert!(!v6.contains("DNS FAIL"), "{v6}");
+    }
 }

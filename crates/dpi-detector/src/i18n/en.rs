@@ -132,6 +132,7 @@ pub(crate) fn messages() -> Messages {
         egress_na: "egress N/A",
         partial_dns_warn: "Partially available DNS servers (packet loss):",
         dns_failure_details_title: "Details of UNKNOWN / NO CA BUNDLE failures:",
+        dns_no_ca_bundle_note: "NO CA BUNDLE: {} endpoint(s) not measured — their chain does not reach a bundled root, so they are out of the availability counts.",
         dns_truth_fallback_note: "Reference IPs for part of the domains come from DNS_TRUTH_FALLBACK\n(config.yml): no encrypted DNS answered here, so they may be outdated.",
         dns_fakeip_warn: "[!] DNS responses contain FakeIP\nDisable proxy/FakeIP during check for accurate assessment.",
         dns_intercept_warn: "[!] Your ISP intercepts DNS queries\nISP replaces UDP DNS responses with stubs or fake NXDOMAIN/EMPTY/TIMEOUT",
@@ -321,6 +322,7 @@ pub(crate) fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("TIMEOUT", "DNS server did not answer in time"),
             ("BLOCKED", "DoH server blocked by provider (HTTP failed)"),
             ("NXDOMAIN", "Domain does not exist according to this server"),
+            ("NO IPV6", "IPv6 mode: the name had no IPv6 address and only IPv4 answered, so no probe ran — a missing capability, not a domain failure, and the row sits in no column's ratio"),
         ]),
         ("— HTTP / Blocks —", vec![
             ("BLOCKED", "HTTP 451 — Unavailable for legal reasons"),

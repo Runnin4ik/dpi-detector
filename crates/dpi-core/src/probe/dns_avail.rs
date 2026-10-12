@@ -224,6 +224,14 @@ pub struct DnsAvailStats {
     pub dot_total: usize,
     pub udp_ok: usize,
     pub udp_total: usize,
+    /// Endpoints left out of `doh_total`/`dot_total` because their certificate
+    /// chain did not reach a bundled root (`NO CA BUNDLE`): a local trust
+    /// mismatch is a property of this machine, not a measurement of the
+    /// resolver, so counting such an endpoint as unavailable would report the
+    /// trust store as the network's verdict. Counted here instead, so the
+    /// skipped endpoints stay visible rather than silently shrinking the
+    /// denominator.
+    pub no_ca_bundle: usize,
     pub hijacked_brands: Vec<String>,
     pub resolvers_total: usize,
     pub subst_sub: usize,
@@ -1045,16 +1053,64 @@ fn fakeip_sub(report: &DnsAvailReport, addr: &str, name: &str) -> usize {
     n
 }
 
+/// Whether any domain of this endpoint carries a measured latency. The one
+/// question `doh_ok`/`dot_ok` and the `NO CA BUNDLE` skip below both ask; a
+/// second spelling of it would let the count and the denominator disagree.
+fn answered(report: &DnsAvailReport, kind: ProbeKind, addr: &str, name: &str) -> bool {
+    let key = ProbeKey { kind, addr: addr.to_string(), name: name.to_string() };
+    report.raw.get(&key).is_some_and(|dm| dm.values().any(|v| v.is_some()))
+}
+
+/// Whether an endpoint carries no measurement because the certificate chain it
+/// presented did not reach a bundled root (`NO CA BUNDLE`).
+///
+/// The detector ships Mozilla's roots and never reads the OS store, so this
+/// failure says the chain stopped at *this machine's* trust boundary — an
+/// antivirus web-shield or a proxy signing in the middle — and not that the
+/// resolver is unreachable. Counting it as unavailable would report a local
+/// trust mismatch as the network's verdict, which is what `doh_total` and
+/// `dot_total` must not do: they hold the endpoints that were measured, and the
+/// skipped ones are counted in `DnsAvailStats::no_ca_bundle`.
+///
+/// An endpoint that answered even one domain *was* measured and stays in the
+/// denominator; only one that answered nothing and failed with this
+/// classification is left out — the same shape the QUIC column uses for a
+/// capability miss.
+fn unmeasured_no_ca(report: &DnsAvailReport, kind: ProbeKind, addr: &str, name: &str) -> bool {
+    let key = ProbeKey { kind, addr: addr.to_string(), name: name.to_string() };
+    !answered(report, kind, addr, name)
+        && report
+            .fail_reasons
+            .get(&key)
+            .is_some_and(|reason| reason.status == DpiStatus::NoCa)
+}
+
 fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
-    let doh_ok = report.doh_servers.iter().filter(|(a, n, _)| {
-        let key = ProbeKey { kind: ProbeKind::DohWire, addr: a.clone(), name: n.clone() };
-        report.raw.get(&key).map(|dm| dm.values().any(|v| v.is_some())).unwrap_or(false)
-    }).count();
+    let doh_ok = report
+        .doh_servers
+        .iter()
+        .filter(|(a, n, _)| answered(report, ProbeKind::DohWire, a, n))
+        .count();
     let udp_ok = report.udp_servers.iter().filter(|(a, n, _)| udp_alive(report, a, n)).count();
-    let dot_ok = report.dot_servers.iter().filter(|(a, n, _)| {
-        let key = ProbeKey { kind: ProbeKind::Dot, addr: a.clone(), name: n.clone() };
-        report.raw.get(&key).map(|dm| dm.values().any(|v| v.is_some())).unwrap_or(false)
-    }).count();
+    let dot_ok = report
+        .dot_servers
+        .iter()
+        .filter(|(a, n, _)| answered(report, ProbeKind::Dot, a, n))
+        .count();
+    // The endpoints whose chain did not reach a bundled root are out of their
+    // transport's denominator: they were never measured, so counting them as
+    // unavailable would read this machine's trust store as the network. The
+    // count keeps them visible beside the ratios.
+    let doh_no_ca = report
+        .doh_servers
+        .iter()
+        .filter(|(a, n, _)| unmeasured_no_ca(report, ProbeKind::DohWire, a, n))
+        .count();
+    let dot_no_ca = report
+        .dot_servers
+        .iter()
+        .filter(|(a, n, _)| unmeasured_no_ca(report, ProbeKind::Dot, a, n))
+        .count();
 
     // Hijacked brands: egress /24 shared by ≥2 brands, unknown org, non-domestic
     let mut net_brands: HashMap<String, HashSet<String>> = HashMap::new();
@@ -1148,11 +1204,12 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
 
     DnsAvailStats {
         doh_ok,
-        doh_total: report.doh_servers.len(),
+        doh_total: report.doh_servers.len() - doh_no_ca,
         dot_ok,
-        dot_total: report.dot_servers.len(),
+        dot_total: report.dot_servers.len() - dot_no_ca,
         udp_ok,
         udp_total: report.udp_servers.len(),
+        no_ca_bundle: doh_no_ca + dot_no_ca,
         hijacked_brands: {
             let mut v: Vec<String> = hi.into_iter().collect();
             v.sort();
@@ -1410,5 +1467,56 @@ mod tests {
             vec!["Watchdog".to_string()],
             "only the brand that is not the stand-in"
         );
+    }
+
+    /// A chain that does not reach a bundled root is this machine's trust
+    /// boundary, not the resolver's availability: such an endpoint is out of
+    /// its transport's denominator and counted in `no_ca_bundle`, while an
+    /// endpoint that answered nothing for an ordinary reason (here a timeout)
+    /// stays in it. Without the exclusion every intercepted DoH/DoT row reads
+    /// as a dead resolver, and the ratio says the network is at fault.
+    #[test]
+    fn compute_stats_leaves_no_ca_endpoints_out_of_the_ratio() {
+        use crate::classify::ConnectStage;
+        use crate::dns::types::DnsError;
+        let key = |kind, addr: &str| ProbeKey { kind, addr: addr.to_string(), name: "P".to_string() };
+        let no_ca = connect_fail(&DnsError::ConnectFault {
+            stage: ConnectStage::TlsHandshake,
+            detail: "invalid peer certificate: UnknownIssuer".to_string(),
+        });
+        let mut report = DnsAvailReport {
+            forbidden: vec!["x.com".to_string()],
+            doh_servers: vec![
+                ("https://ok/dns-query".to_string(), "P".to_string(), 443),
+                ("https://dead/dns-query".to_string(), "P".to_string(), 443),
+                ("https://no-ca/dns-query".to_string(), "P".to_string(), 443),
+            ],
+            dot_servers: vec![
+                ("dot-ok.example".to_string(), "P".to_string(), 853),
+                ("dot-no-ca.example".to_string(), "P".to_string(), 853),
+            ],
+            ..DnsAvailReport::default()
+        };
+        let measured = HashMap::from([("x.com".to_string(), Some(4.0))]);
+        let unmeasured = HashMap::from([("x.com".to_string(), None)]);
+        report.raw.insert(key(ProbeKind::DohWire, "https://ok/dns-query"), measured.clone());
+        report.raw.insert(key(ProbeKind::DohWire, "https://dead/dns-query"), unmeasured);
+        // The probe aborts a session whose chain fails before asking anything,
+        // so the endpoint has no row to measure at all.
+        report.raw.insert(key(ProbeKind::DohWire, "https://no-ca/dns-query"), HashMap::new());
+        report.raw.insert(key(ProbeKind::Dot, "dot-ok.example"), measured);
+        report.raw.insert(key(ProbeKind::Dot, "dot-no-ca.example"), HashMap::new());
+        report.fail_reasons.insert(key(ProbeKind::DohWire, "https://dead/dns-query"), FailReason::timeout());
+        report.fail_reasons.insert(key(ProbeKind::DohWire, "https://no-ca/dns-query"), no_ca.clone());
+        report.fail_reasons.insert(key(ProbeKind::Dot, "dot-no-ca.example"), no_ca);
+
+        let stats = compute_stats(&report, &AppConfig::default());
+        assert_eq!(
+            (stats.doh_ok, stats.doh_total),
+            (1, 2),
+            "the NO CA BUNDLE DoH endpoint leaves the denominator, the dead one stays"
+        );
+        assert_eq!((stats.dot_ok, stats.dot_total), (1, 1), "the same for DoT");
+        assert_eq!(stats.no_ca_bundle, 2, "the skipped endpoints are counted, not dropped");
     }
 }

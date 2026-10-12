@@ -244,6 +244,17 @@ pub enum DpiStatus {
     /// `nxdomain` — not the derived `nx_domain`.
     #[serde(rename = "nxdomain")]
     NxDomain,
+    /// The row was not measured at all: the name has no address in the family
+    /// this run probes, and the other family answered it (`probe/domains.rs`'s
+    /// IPv4 fallback). Its `Detail` is `Ipv6Unsupported`, and it is a capability
+    /// miss rather than a domain failure — the badge names what is missing, the
+    /// row stays out of the DNS-fail count and out of every column's ratio, and
+    /// it is not a block. Before this variant the row wore `DNS FAIL` in all
+    /// four columns and dragged the HTTP/TLS pass ratios down with it.
+    ///
+    /// Token and label follow the neighbouring `NoTls13`: `--json` carries the
+    /// derived `no_ipv6`, the badge is `NO IPV6` (Rule 4 — Latin everywhere).
+    NoIpv6,
     /// The QUIC endpoint answered the Initial and the handshake can proceed: a
     /// ServerHello, a HelloRetryRequest, or a Retry whose integrity tag checked
     /// out. It says the UDP path to port 443 works and the endpoint's QUIC stack
@@ -313,6 +324,7 @@ impl DpiStatus {
         DpiStatus::DnsFail,
         DpiStatus::DnsFake,
         DpiStatus::NxDomain,
+        DpiStatus::NoIpv6,
         DpiStatus::QuicOk,
         DpiStatus::QuicClosed,
         DpiStatus::QuicVn,
@@ -356,6 +368,7 @@ impl DpiStatus {
             Self::DnsFail => "dns_fail",
             Self::DnsFake => "dns_fake",
             Self::NxDomain => "nxdomain",
+            Self::NoIpv6 => "no_ipv6",
             Self::QuicOk => "quic_ok",
             Self::QuicClosed => "quic_closed",
             Self::QuicVn => "quic_vn",
@@ -400,6 +413,7 @@ impl DpiStatus {
             Self::DnsFail => "DNS FAIL",
             Self::DnsFake => "DNS FAKE",
             Self::NxDomain => "NXDOMAIN",
+            Self::NoIpv6 => "NO IPV6",
             Self::QuicOk => "OK",
             Self::QuicClosed => "CLOSED",
             Self::QuicVn => "VN",
@@ -549,6 +563,10 @@ mod tests {
             (DpiStatus::DnsFail, "dns_fail"),
             (DpiStatus::DnsFake, "dns_fake"),
             (DpiStatus::LocalIp, "local_ip"),
+            // The IPv6 fallback's own badge (`probe/domains.rs`): the row was
+            // not measured, so it must not reach `--json` as the `dns_fail` it
+            // used to wear.
+            (DpiStatus::NoIpv6, "no_ipv6"),
         ] {
             assert_eq!(status.as_str(), token);
             assert_eq!(
@@ -573,5 +591,22 @@ mod tests {
         );
         assert!(DpiStatus::Tcp16Range.is_blocked());
         assert!(DpiStatus::Tcp16Detected.is_blocked());
+    }
+
+    /// The IPv6 fallback's badge is a "not measured" verdict, not a failure:
+    /// Latin like every other badge (Rule 4), neither ok nor blocked (a missing
+    /// address family must not colour a run as censored), and listed in `ALL` —
+    /// the list the legend check in `dpi-detector` walks.
+    #[test]
+    fn the_missing_family_is_not_a_failure() {
+        assert_eq!(DpiStatus::NoIpv6.as_str(), "no_ipv6");
+        assert_eq!(DpiStatus::NoIpv6.display_label(), "NO IPV6");
+        assert_eq!(
+            serde_json::to_string(&DpiStatus::NoIpv6).expect("a status serializes"),
+            "\"no_ipv6\""
+        );
+        assert!(!DpiStatus::NoIpv6.is_ok_status());
+        assert!(!DpiStatus::NoIpv6.is_blocked());
+        assert!(DpiStatus::ALL.contains(&DpiStatus::NoIpv6));
     }
 }

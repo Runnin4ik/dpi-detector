@@ -941,6 +941,7 @@ pub(crate) async fn run_test_suite(
                     dot_total: s.dot_total,
                     udp_ok: s.udp_ok,
                     udp_total: s.udp_total,
+                    no_ca_bundle: s.no_ca_bundle,
                     hijacked_brands: s.hijacked_brands.clone(),
                     resolvers_total: s.resolvers_total,
                     subst_sub: s.subst_sub,

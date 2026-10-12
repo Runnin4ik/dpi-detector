@@ -485,9 +485,11 @@ fn skipped_quic(status: DpiStatus, detail: Detail) -> crate::probe::quic::QuicCh
 /// protocol probe can run against — the verdict all four protocol columns carry.
 ///
 /// `v4_fallback` is whether a second lookup over IPv4 answered a host IPv6 could
-/// not resolve: that reads "no IPv6 here", not "no such host". An ISP stub-IP or
-/// a local/relay address is `Some(true)`, a clean answer `Some(false)`, and no
-/// answer at all `None`.
+/// not resolve: that reads "no IPv6 here", not "no such host", so the four
+/// columns carry [`DpiStatus::NoIpv6`] — a capability miss, counted in no
+/// column's ratio — rather than the `DpiStatus::DnsFail` a name nothing answered
+/// gets. An ISP stub-IP or a local/relay address is `Some(true)`, a clean answer
+/// `Some(false)`, and no answer at all `None`.
 fn entry_for(
     domain: &str,
     resolved: Option<IpAddr>,
@@ -496,11 +498,19 @@ fn entry_for(
 ) -> DomainEntry {
     let Some(ip) = resolved else {
         let mut e = DomainEntry::pending(domain.to_string(), None, None);
-        let detail = if v4_fallback { Detail::Ipv6Unsupported } else { Detail::DomainNotFound };
-        e.t13 = TlsCheck { status: DpiStatus::DnsFail, detail: detail.clone(), elapsed: 0.0 };
+        // A v6-mode row whose name IPv4 answered was not measured at all: the
+        // family this run probes is missing, so it wears `NoIpv6` — its own
+        // badge, out of `dns_fail` and out of every column's ratio — instead of
+        // reading as a domain failure. Only a name nothing resolved is `DnsFail`.
+        let (status, detail) = if v4_fallback {
+            (DpiStatus::NoIpv6, Detail::Ipv6Unsupported)
+        } else {
+            (DpiStatus::DnsFail, Detail::DomainNotFound)
+        };
+        e.t13 = TlsCheck { status, detail: detail.clone(), elapsed: 0.0 };
         e.t12 = e.t13.clone();
-        e.http = HttpCheck::at(DpiStatus::DnsFail, detail);
-        e.quic = skipped_quic(DpiStatus::DnsFail, e.http.detail.clone());
+        e.http = HttpCheck::at(status, detail);
+        e.quic = skipped_quic(status, e.http.detail.clone());
         return e;
     };
     let mut ftype = fake_ip_type(&ip);
@@ -785,8 +795,17 @@ fn col_ok_t12(status: DpiStatus) -> bool {
 #[derive(Debug, Clone, Default)]
 pub struct DomainStats {
     pub total: usize,
+    /// The rows the HTTP and TLS columns apply to at all: `total` minus the rows
+    /// whose address family this run could not reach (`DpiStatus::NoIpv6`, the
+    /// IPv6-mode fallback). The three columns' own denominator — a row that was
+    /// never measured is not a failure and must not sit in a ratio. They share
+    /// one denominator because all three run on the same resolved address; QUIC
+    /// keeps its own, because HTTP/3 applicability is a per-host property.
+    pub measured_total: usize,
     pub ok: usize,
     pub timeout: usize,
+    /// Real domain failures only: the name did not resolve at all. A row that
+    /// was not measured (`DpiStatus::NoIpv6`) is not one of them.
     pub dns_fail: usize,
     pub blocked: usize,
     pub http_ok: usize,
@@ -808,11 +827,25 @@ fn is_timeout_status(s: DpiStatus) -> bool {
     )
 }
 
+/// Whether the run measured this row at all. The IPv6 fallback is the one row
+/// whose address family this run could not reach: `entry_for` writes
+/// `DpiStatus::NoIpv6` into all four of its cells, and that row belongs in no
+/// column's ratio — the same "not applicable" the QUIC column gives a
+/// `QuicUnsupported` dash.
+///
+/// A row DNS settled for a reason about the domain itself — NXDOMAIN, an ISP
+/// stub IP, a local address — is measured: it failed, and a failure is what a
+/// ratio counts.
+fn measured(e: &DomainEntry) -> bool {
+    !matches!(e.t13.status, DpiStatus::NoIpv6)
+}
+
 pub fn domain_stats(entries: &[DomainEntry]) -> DomainStats {
     let is_ok_t13 = |e: &DomainEntry| col_ok(e.t13.status) || e.t13.status == DpiStatus::NoTls13;
     let is_ok_t12 = |e: &DomainEntry| col_ok(e.t12.status) || e.t12.status == DpiStatus::NoTls13;
     DomainStats {
         total: entries.len(),
+        measured_total: entries.iter().filter(|e| measured(e)).count(),
         ok: entries.iter().filter(|e| col_ok(e.t13.status) || col_ok(e.t12.status)).count(),
         timeout: entries
             .iter()
@@ -831,7 +864,9 @@ pub fn domain_stats(entries: &[DomainEntry]) -> DomainStats {
         quic_ok: entries.iter().filter(|e| e.quic.status == DpiStatus::QuicOk).count(),
         quic_total: entries
             .iter()
-            .filter(|e| e.quic.status != DpiStatus::QuicUnsupported)
+            // The dash is not a unit of the column, and neither is a row that
+            // was never measured: both are rows the column has no question for.
+            .filter(|e| measured(e) && e.quic.status != DpiStatus::QuicUnsupported)
             .count(),
     }
 }
@@ -1078,7 +1113,8 @@ mod tests {
     /// The other three are decided before a probe could run, and every protocol
     /// column carries the verdict that decided them — `Unknown` there would
     /// paint the row red and write `"unknown"` into `--json` beside the
-    /// `dns_fail` that describes the whole row.
+    /// `dns_fail` (or the `no_ipv6` of the IPv6 fallback) that describes the
+    /// whole row.
     #[test]
     fn test_entry_for_decides_every_row_dns_can_settle() {
         let none: HashSet<IpAddr> = HashSet::new();
@@ -1094,9 +1130,16 @@ mod tests {
         assert_eq!(miss.http.detail, Detail::DomainNotFound);
         assert_eq!(miss.quic.detail, miss.http.detail);
 
-        // The IPv4 fallback answered: "no IPv6 here", not "no such host".
+        // The IPv4 fallback answered: "no IPv6 here", not "no such host" — so the
+        // row carries the family's own badge, not the DNS failure the name that
+        // nothing resolved gets, while the reason travels in the detail.
         let v6 = entry_for("v6.example", None, true, &none);
+        assert_eq!(v6.t13.status, DpiStatus::NoIpv6);
+        assert_eq!(v6.t12.status, DpiStatus::NoIpv6);
+        assert_eq!(v6.http.status, DpiStatus::NoIpv6);
+        assert_eq!(v6.quic.status, DpiStatus::NoIpv6);
         assert_eq!(v6.http.detail, Detail::Ipv6Unsupported);
+        assert_eq!(v6.quic.detail, v6.http.detail);
 
         // An ISP stub address (CGNAT), and a clean-class address the resolver
         // handed out for many domains — the stub set overrides the class.
@@ -1123,6 +1166,30 @@ mod tests {
         assert_eq!(real.t12.status, DpiStatus::Unknown);
         assert_eq!(real.http.status, DpiStatus::Unknown);
         assert_eq!(real.quic.status, DpiStatus::Unknown);
+    }
+
+    /// The IPv6 fallback is a capability miss, not a domain failure: the row is
+    /// out of `dns_fail`, out of the HTTP/TLS denominators and out of the QUIC
+    /// column's own total — the same "not applicable" its dash-shaped neighbour
+    /// (`QuicUnsupported`) gets — while a real NXDOMAIN still counts on all of
+    /// them. Regression: the fallback row wore `DNS FAIL` in all four columns,
+    /// landed in `dns_fail` and pulled the pass ratios down with it.
+    #[test]
+    fn the_ipv6_fallback_is_not_a_dns_failure() {
+        let none: HashSet<IpAddr> = HashSet::new();
+        let fallback = entry_for("v6.example", None, true, &none);
+        let missing = entry_for("gone.example", None, false, &none);
+
+        let stats = domain_stats(&[fallback, missing]);
+        assert_eq!(stats.total, 2);
+        assert_eq!(stats.dns_fail, 1, "only the name that really did not resolve");
+        assert_eq!(stats.measured_total, 1, "the fallback row was never measured");
+        assert_eq!(stats.quic_total, 1, "so no Initial was sent for it either");
+        assert_eq!(stats.blocked, 0, "a missing family is not a block");
+        assert_eq!(stats.timeout, 0);
+        assert_eq!(stats.ok, 0);
+        assert_eq!(stats.http_ok, 0);
+        assert_eq!(stats.t13_ok, 0);
     }
 
     #[test]
