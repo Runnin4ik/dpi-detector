@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use dpi_core::classify::Detail;
+use dpi_core::net::ggc::GgcMapping;
 use dpi_core::probe::telegram::TransferStatus;
 use serde::Serialize;
 
@@ -31,6 +32,19 @@ pub(crate) struct Report {
 pub(crate) struct Results {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network_info: Option<NetworkInfo>,
+    /// The cache node the GGC mapping endpoint steered this address to — the
+    /// answer behind test 2's YouTube verdict. Absent when the endpoint answered
+    /// nothing the parser accepts or timed out, the same `None` the report
+    /// prints as its `unknown` line. Additive, so `SCHEMA_VERSION` stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ggc: Option<GgcMapping>,
+    /// `Some(true)` when the mapping was computed for a different address than
+    /// the one the run's own public-IP echo returned: the split-routing shape
+    /// behind an HTTP 403 on video, because the media token is bound to the
+    /// address that fetched the manifest. Absent when either address is unknown,
+    /// so the key never claims "the same". Additive, so `SCHEMA_VERSION` stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ggc_ip_mismatch: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dns_availability: Option<DnsAvailability>,
     #[serde(skip_serializing_if = "Option::is_none")]

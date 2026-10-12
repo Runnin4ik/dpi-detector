@@ -77,6 +77,12 @@ pub(crate) fn messages() -> Messages {
         not_detected: "не обнаружен",
         unavailable: "недоступен",
 
+        ggc_label: "GGC",
+        ggc_local_ru: "локальный кэш RU",
+        ggc_foreign_pop: "зарубежный PoP",
+        ggc_unknown: "неизвестно",
+        ggc_ip_mismatch: "Ответ GGC пришёл для другого адреса ({}) — раздельная маршрутизация или VPN могут дать HTTP 403 на видео",
+
         intercept_header: "Обнаружен включённый nfqws2, но есть проблемы:",
         intercept_excluded: "Трафик детектора исключён политикой доступа «{}».\n\
                              На время тестов поставьте POLICY_EXCLUDE=1 или укажите свой POLICY_NAME,\n\

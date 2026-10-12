@@ -77,6 +77,12 @@ pub(crate) fn messages() -> Messages {
         not_detected: "未检测到",
         unavailable: "不可用",
 
+        ggc_label: "GGC",
+        ggc_local_ru: "俄罗斯本地缓存",
+        ggc_foreign_pop: "境外 PoP",
+        ggc_unknown: "未知",
+        ggc_ip_mismatch: "GGC 映射看到的地址不同（{}）——分流或 VPN 可能导致视频出现 HTTP 403",
+
         intercept_header: "检测到 nfqws2 正在运行，但存在以下问题：",
         intercept_excluded: "检测器的流量被访问策略「{}」排除。\n\
                              测试期间请设置 POLICY_EXCLUDE=1，或把 POLICY_NAME 改成路由器不存在的策略名",

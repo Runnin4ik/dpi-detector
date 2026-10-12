@@ -104,6 +104,28 @@ pub(crate) struct Messages {
     pub not_detected: &'static str,
     pub unavailable: &'static str,
 
+    // GGC (Google Global Cache): one line saying which cache node the mapping
+    // endpoint steers this address to, because that is what a throttled or
+    // reset video path is explained by. `ggc_label` is the protocol-style token
+    // and stays Latin in every language (rule 4); the node id is Latin too (it
+    // is data), while the placement and the miss are prose.
+    /// Label of the GGC line (`GGC`).
+    pub ggc_label: &'static str,
+    /// The node sits in a Russian operator's own network: the cache is domestic,
+    /// and its path is the one that broke.
+    pub ggc_local_ru: &'static str,
+    /// The node sits in a foreign PoP (`fra16s48`): the path is transit, whose
+    /// peering is what was cut.
+    pub ggc_foreign_pop: &'static str,
+    /// The redirector named nothing the parser accepts, or did not answer: the
+    /// run says so and carries on.
+    pub ggc_unknown: &'static str,
+    /// The mapping was computed for a different address than this run leaves
+    /// through: `{}` is that address. Split routing or a VPN is the shape that
+    /// then breaks video with an HTTP 403, because the media token is bound to
+    /// the address that fetched the manifest.
+    pub ggc_ip_mismatch: &'static str,
+
     // Interception of this process's own traffic by nfqws2 on Keenetic. One
     // header, then a list: every entry is the problem on its first line and what
     // to do about it on the lines under it. `{}` slots are the policy name, the

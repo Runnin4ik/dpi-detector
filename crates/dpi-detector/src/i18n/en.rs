@@ -77,6 +77,12 @@ pub(crate) fn messages() -> Messages {
         not_detected: "not detected",
         unavailable: "unavailable",
 
+        ggc_label: "GGC",
+        ggc_local_ru: "local RU cache",
+        ggc_foreign_pop: "foreign PoP",
+        ggc_unknown: "unknown",
+        ggc_ip_mismatch: "GGC mapping saw a different address ({}) — split routing or a VPN can cause HTTP 403 on video",
+
         intercept_header: "nfqws2 is running, but there are problems:",
         intercept_excluded: "The detector's traffic is excluded by the \"{}\" access policy.\n\
                              For the tests, set POLICY_EXCLUDE=1 or point POLICY_NAME at a name\n\

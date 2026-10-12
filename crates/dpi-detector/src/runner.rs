@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 use std::io::{self, IsTerminal, Write};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use dpi_core::classify::Detail;
@@ -584,6 +584,39 @@ impl BurstObserver for Observers<'_> {
     }
 }
 
+/// Test 2's target list: the run's own domains plus the cache node the GGC
+/// mapping named.
+///
+/// One extra host in the same list — the rows, the columns and the row
+/// semantics are what they were — and only when the endpoint named a node this
+/// run does not already probe, so a cluster already in `domains.txt` stays one
+/// row instead of two. `None` (no answer, or an answer without a cluster) is
+/// the list as it came in.
+fn with_ggc_target(domains: &[String], ggc_host: Option<&str>) -> Vec<String> {
+    let mut targets = domains.to_vec();
+    if let Some(host) = ggc_host
+        && !targets.iter().any(|d| d.as_str() == host)
+    {
+        targets.push(host.to_string());
+    }
+    targets
+}
+
+/// Whether the address the GGC mapping answered for differs from the run's own
+/// public IPv4.
+///
+/// `Some(true)` only when both addresses were known and are not the same;
+/// `None` when either is missing — a dead public-IP echo or a mapping line
+/// without an address leaves the comparison unmeasured, not `false`. That is
+/// the shape the wrapper key takes: present means "measured and different".
+fn ggc_address_mismatch(
+    public_v4: Option<Ipv4Addr>,
+    mapping: Option<&dpi_core::net::ggc::GgcMapping>,
+) -> Option<bool> {
+    let public = IpAddr::V4(public_v4?);
+    (public != mapping?.client_ip?).then_some(true)
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "one parameter per input the run needs; the shell holds each of them separately and a wrapper struct would only move the same list one level down"
@@ -675,6 +708,22 @@ pub(crate) async fn run_test_suite(
     let mut tcp_summary = None;
     let mut tg_full = None;
 
+    // The redirector's answer about this address: names the cache node this
+    // address is steered to, which is both the line test 0 prints and the one
+    // extra host test 2 measures. Fetched once, before both blocks, so a run
+    // that has both tests reads a single answer: with test 0 in the run it rides
+    // along with the public-IP race and shares its clock, and with only test 2
+    // the redirector gets its own 5 s budget instead.
+    let ggc: Option<dpi_core::net::ggc::GgcMapping>;
+    // The one host test 2 adds for it. Derived where the mapping lands rather
+    // than where it is used, so `--json` can take the mapping itself without
+    // copying it out from under test 2.
+    let mut ggc_host: Option<String> = None;
+    // Whether that answer is about a *different* address than the run's own
+    // public IPv4 — the split-routing shape behind an HTTP 403 on video. Only
+    // test 0's public-IP echo can say, so a run without test 0 leaves it `None`.
+    let mut ggc_ip_mismatch: Option<bool> = None;
+
     // ── Test 0: network & system ──
     if tests.net {
         let spinner = (!args.json).then(|| Spinner::start(msg.fetching_net_info));
@@ -682,7 +731,13 @@ pub(crate) async fn run_test_suite(
         // Cymru, both bounding their whole fetch): with a smaller one a slow
         // but working network would print "network information unavailable"
         // instead of the panel with its red timeout rows.
-        let net_data = tokio::time::timeout(Duration::from_secs(10), async {
+        //
+        // The GGC mapping is the other control-plane lookup: it names the cache
+        // node this address is steered to, which is what explains what test 2
+        // measured. It leaves beside the public-IP race rather than after it, so
+        // the two share one clock instead of adding up, and its own 5 s budget
+        // bounds the redirector alone.
+        let net_fut = tokio::time::timeout(Duration::from_secs(10), async {
             let ips = fetch_public_ips(
                 &cfg.ip4_lookup_urls,
                 &cfg.ip6_lookup_urls,
@@ -708,8 +763,15 @@ pub(crate) async fn run_test_suite(
                 }
             );
             (ips, v4_extra, v6_extra)
-        })
-        .await;
+        });
+        // A redirector that does not answer within its budget leaves `ggc`
+        // `None`, which is the report's `unknown` line — never a failed run.
+        let (net_data, mapping) = tokio::join!(
+            net_fut,
+            dpi_core::net::ggc::fetch_ggc_mapping(Duration::from_secs(5)),
+        );
+        ggc = mapping;
+        ggc_host = ggc.as_ref().map(|m| dpi_core::net::ggc::candidate_ggc_host(&m.cluster_id));
         if let Some(s) = spinner {
             s.finish();
         }
@@ -729,6 +791,12 @@ pub(crate) async fn run_test_suite(
         };
 
         if let Ok((ips, v4_extra, v6_extra)) = net_data {
+            // The mapping answered for the address it saw; the echo above says
+            // which address this run actually leaves through. A difference is
+            // the split-routing shape (or a VPN) that breaks playback with an
+            // HTTP 403: the media token is bound to the address that fetched the
+            // manifest. A dead echo leaves it unmeasured rather than wrong.
+            ggc_ip_mismatch = ggc_address_mismatch(ips.v4.map(|(ip, _)| ip), ggc.as_ref());
             // Upstream router / VPN relay: whoami.akamai.net via local candidates.
             let mut candidates: Vec<IpAddr> = Vec::new();
             for (ip_str, _) in &dns_info.active {
@@ -814,6 +882,43 @@ pub(crate) async fn run_test_suite(
             emitter.emit(msg.net_info_unavailable);
         }
 
+        // The mapping is the redirector's answer about this address, so it is
+        // reported whatever the public-IP race did: a dead lookup there says
+        // nothing about the cache node. `None` is the `unknown` line and the
+        // absent `--json` key alike.
+        if args.json {
+            results.ggc = ggc;
+            results.ggc_ip_mismatch = ggc_ip_mismatch;
+        } else {
+            let line = match ggc.as_ref() {
+                Some(m) => format!(
+                    "{}: {} ({})\n",
+                    msg.ggc_label,
+                    m.cluster_id,
+                    if m.is_local_ru { msg.ggc_local_ru } else { msg.ggc_foreign_pop }
+                ),
+                None => format!("{}: {}\n", msg.ggc_label, msg.ggc_unknown),
+            };
+            emitter.emit(&line);
+            // Said right under the mapping line it belongs to: the node is the
+            // right one for the address the redirector saw, and what breaks the
+            // stream is that this run's own address is not that address.
+            if ggc_ip_mismatch == Some(true)
+                && let Some(ip) = ggc.as_ref().and_then(|m| m.client_ip)
+            {
+                emitter.emit(&format!(
+                    "{}\n",
+                    msg.ggc_ip_mismatch.replacen("{}", &ip.to_string(), 1)
+                ));
+            }
+        }
+
+    } else if tests.domains {
+        // No public-IP echo in this run — that belongs to test 0 — but test 2
+        // still probes the node the redirector named, so the redirector is asked
+        // on its own budget here.
+        ggc = dpi_core::net::ggc::fetch_ggc_mapping(Duration::from_secs(5)).await;
+        ggc_host = ggc.as_ref().map(|m| dpi_core::net::ggc::candidate_ggc_host(&m.cluster_id));
     }
     // ── Test 1: DNS availability ──
     if tests.dns {
@@ -862,12 +967,15 @@ pub(crate) async fn run_test_suite(
 
     // ── Test 2: domains (resolve → TLS1.3 → TLS1.2 → HTTP) ──
     if tests.domains {
+        // The node the redirector named rides in the same target list: test 2 is
+        // where the mapping becomes a measurement instead of a note.
+        let targets = with_ggc_target(domains, ggc_host.as_deref());
         if !args.json {
             emitter.emit(&format!(
                 "\n{}  {}: {} | {}: {} | {}: {}s\n\n",
                 msg.domains_check_header,
                 msg.targets_label,
-                domains.len(),
+                targets.len(),
                 msg.ip_col,
                 if cfg.ip_version == "ipv6" { "IPv6" } else { "IPv4" },
                 msg.timeout_label,
@@ -886,7 +994,7 @@ pub(crate) async fn run_test_suite(
         // them, their cell is a dash, and the QUIC column — the live line and the
         // summary alike — counts only the rows that can answer it.
         let quic_unsupported = load_quic_unsupported_list(cfg, msg);
-        let quic_total = domains
+        let quic_total = targets
             .iter()
             .filter(|d| domains::quic_applicable(d, &quic_unsupported))
             .count();
@@ -898,16 +1006,16 @@ pub(crate) async fn run_test_suite(
             live.begin_stages(
                 msg.stages_label.to_string(),
                 &[
-                    (dpi_core::ProgressBlock::DomainDns, domains.len()),
-                    (dpi_core::ProgressBlock::DomainTls13, domains.len()),
-                    (dpi_core::ProgressBlock::DomainTls12, domains.len()),
-                    (dpi_core::ProgressBlock::DomainHttp, domains.len()),
+                    (dpi_core::ProgressBlock::DomainDns, targets.len()),
+                    (dpi_core::ProgressBlock::DomainTls13, targets.len()),
+                    (dpi_core::ProgressBlock::DomainTls12, targets.len()),
+                    (dpi_core::ProgressBlock::DomainHttp, targets.len()),
                     (dpi_core::ProgressBlock::DomainQuic, quic_total),
                 ],
             );
         }
         let entries =
-            check_domains(domains, family, cfg, &stub_ips, &quic_unsupported, &sem, phases.clone()).await;
+            check_domains(&targets, family, cfg, &stub_ips, &quic_unsupported, &sem, phases.clone()).await;
         live.finish();
 
         let stats = domain_stats(&entries);
@@ -1242,6 +1350,49 @@ mod tests {
         // empty result, not a list with anything left in it.
         let kept = load_domains(&targets_arg(&["Example.COM/some/path", "   "], None), &cfg, profile, &msg).unwrap();
         assert_eq!(kept, vec!["example.com".to_string()]);
+    }
+
+    /// The `results.ggc_ip_mismatch` predicate: `Some(true)` is the only value
+    /// it ever produces, which is what makes the key mean "measured and
+    /// different" — absent (`None`) covers both "no mapping" and "the mapping
+    /// said nothing about the address".
+    #[test]
+    fn ggc_mismatch_is_only_true_when_both_addresses_differ() {
+        let mapping = |ip: Option<&str>| dpi_core::net::ggc::GgcMapping {
+            client_ip: ip.map(|s| s.parse::<IpAddr>().unwrap()),
+            cluster_id: "ertelecom-pez1".to_string(),
+            prefix: "85.249.20.0/22".to_string(),
+            is_local_ru: true,
+        };
+        let run = "203.0.113.7".parse::<Ipv4Addr>().unwrap();
+
+        // Both addresses known and the same: the mapping is about this run.
+        assert_eq!(ggc_address_mismatch(Some(run), Some(&mapping(Some("203.0.113.7")))), None);
+        // Both known and different: the split-routing case the warning names.
+        assert_eq!(ggc_address_mismatch(Some(run), Some(&mapping(Some("198.51.100.9")))), Some(true));
+        // An address on either side missing is unmeasured, never "same".
+        assert_eq!(ggc_address_mismatch(None, Some(&mapping(Some("198.51.100.9")))), None);
+        assert_eq!(ggc_address_mismatch(Some(run), Some(&mapping(None))), None);
+        assert_eq!(ggc_address_mismatch(Some(run), None), None);
+    }
+
+    /// Test 2's extra host: appended once, never twice, and never when the
+    /// endpoint named nothing. `rr1` in the list stands for a `domains.txt` that
+    /// already names the node.
+    #[test]
+    fn the_cache_node_is_appended_once_and_only_once() {
+        let domains = vec!["youtube.com".to_string()];
+        let node = "r1.ertelecom-pez1.googlevideo.com";
+
+        assert_eq!(
+            with_ggc_target(&domains, Some(node)),
+            vec!["youtube.com".to_string(), node.to_string()]
+        );
+        // Already a target of the run: one row, not two.
+        let with_node = vec![node.to_string()];
+        assert_eq!(with_ggc_target(&with_node, Some(node)), with_node);
+        // No mapping (or a mapping with no cluster): the list as it came in.
+        assert_eq!(with_ggc_target(&domains, None), domains);
     }
 }
 

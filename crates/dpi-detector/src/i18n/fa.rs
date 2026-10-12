@@ -76,6 +76,12 @@ pub(crate) fn messages() -> Messages {
         not_detected: "peyda nashod",
         unavailable: "dar dastras nist",
 
+        ggc_label: "GGC",
+        ggc_local_ru: "cache-e mahalli-ye RU",
+        ggc_foreign_pop: "PoP-e khareji",
+        ggc_unknown: "nashinakhte",
+        ggc_ip_mismatch: "GGC mapping adres-e digari did ({}) — split routing ya VPN mitavanad sabab-e HTTP 403 rooye video shavad",
+
         intercept_header: "nfqws2 ejra mishavad, amma in moshkelat vojood darad:",
         intercept_excluded: "Traffic-e detector tavasot-e policy-e dastresi \"{}\" mostasna shode ast.\n\
                              Baraye test-ha, POLICY_EXCLUDE=1 ra bezarid ya POLICY_NAME ra be esmi ke\n\

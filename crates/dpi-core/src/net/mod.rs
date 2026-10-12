@@ -8,6 +8,7 @@ pub mod follow_up;
 pub mod ja3;
 pub mod ja4;
 pub mod http_client;
+pub mod ggc;
 pub mod http;
 pub mod netinfo;
 pub mod public_ip;
