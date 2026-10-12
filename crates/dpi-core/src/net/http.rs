@@ -635,13 +635,26 @@ fn strip_www(host: &str) -> &str {
 /// behaviour instead. It grows by one line per pair; the direction matters, and
 /// a host that is not in the list keeps the default verdict.
 ///
-/// Both entries are Meta's own sign-in hop, measured on the live sites: the two
-/// names answer `301` to `https://www.facebook.com/` and nothing else, so the
-/// row reads `OK` with the target named. A hop between the two of them
-/// (`www.instagram.com` → `www.messenger.com`) is not a pair and stays `REDIR`.
+/// Each of the Meta entries is that company's own sign-in hop, measured on the
+/// live sites: the two names answer `301` to `https://www.facebook.com/` and
+/// nothing else, so the row reads `OK` with the target named. A hop between the
+/// two of them (`www.instagram.com` → `www.messenger.com`) is not a pair and
+/// stays `REDIR`.
+///
+/// The four Google entries are the same shape, each measured on the live host:
+/// the URL shortener `youtu.be` answers `303` to `https://www.youtube.com/`, the
+/// Studio front door `studio.youtube.com` answers `302` to
+/// `accounts.google.com`'s sign-in, and the retired `googlevideo.com` apex
+/// answers `301` to `video.google.com` over plain HTTP and to `www.google.com`
+/// over TLS. All four targets are Google's own hosts, so the hop is the site's
+/// behaviour rather than a foreign redirect — the exact pair, still directional.
 const REDIRECT_EXCEPTIONS: &[(&str, &str)] = &[
     ("messenger.com", "facebook.com"),
     ("instagram.com", "facebook.com"),
+    ("youtu.be", "youtube.com"),
+    ("studio.youtube.com", "accounts.google.com"),
+    ("googlevideo.com", "google.com"),
+    ("googlevideo.com", "video.google.com"),
 ];
 
 /// True when `from` → `to` is a declared exception in [`REDIRECT_EXCEPTIONS`].
@@ -1188,5 +1201,35 @@ mod tests {
         assert_eq!(parse_host("https://[2001:db8::1]:8443/dns-query"), "[2001:db8::1]");
         assert_eq!(parse_host("dns.google:443"), "dns.google");
         assert_eq!(parse_host("::1"), "::1");
+    }
+
+    /// The Google-owned pairs added to [`REDIRECT_EXCEPTIONS`] read `OK` with the
+    /// target named, exactly like the Meta sign-in hop — each measured on its
+    /// live host, and still the exact pair in the declared direction.
+    #[test]
+    fn the_declared_google_redirects_read_ok() {
+        let cases: &[(&str, u16, &str, bool)] = &[
+            // (asked-for host, status, Location, HTTP phase)
+            ("youtu.be", 303, "https://www.youtube.com/?feature=youtu.be", false),
+            ("studio.youtube.com", 302, "https://accounts.google.com/ServiceLogin?service=youtube", false),
+            ("googlevideo.com", 301, "http://video.google.com/", true),
+            ("googlevideo.com", 301, "https://www.google.com/", false),
+        ];
+        for (domain, status, location, http_phase) in cases {
+            let base = format!("http{}://{domain}", if *http_phase { "" } else { "s" });
+            let (s, d) = classify_redirect(domain, &base, *status, location, *http_phase);
+            assert_eq!(s, DpiStatus::Ok, "{domain} + {location} -> {}", d.code());
+            assert!(matches!(d, Detail::Redirect { .. }), "{domain} names the target it was sent to");
+        }
+        // The pair is exact and directional: the hop the other way, and a host
+        // that only wears the name, keep the default red verdict.
+        assert_eq!(
+            classify_redirect("youtube.com", "https://youtube.com", 301, "https://youtu.be/", false).0,
+            DpiStatus::RedirSuspect
+        );
+        assert_eq!(
+            classify_redirect("notgooglevideo.com", "https://notgooglevideo.com", 301, "https://www.google.com/", false).0,
+            DpiStatus::RedirSuspect
+        );
     }
 }
