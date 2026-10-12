@@ -33,4 +33,4 @@ shikimori.io
 vk.ru
 www.google.com
 fonts.gstatic.com
-gvt1.com
+dl.google.com
