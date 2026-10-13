@@ -108,15 +108,37 @@ pub(crate) struct Messages {
     // endpoint steers this address to, because that is what a throttled or
     // reset video path is explained by. `ggc_label` is the protocol-style token
     // and stays Latin in every language (rule 4); the node id is Latin too (it
-    // is data), while the placement and the miss are prose.
+    // is data), while the placement and the miss are prose. The node is placed
+    // by its address when that answered (`ggc_placement_*` plus `ggc_as`), and
+    // `ggc_local_ru`/`ggc_foreign_pop` are the name-based verdict that stands in
+    // when it did not.
     /// Label of the GGC line (`GGC`).
     pub ggc_label: &'static str,
-    /// The node sits in a Russian operator's own network: the cache is domestic,
-    /// and its path is the one that broke.
+    /// The name says the node sits in a Russian operator's own network or a
+    /// Russian city, with no address to confirm it: the fallback verdict, and
+    /// the one the line printed before it could read the address at all.
     pub ggc_local_ru: &'static str,
-    /// The node sits in a foreign PoP (`fra16s48`): the path is transit, whose
-    /// peering is what was cut.
+    /// The name says the node sits in a foreign PoP (`fra16s48`) — the same
+    /// fallback, read the other way: the path is transit, whose peering is what
+    /// was cut.
     pub ggc_foreign_pop: &'static str,
+    /// The node's address puts it in the run's own provider's network (the same
+    /// AS): a cache next door. `--json` token `local`.
+    pub ggc_placement_local: &'static str,
+    /// The node's address puts it in Google's own network (`AS15169`): a PoP
+    /// over transit. `--json` token `global`.
+    pub ggc_placement_global: &'static str,
+    /// The node's address is in neither the run's own AS nor Google's: somebody
+    /// else's network. `--json` token `other`.
+    pub ggc_placement_other: &'static str,
+    /// The AS the node's address was placed by: `{}` is the number, and `AS`
+    /// stays Latin in every language (rule 4).
+    pub ggc_as: &'static str,
+    /// The control node's clause on the same line: `{}` is its name and `{}` its
+    /// placement, so the mapped node reads against a node in Google's own
+    /// network. Printed only when the control answered and the mapping named a
+    /// node: the pair is what the clause explains.
+    pub ggc_control: &'static str,
     /// The redirector named nothing the parser accepts, or did not answer: the
     /// run says so and carries on.
     pub ggc_unknown: &'static str,

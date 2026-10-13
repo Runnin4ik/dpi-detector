@@ -80,6 +80,11 @@ pub(crate) fn messages() -> Messages {
         ggc_label: "GGC",
         ggc_local_ru: "локальный кэш RU",
         ggc_foreign_pop: "зарубежный PoP",
+        ggc_placement_local: "локальный кэш",
+        ggc_placement_global: "глобальный PoP",
+        ggc_placement_other: "другая сеть",
+        ggc_as: "AS{}",
+        ggc_control: " | контроль: {} ({})",
         ggc_unknown: "неизвестно",
         ggc_ip_mismatch: "Ответ GGC пришёл для другого адреса ({}) — раздельная маршрутизация или VPN могут дать HTTP 403 на видео",
 

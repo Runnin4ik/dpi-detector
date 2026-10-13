@@ -80,6 +80,11 @@ pub(crate) fn messages() -> Messages {
         ggc_label: "GGC",
         ggc_local_ru: "local RU cache",
         ggc_foreign_pop: "foreign PoP",
+        ggc_placement_local: "local cache",
+        ggc_placement_global: "global PoP",
+        ggc_placement_other: "other network",
+        ggc_as: "AS{}",
+        ggc_control: " | control: {} ({})",
         ggc_unknown: "unknown",
         ggc_ip_mismatch: "GGC mapping saw a different address ({}) — split routing or a VPN can cause HTTP 403 on video",
 

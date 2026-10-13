@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use dpi_core::classify::Detail;
-use dpi_core::net::ggc::GgcMapping;
+use dpi_core::net::ggc::{GgcMapping, GgcPlacement};
 use dpi_core::probe::telegram::TransferStatus;
 use serde::Serialize;
 
@@ -33,11 +33,19 @@ pub(crate) struct Results {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network_info: Option<NetworkInfo>,
     /// The cache node the GGC mapping endpoint steered this address to — the
-    /// answer behind test 2's YouTube verdict. Absent when the endpoint answered
-    /// nothing the parser accepts or timed out, the same `None` the report
-    /// prints as its `unknown` line. Additive, so `SCHEMA_VERSION` stands.
+    /// answer behind test 2's YouTube verdict — together with what this run
+    /// measured about where that node actually is. Absent when the endpoint
+    /// answered nothing the parser accepts or timed out, the same `None` the
+    /// report prints as its `unknown` line. Additive, so `SCHEMA_VERSION`
+    /// stands.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ggc: Option<GgcMapping>,
+    pub ggc: Option<GgcReport>,
+    /// The control node probed beside the mapped one for the same row: a node in
+    /// Google's own network, which is what "global" looks like from this run.
+    /// Absent when the mapping named no node or the control did not answer.
+    /// Additive, so `SCHEMA_VERSION` stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ggc_control: Option<GgcControl>,
     /// `Some(true)` when the mapping was computed for a different address than
     /// the one the run's own public-IP echo returned: the split-routing shape
     /// behind an HTTP 403 on video, because the media token is bound to the
@@ -57,6 +65,52 @@ pub(crate) struct Results {
     pub telegram: Option<Telegram>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint_burst: Option<FingerprintBurst>,
+}
+
+/// `results.ggc`: the mapping the redirector answered, plus what this run
+/// measured about where the node it named actually is.
+///
+/// The mapping's own keys are flattened in unchanged (`client_ip`, `cluster_id`,
+/// `prefix`, `is_local_ru`), because a reader that knows them must not have to
+/// look one level deeper for them; the added keys are the address's answer,
+/// which is not the name's. `placement` is always there while the mapping is:
+/// when `asn` is absent the address could not be classified and the placement is
+/// the name's reading. Additive, so `SCHEMA_VERSION` stands.
+#[derive(Serialize)]
+pub(crate) struct GgcReport {
+    #[serde(flatten)]
+    pub mapping: GgcMapping,
+    /// Where the node sits: `local` (its AS is this run's own provider's),
+    /// `global` (Google's own network, AS15169) or `other`.
+    pub placement: GgcPlacement,
+    /// The address the node's name resolved to, absent when it did not resolve
+    /// inside the budget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// The AS Team Cymru answered for that address, absent when the lookup did
+    /// not answer — which is also what sends `placement` to the name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asn: Option<String>,
+    /// The org name Cymru gave that AS, absent when it gave none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
+}
+
+/// The control node measured beside the mapped one: a node in Google's own
+/// network, whose two rows are the pair the `GGC:` line reads.
+#[derive(Serialize)]
+pub(crate) struct GgcControl {
+    /// The host as probed (`r1.pniada-as.googlevideo.com`).
+    pub host: String,
+    /// Where the control sits, read by the same rule as the mapped node; the
+    /// name is its fallback.
+    pub placement: GgcPlacement,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -245,5 +299,49 @@ mod tests {
         // The skipped-endpoint counter is a wire key of its own: the ratio it is
         // kept out of (`doh_total`/`dot_total`) cannot name it.
         assert!(text.contains(r#""no_ca_bundle":1"#), "{text}");
+    }
+
+    /// `results.ggc` keeps the mapping's own keys where they were and adds the
+    /// address's verdict beside them: the flatten is the point, because a reader
+    /// that already keys on `cluster_id` must not have to look one level deeper
+    /// after this change. An unfilled fact is absent, not `null`.
+    #[test]
+    fn ggc_report_flattens_the_mapping_beside_the_placement() {
+        let report = GgcReport {
+            mapping: GgcMapping {
+                client_ip: Some("203.0.113.7".parse().expect("an IPv4 address")),
+                cluster_id: "ertelecom-pez1".to_string(),
+                prefix: "85.249.20.0/22".to_string(),
+                is_local_ru: true,
+            },
+            placement: GgcPlacement::Local,
+            address: Some("109.194.137.76".to_string()),
+            asn: Some("41754".to_string()),
+            org: None,
+        };
+        let text = serde_json::to_string(&report).expect("the payload serializes");
+        for key in [
+            r#""client_ip":"203.0.113.7""#,
+            r#""cluster_id":"ertelecom-pez1""#,
+            r#""prefix":"85.249.20.0/22""#,
+            r#""is_local_ru":true"#,
+            r#""placement":"local""#,
+            r#""address":"109.194.137.76""#,
+            r#""asn":"41754""#,
+        ] {
+            assert!(text.contains(key), "{key} missing from {text}");
+        }
+        assert!(!text.contains("org"), "an unfilled org is absent, not null: {text}");
+
+        let control = GgcControl {
+            host: "r1.pniada-as.googlevideo.com".to_string(),
+            placement: GgcPlacement::Global,
+            address: Some("172.217.152.129".to_string()),
+            asn: Some("15169".to_string()),
+            org: Some("GOOGLE".to_string()),
+        };
+        let text = serde_json::to_string(&control).expect("the control serializes");
+        assert!(text.contains(r#""placement":"global""#), "{text}");
+        assert!(text.contains(r#""host":"r1.pniada-as.googlevideo.com""#), "{text}");
     }
 }

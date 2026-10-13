@@ -79,6 +79,11 @@ pub(crate) fn messages() -> Messages {
         ggc_label: "GGC",
         ggc_local_ru: "cache-e mahalli-ye RU",
         ggc_foreign_pop: "PoP-e khareji",
+        ggc_placement_local: "cache-e mahalli",
+        ggc_placement_global: "PoP-e jahani",
+        ggc_placement_other: "network-e digar",
+        ggc_as: "AS{}",
+        ggc_control: " | control: {} ({})",
         ggc_unknown: "nashinakhte",
         ggc_ip_mismatch: "GGC mapping adres-e digari did ({}) — split routing ya VPN mitavanad sabab-e HTTP 403 rooye video shavad",
 

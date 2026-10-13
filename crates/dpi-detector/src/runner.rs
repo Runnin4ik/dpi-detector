@@ -27,6 +27,10 @@ use dpi_core::probe::burst::{
     BurstTlsVersion, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_LAUNCH_GAP_MS, BURST_DEFAULT_TIMEOUT_SECS,
 };
 use dpi_core::dns::cymru::{fetch_ip_cymru, IpCymruInfo};
+use dpi_core::net::ggc::{
+    candidate_ggc_host, fetch_ggc_mapping, gather_node_facts, node_name_is_local_ru, placement,
+    GGC_CONTROL_HOSTS, GgcMapping, GgcNodeFacts, GgcPlacement,
+};
 use dpi_core::probe::domains::{
     check_domains, collect_stub_ips, domain_stats, IpFamily,
 };
@@ -584,23 +588,87 @@ impl BurstObserver for Observers<'_> {
     }
 }
 
-/// Test 2's target list: the run's own domains plus the cache node the GGC
-/// mapping named.
+/// Test 2's target list: the run's own domains plus the GGC hosts.
 ///
-/// One extra host in the same list — the rows, the columns and the row
-/// semantics are what they were — and only when the endpoint named a node this
-/// run does not already probe, so a cluster already in `domains.txt` stays one
-/// row instead of two. `None` (no answer, or an answer without a cluster) is
-/// the list as it came in.
-fn with_ggc_target(domains: &[String], ggc_host: Option<&str>) -> Vec<String> {
+/// Extra hosts in the same list — the rows, the columns and the row semantics
+/// are what they were — each only when the run does not already probe it, so a
+/// cluster already in `domains.txt` stays one row instead of two. An empty
+/// `ggc_hosts` is the list as it came in.
+fn with_ggc_target(domains: &[String], ggc_hosts: &[&str]) -> Vec<String> {
     let mut targets = domains.to_vec();
-    if let Some(host) = ggc_host
-        && !targets.iter().any(|d| d.as_str() == host)
-    {
-        targets.push(host.to_string());
+    for host in ggc_hosts {
+        if !targets.iter().any(|d| d.as_str() == *host) {
+            targets.push((*host).to_string());
+        }
     }
     targets
 }
+
+/// The hosts test 2 adds for the GGC pair: the node the mapping named, then the
+/// measured control beside it.
+///
+/// Built only from a named node. The control is there to be read against our
+/// node's row — that is the whole point of the pair — so a run whose mapping
+/// answered nothing adds neither: one row with no counterpart explains nothing.
+fn ggc_extra_targets<'a>(node_host: Option<&'a str>, control_hosts: &'a [&'a str]) -> Vec<&'a str> {
+    let Some(node_host) = node_host else {
+        return Vec::new();
+    };
+    let mut hosts = vec![node_host];
+    hosts.extend_from_slice(control_hosts);
+    hosts
+}
+
+/// Where a node sits, from the facts gathered for it and this run's own ASN.
+///
+/// One function for both halves of the pair: the node the mapping named carries
+/// the mapping's own name verdict as its fallback, the control the name verdict
+/// of its host — no mapping names it. `None` facts (nothing answered, or test 0
+/// gathered none) and a `None` run ASN both leave the name deciding, exactly as
+/// the line did before it could read an address.
+fn node_placement(
+    mapping: Option<&GgcMapping>,
+    facts: Option<&GgcNodeFacts>,
+    run_asn: Option<&str>,
+) -> GgcPlacement {
+    let name_local_ru = match mapping {
+        Some(m) => m.is_local_ru,
+        None => facts.map(|f| node_name_is_local_ru(&f.host)).unwrap_or(false),
+    };
+    placement(facts.and_then(|f| f.asn.as_deref()), run_asn, name_local_ru)
+}
+
+/// The parenthesised description of a node on the `GGC:` line.
+///
+/// By address when the ASN is known — the placement and `AS<n>`, which is what
+/// the address measured — and by the name's own verdict otherwise, in the two
+/// strings the line always had. The name is not printed beside an ASN: the two
+/// can disagree (that is what the address rule is for), so the line says what
+/// was measured and not both readings of it.
+fn ggc_node_text(asn: Option<&str>, placed: GgcPlacement, name_local_ru: bool, msg: &Messages) -> String {
+    let Some(asn) = asn else {
+        return if name_local_ru { msg.ggc_local_ru } else { msg.ggc_foreign_pop }.to_string();
+    };
+    format!("{}, {}", placement_text(placed, msg), msg.ggc_as.replacen("{}", asn, 1))
+}
+
+/// The label of a placement read from an address.
+fn placement_text(placed: GgcPlacement, msg: &Messages) -> &'static str {
+    match placed {
+        GgcPlacement::Local => msg.ggc_placement_local,
+        GgcPlacement::Global => msg.ggc_placement_global,
+        GgcPlacement::Other => msg.ggc_placement_other,
+    }
+}
+
+/// The budget for one node's lookup: the name resolves first, then Team Cymru
+/// answers about that address, both inside this one deadline.
+///
+/// The node and the control are looked up together, so a run waits it once at
+/// worst. It is the same 5 s the redirector and the run's own Cymru lookup get,
+/// and the inner lookups are bounded by it in turn, so a dead DoH endpoint
+/// cannot turn a diagnostic into a stall.
+const GGC_NODE_FACTS_BUDGET: Duration = Duration::from_secs(5);
 
 /// Whether the address the GGC mapping answered for differs from the run's own
 /// public IPv4.
@@ -611,7 +679,7 @@ fn with_ggc_target(domains: &[String], ggc_host: Option<&str>) -> Vec<String> {
 /// the shape the wrapper key takes: present means "measured and different".
 fn ggc_address_mismatch(
     public_v4: Option<Ipv4Addr>,
-    mapping: Option<&dpi_core::net::ggc::GgcMapping>,
+    mapping: Option<&GgcMapping>,
 ) -> Option<bool> {
     let public = IpAddr::V4(public_v4?);
     (public != mapping?.client_ip?).then_some(true)
@@ -714,11 +782,20 @@ pub(crate) async fn run_test_suite(
     // that has both tests reads a single answer: with test 0 in the run it rides
     // along with the public-IP race and shares its clock, and with only test 2
     // the redirector gets its own 5 s budget instead.
-    let ggc: Option<dpi_core::net::ggc::GgcMapping>;
-    // The one host test 2 adds for it. Derived where the mapping lands rather
-    // than where it is used, so `--json` can take the mapping itself without
-    // copying it out from under test 2.
+    let mut ggc: Option<GgcMapping>;
+    // The node test 2 adds for it, and the address measurement that places it.
+    // Derived where the mapping lands rather than where it is used, so `--json`
+    // can take the mapping itself without copying it out from under test 2.
     let mut ggc_host: Option<String> = None;
+    // What the node's own name resolves to and what Cymru says about that
+    // address, plus the same facts for the control node measured beside it.
+    // Filled only when the mapping named a node: the pair is the point.
+    let mut ggc_node_facts: Option<GgcNodeFacts> = None;
+    let mut ggc_control: Option<GgcNodeFacts> = None;
+    // This run's own ASN, as test 0's Cymru lookup filled it — the other half of
+    // the address comparison. `None` (test 0 out of the run, or its lookup dead)
+    // leaves the placement to the name.
+    let mut run_asn: Option<String> = None;
     // Whether that answer is about a *different* address than the run's own
     // public IPv4 — the split-routing shape behind an HTTP 403 on video. Only
     // test 0's public-IP echo can say, so a run without test 0 leaves it `None`.
@@ -768,10 +845,10 @@ pub(crate) async fn run_test_suite(
         // `None`, which is the report's `unknown` line — never a failed run.
         let (net_data, mapping) = tokio::join!(
             net_fut,
-            dpi_core::net::ggc::fetch_ggc_mapping(Duration::from_secs(5)),
+            fetch_ggc_mapping(Duration::from_secs(5)),
         );
         ggc = mapping;
-        ggc_host = ggc.as_ref().map(|m| dpi_core::net::ggc::candidate_ggc_host(&m.cluster_id));
+        ggc_host = ggc.as_ref().map(|m| candidate_ggc_host(&m.cluster_id));
         if let Some(s) = spinner {
             s.finish();
         }
@@ -837,6 +914,10 @@ pub(crate) async fn run_test_suite(
                 dns_info.upstream_label = Some(label.to_string());
             }
 
+            // The run's own AS, kept for the GGC placement: the panel reports it
+            // either way, and the node's address is read against it.
+            run_asn = v4_extra.as_ref().map(|c| c.asn.clone());
+
             let v4 = family_info(ips.v4.map(|(ip, ms)| (IpAddr::V4(ip), ms)), v4_extra.clone());
             let v6 = ips.v6.map(|(ip, ms)| (IpAddr::V6(ip), ms));
             let v6 = family_info(v6, v6_extra);
@@ -882,20 +963,84 @@ pub(crate) async fn run_test_suite(
             emitter.emit(msg.net_info_unavailable);
         }
 
+        // The node's address is what places it, not its name. The name is a
+        // convention: it read `pniada-as` as a foreign PoP while that address is
+        // Google's own network, and it would read an operator's own cache as
+        // foreign whenever the operator named the cluster something the tables
+        // do not carry. The address is resolved and looked up through the same
+        // Cymru path test 0 uses for this run's own address, and only when the
+        // mapping named a node — the pair is what the row explains.
+        if let Some(host) = ggc_host.as_deref() {
+            let controls = async {
+                for candidate in GGC_CONTROL_HOSTS.iter().copied() {
+                    let facts = gather_node_facts(candidate, &cfg.cymru_doh_servers, GGC_NODE_FACTS_BUDGET).await;
+                    // Only what answered is a control: a name that did not
+                    // resolve has no row to read the node against.
+                    if facts.answered() {
+                        return Some(facts);
+                    }
+                }
+                None
+            };
+            let (node, control) = tokio::join!(
+                gather_node_facts(host, &cfg.cymru_doh_servers, GGC_NODE_FACTS_BUDGET),
+                controls,
+            );
+            ggc_node_facts = Some(node);
+            ggc_control = control;
+        }
+
         // The mapping is the redirector's answer about this address, so it is
         // reported whatever the public-IP race did: a dead lookup there says
         // nothing about the cache node. `None` is the `unknown` line and the
         // absent `--json` key alike.
         if args.json {
-            results.ggc = ggc;
+            if let Some(mapping) = ggc.take() {
+                results.ggc = Some(crate::json::GgcReport {
+                    placement: node_placement(Some(&mapping), ggc_node_facts.as_ref(), run_asn.as_deref()),
+                    address: ggc_node_facts.as_ref().and_then(|f| f.address).map(|ip| ip.to_string()),
+                    asn: ggc_node_facts.as_ref().and_then(|f| f.asn.clone()),
+                    org: ggc_node_facts.as_ref().and_then(|f| f.org.clone()),
+                    mapping,
+                });
+            }
+            results.ggc_control = ggc_control.as_ref().map(|facts| crate::json::GgcControl {
+                host: facts.host.clone(),
+                placement: node_placement(None, Some(facts), run_asn.as_deref()),
+                address: facts.address.map(|ip| ip.to_string()),
+                asn: facts.asn.clone(),
+                org: facts.org.clone(),
+            });
             results.ggc_ip_mismatch = ggc_ip_mismatch;
         } else {
+            // The control's clause rides on the same line, so the node reads
+            // against a node in Google's own network instead of standing alone.
+            let control_clause = ggc_control.as_ref().map_or_else(String::new, |facts| {
+                msg.ggc_control
+                    .replacen("{}", &facts.host, 1)
+                    .replacen(
+                        "{}",
+                        &ggc_node_text(
+                            facts.asn.as_deref(),
+                            node_placement(None, Some(facts), run_asn.as_deref()),
+                            node_name_is_local_ru(&facts.host),
+                            msg,
+                        ),
+                        1,
+                    )
+            });
             let line = match ggc.as_ref() {
                 Some(m) => format!(
-                    "{}: {} ({})\n",
+                    "{}: {} ({}){}\n",
                     msg.ggc_label,
                     m.cluster_id,
-                    if m.is_local_ru { msg.ggc_local_ru } else { msg.ggc_foreign_pop }
+                    ggc_node_text(
+                        ggc_node_facts.as_ref().and_then(|f| f.asn.as_deref()),
+                        node_placement(Some(m), ggc_node_facts.as_ref(), run_asn.as_deref()),
+                        m.is_local_ru,
+                        msg,
+                    ),
+                    control_clause,
                 ),
                 None => format!("{}: {}\n", msg.ggc_label, msg.ggc_unknown),
             };
@@ -917,8 +1062,8 @@ pub(crate) async fn run_test_suite(
         // No public-IP echo in this run — that belongs to test 0 — but test 2
         // still probes the node the redirector named, so the redirector is asked
         // on its own budget here.
-        ggc = dpi_core::net::ggc::fetch_ggc_mapping(Duration::from_secs(5)).await;
-        ggc_host = ggc.as_ref().map(|m| dpi_core::net::ggc::candidate_ggc_host(&m.cluster_id));
+        ggc = fetch_ggc_mapping(Duration::from_secs(5)).await;
+        ggc_host = ggc.as_ref().map(|m| candidate_ggc_host(&m.cluster_id));
     }
     // ── Test 1: DNS availability ──
     if tests.dns {
@@ -968,9 +1113,10 @@ pub(crate) async fn run_test_suite(
 
     // ── Test 2: domains (resolve → TLS1.3 → TLS1.2 → HTTP) ──
     if tests.domains {
-        // The node the redirector named rides in the same target list: test 2 is
-        // where the mapping becomes a measurement instead of a note.
-        let targets = with_ggc_target(domains, ggc_host.as_deref());
+        // The node the redirector named rides in the same target list, with the
+        // measured control beside it: test 2 is where the mapping becomes a
+        // measurement instead of a note, and the pair is what the row shows.
+        let targets = with_ggc_target(domains, &ggc_extra_targets(ggc_host.as_deref(), GGC_CONTROL_HOSTS));
         if !args.json {
             emitter.emit(&format!(
                 "\n{}  {}: {} | {}: {} | {}: {}s\n\n",
@@ -1359,7 +1505,7 @@ mod tests {
     /// said nothing about the address".
     #[test]
     fn ggc_mismatch_is_only_true_when_both_addresses_differ() {
-        let mapping = |ip: Option<&str>| dpi_core::net::ggc::GgcMapping {
+        let mapping = |ip: Option<&str>| GgcMapping {
             client_ip: ip.map(|s| s.parse::<IpAddr>().unwrap()),
             cluster_id: "ertelecom-pez1".to_string(),
             prefix: "85.249.20.0/22".to_string(),
@@ -1377,23 +1523,120 @@ mod tests {
         assert_eq!(ggc_address_mismatch(Some(run), None), None);
     }
 
-    /// Test 2's extra host: appended once, never twice, and never when the
-    /// endpoint named nothing. `rr1` in the list stands for a `domains.txt` that
-    /// already names the node.
+    /// Test 2's extra hosts: the mapped node and the measured control beside it,
+    /// each appended once and never twice. Pins the pair rule the row rests on —
+    /// a run that already lists either host keeps one row of it, and the
+    /// dedupe is by host, not by position.
     #[test]
-    fn the_cache_node_is_appended_once_and_only_once() {
+    fn the_control_node_rides_beside_the_mapped_one_once_each() {
         let domains = vec!["youtube.com".to_string()];
         let node = "r1.ertelecom-pez1.googlevideo.com";
+        let control = GGC_CONTROL_HOSTS[0];
 
         assert_eq!(
-            with_ggc_target(&domains, Some(node)),
-            vec!["youtube.com".to_string(), node.to_string()]
+            with_ggc_target(&domains, &[node, control]),
+            vec!["youtube.com".to_string(), node.to_string(), control.to_string()]
         );
-        // Already a target of the run: one row, not two.
-        let with_node = vec![node.to_string()];
-        assert_eq!(with_ggc_target(&with_node, Some(node)), with_node);
-        // No mapping (or a mapping with no cluster): the list as it came in.
-        assert_eq!(with_ggc_target(&domains, None), domains);
+        // Already targets of the run: one row each, not two.
+        let with_both = vec![node.to_string(), control.to_string()];
+        assert_eq!(with_ggc_target(&with_both, &[node, control]), with_both);
+        // The control already a target of the run, our node not: the node is
+        // added and the control stays one row.
+        let with_control = vec![control.to_string()];
+        assert_eq!(
+            with_ggc_target(&with_control, &[node, control]),
+            vec![control.to_string(), node.to_string()]
+        );
+        // No GGC hosts at all: the list as it came in.
+        assert_eq!(with_ggc_target(&domains, &[]), domains);
+    }
+
+    /// What test 2 adds, and when: the control is the counterpart of our node's
+    /// row, so a mapping that named nothing adds neither. Pins the failure the
+    /// standalone control would be — a "global PoP" row with nothing to contrast
+    /// it against, which is the mapping's `unknown` case.
+    #[test]
+    fn the_control_is_added_only_beside_a_named_node() {
+        let node = "r1.ertelecom-pez1.googlevideo.com";
+        assert_eq!(ggc_extra_targets(Some(node), GGC_CONTROL_HOSTS), vec![node, GGC_CONTROL_HOSTS[0]]);
+        assert_eq!(ggc_extra_targets(None, GGC_CONTROL_HOSTS), Vec::<&str>::new());
+    }
+
+    /// The line's two readings of a node: by the address when the ASN is known
+    /// (placement plus `AS<n>`), by the name otherwise, in the strings the line
+    /// has always printed. Pins that the fallback wording survives the address
+    /// rule and that the two are never printed at once — they can disagree, and
+    /// a line saying both would leave the reader to pick.
+    #[test]
+    fn the_node_description_is_the_address_or_the_name_but_not_both() {
+        let msg = get_messages(Language::En);
+
+        // Address known: the placement and the AS.
+        assert_eq!(
+            ggc_node_text(Some("41754"), GgcPlacement::Local, false, &msg),
+            "local cache, AS41754"
+        );
+        assert_eq!(
+            ggc_node_text(Some("15169"), GgcPlacement::Global, true, &msg),
+            "global PoP, AS15169"
+        );
+        assert_eq!(
+            ggc_node_text(Some("8359"), GgcPlacement::Other, true, &msg),
+            "other network, AS8359"
+        );
+        // No ASN: the name's own verdict, in the original wording, whatever the
+        // placement function made of it.
+        assert_eq!(ggc_node_text(None, GgcPlacement::Local, true, &msg), "local RU cache");
+        assert_eq!(ggc_node_text(None, GgcPlacement::Other, false, &msg), "foreign PoP");
+    }
+
+    /// The placement the report carries for each half of the pair: the mapped
+    /// node from the mapping's name verdict, the control from its own host name,
+    /// and the run's ASN deciding both when the facts answered.
+    #[test]
+    fn the_pair_is_placed_by_address_and_falls_back_by_name() {
+        let mapping = GgcMapping {
+            client_ip: Some("203.0.113.7".parse().expect("an IPv4 address")),
+            cluster_id: "ertelecom-pez1".to_string(),
+            prefix: "85.249.20.0/22".to_string(),
+            is_local_ru: true,
+        };
+        let node = GgcNodeFacts {
+            host: "r1.ertelecom-pez1.googlevideo.com".to_string(),
+            address: Some("109.194.137.76".parse().expect("an IPv4 address")),
+            asn: Some("41754".to_string()),
+            org: Some("ERTH-PENZA-AS".to_string()),
+        };
+        let control = GgcNodeFacts {
+            host: GGC_CONTROL_HOSTS[0].to_string(),
+            address: Some("172.217.152.129".parse().expect("an IPv4 address")),
+            asn: Some("15169".to_string()),
+            org: Some("GOOGLE".to_string()),
+        };
+
+        // Both answered and the run's own AS is known: the addresses decide —
+        // the node is in the run's own AS, the control in Google's network.
+        assert_eq!(node_placement(Some(&mapping), Some(&node), Some("41754")), GgcPlacement::Local);
+        assert_eq!(node_placement(None, Some(&control), Some("41754")), GgcPlacement::Global);
+        // The run's own ASN missing — test 0 out of the run: Google's AS still
+        // places the control, because that fact needs no second side, while the
+        // node's AS alone says nothing and the mapping's name verdict stands.
+        assert_eq!(node_placement(Some(&mapping), Some(&node), None), GgcPlacement::Local);
+        assert_eq!(node_placement(None, Some(&control), None), GgcPlacement::Global);
+        // No facts at all (nothing resolved, or the deadline ran out): the
+        // mapping's verdict for the node, the control's own host name for the
+        // control — and the control's name is not local, so it stays unplaced.
+        assert_eq!(node_placement(Some(&mapping), None, Some("41754")), GgcPlacement::Local);
+        assert_eq!(node_placement(None, None, Some("41754")), GgcPlacement::Other);
+    }
+
+    /// The control's name is not local, so its placement is the address's answer
+    /// and not the name's: the measured node is in Google's own network, which
+    /// the tables cannot read out of `pniada-as`.
+    #[test]
+    fn the_control_is_placed_by_its_address_not_its_name() {
+        assert!(!node_name_is_local_ru(GGC_CONTROL_HOSTS[0]));
+        assert_eq!(placement(Some("15169"), Some("41754"), node_name_is_local_ru(GGC_CONTROL_HOSTS[0])), GgcPlacement::Global);
     }
 }
 

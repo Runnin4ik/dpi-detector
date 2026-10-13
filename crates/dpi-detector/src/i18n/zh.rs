@@ -80,6 +80,11 @@ pub(crate) fn messages() -> Messages {
         ggc_label: "GGC",
         ggc_local_ru: "俄罗斯本地缓存",
         ggc_foreign_pop: "境外 PoP",
+        ggc_placement_local: "本地缓存",
+        ggc_placement_global: "全局 PoP",
+        ggc_placement_other: "其他网络",
+        ggc_as: "AS{}",
+        ggc_control: " | 对照组: {} ({})",
         ggc_unknown: "未知",
         ggc_ip_mismatch: "GGC 映射看到的地址不同（{}）——分流或 VPN 可能导致视频出现 HTTP 403",
 
