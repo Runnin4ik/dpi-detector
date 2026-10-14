@@ -1,0 +1,26 @@
+# Пресет «русские домены»: сервисы, которые ведут себя иначе при зарубежном
+# адресе - гео-ограничения, блокировки по IP, лимиты.
+gosuslugi.ru
+nalog.gov.ru
+mos.ru
+sberbank.ru
+online.sberbank.ru
+tbank.ru
+alfabank.ru
+vtb.ru
+vk.com
+ok.ru
+mail.ru
+yandex.ru
+dzen.ru
+market.yandex.ru
+avito.ru
+wildberries.ru
+ozon.ru
+kinopoisk.ru
+2gis.ru
+hh.ru
+rzd.ru
+gismeteo.ru
+1tv.ru
+ria.ru

@@ -296,7 +296,7 @@ async fn run() {
         let _ = std::io::stdin().read_line(&mut s);
     }));
 
-    let args = args::parse_cli(prescan_language());
+    let mut args = args::parse_cli(prescan_language());
     let has_vt = tui::backend::detect_vt();
     set_has_vt(has_vt);
     let no_color = std::env::var_os("NO_COLOR").is_some();
@@ -348,6 +348,26 @@ async fn run() {
                     .replacen("{}", RegionProfile::default().code(), 1)
             );
             RegionProfile::default()
+        }
+    };
+
+    // An unknown `--preset` is the same kind of recoverable value as an unknown
+    // `--profile`: the default stands and the operator is told, through the same
+    // generic wording. Nothing else reads the token, so the resolution happens
+    // here and the loader takes the parsed value.
+    let mut preset = match args.preset.as_deref().and_then(dpi_core::config::DomainPreset::parse) {
+        Some(preset) => preset,
+        None => {
+            if let Some(asked) = &args.preset {
+                eprintln!(
+                    "{}",
+                    msg.warn_unknown_flag_value
+                        .replacen("{}", "--preset", 1)
+                        .replacen("{}", asked, 1)
+                        .replacen("{}", dpi_core::config::DomainPreset::Default.as_str(), 1)
+                );
+            }
+            dpi_core::config::DomainPreset::Default
         }
     };
 
@@ -410,7 +430,7 @@ async fn run() {
         .try_init();
 
     // Domains / TCP targets / whitelist, loaded from the CLI args and the config.
-    let domains = targets_or_exit(load_domains(&args, &cfg, profile, &msg), msg.domains_load_failed);
+    let mut domains = targets_or_exit(load_domains(&args, &cfg, profile, preset, &msg), msg.domains_load_failed);
     let tcp_items = targets_or_exit(load_tcp16_targets(&args, &cfg), msg.tcp16_load_failed);
     let whitelist_sni = load_whitelist_sni_list(&cfg, &msg);
     // Test 4 is unavailable without an SNI list, so warn when the list is empty.
@@ -597,6 +617,12 @@ async fn run() {
                 // over `--iface`; `None` means the routing table and clears any
                 // target the flag had set. Before the fields move out of `sel`.
                 apply_interface(&sel);
+                // The preset row has the last word over `--preset`, the same way
+                // the interface row outranks `--iface`; the list itself is re-read
+                // below, so the choice reaches the probes and not just the next
+                // start.
+                args.preset = Some(sel.preset.as_str().to_string());
+                preset = sel.preset;
                 state::save(&state::SavedState::remember(&sel));
                 cfg.timeout = sel.timeout;
                 tests_str = sel.selected_tests;
@@ -608,6 +634,10 @@ async fn run() {
             }
             MenuResult::Quit => return,
         }
+        // The domains were read before the menu, and the preset row can change
+        // them: re-read through the same loader, which is also where `-d` and
+        // `--domains` still win.
+        domains = targets_or_exit(load_domains(&args, &cfg, profile, preset, &msg), msg.domains_load_failed);
         // Refresh badge after menu dwell time
         if let Ok(g) = version_slot.lock()
             && let Some(ref latest) = *g
@@ -654,6 +684,8 @@ async fn run() {
                         state::save(&state::SavedState::remember(&chosen));
                         cfg.timeout = chosen.timeout;
                         tests_str = chosen.selected_tests;
+                        args.preset = Some(chosen.preset.as_str().to_string());
+                        preset = chosen.preset;
                         concurrency = chosen.concurrency;
                         ip_version = chosen.ip_version;
                         tls_fingerprint = chosen.tls_fingerprint;
@@ -662,6 +694,10 @@ async fn run() {
                     }
                     MenuResult::Quit => return,
                 }
+                // The same re-read as the other menu sites: this path leaves the
+                // legend and runs what the menu chose, so a preset picked here
+                // has to reach the list those tests probe.
+                domains = targets_or_exit(load_domains(&args, &cfg, profile, preset, &msg), msg.domains_load_failed);
             }
             _ => return,
         }
@@ -835,6 +871,8 @@ async fn run() {
                             apply_interface(&chosen);
                             state::save(&state::SavedState::remember(&chosen));
                             selection = chosen.selected_tests;
+                            args.preset = Some(chosen.preset.as_str().to_string());
+                            preset = chosen.preset;
                             concurrency = chosen.concurrency;
                             ip_version = chosen.ip_version.clone();
                             cfg.ip_version = chosen.ip_version.clone();
@@ -845,6 +883,9 @@ async fn run() {
                         }
                         MenuResult::Quit => return,
                     }
+                    // The same re-read as the first menu: a preset chosen here
+                    // must reach the repeat run, not only the next start.
+                    domains = targets_or_exit(load_domains(&args, &cfg, profile, preset, &msg), msg.domains_load_failed);
                     should_repeat = true;
                 }
                 PostTestAction::Export => {
@@ -906,7 +947,14 @@ mod tests {
         let burst = load_burst_domains(&args, RegionProfile::Ru, &msg).unwrap();
         assert!(burst.contains(&"ezgame.su".to_string()), "{burst:?}");
         assert!(burst.contains(&"www.smartape.ru".to_string()), "{burst:?}");
-        let shared = load_domains(&args, &AppConfig::default(), RegionProfile::Ru, &msg).unwrap();
+        let shared = load_domains(
+            &args,
+            &AppConfig::default(),
+            RegionProfile::Ru,
+            dpi_core::config::DomainPreset::Default,
+            &msg,
+        )
+        .unwrap();
         assert!(!burst.is_empty() && !shared.is_empty());
         assert!(!burst.iter().any(|d| shared.contains(d)), "the two lists ask different questions");
         // `-d` still picks the hosts for a run, and picks them for this test too.

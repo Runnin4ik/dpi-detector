@@ -27,6 +27,9 @@ pub(crate) struct Messages {
     pub menu_interface_auto: &'static str,
     pub menu_ip_version: &'static str,
     pub menu_concurrency: &'static str,
+    /// Menu row: which shipped target list test 2 runs. The three values are
+    /// tokens (`default`, `youtube`, `ru`), so only the label is translated.
+    pub menu_preset: &'static str,
     pub menu_hw_row: &'static str,
     pub menu_hw_change: &'static str,
     pub menu_hw_tests: &'static str,
@@ -392,6 +395,7 @@ pub(crate) struct Messages {
     /// measure hosts the operator never asked for.
     pub tcp16_load_failed: &'static str,
     pub cli_domains: &'static str,
+    pub cli_preset: &'static str,
     pub cli_tcp16: &'static str,
     pub cli_ascii: &'static str,
     pub cli_fingerprint: &'static str,

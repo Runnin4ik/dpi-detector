@@ -77,6 +77,11 @@ pub(crate) struct SavedState {
     /// `None` is the routing table; `Some` is a named interface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface: Option<String>,
+    /// Test 2's shipped target list, the menu's Preset row. Stored as the token
+    /// `--preset` takes and `--json` prints, because that is what a user can type
+    /// back; [`SavedState::preset`] rejects anything else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }
 
 impl SavedState {
@@ -91,6 +96,7 @@ impl SavedState {
             tests: Some(selection.selected_tests.clone()),
             timeout: Some(selection.timeout),
             interface: selection.interface.clone(),
+            preset: Some(selection.preset.as_str().to_string()),
         }
     }
 
@@ -111,6 +117,13 @@ impl SavedState {
     pub(crate) fn timeout(&self) -> Option<f64> {
         self.timeout
             .filter(|secs| (crate::screens::main::TIMEOUT_MIN_SECS..=crate::screens::main::TIMEOUT_MAX_SECS).contains(secs))
+    }
+
+    /// The preset to start from, ignoring a token the enum does not parse: the
+    /// same rule as `ip_version`, because a hand-edited state file must not put
+    /// a run on a list that does not exist.
+    pub(crate) fn preset(&self) -> Option<dpi_core::config::DomainPreset> {
+        self.preset.as_deref().and_then(dpi_core::config::DomainPreset::parse)
     }
 }
 
@@ -276,6 +289,7 @@ mod tests {
             language: Some(Language::Ru),
             ip_version: Some("ipv6".to_string()),
             concurrency: Some(20),
+            preset: Some("youtube".to_string()),
             fingerprint: Some("chrome146".to_string()),
             tests: Some("023".to_string()),
             timeout: Some(15.0),
@@ -306,7 +320,7 @@ mod tests {
         let state = SavedState { language: Some(Language::En), ..SavedState::default() };
         let text = serde_json::to_string(&state).expect("serializes");
         assert!(text.contains("\"language\":\"en\""), "{text}");
-        for absent in ["ip_version", "concurrency", "fingerprint", "tests", "interface", "timeout"] {
+        for absent in ["ip_version", "concurrency", "fingerprint", "tests", "interface", "timeout", "preset"] {
             assert!(!text.contains(absent), "{absent} in {text}");
         }
     }
@@ -338,6 +352,7 @@ mod tests {
             language: Language::Zh,
             tls_fingerprint: TlsFingerprint::ALL[1],
             interface: None,
+            preset: dpi_core::config::DomainPreset::Youtube,
         };
         let state = SavedState::remember(&selection);
         assert_eq!(state.language, Some(Language::Zh));
@@ -346,6 +361,7 @@ mod tests {
         assert_eq!(state.timeout, Some(12.0));
         assert_eq!(state.fingerprint.as_deref(), Some(TlsFingerprint::ALL[1].code()));
         assert_eq!(state.tests.as_deref(), Some("023"));
+        assert_eq!(state.preset(), Some(dpi_core::config::DomainPreset::Youtube));
         assert_eq!(state.interface, None, "the routing table is an absent key");
     }
 

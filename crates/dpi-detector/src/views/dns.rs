@@ -610,7 +610,7 @@ mod tests {
         use dpi_core::probe::dns_avail::{DnsAvailReport, ProbeKey, ProbeKind};
         use std::collections::HashMap;
 
-        let cfg = AppConfig::from_yaml_str(include_str!("../../../../config.yml"));
+        let cfg = AppConfig::from_yaml_str(include_str!("../../../../data/config.yml"));
         let names = [("DNS Watch", "198.51.100.1"), ("Level 3", "198.51.100.2")];
         let mut report = DnsAvailReport {
             allowed: vec!["vk.ru".to_string()],

@@ -22,6 +22,12 @@ pub(crate) struct Report {
     pub schema_version: u32,
     pub version: &'static str,
     pub profile: &'static str,
+    /// Test 2's shipped target list this run used: `default`, `youtube` or `ru`
+    /// — the same token `--preset` takes, Latin and language-independent. A
+    /// consumer that compares two reports needs it, because the same run over a
+    /// different list is a different measurement. Additive, so `SCHEMA_VERSION`
+    /// stands.
+    pub domain_preset: &'static str,
     pub tls_fingerprint: String,
     pub results: Results,
 }

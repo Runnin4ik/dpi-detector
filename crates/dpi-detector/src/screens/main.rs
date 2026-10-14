@@ -37,6 +37,8 @@ pub(crate) struct MenuSelection {
     /// The interface the probes leave through, when the user picked one: `None`
     /// is the routing table.
     pub interface: Option<String>,
+    /// Test 2's shipped target list: the row between Timeout and the tests.
+    pub preset: dpi_core::config::DomainPreset,
 }
 
 /// The Timeout row steps one second at a time inside this range. Both ends are
@@ -184,6 +186,14 @@ async fn run_menu_loop(
     // range: a config or a hand-edited state file must not put the row outside
     // what the arrows can step through.
     let mut timeout = saved.timeout().unwrap_or(cfg.timeout).clamp(TIMEOUT_MIN_SECS, TIMEOUT_MAX_SECS);
+    // The saved preset when there is one, else the default list: the menu is the
+    // last place the user chose it, and `--preset` is what a run outside the menu
+    // takes. A hand-edited state file cannot name a list that does not exist —
+    // `SavedState::preset` drops a token the enum does not parse.
+    let mut preset_idx = saved
+        .preset()
+        .and_then(|preset| dpi_core::config::DomainPreset::ALL.iter().position(|&p| p == preset))
+        .unwrap_or(0);
 
     // What the run was asked for: the flag or the menu's last selection, already
     // resolved by `main.rs` — a `--domain` run must not be re-ticked from the
@@ -206,7 +216,7 @@ async fn run_menu_loop(
     let mut notice: Option<String> = None;
     let mut reader = EventStream::new();
     loop {
-        let offset = 6;
+        let offset = 7;
         let test_options = get_test_options(&msg);
         let total_rows = offset + test_options.len();
 
@@ -219,6 +229,7 @@ async fn run_menu_loop(
                 &ip_version,
                 presets[conc_idx],
                 timeout,
+                dpi_core::config::DomainPreset::ALL[preset_idx],
                 &presets,
                 TlsFingerprint::ALL[fp_idx],
                 v6_supported,
@@ -315,6 +326,9 @@ async fn run_menu_loop(
                         fp_idx = (fp_idx + TlsFingerprint::ALL.len() - 1) % TlsFingerprint::ALL.len();
                     } else if cursor == 5 {
                         timeout = (timeout - 1.0).max(TIMEOUT_MIN_SECS);
+                    } else if cursor == 6 {
+                        let all = dpi_core::config::DomainPreset::ALL;
+                        preset_idx = (preset_idx + all.len() - 1) % all.len();
                     } else if cursor >= offset {
                         let t_idx = cursor - offset;
                         if t_idx < test_options.len() {
@@ -349,6 +363,9 @@ async fn run_menu_loop(
                         fp_idx = (fp_idx + 1) % TlsFingerprint::ALL.len();
                     } else if cursor == 5 {
                         timeout = (timeout + 1.0).min(TIMEOUT_MAX_SECS);
+                    } else if cursor == 6 {
+                        let all = dpi_core::config::DomainPreset::ALL;
+                        preset_idx = (preset_idx + 1) % all.len();
                     } else if cursor >= offset {
                         let t_idx = cursor - offset;
                         if t_idx < test_options.len() {
@@ -379,6 +396,9 @@ async fn run_menu_loop(
                         fp_idx = (fp_idx + 1) % TlsFingerprint::ALL.len();
                     } else if cursor == 5 {
                         timeout = (timeout + 1.0).min(TIMEOUT_MAX_SECS);
+                    } else if cursor == 6 {
+                        let all = dpi_core::config::DomainPreset::ALL;
+                        preset_idx = (preset_idx + 1) % all.len();
                     } else if cursor >= offset {
                         let t_idx = cursor - offset;
                         if t_idx < test_options.len() {
@@ -414,6 +434,7 @@ async fn run_menu_loop(
                             .checked_sub(1)
                             .and_then(|pos| ifaces.get(pos))
                             .map(|target| target.name.clone()),
+                        preset: dpi_core::config::DomainPreset::ALL[preset_idx],
                     });
                 }
 
@@ -456,6 +477,7 @@ fn menu_rows(
     ip_version: &str,
     concurrency: usize,
     timeout: f64,
+    preset: dpi_core::config::DomainPreset,
     presets: &[usize],
     fingerprint: TlsFingerprint,
     v6_supported: bool,
@@ -465,7 +487,7 @@ fn menu_rows(
     iface_value: &str,
 ) -> Vec<String> {
     let mut lines = Vec::new();
-    let offset = 6;
+    let offset = 7;
 
     // Language row
     let lang_opts = Language::ALL
@@ -545,6 +567,16 @@ fn menu_rows(
         pad_width(&timeout_lbl, 16),
         timeout_value(timeout)
     ));
+    // Preset row: a cycler over the three shipped lists, the same shape as the
+    // interface row — three names fit on one line and the arrows walk them.
+    let preset_cursor = if cursor == 6 { "►" } else { " " };
+    let preset_lbl = format!("{}:", msg.menu_preset.trim_end_matches(':'));
+    lines.push(format!(
+        "  {} {} < {} >",
+        preset_cursor,
+        pad_width(&preset_lbl, 16),
+        preset.as_str()
+    ));
     lines.push(format!("  {}", "─".repeat(BOX_WIDTH - 8)));
     for (i, (digit, label)) in test_options.iter().enumerate() {
         let is_selected = selected_tests.contains(digit);
@@ -574,6 +606,7 @@ fn draw_menu(
     ip_version: &str,
     concurrency: usize,
     timeout: f64,
+    preset: dpi_core::config::DomainPreset,
     presets: &[usize],
     fingerprint: TlsFingerprint,
     v6_supported: bool,
@@ -597,6 +630,7 @@ fn draw_menu(
         ip_version,
         concurrency,
         timeout,
+        preset,
         presets,
         fingerprint,
         v6_supported,
@@ -769,6 +803,7 @@ mod tests {
             language: Language::Ru,
             tls_fingerprint: TlsFingerprint::Rustls,
             interface: None,
+            preset: dpi_core::config::DomainPreset::Default,
         };
         assert_eq!(sel.language, Language::Ru);
         assert_eq!(sel.selected_tests, "123");
@@ -790,6 +825,7 @@ mod tests {
             language: Language::Ru,
             tls_fingerprint: TlsFingerprint::Rustls,
             interface: None,
+            preset: dpi_core::config::DomainPreset::Default,
         };
         bind::set_target(Some(bind::BindTarget {
             name: "example0".to_string(),
@@ -828,6 +864,7 @@ mod tests {
                 "ipv4",
                 50,
                 15.0,
+                dpi_core::config::DomainPreset::Default,
                 &[1, 5, 20, 50, 100],
                 TlsFingerprint::Rustls,
                 true,
@@ -864,9 +901,9 @@ mod tests {
             let msg = get_messages(lang);
             let test_options = get_test_options(&msg);
             let selected: HashSet<char> = ['1', '3'].into_iter().collect();
-            // 0..=12 is every row the cursor can be on: the five fixed rows, then
-            // the eight test rows `menu_rows` numbers from its own `offset`.
-            for cursor in 0..=12 {
+            // 0..=14 is every row the cursor can be on: the seven fixed rows,
+            // then the eight test rows `menu_rows` numbers from its own `offset`.
+            for cursor in 0..=14 {
                 for ip_version in ["ipv4", "ipv6"] {
                     for v6_supported in [true, false] {
                         for iface in [
@@ -881,6 +918,7 @@ mod tests {
                                 ip_version,
                                 50,
                                 8.0,
+                                dpi_core::config::DomainPreset::Default,
                                 &presets,
                                 TlsFingerprint::Chrome146,
                                 v6_supported,
@@ -910,6 +948,7 @@ mod tests {
                     "ipv4",
                     100,
                     60.0,
+                    dpi_core::config::DomainPreset::Default,
                     &presets,
                     fingerprint,
                     true,

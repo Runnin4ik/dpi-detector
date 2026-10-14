@@ -24,6 +24,11 @@ pub(crate) struct CliArgs {
     pub domain: Vec<String>,
     pub output: Option<String>,
     pub domains: Option<String>,
+    /// Test 2's shipped target list: `default`, `youtube` or `ru`
+    /// ([`dpi_core::config::DomainPreset`]). An explicit `--preset` outranks the
+    /// configured `domains_file`, because a flag on the command line is the
+    /// operator's own word and the config key is a preference.
+    pub preset: Option<String>,
     pub tcp16: Option<String>,
     pub ascii: bool,
     pub fingerprint: Option<String>,
@@ -150,6 +155,13 @@ pub(crate) fn command(msg: &Messages) -> Command {
                 .help(msg.cli_domains),
         )
         .arg(
+            Arg::new("preset")
+                .long("preset")
+                .value_name("PRESET")
+                .help_heading(msg.cli_options_heading)
+                .help(msg.cli_preset),
+        )
+        .arg(
             Arg::new("tcp16")
                 .long("tcp16")
                 .value_name("PATH")
@@ -266,6 +278,7 @@ pub(crate) fn parse_cli(lang: Language) -> CliArgs {
         domain: m.get_many::<String>("domain").map(|v| v.cloned().collect()).unwrap_or_default(),
         output: m.get_one::<String>("output").cloned(),
         domains: m.get_one::<String>("domains").cloned(),
+        preset: m.get_one::<String>("preset").cloned(),
         tcp16: m.get_one::<String>("tcp16").cloned(),
         ascii: m.get_flag("ascii"),
         fingerprint: m.get_one::<String>("fingerprint").cloned(),

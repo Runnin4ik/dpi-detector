@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use dpi_core::classify::Detail;
 use dpi_core::config::{
-    clean_domain, embedded_burst_domains, embedded_domains,
+    clean_domain, embedded_burst_domains,
     embedded_quic_unsupported, embedded_tcp16_targets, embedded_whitelist_sni,
     load_domains_from_file, load_quic_unsupported, load_tcp16_targets_from_file,
     load_whitelist_sni, resource_path, AppConfig, Tcp16Target,
@@ -58,8 +58,24 @@ use crate::{print_out, tcp16_detail, Emitter};
 /// parses to nothing and a `-d` list whose every entry `clean_domain` filtered
 /// away all used to end as a "successful" run that probed nothing. The
 /// configured and embedded lists are preferences, so those still fall through.
-pub(crate) fn load_domains(args: &CliArgs, cfg: &AppConfig, profile: RegionProfile, msg: &Messages) -> io::Result<Vec<String>> {
-    load_domain_set(args, profile, &cfg.domains_file, embedded_domains(), msg)
+pub(crate) fn load_domains(
+    args: &CliArgs,
+    cfg: &AppConfig,
+    profile: RegionProfile,
+    preset: dpi_core::config::DomainPreset,
+    msg: &Messages,
+) -> io::Result<Vec<String>> {
+    // A preset replaces the shipped pair — the file name and the embedded list —
+    // so `--preset youtube` reads `domains-youtube.txt` beside the binary and
+    // falls back to the YouTube list inside it. The `default` preset keeps the
+    // configured `domains_file`, which is the key an operator has always been
+    // able to point somewhere else. `-d` and `--domains` still outrank both,
+    // because a list the operator named *is* the run's target set.
+    let (file, embedded) = match preset {
+        dpi_core::config::DomainPreset::Default => (cfg.domains_file.as_str(), preset.embedded()),
+        other => (other.file_name(), other.embedded()),
+    };
+    load_domain_set(args, profile, file, embedded, msg)
 }
 
 /// Test 6's shipped target file. Deliberately not the configured `domains_file`:
@@ -118,6 +134,20 @@ fn load_domain_set(
         return Ok(embedded);
     }
     Ok(profile.default_domains().iter().map(|s| s.to_string()).collect())
+}
+
+/// The preset this run used, as the machine-readable token.
+///
+/// Resolved from the same `--preset` token the loader resolved, through the same
+/// `DomainPreset::parse`, so the document cannot name a list other than the one
+/// that was probed. An absent or unknown token is the default preset, which is
+/// what the loader fell back to as well.
+pub(crate) fn preset_token(args: &CliArgs) -> &'static str {
+    args.preset
+        .as_deref()
+        .and_then(dpi_core::config::DomainPreset::parse)
+        .unwrap_or(dpi_core::config::DomainPreset::Default)
+        .as_str()
 }
 
 /// The error for a list the operator named that holds nothing to probe.
@@ -1428,6 +1458,7 @@ pub(crate) async fn run_test_suite(
             schema_version: crate::json::SCHEMA_VERSION,
             version: env!("CARGO_PKG_VERSION"),
             profile: profile.code(),
+            domain_preset: preset_token(args),
             tls_fingerprint: TlsFingerprint::from_config(cfg).code().to_string(),
             results,
         };
@@ -1471,7 +1502,7 @@ mod tests {
         let profile = RegionProfile::Ru;
 
         // `-d ""` and `-d "   "`: `clean_domain` keeps neither.
-        let err = load_domains(&targets_arg(&["", "   "], None), &cfg, profile, &msg).unwrap_err();
+        let err = load_domains(&targets_arg(&["", "   "], None), &cfg, profile, dpi_core::config::DomainPreset::Default, &msg).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
         assert!(err.to_string().contains("-d"), "the failed flag is named: {err}");
 
@@ -1479,7 +1510,7 @@ mod tests {
         // blank lines only) is the same empty run.
         let path = std::env::temp_dir().join("dpi-detector-empty-domains.txt");
         std::fs::write(&path, "# only a comment\n\n").unwrap();
-        let err = load_domains(&targets_arg(&[], Some(&path)), &cfg, profile, &msg).unwrap_err();
+        let err = load_domains(&targets_arg(&[], Some(&path)), &cfg, profile, dpi_core::config::DomainPreset::Default, &msg).unwrap_err();
         let _ = std::fs::remove_file(&path);
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
         assert!(
@@ -1490,13 +1521,13 @@ mod tests {
         // A path that cannot be read keeps the OS error kind — the path is
         // folded into the message, and `main.rs` maps the kind to exit code 2.
         let missing = std::path::Path::new("/no/such/domains.txt");
-        let err = load_domains(&targets_arg(&[], Some(missing)), &cfg, profile, &msg).unwrap_err();
+        let err = load_domains(&targets_arg(&[], Some(missing)), &cfg, profile, dpi_core::config::DomainPreset::Default, &msg).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err}");
         assert!(err.to_string().contains("/no/such/domains.txt"), "the failed file is named: {err}");
 
         // An entry that does clean is still the run's list: the check rejects an
         // empty result, not a list with anything left in it.
-        let kept = load_domains(&targets_arg(&["Example.COM/some/path", "   "], None), &cfg, profile, &msg).unwrap();
+        let kept = load_domains(&targets_arg(&["Example.COM/some/path", "   "], None), &cfg, profile, dpi_core::config::DomainPreset::Default, &msg).unwrap();
         assert_eq!(kept, vec!["example.com".to_string()]);
     }
 

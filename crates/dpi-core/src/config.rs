@@ -917,17 +917,20 @@ impl AppConfig {
     }
 }
 
-/// Shipped lists embedded into the binary (workspace-root config.yml,
-/// domains.txt, burst-domains.txt, tcp16.json, whitelist_sni.txt,
-/// quic_unsupported.txt). External
+/// Shipped lists embedded into the binary (workspace `data/config.yml`,
+/// data/domains.txt, data/burst-domains.txt, data/tcp16.json,
+/// data/whitelist_sni.txt, data/quic_unsupported.txt, and test 2's two extra
+/// presets data/domains-youtube.txt and data/domains-ru.txt). External
 /// files (cwd, then exe dir) win when present; the embedded copies keep the
 /// standalone binary fully working from any directory, including routers.
-pub const EMBEDDED_CONFIG_YML: &str = include_str!("../../../config.yml");
-const EMBEDDED_DOMAINS_TXT: &str = include_str!("../../../domains.txt");
-const EMBEDDED_BURST_DOMAINS_TXT: &str = include_str!("../../../burst-domains.txt");
-const EMBEDDED_TCP16_JSON: &str = include_str!("../../../tcp16.json");
-const EMBEDDED_WHITELIST_SNI_TXT: &str = include_str!("../../../whitelist_sni.txt");
-const EMBEDDED_QUIC_UNSUPPORTED_TXT: &str = include_str!("../../../quic_unsupported.txt");
+pub const EMBEDDED_CONFIG_YML: &str = include_str!("../../../data/config.yml");
+const EMBEDDED_DOMAINS_TXT: &str = include_str!("../../../data/domains.txt");
+const EMBEDDED_BURST_DOMAINS_TXT: &str = include_str!("../../../data/burst-domains.txt");
+const EMBEDDED_TCP16_JSON: &str = include_str!("../../../data/tcp16.json");
+const EMBEDDED_WHITELIST_SNI_TXT: &str = include_str!("../../../data/whitelist_sni.txt");
+const EMBEDDED_QUIC_UNSUPPORTED_TXT: &str = include_str!("../../../data/quic_unsupported.txt");
+const EMBEDDED_DOMAINS_YOUTUBE_TXT: &str = include_str!("../../../data/domains-youtube.txt");
+const EMBEDDED_DOMAINS_RU_TXT: &str = include_str!("../../../data/domains-ru.txt");
 
 /// Locates config.yml: current dir first, then executable dir; `None` when
 /// neither has one.
@@ -1073,7 +1076,72 @@ fn parse_whitelist_sni(content: &str) -> Vec<(String, usize)> {
 
 /// Domains shipped inside the binary (fallback when domains.txt is absent).
 pub fn embedded_domains() -> Vec<String> {
-    parse_domains(EMBEDDED_DOMAINS_TXT)
+    DomainPreset::Default.embedded()
+}
+
+/// The shipped target list test 2 runs, chosen by `--preset` or the menu.
+///
+/// Three lists rather than one because they answer three different questions of
+/// the same probe: `default` is the censored sites the tool has always shipped,
+/// `youtube` is the video platform with its CDN and the Google caches inside
+/// operators, and `ru` is Russian services whose behaviour changes from a
+/// foreign address. `default` carries no YouTube or GGC host — the lists are
+/// disjoint, and the test below holds them that way, because that disjointness
+/// is exactly what makes `default` mean "everything that is not YouTube".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainPreset {
+    Default,
+    Youtube,
+    Ru,
+}
+
+impl DomainPreset {
+    /// Every preset, in menu order. The totality table the tests walk: a variant
+    /// without a file name or a token fails there rather than at a call site.
+    pub const ALL: &'static [Self] = &[Self::Default, Self::Youtube, Self::Ru];
+
+    /// Parses a `--preset` token, case-insensitively; `None` for anything else,
+    /// which the CLI reports as an invalid value.
+    pub fn parse(s: &str) -> Option<Self> {
+        if s.eq_ignore_ascii_case("default") {
+            Some(Self::Default)
+        } else if s.eq_ignore_ascii_case("youtube") {
+            Some(Self::Youtube)
+        } else if s.eq_ignore_ascii_case("ru") {
+            Some(Self::Ru)
+        } else {
+            None
+        }
+    }
+
+    /// The machine-readable token: what `--json` prints and what the menu
+    /// stores. Latin and language-independent, like every other such token.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Youtube => "youtube",
+            Self::Ru => "ru",
+        }
+    }
+
+    /// The file this preset ships as. The same name is what an operator writes
+    /// beside the binary to override that one list, so the two cannot drift.
+    pub fn file_name(self) -> &'static str {
+        match self {
+            Self::Default => "domains.txt",
+            Self::Youtube => "domains-youtube.txt",
+            Self::Ru => "domains-ru.txt",
+        }
+    }
+
+    /// The list shipped inside the binary for this preset.
+    pub fn embedded(self) -> Vec<String> {
+        parse_domains(match self {
+            Self::Default => EMBEDDED_DOMAINS_TXT,
+            Self::Youtube => EMBEDDED_DOMAINS_YOUTUBE_TXT,
+            Self::Ru => EMBEDDED_DOMAINS_RU_TXT,
+        })
+    }
 }
 
 /// Test 6's own shipped targets, fallback when burst-domains.txt is absent.
@@ -1383,11 +1451,46 @@ mod tests {
         assert_eq!(cfg.ip4_lookup_urls, vec!["https://example.com/other".to_string()]);
     }
 
+    /// Every preset names a token and a non-empty list, the three lists do not
+    /// overlap, and `default` plus `youtube` are exactly the 72 hosts the tool
+    /// shipped before presets existed. A host in two presets would be measured
+    /// twice under two names; a host lost in the split would silently stop
+    /// being probed, which is the failure this pins.
+    #[test]
+    fn test_domain_presets_are_total_and_disjoint() {
+        use std::collections::HashSet;
+
+        let mut seen: HashSet<String> = HashSet::new();
+        for preset in DomainPreset::ALL {
+            assert_eq!(
+                DomainPreset::parse(preset.as_str()),
+                Some(*preset),
+                "{} parses back from its own token",
+                preset.as_str()
+            );
+            let list = preset.embedded();
+            assert!(!list.is_empty(), "{} ships a list", preset.file_name());
+            for domain in &list {
+                assert!(
+                    seen.insert(domain.clone()),
+                    "{domain} is in two presets at once"
+                );
+            }
+        }
+        assert_eq!(DomainPreset::ALL.len(), 3, "three shipped presets");
+        assert_eq!(DomainPreset::parse("nope"), None);
+        assert_eq!(
+            DomainPreset::Default.embedded().len() + DomainPreset::Youtube.embedded().len(),
+            72,
+            "default plus youtube are the whole list the tool shipped before presets"
+        );
+    }
+
     /// Every list parsed from the shipped config.yml matches the values
     /// asserted below: any drift fails here.
     #[test]
     fn test_lists_match_shipped_config_yml() {
-        let cfg = AppConfig::from_yaml_str(include_str!("../../../config.yml"));
+        let cfg = AppConfig::from_yaml_str(include_str!("../../../data/config.yml"));
         assert!(cfg.config_load_error.is_none(), "{:?}", cfg.config_load_error);
         assert_eq!(
             cfg.dns_check_domains,
@@ -1422,7 +1525,7 @@ mod tests {
     /// No-file fallbacks carry the same lists (embedded use without config.yml).
     #[test]
     fn test_default_lists_match_shipped_yml() {
-        let from_yml = AppConfig::from_yaml_str(include_str!("../../../config.yml"));
+        let from_yml = AppConfig::from_yaml_str(include_str!("../../../data/config.yml"));
         let def = AppConfig::default();
         assert_eq!(def.dns_check_domains, from_yml.dns_check_domains);
         assert_eq!(def.dns_udp_servers, from_yml.dns_udp_servers);
@@ -1454,7 +1557,7 @@ mod tests {
             .count();
         assert_eq!(domains.len(), shipped, "every shipped domain survives cleaning");
         let file_targets: Vec<Tcp16Target> =
-            serde_json::from_str(include_str!("../../../tcp16.json")).unwrap();
+            serde_json::from_str(include_str!("../../../data/tcp16.json")).unwrap();
         assert_eq!(embedded_tcp16_targets(), file_targets);
         assert!(!embedded_tcp16_targets().is_empty());
         assert!(!embedded_whitelist_sni().is_empty());

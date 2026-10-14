@@ -116,7 +116,7 @@ registry/env keys, `Detail` codes, raw error text appended after a localized lab
 
 - TUI repaints ONLY via `render::frame_repaint`/`render::frame_home`; padding and erase rules, and why they exist, in `frame_repaint`'s doc comment. NEVER hand-pad a row, NEVER home to `(0, 0)`, NEVER clear the screen first.
 - Totality tables synced by tests: `DpiStatus::ALL`, `TlsFingerprint::ALL` ↔ `SHAPES`, `TELEGRAM_DCS`, `KNOWN_KEYS`. A profile without a `TlsShape` record panics in `spec()`.
-- Shipped defaults live in the root data files (`config.yml`, `domains.txt`, `burst-domains.txt`, `tcp16.json`, `whitelist_sni.txt`), embedded via `include_str!`; precedence and key handling documented in `config.rs`.
+- Shipped defaults live in `data/` (`config.yml`, `domains.txt`, `burst-domains.txt`, `tcp16.json`, `whitelist_sni.txt`, `quic_unsupported.txt`), embedded via `include_str!`; precedence and key handling documented in `config.rs`.
 - stdout = machine channel: `--json` writes a parseable document, nothing else may. Human output via `print_out`/`println_out`/`Emitter::emit` (`--json`-aware); diagnostics via `tracing` (stderr); TUI owns the screen. A stray `println!` breaks a consumer's `jq` and a frame at once.
 - Sanitize server-controlled bytes (TLS alert text, `Detail::Other`, HTTP status lines, cert fields) through `tui` helpers on EVERY render path, error branches included.
 - Search before writing a helper: two implementations = a bug even when both work. Central: `clean_domain`, `netinfo` facade, `probe::permit`, `render::frame_repaint`/`frame_home`, `i18n::{fmt_speed, fmt_size, detail_text}`, `tui::widgets` width math. Missing capability ⇒ extend the central helper, NEVER fork locally.
@@ -131,8 +131,8 @@ registry/env keys, `Detail` codes, raw error text appended after a localized lab
 - `crates/dpi-detector/src/args.rs` — `CliArgs` + runtime-built clap `Command` (localized help).
 - `crates/dpi-detector/src/state.rs` — what the interactive menu remembers between runs: `state.json` in the per-OS config dir, then `$PREFIX/etc` on Entware, then beside the binary. Written where a run starts — never on a quit, never by a non-interactive run; CLI flags outrank it, `config.yml` is the fallback.
 - `crates/dpi-core/src/classify/classifier.rs` — error ⇒ verdict decisions.
-- `config.yml` (root, 430 lines) — shipped default runtime config, embedded via `include_str!`.
-- `domains.txt`, `burst-domains.txt`, `tcp16.json`, `whitelist_sni.txt`, `quic_unsupported.txt` — per-test target lists, all embedded; test 6 keeps its own on purpose, and `quic_unsupported.txt` names the hosts whose QUIC column test 2 does not probe (the cell prints `—` and the summary counts only the rest).
+- `data/config.yml` (443 lines) — shipped default runtime config, embedded via `include_str!`.
+- `data/domains.txt`, `data/burst-domains.txt`, `data/tcp16.json`, `data/whitelist_sni.txt`, `data/quic_unsupported.txt` — per-test target lists, all embedded; test 6 keeps its own on purpose, and `quic_unsupported.txt` names the hosts whose QUIC column test 2 does not probe (the cell prints `—` and the summary counts only the rest).
 - `README.md` — user manual (**Russian**), authoritative CLI reference. MUST update in the same commit as a CLI/`--json`/`Detail` change.
 - `Cargo.toml`, `rust-toolchain.toml`, `deny.toml`, `Cross.toml`, `.cargo/config.toml` — build, toolchain, supply-chain, cross-compile policy.
 - `.github/workflows/`, `.omp/rules/`, `.omp/agents/` — what CI runs (explained in `docs/CI.md`); repo-local agent rules and profiles.
