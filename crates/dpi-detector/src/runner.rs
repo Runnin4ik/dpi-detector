@@ -1203,18 +1203,25 @@ pub(crate) async fn run_test_suite(
             results.domain_inspection = Some(
                 entries
                     .iter()
-                    .map(|e| crate::json::DomainRow {
-                        domain: e.domain.clone(),
-                        resolved: e.resolved.map(|ip| ip.to_string()),
-                        http: e.http.status.as_str(),
-                        http_detail: e.http.detail.clone(),
-                        tls12: e.t12.status.as_str(),
-                        tls12_detail: e.t12.detail.clone(),
-                        tls13: e.t13.status.as_str(),
-                        tls13_detail: e.t13.detail.clone(),
-                        quic: e.quic.status.as_str(),
-                        quic_detail: e.quic.detail.clone(),
-                        cert_detail: e.cert_mark(),
+                    .map(|e| {
+                        // The same cells the table draws, from the same function:
+                        // a `RU CA` badge in the table and an `ok` in the document
+                        // is exactly the disagreement Rule 5 exists to prevent.
+                        let (http, tls12, tls13, quic, _details) =
+                            dpi_core::probe::domains::build_domain_row(e);
+                        crate::json::DomainRow {
+                            domain: e.domain.clone(),
+                            resolved: e.resolved.map(|ip| ip.to_string()),
+                            http: http.as_str(),
+                            http_detail: e.http.detail.clone(),
+                            tls12: tls12.as_str(),
+                            tls12_detail: e.t12.detail.clone(),
+                            tls13: tls13.as_str(),
+                            tls13_detail: e.t13.detail.clone(),
+                            quic: quic.as_str(),
+                            quic_detail: e.quic.detail.clone(),
+                            cert_detail: e.cert_mark(),
+                        }
                     })
                     .collect(),
             );
