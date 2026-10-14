@@ -1,26 +1,147 @@
 # Пресет «русские домены»: сервисы, которые ведут себя иначе при зарубежном
 # адресе - гео-ограничения, блокировки по IP, лимиты.
-gosuslugi.ru
-nalog.gov.ru
-mos.ru
-sberbank.ru
-online.sberbank.ru
-tbank.ru
-alfabank.ru
-vtb.ru
-vk.com
-ok.ru
-mail.ru
+#
+# Список собран по двум топам русскоязычных сайтов по аудитории (октябрь 2026) и
+# намеренно не пересекается с domains.txt и domains-youtube.txt: тест на полноту
+# пресетов этого требует, а хост, попавший в два пресета, измерялся бы дважды под
+# разными именами. Зарубежные сервисы из тех же топов (Google, YouTube, Wikipedia,
+# TikTok, WhatsApp, Telegram, Twitch, Reddit, Booking) сюда не входят - они не
+# русские; взрослые сайты исключены, потому что дерево публичное.
+
+# Поиск, порталы, почта
 yandex.ru
+ya.ru
+mail.ru
+rambler.ru
 dzen.ru
 market.yandex.ru
-avito.ru
-wildberries.ru
-ozon.ru
-kinopoisk.ru
-2gis.ru
-hh.ru
-rzd.ru
-gismeteo.ru
-1tv.ru
+travel.yandex.ru
+eda.yandex.ru
+music.yandex.ru
+pochta.ru
+
+# Соцсети, блоги, сообщества
+vk.com
+ok.ru
+vkvideo.ru
+pikabu.ru
+yaplakal.com
+drive2.ru
+irecommend.ru
+habr.com
+4pda.to
+woman.ru
+azbyka.ru
+livejournal.com
+author.today
+ficbook.net
+
+# Медиа, новости, спорт
 ria.ru
+lenta.ru
+rbc.ru
+kp.ru
+mk.ru
+gazeta.ru
+iz.ru
+aif.ru
+vedomosti.ru
+kommersant.ru
+life.ru
+fontanka.ru
+e1.ru
+ura.news
+seldon.news
+echo.msk.ru
+the-village.ru
+sport-express.ru
+sports.ru
+championat.com
+sportbox.ru
+stopgame.ru
+playground.ru
+ixbt.com
+1tv.ru
+
+# Госуслуги, финансы, право
+gosuslugi.ru
+mos.ru
+nalog.ru
+fias.nalog.ru
+nalog.gov.ru
+sberbank.ru
+online.sberbank.ru
+sberbank.com
+tbank.ru
+tinkoff.ru
+alfabank.ru
+vtb.ru
+banki.ru
+sravni.ru
+nspk.ru
+consultant.ru
+garant.ru
+cdek.ru
+rzd.ru
+
+# Магазины, доставка, сервисы
+ozon.ru
+wildberries.ru
+avito.ru
+dns-shop.ru
+citilink.ru
+eldorado.ru
+mvideo.ru
+leroymerlin.ru
+lamoda.ru
+detskymir.ru
+vprok.ru
+sbermarket.ru
+samokat.ru
+vseinstrumenti.ru
+aliexpress.ru
+rustore.ru
+2gis.ru
+cian.ru
+domclick.ru
+tutu.ru
+aviasales.ru
+ostrovok.ru
+hh.ru
+
+# Развлечения, видео, музыка, обучение
+kinopoisk.ru
+ivi.ru
+wink.ru
+more.tv
+amediateka.ru
+rutube.ru
+gismeteo.ru
+muzofond.fm
+ukdevilz.com
+knigavuhe.org
+litres.ru
+stepik.org
+skyeng.ru
+geekbrains.ru
+skillbox.ru
+uchi.ru
+znanija.com
+gdz.ru
+adme.media
+maximonline.ru
+russianfood.com
+mangalib.me
+mangabuff.ru
+remanga.org
+anilib.me
+amedia.lol
+yummy-anime.ru
+anime-bit.online
+mult-fan.tv
+doramalive.news
+
+# Телеком
+mts.ru
+megafon.ru
+beeline.ru
