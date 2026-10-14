@@ -76,6 +76,12 @@ pub enum Detail {
 
     // ─── Certificates ───
     NoRootCa,
+    /// The chain reaches a Russian root instead of a bundled one: the sites that
+    /// re-issued their certificates under the Ministry of Digital Development
+    /// after their international ones were revoked. A mark like every other
+    /// certificate detail here — it sharpens `NoRootCa`'s answer, it never gates
+    /// a verdict.
+    RuTrustedCa,
     CertExpired,
     SelfSigned,
     HostnameMismatch,
@@ -380,6 +386,7 @@ impl Detail {
             Alert(kind) => Cow::Owned(format!("alert_{}", kind.code())),
             StackFailure(kind) => Cow::Owned(format!("tls_{}", kind.code())),
             NoRootCa => Cow::Borrowed("no_root_certificates"),
+            RuTrustedCa => Cow::Borrowed("ru_trusted_ca"),
             CertExpired => Cow::Borrowed("cert_expired"),
             SelfSigned => Cow::Borrowed("self_signed_cert"),
             HostnameMismatch => Cow::Borrowed("hostname_mismatch"),

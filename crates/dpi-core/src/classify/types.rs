@@ -226,6 +226,13 @@ pub enum DpiStatus {
     /// thing and the two have to agree.
     #[serde(rename = "no_ca_bundle")]
     NoCa,
+    /// The site answered and its chain is Russian-rooted: the bank and government
+    /// sites that re-issued their certificates under the Ministry of Digital
+    /// Development after the international ones were revoked. Not a block — the
+    /// probe reached the site and read it — so the summary counts the row as
+    /// available, and the badge says why a browser would draw no padlock.
+    #[serde(rename = "ru_ca")]
+    RuCa,
     TlsSpoof,
     TlsEof,
     /// Rule 5: `tcp16_20`, the window the connection died in, not the derived
@@ -318,6 +325,7 @@ impl DpiStatus {
         DpiStatus::TlsBlock,
         DpiStatus::TlsErr,
         DpiStatus::NoCa,
+        DpiStatus::RuCa,
         DpiStatus::TlsSpoof,
         DpiStatus::TlsEof,
         DpiStatus::Tcp16Range,
@@ -362,6 +370,7 @@ impl DpiStatus {
             Self::TlsBlock => "tls_block",
             Self::TlsErr => "tls_err",
             Self::NoCa => "no_ca_bundle",
+            Self::RuCa => "ru_ca",
             Self::TlsSpoof => "tls_spoof",
             Self::Tcp16Range => "tcp16_20",
             Self::TlsEof => "tls_eof",
@@ -408,6 +417,7 @@ impl DpiStatus {
             Self::TlsBlock => "TLS BLOCK",
             Self::TlsErr => "TLS ERR",
             Self::NoCa => "NO CA BUNDLE",
+            Self::RuCa => "RU CA",
             Self::TlsSpoof => "TLS SPOOF",
             Self::TlsEof => "TLS EOF",
             Self::NoTls13 => "NO TLS1.3",
@@ -552,6 +562,7 @@ mod tests {
             (DpiStatus::Tcp16Range, "tcp16_20"),
             (DpiStatus::Tcp16Detected, "detected"),
             (DpiStatus::NoCa, "no_ca_bundle"),
+            (DpiStatus::RuCa, "ru_ca"),
             (DpiStatus::NxDomain, "nxdomain"),
             (DpiStatus::RedirSuspect, "redir"),
             (DpiStatus::TlsErr, "tls_err"),

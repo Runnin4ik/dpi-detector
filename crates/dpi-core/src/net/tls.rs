@@ -535,6 +535,45 @@ pub fn verify_peer_chain(
         .map(|_| ())
 }
 
+/// The names a certificate chain issued under Russia's own root carries.
+///
+/// Measured on the sites that switched after their international certificates
+/// were revoked (`sberbank.ru`, `tbank.ru`, `alfabank.ru`, `online.sberbank.ru`,
+/// 2026-10-14): the leaf's issuer reads
+/// `C=RU; O=The Ministry of Digital Development and Communications;
+/// CN=Russian Trusted Sub CA`, whose own issuer is the ministry's
+/// `Russian Trusted Root CA`. The tool never reads the OS store (`TlsProfile::verify`),
+/// so such a chain fails against the bundled roots with `UnknownIssuer` and
+/// every one of those rows used to read `NO CA BUNDLE` — which names the
+/// mechanism and not the reason.
+///
+/// This is a *mark*, never a verdict: it only sharpens a failure that has
+/// already been decided, so a chain carrying none of these names keeps the
+/// generic answer. Matching is a byte search over the DER rather than a parsed
+/// RDN, because the crate tree carries no X.509 parser and these names are
+/// ASCII in every certificate seen so far; a certificate that hid one of these
+/// strings in another field would be misread as Russian — which is tolerable
+/// precisely because the result marks an already-failed chain and never gates
+/// trust.
+const RU_CA_MARKERS: &[&[u8]] = &[
+    b"Russian Trusted Sub CA",
+    b"Russian Trusted Root CA",
+    b"The Ministry of Digital Development and Communications",
+];
+
+/// Whether any certificate in `chain` names Russia's own root.
+///
+/// `chain` is what `ClientConnection::peer_certificates` returned: the leaf
+/// first, intermediates after. An empty chain names nothing.
+pub fn is_russian_trusted_ca(chain: &[CertificateDer<'static>]) -> bool {
+    chain.iter().any(|cert| {
+        let der = cert.as_ref();
+        RU_CA_MARKERS
+            .iter()
+            .any(|marker| der.windows(marker.len()).any(|window| window == *marker))
+    })
+}
+
 /// Installs the profile and keeps the baseline wire shape intact.
 ///
 /// `profile.alpn` replaces the profile's own list when the caller pins one (test
@@ -978,6 +1017,43 @@ mod tests {
         }
         // A handshake that carried no certificate has nothing to judge.
         assert!(verify_peer_chain(&[], &server).is_err());
+    }
+
+    /// The Russian-root mark: the names measured on the sites that moved to the
+    /// ministry's own root after their international certificates were revoked.
+    /// The negative half is the one that matters — the fixture CA this module
+    /// already ships carries none of them, so an ordinary `UnknownIssuer` keeps
+    /// its generic answer instead of being read as Russian.
+    #[test]
+    fn the_russian_root_mark_reads_the_names_and_nothing_else() {
+        let chain_with = |text: &str| {
+            // Bytes shaped like a certificate: a SEQUENCE header, then the name
+            // where an issuer's RDN would sit. The mark is a byte search, so the
+            // structure is not what is under test here.
+            let mut der = vec![0x30, 0x82, 0x01, 0x00];
+            der.extend_from_slice(text.as_bytes());
+            vec![CertificateDer::from(der)]
+        };
+
+        assert!(is_russian_trusted_ca(&chain_with("Russian Trusted Sub CA")));
+        assert!(is_russian_trusted_ca(&chain_with("Russian Trusted Root CA")));
+        assert!(is_russian_trusted_ca(&chain_with(
+            "The Ministry of Digital Development and Communications"
+        )));
+
+        let fixture = vec![
+            CertificateDer::from(CA.to_vec()),
+            CertificateDer::from(LEAVES[0].1.to_vec()),
+        ];
+        assert!(
+            !is_russian_trusted_ca(&fixture),
+            "the fixture chain is not Russian, whatever else it fails"
+        );
+        assert!(!is_russian_trusted_ca(&[]), "an empty chain names nothing");
+        assert!(
+            !is_russian_trusted_ca(&chain_with("Ministry of Silly Walks")),
+            "a name that merely mentions a ministry is not the mark"
+        );
     }
 
     /// `t13d1516h2_8daaf6152771_e5627efa2ab1`: protocol and version, the SNI and

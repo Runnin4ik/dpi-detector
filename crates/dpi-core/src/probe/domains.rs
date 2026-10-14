@@ -281,7 +281,19 @@ fn peer_cert_mark(conn: &rustls::ClientConnection, domain: &str) -> Detail {
     };
     match crate::net::tls::verify_peer_chain(chain, &name) {
         Ok(()) => Detail::None,
-        Err(e) => classify_ssl_error(&e.to_string(), 0, ConnectionStage::TlsHandshakeDone).1,
+        Err(e) => {
+            // A chain the bundled roots reject because it is rooted in Russia's
+            // own CA is named as such. The generic `NoRootCa` told the reader the
+            // mechanism ("no root for this chain") where the reason is what they
+            // need: a browser draws no padlock for these sites, and that is not
+            // censorship. A mark, not a verdict — the status beside it is
+            // unchanged.
+            if crate::net::tls::is_russian_trusted_ca(chain) {
+                Detail::RuTrustedCa
+            } else {
+                classify_ssl_error(&e.to_string(), 0, ConnectionStage::TlsHandshakeDone).1
+            }
+        }
     }
 }
 
@@ -877,7 +889,22 @@ fn col_ok(status: DpiStatus) -> bool {
 }
 
 fn col_ok_t12(status: DpiStatus) -> bool {
-    matches!(status, DpiStatus::Ok | DpiStatus::NoTls13)
+    matches!(status, DpiStatus::Ok | DpiStatus::NoTls13 | DpiStatus::RuCa)
+}
+
+/// A TLS cell's badge: a leg that answered reads `RU CA` instead of a green `OK`
+/// when the chain it was shown is rooted in Russia's own CA.
+///
+/// The mark is the certificate detail the leg already carries, so nothing new is
+/// read here. A leg that failed for another reason keeps its own status and the
+/// certificate line still names the chain beside that failure — which is the
+/// second half of the rule: the reason is never swallowed by the mark.
+fn ru_ca_or(status: DpiStatus, cert: &Detail) -> DpiStatus {
+    if status == DpiStatus::Ok && *cert == Detail::RuTrustedCa {
+        DpiStatus::RuCa
+    } else {
+        status
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1117,13 +1144,57 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Dp
     // where the mark is the only thing to see.
     details.extend(cert_lines);
 
-    (e.http.status, e.t12.status, e.t13.status, e.quic.status, details)
+    (e.http.status, ru_ca_or(e.t12.status, &e.t12.cert), ru_ca_or(e.t13.status, &e.t13.cert), e.quic.status, details)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A leg that answered while its chain is rooted in Russia's own CA reads
+    /// `RU CA`, not a green `OK`, and the row still counts as available: the
+    /// probe reached the site, so calling it blocked would be the lie this tool
+    /// exists to avoid. The certificate line names the chain either way.
+    #[test]
+    fn a_russian_rooted_chain_reads_ru_ca_and_stays_available() {
+        let mut entry = DomainEntry::pending("sberbank.ru".to_string(), None, None);
+        entry.http = HttpCheck::at(DpiStatus::Ok, Detail::HttpStatus(200));
+        entry.t12 = TlsCheck {
+            status: DpiStatus::Ok,
+            detail: Detail::None,
+            cert: Detail::RuTrustedCa,
+            elapsed: 0.3,
+        };
+        entry.t13 = entry.t12.clone();
+
+        let (http, t12, t13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(http, DpiStatus::Ok);
+        assert_eq!(t12, DpiStatus::RuCa);
+        assert_eq!(t13, DpiStatus::RuCa);
+        assert_eq!(t12.display_label(), "RU CA");
+        assert!(
+            details.iter().any(|line| matches!(line, DetailLine::Tagged(_, Detail::RuTrustedCa))),
+            "the chain is named beside the badge: {details:?}"
+        );
+        assert!(col_ok_t12(t12) && col_ok_t12(t13), "available, not blocked");
+
+        // A leg that failed for another reason keeps its own badge, and the mark
+        // becomes a second line rather than replacing the reason.
+        entry.t13 = TlsCheck {
+            status: DpiStatus::TlsBlock,
+            detail: Detail::ProtocolVersionAlert,
+            cert: Detail::RuTrustedCa,
+            elapsed: 0.4,
+        };
+        let (_http, t12, t13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(t12, DpiStatus::RuCa);
+        assert_eq!(t13, DpiStatus::TlsBlock, "the failure is never swallowed");
+        assert!(
+            details.iter().any(|line| matches!(line, DetailLine::Tagged(_, Detail::RuTrustedCa))),
+            "and the chain is still named: {details:?}"
+        );
+    }
 
     #[test]
     fn test_fake_ip_type() {

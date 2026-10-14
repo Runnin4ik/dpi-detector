@@ -175,7 +175,7 @@ pub(crate) fn transfer_badge(status: TransferStatus) -> (&'static str, Color) {
 pub(crate) fn status_color(s: DpiStatus) -> Color {
     match s {
         DpiStatus::Ok => Color::Green,
-        DpiStatus::NoTls13 | DpiStatus::NoCa => Color::Yellow,
+        DpiStatus::NoTls13 | DpiStatus::NoCa | DpiStatus::RuCa => Color::Yellow,
         DpiStatus::LocalIp | DpiStatus::DnsFail | DpiStatus::NxDomain => Color::Yellow,
         DpiStatus::Err => Color::DarkGrey,
         // A row that was never measured holds no verdict about the site: the
