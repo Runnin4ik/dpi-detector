@@ -340,8 +340,8 @@ pub(crate) fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("CLOSED", "端点以受保护的 CONNECTION_CLOSE 或无状态重置回应：路径可用，握手不会进行；详情给出 transport error 代码"),
             ("VN", "端点不支持 QUIC v1，并列出了它支持的版本"),
             ("SPOOF", "Retry 的完整性标签不匹配：该报文并非来自端点（只有看到 Initial 的一方能计算该标签）"),
-            ("DROP", "Initial 没有回应：UDP 443 被过滤或端点不可用（TCP 中的对应物是 SYN DROP）"),
-            ("REFUSED", "ICMP：UDP 端口无人监听——路径可用，端点根本没有 QUIC 监听器；这不是封锁（封锁是 DROP）"),
+            ("TIMEOUT", "Initial 超时：Initial 完全没有回应——UDP 443 被过滤或端点不可用（TCP 中的对应物是 SYN DROP）；该行不写详情，徽标已说明一切"),
+            ("REFUSED", "ICMP：UDP 端口无人监听——路径可用，端点根本没有 QUIC 监听器；这不是封锁（封锁是 TIMEOUT）"),
             ("—", "端点完全不支持 HTTP/3，因此未发送 Initial：该主机在内置的 quic_unsupported.txt 中（两个外部测试器均如此判定），汇总统计该列时不计入它"),
         ]),
         ("— 其他 —", vec![

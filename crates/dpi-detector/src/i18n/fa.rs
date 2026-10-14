@@ -340,8 +340,8 @@ pub(crate) fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("CLOSED", "Endpoint ba CONNECTION_CLOSE-e mahfuz ya stateless reset pasokh dad: masir kar mikonad, handshake na - detail code-e transport error ra migooyad"),
             ("VN", "Endpoint version-e QUIC v1 ra nadarad va version-hayi ke darad ra fehrest kard"),
             ("SPOOF", "Retry ba integrity tag-e ghalat: packet az endpoint nayamade, chon tag ra faghat kasani ke Initial ra dideand mitavanand hesab konand"),
-            ("DROP", "Be Initial pasokhi nayamad: UDP 443 filter shode ya endpoint kharab ast (haman sokuti ke SYN DROP baraye TCP ast)"),
-            ("REFUSED", "ICMP: ru-ye UDP-port hich kas goosh nemidahad - masir kar mikonad va endpoint aslan QUIC nadarad; in block nist (block = DROP)"),
+            ("TIMEOUT", "Mohlat-e Initial: be Initial aslan pasokhi nayamad - UDP 443 filter shode ya endpoint kharab ast (haman sokuti ke SYN DROP baraye TCP ast); dar detail khatti neest, badge hame chiz ra migooyad"),
+            ("REFUSED", "ICMP: ru-ye UDP-port hich kas goosh nemidahad - masir kar mikonad va endpoint aslan QUIC nadarad; in block nist (block = TIMEOUT)"),
             ("—", "Endpoint aslan HTTP/3 nadarad, pas Initial ferestade nashod: host dar quic_unsupported.txt-e dakheli ast (har do tester-e khareji hamin ra migooyand) va summary in sotun ra bedun-e an mishomarad"),
         ]),
         ("- Sayer -", vec![

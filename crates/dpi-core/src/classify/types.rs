@@ -273,6 +273,12 @@ pub enum DpiStatus {
     /// on the path answered in the endpoint's place.
     QuicSpoof,
     /// Nothing came back within the window: the silence `SYN DROP` is for TCP.
+    ///
+    /// The badge is `TIMEOUT` — the same one a TCP connect or an HTTP/TLS leg
+    /// that ran out of window wears — because the finding is "nothing came
+    /// back", not which filter produced the silence. The `--json` token stays
+    /// `quic_drop`, so a consumer's key does not move, and the details column
+    /// carries no line for it: the badge says the whole of it.
     QuicDrop,
     /// The endpoint does not serve HTTP/3 at all, so no Initial was sent for
     /// this row: the QUIC cell prints a dash and the summary counts the row out
@@ -418,7 +424,7 @@ impl DpiStatus {
             Self::QuicClosed => "CLOSED",
             Self::QuicVn => "VN",
             Self::QuicSpoof => "SPOOF",
-            Self::QuicDrop => "DROP",
+            Self::QuicDrop => "TIMEOUT",
             Self::QuicUnsupported => "—",
             Self::Err => "ERR",
             Self::Unknown => "UNKNOWN",
@@ -591,6 +597,22 @@ mod tests {
         );
         assert!(DpiStatus::Tcp16Range.is_blocked());
         assert!(DpiStatus::Tcp16Detected.is_blocked());
+    }
+
+    /// The QUIC Initial's own timeout wears the badge every other window that
+    /// ran out wears — `TIMEOUT` — while its `--json` token stays `quic_drop`:
+    /// the badge is what a reader compares across the HTTP, TLS and QUIC
+    /// columns, and the token is what a consumer keys on, so only one of the two
+    /// moves when the column is renamed in prose.
+    #[test]
+    fn the_quic_timeout_wears_the_timeout_badge() {
+        assert_eq!(DpiStatus::QuicDrop.display_label(), "TIMEOUT");
+        assert_eq!(DpiStatus::QuicDrop.as_str(), "quic_drop");
+        assert_eq!(
+            serde_json::to_string(&DpiStatus::QuicDrop).expect("a status serializes"),
+            "\"quic_drop\""
+        );
+        assert!(DpiStatus::QuicDrop.is_blocked(), "silence is not a pass");
     }
 
     /// The IPv6 fallback's badge is a "not measured" verdict, not a failure:

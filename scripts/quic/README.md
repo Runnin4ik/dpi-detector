@@ -33,7 +33,7 @@ Run against the 34 hosts `hosts.txt` held at the time (2026-09-26, Windows x86_6
 the shipped defaults), `crosscheck.py` agreed with the detector on **13 of 34**
 rows. The disagreements were not noise:
 
-* Seven hosts the column called `QUIC DROP` — `discord.com`, `meduza.io`,
+* Seven hosts the column called `QUIC TIMEOUT` — `discord.com`, `meduza.io`,
   `www.linkedin.com`, `danbooru.donmai.us`, `holod.media`, `nnmclub.to`,
   `media.discordapp.net` — completed a full HTTP/3 handshake with the stock
   client **at the same address, seconds before and after the detector's own
@@ -63,7 +63,7 @@ The cause was in the probe, not in the network:
    endpoint then answers with a readable ServerHello. `replay.py` proved this
    with the detector's own hello bytes: the first flight produced only the
    unreadable packet, the retransmission produced `ACK` + `CRYPTO`.
-3. The probe sent its flight once and waited, so it reported `QUIC DROP` for an
+3. The probe sent its flight once and waited, so it reported `QUIC TIMEOUT` for an
    endpoint that was answering every browser on the same address.
 
 The fix is in `crates/dpi-core/src/probe/quic.rs`: the flight is repeated on a
@@ -205,7 +205,7 @@ So the gate is Cloudflare's, and inside Cloudflare it is not uniform: `canva`
 answers at once (with a close that belongs to the fake's connection — the same
 tuple binding, a different reaction), and `apkmirror` answers early or late
 depending on the run. Every other CDN in the sample answered our **first**
-Initial. For hosts whose verdict is `DROP`/`CLOSED` the column carries no timing,
+Initial. For hosts whose verdict is `TIMEOUT`/`CLOSED` the column carries no timing,
 so their gate is only visible in a capture — `x.com` and `hub.docker.com` were
 read that way (their answers come at 4.708 s and 4.813 s, after the fourth send,
 and carry our SCID; the fake's answers carry the blob's empty one).
@@ -406,7 +406,7 @@ All three were in the probe's hello, and all three are now fixed:
   and Google answers nothing. The probe now sends the set a live Chrome sends
   (`tp_dump.py` read it out of a capture), which turned `www.google.com`,
   `www.youtube.com`, `amnezia.org`, `holod.media` and `www.intel.com` from
-  `QUIC CLOSED`/`QUIC DROP` into `quic_ok`.
+  `QUIC CLOSED`/`QUIC TIMEOUT` into `quic_ok`.
 * **The application settings advertised `h2`.** The shape is the TCP one, where
   Chrome sends `h2`; over QUIC the same extension carries `h3` (a live Chrome's
   hello: `0003026833` in extension `0x44cd`, this probe's: `0003026832`). The
@@ -491,7 +491,7 @@ Caveats the runs taught:
   What *is* comparable between captures: which extensions are present, their
   bodies, and the cipher list.
 * An endpoint's willingness to answer is not stable. A full 34-host sweep
-  minutes after a good one returned `QUIC DROP` for every host *including* the
+  minutes after a good one returned `QUIC TIMEOUT` for every host *including* the
   ones a stock client had answered, and the stock client timed out on the same
   hosts in the same minutes. Only a comparison made **in one window**
   (`bracket.py`) can tell a wrong verdict from a network that stopped answering.
@@ -545,7 +545,7 @@ about the new ones in the same window.
   while both testers say "no", so Yandex serves H3 only from this region;
   `www.netflix.com`, `duckduckgo.com`, `mail.ru`, `lenta.ru`, `ria.ru` and the
   three Telegram hosts drop here *and* serve no HTTP/3 anywhere, so their
-  `QUIC DROP` is not a finding.
+  `QUIC TIMEOUT` is not a finding.
 
 ## The row that looked like a defect, and was not: `www.whatsapp.com`
 
@@ -574,7 +574,7 @@ www.whatsapp.com: a real browser did NOT complete the HTTP/3 handshake with 31.1
 ```
 
 So the browser went to the address the probe used and got the same silence: the
-`QUIC DROP` is what a browser would report, and the third-party testers that see
+`QUIC TIMEOUT` is what a browser would report, and the third-party testers that see
 HTTP/3 for this name are on another network. That is a finding about the path, not
 about the probe. The one address the probe did not try — `157.240.205.60`,
 `dns.google`'s answer — is silent too.

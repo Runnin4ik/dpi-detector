@@ -60,9 +60,12 @@ fn proto_cell(status: DpiStatus, detail: &Detail) -> String {
     }
 }
 
-/// Detail cell of the domain table: one `<proto>:<detail>` line per failing
-/// protocol, or a single line when the failure is shared. Protocol tags are
-/// canonical Latin tokens (Rule 4) and stay untranslated.
+/// Detail cell of the domain table: one line per reason a row failed for, and a
+/// `TLS:`-style prefix only when the row carries more than one reason — the lines
+/// then name the protocols they belong to, joined in the table's own column order
+/// (`HTTP,TLS13:→ m.megafonpro.ru`). One protocol name, or none, comes from the
+/// core (`build_domain_row`); the names are canonical Latin tokens (Rule 4) and
+/// stay untranslated.
 ///
 /// A row where every protocol passed carries the four stage timings instead —
 /// `0.2s,0.2s,0.2s,0.2s`, one per column in the table's order (HTTP, TLS 1.2,
@@ -71,8 +74,14 @@ fn row_details(lines: &[DetailLine], lang: Language) -> String {
     lines
         .iter()
         .map(|line| match line {
-            DetailLine::Tagged(Some(tag), detail) => format!("{}:{}", tag, detail_text(detail, lang)),
-            DetailLine::Tagged(None, detail) => detail_text(detail, lang),
+            DetailLine::Tagged(protos, detail) => {
+                let text = detail_text(detail, lang);
+                if protos.is_empty() {
+                    text
+                } else {
+                    format!("{}:{}", protos.join(","), text)
+                }
+            }
             DetailLine::Timings([http, tls12, tls13, quic]) => {
                 format!("{:.1}s,{:.1}s,{:.1}s,{:.1}s", http, tls12, tls13, quic)
             }
@@ -178,11 +187,35 @@ mod tests {
         assert!(proto_cell(DpiStatus::TlsRst, &Detail::RstHello).contains("TLS RST"));
     }
 
+    /// The details cell has a rendering rule of its own: the names the core put
+    /// on a line are joined by a comma in the order the table prints the columns,
+    /// a colon separates them from the detail, and a line the core left unnamed
+    /// gets no colon at all. Regression: the first version of the shared line
+    /// would have rendered `:→ host` for a row with a single reason.
+    #[test]
+    fn the_details_cell_joins_the_names_that_share_a_reason() {
+        let lang = Language::Ru;
+        let redirect = Detail::Redirect { host: "m.megafonpro.ru".to_string() };
+
+        assert_eq!(
+            row_details(&[DetailLine::Tagged(vec!["HTTP", "TLS13"], redirect.clone())], lang),
+            "HTTP,TLS13:→ m.megafonpro.ru"
+        );
+        assert_eq!(
+            row_details(&[DetailLine::Tagged(vec![], redirect.clone())], lang),
+            "→ m.megafonpro.ru"
+        );
+        assert_eq!(
+            row_details(&[DetailLine::Tagged(vec!["TLS12"], redirect.clone())], lang),
+            "TLS12:→ m.megafonpro.ru"
+        );
+    }
+
     /// One row whose four columns all carry `status`/`detail`.
     fn row(domain: &str, status: DpiStatus, detail: Detail) -> DomainEntry {
         use dpi_core::probe::domains::{HttpCheck, TlsCheck};
         use dpi_core::probe::quic::QuicCheck;
-        let tls = TlsCheck { status, detail: detail.clone(), elapsed: 0.0 };
+        let tls = TlsCheck { status, detail: detail.clone(), cert: Detail::None, elapsed: 0.0 };
         DomainEntry {
             domain: domain.to_string(),
             resolved: Some("203.0.113.7".parse().unwrap()),

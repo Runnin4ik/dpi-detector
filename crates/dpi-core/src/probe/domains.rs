@@ -128,6 +128,16 @@ pub fn is_local_or_relay_ip(ip: &IpAddr) -> bool {
 pub struct TlsCheck {
     pub status: DpiStatus,
     pub detail: Detail,
+    /// What the bundled roots say about the chain this leg was shown, judged
+    /// after the handshake ([`crate::net::tls::verify_peer_chain`]): a certificate
+    /// detail (`FakeCert`, `CertExpired`, `SelfSigned`, `HostnameMismatch`,
+    /// `NoRootCa`) when they reject it, `Detail::None` when they accept it, when
+    /// the handshake carried no chain, or when the handshake never completed.
+    ///
+    /// A mark, never a verdict: the leg's `status` is the same with and without
+    /// it, so a spoofed certificate on a site that still answers is a row reading
+    /// `OK` and a detail line saying the chain is not the host's.
+    pub cert: Detail,
     pub elapsed: f64,
 }
 
@@ -165,7 +175,7 @@ pub async fn check_domain_tls(
             Ok(stream) => stream,
             Err(e) => {
                 let (status, detail) = e.verdict();
-                return (status, detail, 0usize);
+                return (status, detail, 0usize, Detail::None);
             }
         };
 
@@ -181,7 +191,7 @@ pub async fn check_domain_tls(
         let server_name = match crate::net::tls::server_name(domain) {
             Ok(n) => n,
             Err(e) => {
-                return (DpiStatus::Err, Detail::Other(format!("bad SNI: {}", e)), 0usize);
+                return (DpiStatus::Err, Detail::Other(format!("bad SNI: {}", e)), 0usize, Detail::None);
             }
         };
         let tracker = crate::classify::DpiProbeTracker::new();
@@ -197,30 +207,44 @@ pub async fn check_domain_tls(
                 let st = tracker.state.lock();
                 if let Some(status) = st.last_status {
                     let detail = st.last_error_msg.clone().unwrap_or(Detail::RstHello);
-                    return (status, detail, 0usize);
+                    return (status, detail, 0usize, Detail::None);
                 }
                 drop(st);
                 let msg = e.to_string();
                 let (status, detail) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, ProbeStage::TlsHandshake);
                 if status != DpiStatus::Unknown {
-                    return (status, detail, 0usize);
+                    return (status, detail, 0usize, Detail::None);
                 }
                 let (ssl_status, ssl_detail) = classify_ssl_error(&msg, 0, ConnectionStage::TlsClientHelloSent);
-                return (ssl_status, ssl_detail, 0usize);
+                let (pinned_status, pinned_detail) =
+                    resolve_peer_version_mismatch(ssl_status, ssl_detail, tls12_only);
+                return (pinned_status, pinned_detail, 0usize, Detail::None);
             }
             Err(_) => {
-                return (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout, 0usize);
+                return (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout, 0usize, Detail::None);
             }
         };
 
         *stage.lock() = ProbeStage::TlsConnected;
+        // The chain this leg was shown, judged *after* the handshake: the probe
+        // hands rustls an insecure profile on purpose (the certificate is
+        // evidence here, not a gate), so this is the only place the row can learn
+        // that the answer came from a chain that is not the host's.
+        let cert = peer_cert_mark(tls_stream.get_ref().1, domain);
         // Test 2 counts the bytes a connection carries before it is cut, so it
         // never negotiates a Content-Encoding.
-        check_http(tls_stream, domain, cfg, fingerprint, &stage, true).await
+        let (status, detail, bytes) =
+            check_http(tls_stream, domain, cfg, fingerprint, &stage, true).await;
+        (status, detail, bytes, cert)
     };
 
     match timeout(total_timeout, fut).await {
-        Ok((status, detail, _)) => TlsCheck { status, detail, elapsed: start.elapsed().as_secs_f64() },
+        Ok((status, detail, _, cert)) => TlsCheck {
+            status,
+            detail,
+            cert,
+            elapsed: start.elapsed().as_secs_f64(),
+        },
         Err(_) => {
             // An outer timeout is a failure of whatever stage the check had
             // reached, read the same way the classifier reads it: the two dial
@@ -234,11 +258,60 @@ pub async fn check_domain_tls(
                     (DpiStatus::ReadTimeout, Detail::ReadTimeoutWord)
                 }
             };
-            TlsCheck { status, detail, elapsed: start.elapsed().as_secs_f64() }
+            TlsCheck { status, detail, cert: Detail::None, elapsed: start.elapsed().as_secs_f64() }
         }
     }
 }
 
+/// The certificate mark of one completed TLS leg: a certificate detail
+/// (`FakeCert`, `CertExpired`, `SelfSigned`, `NoRootCa`, `HostnameMismatch`) when
+/// the bundled Mozilla roots reject the chain the leg was shown, `Detail::None`
+/// when they accept it or when the handshake carried no chain at all.
+///
+/// The classifier the TLS legs already use for a certificate failure names it, so
+/// the mark is the same word a *verifying* leg would have produced — the probes
+/// only add it after the fact instead of aborting on it
+/// ([`crate::net::tls::verify_peer_chain`]).
+fn peer_cert_mark(conn: &rustls::ClientConnection, domain: &str) -> Detail {
+    let Some(chain) = conn.peer_certificates() else {
+        return Detail::None;
+    };
+    let Ok(name) = crate::net::tls::server_name(domain) else {
+        return Detail::None;
+    };
+    match crate::net::tls::verify_peer_chain(chain, &name) {
+        Ok(()) => Detail::None,
+        Err(e) => classify_ssl_error(&e.to_string(), 0, ConnectionStage::TlsHandshakeDone).1,
+    }
+}
+
+/// Reads a version-naming `PeerIncompatible` answer against the leg that met it.
+///
+/// rustls raises `PeerIncompatible::ServerTlsVersionIsDisabledByOurConfig` both
+/// when a peer picks a version *above* our offer and when it picks one *below*
+/// it, and the message names neither (`vendor/rustls/src/error.rs` renders the
+/// variant's Debug name). The pin does: the TLS-1.2 leg offered 1.2 alone, so a
+/// peer that selected anything else selected **1.3** — an answer this host never
+/// gave, which is the spoofed answer `TLS SPOOF` names — while the TLS-1.3 leg
+/// meeting the same message met a host without TLS 1.3 (or a box that downgraded
+/// it), and that column keeps its own `NO TLS1.3`.
+///
+/// Every other verdict passes through untouched, the record-level
+/// "wrong version number" included: that one is a spoof on either leg.
+fn resolve_peer_version_mismatch(
+    status: DpiStatus,
+    detail: Detail,
+    tls12_only: bool,
+) -> (DpiStatus, Detail) {
+    if detail != Detail::PeerVersionMismatch {
+        return (status, detail);
+    }
+    if tls12_only {
+        (DpiStatus::TlsSpoof, Detail::WrongVersion)
+    } else {
+        (DpiStatus::NoTls13, Detail::NoTls13)
+    }
+}
 
 /// Plain-HTTP injection check: GET to `port` of the resolved IP with
 /// Host = domain; a known provider stub IP short-circuits to `IspPage`.
@@ -441,7 +514,7 @@ pub struct DomainEntry {
 
 impl DomainEntry {
     fn pending(domain: String, resolved: Option<IpAddr>, dns_fake: Option<bool>) -> Self {
-        let dash = TlsCheck { status: DpiStatus::Unknown, detail: Detail::None, elapsed: 0.0 };
+        let dash = TlsCheck { status: DpiStatus::Unknown, detail: Detail::None, cert: Detail::None, elapsed: 0.0 };
         Self {
             domain,
             resolved,
@@ -450,6 +523,21 @@ impl DomainEntry {
             t12: dash,
             http: HttpCheck::at(DpiStatus::Unknown, Detail::None),
             quic: crate::probe::quic::QuicCheck::pending(),
+        }
+    }
+
+    /// The certificate mark of the row: what the bundled roots said about the
+    /// chain the row's TLS legs were shown. TLS 1.3 is asked first because it is
+    /// the leg that completes on a modern endpoint, and a leg that never
+    /// handshook carries `Detail::None` anyway.
+    ///
+    /// `--json` writes this as `cert_detail`; the table draws the same detail as
+    /// a line of its own ([`build_domain_row`]).
+    pub fn cert_mark(&self) -> Detail {
+        if self.t13.cert != Detail::None {
+            self.t13.cert.clone()
+        } else {
+            self.t12.cert.clone()
         }
     }
 }
@@ -507,7 +595,7 @@ fn entry_for(
         } else {
             (DpiStatus::DnsFail, Detail::DomainNotFound)
         };
-        e.t13 = TlsCheck { status, detail: detail.clone(), elapsed: 0.0 };
+        e.t13 = TlsCheck { status, detail: detail.clone(), cert: Detail::None, elapsed: 0.0 };
         e.t12 = e.t13.clone();
         e.http = HttpCheck::at(status, detail);
         e.quic = skipped_quic(status, e.http.detail.clone());
@@ -521,7 +609,7 @@ fn entry_for(
         FakeIpType::Isp => {
             let mut e = DomainEntry::pending(domain.to_string(), Some(ip), Some(true));
             let detail = Detail::IspBlockpage { arrow: true, ip: ip.to_string() };
-            e.t13 = TlsCheck { status: DpiStatus::DnsFake, detail: detail.clone(), elapsed: 0.0 };
+            e.t13 = TlsCheck { status: DpiStatus::DnsFake, detail: detail.clone(), cert: Detail::None, elapsed: 0.0 };
             e.t12 = e.t13.clone();
             e.http = HttpCheck::at(DpiStatus::DnsFake, detail);
             e.quic = skipped_quic(DpiStatus::DnsFake, e.http.detail.clone());
@@ -530,7 +618,7 @@ fn entry_for(
         FakeIpType::Local => {
             let mut e = DomainEntry::pending(domain.to_string(), Some(ip), Some(true));
             let detail = Detail::LocalIp { ip: ip.to_string() };
-            e.t13 = TlsCheck { status: DpiStatus::LocalIp, detail: detail.clone(), elapsed: 0.0 };
+            e.t13 = TlsCheck { status: DpiStatus::LocalIp, detail: detail.clone(), cert: Detail::None, elapsed: 0.0 };
             e.t12 = e.t13.clone();
             e.http = HttpCheck::at(DpiStatus::LocalIp, detail);
             e.quic = skipped_quic(DpiStatus::LocalIp, e.http.detail.clone());
@@ -874,9 +962,15 @@ pub fn domain_stats(entries: &[DomainEntry]) -> DomainStats {
 /// One line of a domain row's detail cell.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DetailLine {
-    /// An optional protocol tag (Latin in every language, Rule 4) and the detail
-    /// it explains.
-    Tagged(Option<&'static str>, Detail),
+    /// The protocols that share this reason, in the order the table prints them
+    /// (Latin in every language, Rule 4), and the detail itself.
+    ///
+    /// Empty means the line needs no name: it is the only reason on the row, so
+    /// the badges beside the cell already say which columns are not OK and
+    /// naming them again would be the same fact twice. A *pass* line — the best
+    /// TLS time — always names its protocol, because nothing else on the row
+    /// would say whose time it is.
+    Tagged(Vec<&'static str>, Detail),
     /// Every protocol of the row passed: the four stage timings, in the order
     /// the columns are printed — HTTP, TLS 1.2, TLS 1.3, QUIC.
     Timings([f64; 4]),
@@ -884,6 +978,10 @@ pub enum DetailLine {
 
 /// Details that describe "nothing came back in time" rather than a verdict: they
 /// are dropped from a row's detail cell (the badge already says `TIMEOUT`).
+///
+/// The QUIC Initial's own timeout is one of them: its badge is `TIMEOUT` too
+/// (`DpiStatus::QuicDrop`), so naming the timeout again in the details says
+/// nothing the cell does not already carry.
 fn is_timeout_detail(detail: &Detail) -> bool {
     matches!(
         detail,
@@ -891,16 +989,20 @@ fn is_timeout_detail(detail: &Detail) -> bool {
             | Detail::ReadTimeoutWord
             | Detail::TimeoutStage { .. }
             | Detail::AtKb { .. }
+            | Detail::QuicTimeout
     )
 }
 
 /// Builds the (http, t12, t13, quic, details) cells: each failing protocol
-/// contributes a detail (timeouts dropped), and two passing TLS columns collapse
-/// to the best time.
+/// contributes a detail (timeouts dropped, the badge says `TIMEOUT`), one line
+/// per *reason* — the legs that failed alike share theirs and are named together
+/// (`HTTP,TLS13`), a row with a single reason carries no name at all — and two
+/// passing TLS columns collapse to the best time.
 ///
 /// The QUIC column joins them on the same terms as the others: a verdict that is
-/// not `OK` names its reason, and only a row where every protocol passed
-/// collapses to the elapsed time.
+/// not `OK` names its reason — a timed-out Initial excepted, since its badge
+/// carries it — and only a row where every protocol passed collapses to the
+/// elapsed time.
 pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, DpiStatus, Vec<DetailLine>) {
     let http_ok = col_ok(e.http.status);
     let t12_ok = col_ok_t12(e.t12.status);
@@ -913,56 +1015,79 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Dp
         DpiStatus::Unknown | DpiStatus::QuicOk | DpiStatus::QuicUnsupported
     );
 
-    let mut problems: Vec<(&'static str, Detail)> = Vec::new();
+    // Every failing leg names itself and its reason, in the order the columns are
+    // printed; the grouping below turns these into lines, and the names are what
+    // tells two lines apart when a row has more than one reason.
+    let mut failures: Vec<(&'static str, Detail)> = Vec::new();
     if !http_ok
         && !e.http.detail.is_none()
         && !is_timeout_detail(&e.http.detail)
         && !is_timeout_status(e.http.status)
     {
-        problems.push(("HTTP", e.http.detail.clone()));
+        failures.push(("HTTP", e.http.detail.clone()));
     }
-    // `DROP` keeps its line: unlike the TLS timeouts, the badge does not say
-    // why nothing came back, and "no reply to the Initial" is the whole finding.
-    if quic_failed && e.quic.detail != Detail::None {
-        problems.push(("QUIC", e.quic.detail.clone()));
-    }
-
-    // TLS 1.2 and 1.3 are one stage while they agree — one `TLS:` line says it
+    // TLS 1.2 and 1.3 are one stage while they agree — one `TLS` line says it
     // once — and two stages the moment they disagree: a reader looking at
-    // `TLS RST` beside `DROP` has to know which version did what, so each line
-    // then carries its own version and a shared detail is not folded across them.
-    let mut details: Vec<DetailLine> = Vec::new();
+    // `TLS RST` beside `TLS DROP` has to know which version did what, so each
+    // leg then carries its own version.
     let tls_agree = e.t12.status == e.t13.status && e.t12.detail == e.t13.detail;
     if tls_agree {
         if !t12_ok && e.t12.detail != Detail::None && !is_timeout_detail(&e.t12.detail) {
-            details.push(DetailLine::Tagged(Some("TLS"), e.t12.detail.clone()));
+            failures.push(("TLS", e.t12.detail.clone()));
         }
     } else {
         if !t12_ok && e.t12.detail != Detail::None && !is_timeout_detail(&e.t12.detail) {
-            details.push(DetailLine::Tagged(Some("TLS12"), e.t12.detail.clone()));
+            failures.push(("TLS12", e.t12.detail.clone()));
         }
         if !t13_ok && e.t13.detail != Detail::None && !is_timeout_detail(&e.t13.detail) {
-            details.push(DetailLine::Tagged(Some("TLS13"), e.t13.detail.clone()));
+            failures.push(("TLS13", e.t13.detail.clone()));
+        }
+    }
+    // A QUIC Initial that timed out carries no line: its badge is `TIMEOUT` and
+    // the timeout is the whole finding — the same terms the TLS legs are read
+    // on. Every other QUIC verdict does keep its line here, because no badge
+    // says *which* reply came back.
+    if quic_failed && e.quic.detail != Detail::None && !is_timeout_detail(&e.quic.detail) {
+        failures.push(("QUIC", e.quic.detail.clone()));
+    }
+
+    // The certificate the row's TLS legs were shown, when the bundled roots
+    // reject it (see `TlsCheck::cert`). It is a mark rather than a verdict, so it
+    // draws no badge and the line always names the protocol it came from: a row
+    // whose only line is the mark would otherwise read "Certificate spoofing"
+    // with no subject. The two legs share their name (`TLS`) exactly when they
+    // share the mark, like the failure lines above.
+    let mut cert_lines: Vec<DetailLine> = Vec::new();
+    match (&e.t12.cert, &e.t13.cert) {
+        (Detail::None, Detail::None) => {}
+        (Detail::None, mark) => cert_lines.push(DetailLine::Tagged(vec!["TLS13"], mark.clone())),
+        (mark, Detail::None) => cert_lines.push(DetailLine::Tagged(vec!["TLS12"], mark.clone())),
+        (t12, t13) if t12 == t13 => {
+            cert_lines.push(DetailLine::Tagged(vec!["TLS"], t12.clone()));
+        }
+        (t12, t13) => {
+            cert_lines.push(DetailLine::Tagged(vec!["TLS12"], t12.clone()));
+            cert_lines.push(DetailLine::Tagged(vec!["TLS13"], t13.clone()));
         }
     }
 
-    if details.is_empty() && problems.len() == 1 {
-        details.push(DetailLine::Tagged(None, problems[0].1.clone()));
-    } else if !problems.is_empty() {
-        // Same detail from several protocols shares one line; a single one keeps
-        // its protocol tag so the reader knows which stage failed.
-        let mut grouped: Vec<(Detail, Vec<&'static str>)> = Vec::new();
-        for (proto, detail) in &problems {
-            match grouped.iter_mut().find(|(known, _)| known == detail) {
-                Some((_, protos)) => protos.push(proto),
-                None => grouped.push((detail.clone(), vec![proto])),
-            }
-        }
-        for (detail, protos) in grouped {
-            let tag = if protos.len() == 1 { Some(protos[0]) } else { None };
-            details.push(DetailLine::Tagged(tag, detail));
+    // One reason, one line: legs that failed for the same reason share theirs and
+    // are named together (`HTTP,TLS13`), instead of one line per protocol saying
+    // the same thing twice. A row with a single reason names nothing at all —
+    // the badges already say which columns are not OK — unless a certificate mark
+    // is on the row too, and then the names are what tells the two lines apart.
+    let mut grouped: Vec<(Detail, Vec<&'static str>)> = Vec::new();
+    for (proto, detail) in &failures {
+        match grouped.iter_mut().find(|(known, _)| known == detail) {
+            Some((_, protos)) => protos.push(proto),
+            None => grouped.push((detail.clone(), vec![proto])),
         }
     }
+    let only_reason = grouped.len() == 1 && cert_lines.is_empty();
+    let mut details: Vec<DetailLine> = grouped
+        .into_iter()
+        .map(|(detail, protos)| DetailLine::Tagged(if only_reason { Vec::new() } else { protos }, detail))
+        .collect();
 
     // Everything passed: the cell is the four stage timings and nothing else,
     // one per column in the order the table prints them. `Unknown` is not a pass
@@ -983,9 +1108,14 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Dp
         }
         if let Some(min) = times.iter().cloned().reduce(f64::min) {
             details.clear();
-            details.push(DetailLine::Tagged(Some("TLS"), Detail::Elapsed(min)));
+            details.push(DetailLine::Tagged(vec!["TLS"], Detail::Elapsed(min)));
         }
     }
+
+    // Last, so that the timing branches above cannot swallow it: a site whose
+    // certificate is not its own and which still answers 200 is exactly the row
+    // where the mark is the only thing to see.
+    details.extend(cert_lines);
 
     (e.http.status, e.t12.status, e.t13.status, e.quic.status, details)
 }
@@ -1083,8 +1213,8 @@ mod tests {
                 &HashSet::new(),
             );
             e.http = HttpCheck::at(DpiStatus::Ok, Detail::HttpStatus(200));
-            e.t13 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.31 };
-            e.t12 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.32 };
+            e.t13 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, cert: Detail::None, elapsed: 0.31 };
+            e.t12 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, cert: Detail::None, elapsed: 0.32 };
             e
         };
 
@@ -1094,7 +1224,7 @@ mod tests {
         assert_eq!(quic, DpiStatus::QuicUnsupported);
         // No `QUIC` problem line and no four-timing line with a zero in the QUIC
         // slot: the best TLS time stands alone, as it does for a missing pass.
-        assert_eq!(details, vec![DetailLine::Tagged(Some("TLS"), Detail::Elapsed(0.31))]);
+        assert_eq!(details, vec![DetailLine::Tagged(vec!["TLS"], Detail::Elapsed(0.31))]);
 
         let mut ok = answered("danbooru.donmai.us");
         ok.quic.status = DpiStatus::QuicOk;
@@ -1196,8 +1326,8 @@ mod tests {
     fn test_build_domain_row_http_timeout_tls_ok_shows_time() {
         let mut entry = DomainEntry::pending("browserleaks.com".to_string(), None, None);
         entry.http = HttpCheck::at(DpiStatus::ReadTimeout, Detail::TimeoutWord);
-        entry.t12 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.35 };
-        entry.t13 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.28 };
+        entry.t12 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, cert: Detail::None, elapsed: 0.35 };
+        entry.t13 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, cert: Detail::None, elapsed: 0.28 };
 
         let (http, tls12, tls13, _quic, details) = build_domain_row(&entry);
         assert_eq!(http, DpiStatus::ReadTimeout);
@@ -1205,7 +1335,7 @@ mod tests {
         assert_eq!(tls12, DpiStatus::Ok);
         assert_eq!(tls13, DpiStatus::Ok);
         // The HTTP leg failed, so the cell is the failing reason — not timings.
-        assert_eq!(details, vec![DetailLine::Tagged(Some("TLS"), Detail::Elapsed(0.28))]);
+        assert_eq!(details, vec![DetailLine::Tagged(vec!["TLS"], Detail::Elapsed(0.28))]);
     }
 
     /// Every protocol passed: the cell is the four stage timings, in the columns'
@@ -1214,8 +1344,8 @@ mod tests {
     fn test_build_domain_row_all_ok_shows_the_four_stage_timings() {
         let mut entry = DomainEntry::pending("www.google.com".to_string(), None, None);
         entry.http = HttpCheck { status: DpiStatus::Ok, detail: Detail::HttpStatus(200), elapsed: 0.21 };
-        entry.t12 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.32 };
-        entry.t13 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, elapsed: 0.43 };
+        entry.t12 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, cert: Detail::None, elapsed: 0.32 };
+        entry.t13 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, cert: Detail::None, elapsed: 0.43 };
         entry.quic = crate::probe::quic::QuicCheck {
             status: DpiStatus::QuicOk,
             detail: Detail::QuicServerHello,
@@ -1239,25 +1369,25 @@ mod tests {
     fn test_build_domain_row_http_timeout_tls_rst_omits_http_timeout() {
         let mut entry = DomainEntry::pending("danbooru.donmai.us".to_string(), None, None);
         entry.http = HttpCheck::at(DpiStatus::ReadTimeout, Detail::TimeoutWord);
-        entry.t12 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, elapsed: 0.1 };
-        entry.t13 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, elapsed: 0.1 };
+        entry.t12 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, cert: Detail::None, elapsed: 0.1 };
+        entry.t13 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, cert: Detail::None, elapsed: 0.1 };
 
         let (http, tls12, tls13, _quic, details) = build_domain_row(&entry);
         assert_eq!(http, DpiStatus::ReadTimeout);
         assert_eq!(http.display_label(), "TIMEOUT");
         assert_eq!(tls12, DpiStatus::TlsRst);
         assert_eq!(tls13, DpiStatus::TlsRst);
-        // Only TLS RST is shown, NO "HTTP:Timeout" — and the versions agree, so
-        // one `TLS:` line carries it.
-        assert_eq!(details, vec![DetailLine::Tagged(Some("TLS"), Detail::RstHello)]);
+        // Only TLS RST is shown, NO "HTTP:Timeout" — and with one reason on the
+        // row the line needs no name to tell it apart from anything.
+        assert_eq!(details, vec![DetailLine::Tagged(vec![], Detail::RstHello)]);
     }
 
     #[test]
     fn test_build_domain_row_tls_drop_omits_http_timeout() {
         let mut entry = DomainEntry::pending("discord.com".to_string(), None, None);
         entry.http = HttpCheck::at(DpiStatus::ReadTimeout, Detail::TimeoutWord);
-        entry.t12 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, elapsed: 5.0 };
-        entry.t13 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, elapsed: 5.0 };
+        entry.t12 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, cert: Detail::None, elapsed: 5.0 };
+        entry.t13 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, cert: Detail::None, elapsed: 5.0 };
 
         let (http, tls12, tls13, _quic, details) = build_domain_row(&entry);
         assert_eq!(http, DpiStatus::ReadTimeout);
@@ -1265,26 +1395,238 @@ mod tests {
         assert_eq!(tls12, DpiStatus::TlsDropped);
         assert_eq!(tls13, DpiStatus::TlsDropped);
         // Only TLS Handshake timeout is shown, NO "HTTP:Timeout" — the two
-        // versions agree, so the line is tagged once.
-        assert_eq!(details, vec![DetailLine::Tagged(Some("TLS"), Detail::TlsHandshakeTimeout)]);
+        // versions agree, so it is one line, and it is the row's only reason, so
+        // the line carries no name.
+        assert_eq!(details, vec![DetailLine::Tagged(vec![], Detail::TlsHandshakeTimeout)]);
     }
 
+    /// The certificate a row's TLS legs were shown is a line of its own, and it
+    /// always names the protocol it came from: the mark draws no badge, so a row
+    /// reading `TLS:Response spoofing` beside `TLS:→ m.megafonpro.ru` would leave
+    /// the reader hunting for which of the two came from where. The badges are
+    /// untouched — a mark is not a verdict.
     #[test]
-    fn test_tls_versions_that_disagree_keep_their_own_tags() {
-        // The other half of the rule: with the versions apart, a shared `TLS:`
-        // line would hide which one failed — the columns say `TLS RST` beside
-        // `DROP`, and the detail has to say which is which.
-        let mut entry = DomainEntry::pending("example.test".to_string(), None, None);
-        entry.http = HttpCheck::at(DpiStatus::Ok, Detail::None);
-        entry.t12 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, elapsed: 0.1 };
-        entry.t13 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, elapsed: 5.0 };
+    fn test_build_domain_row_certificate_mark_is_a_named_line() {
+        let redirect = Detail::Redirect { host: "m.megafonpro.ru".into() };
+        let mut entry = DomainEntry::pending("m.megafonpro.ru".to_string(), None, None);
+        entry.http = HttpCheck { status: DpiStatus::Ok, detail: Detail::HttpStatus(200), elapsed: 0.3 };
+        entry.t12 = TlsCheck {
+            status: DpiStatus::RedirSuspect,
+            detail: redirect.clone(),
+            cert: Detail::FakeCert,
+            elapsed: 0.2,
+        };
+        entry.t13 = TlsCheck {
+            status: DpiStatus::RedirSuspect,
+            detail: redirect.clone(),
+            cert: Detail::FakeCert,
+            elapsed: 0.3,
+        };
+
+        let (_http, tls12, tls13, _quic, details) = build_domain_row(&entry);
+        assert_eq!((tls12, tls13), (DpiStatus::RedirSuspect, DpiStatus::RedirSuspect));
+        assert_eq!(
+            details,
+            vec![
+                DetailLine::Tagged(vec!["TLS"], redirect),
+                DetailLine::Tagged(vec!["TLS"], Detail::FakeCert),
+            ]
+        );
+
+        // One leg marked and the other not is not agreement: the failure keeps
+        // its own name beside the mark, so a reader knows TLS 1.2 was the leg
+        // that handshook and TLS 1.3 the one that never got that far.
+        entry.t12 = TlsCheck {
+            status: DpiStatus::TlsRst,
+            detail: Detail::RstHello,
+            cert: Detail::None,
+            elapsed: 0.1,
+        };
+        entry.t13 = TlsCheck {
+            status: DpiStatus::Ok,
+            detail: Detail::None,
+            cert: Detail::SelfSigned,
+            elapsed: 0.3,
+        };
+        let (_http, _tls12, _tls13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(
+            details,
+            vec![
+                DetailLine::Tagged(vec!["TLS12"], Detail::RstHello),
+                DetailLine::Tagged(vec!["TLS13"], Detail::SelfSigned),
+            ]
+        );
+    }
+
+    /// A certificate mark survives the branches that reduce the cell to a
+    /// timing: a site whose chain is not its own and which still answers `200` is
+    /// exactly the row where the mark is the only thing to see.
+    #[test]
+    fn test_build_domain_row_certificate_mark_outlives_the_timings() {
+        let mut entry = DomainEntry::pending("spoofed.example".to_string(), None, None);
+        entry.http = HttpCheck { status: DpiStatus::Ok, detail: Detail::HttpStatus(200), elapsed: 0.2 };
+        entry.t12 = TlsCheck {
+            status: DpiStatus::Ok,
+            detail: Detail::None,
+            cert: Detail::CertExpired,
+            elapsed: 0.3,
+        };
+        entry.t13 = TlsCheck {
+            status: DpiStatus::Ok,
+            detail: Detail::None,
+            cert: Detail::CertExpired,
+            elapsed: 0.4,
+        };
+
+        let (_http, _tls12, _tls13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(
+            details,
+            vec![
+                DetailLine::Tagged(vec!["TLS"], Detail::Elapsed(0.3)),
+                DetailLine::Tagged(vec!["TLS"], Detail::CertExpired),
+            ]
+        );
+
+        // A chain the bundled roots accept leaves nothing behind.
+        entry.t12.cert = Detail::None;
+        entry.t13.cert = Detail::None;
+        let (_http, _tls12, _tls13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(details, vec![DetailLine::Tagged(vec!["TLS"], Detail::Elapsed(0.3))]);
+    }
+
+    /// The version-naming answer, read against the leg that met it. rustls's
+    /// message names no version, and the two legs resolve it in opposite
+    /// directions — a 1.2-pinned leg can only have been answered with 1.3 (an
+    /// answer the host never gave), a 1.3-pinned leg met a host without 1.3.
+    /// Everything else passes through untouched.
+    #[test]
+    fn test_peer_version_mismatch_resolves_against_the_pin() {
+        assert_eq!(
+            resolve_peer_version_mismatch(DpiStatus::Unknown, Detail::PeerVersionMismatch, true),
+            (DpiStatus::TlsSpoof, Detail::WrongVersion)
+        );
+        assert_eq!(
+            resolve_peer_version_mismatch(DpiStatus::Unknown, Detail::PeerVersionMismatch, false),
+            (DpiStatus::NoTls13, Detail::NoTls13)
+        );
+
+        // A verdict that is not the version-naming one keeps its pair on the
+        // 1.3-pinned leg too: the record-level wrong version number is a spoof
+        // whichever leg reads it.
+        for tls12_only in [true, false] {
+            assert_eq!(
+                resolve_peer_version_mismatch(DpiStatus::TlsSpoof, Detail::WrongVersion, tls12_only),
+                (DpiStatus::TlsSpoof, Detail::WrongVersion)
+            );
+            assert_eq!(
+                resolve_peer_version_mismatch(DpiStatus::TlsErr, Detail::PeerIncompatible, tls12_only),
+                (DpiStatus::TlsErr, Detail::PeerIncompatible)
+            );
+        }
+    }
+
+    /// A row whose only failure is the QUIC Initial that never got an answer:
+    /// the column reads `TIMEOUT` (the badge every other timed-out window
+    /// wears) and the details cell stays **empty** — the badge names the column
+    /// and the cause, so a `QUIC:` line repeating the timeout says less than
+    /// the badge does. Regression: the row printed a timeout line beside a
+    /// badge that read `DROP`, which is why the two looked like two findings.
+    #[test]
+    fn test_build_domain_row_quic_timeout_carries_no_detail_line() {
+        let mut entry = DomainEntry::pending("silent.example".to_string(), None, None);
+        entry.http = HttpCheck { status: DpiStatus::Ok, detail: Detail::HttpStatus(200), elapsed: 0.2 };
+        entry.t12 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, cert: Detail::None, elapsed: 0.3 };
+        entry.t13 = TlsCheck { status: DpiStatus::Ok, detail: Detail::None, cert: Detail::None, elapsed: 0.4 };
+        entry.quic = crate::probe::quic::QuicCheck {
+            status: DpiStatus::QuicDrop,
+            detail: Detail::QuicTimeout,
+            elapsed: 6.2,
+        };
+
+        let (_http, _tls12, _tls13, quic, details) = build_domain_row(&entry);
+        assert_eq!(quic.display_label(), "TIMEOUT");
+        assert!(details.is_empty(), "{details:?}");
+
+        // The timeout is the *only* QUIC verdict that loses its line: an
+        // endpoint's own answer has no badge that says which reply came back.
+        entry.quic = crate::probe::quic::QuicCheck {
+            status: DpiStatus::QuicClosed,
+            detail: Detail::QuicReset,
+            elapsed: 0.4,
+        };
+        let (_http, _tls12, _tls13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(details, vec![DetailLine::Tagged(vec![], Detail::QuicReset)]);
+    }
+
+    /// A line belongs to a *reason*, not to a protocol: the redirect that HTTP
+    /// and TLS 1.3 both answered is one line, named `HTTP,TLS13` in the table's
+    /// own column order, while TLS 1.2's different failure keeps a line of its
+    /// own. Measured input: a lawfilter that answers its own host on HTTP and on
+    /// TLS 1.3 while TLS 1.2 ends in a reset.
+    #[test]
+    fn test_build_domain_row_names_the_legs_that_share_a_reason() {
+        let mut entry = DomainEntry::pending("blocked.example".to_string(), None, None);
+        let redirect = Detail::Redirect { host: "m.megafonpro.ru".to_string() };
+        entry.http = HttpCheck { status: DpiStatus::RedirSuspect, detail: redirect.clone(), elapsed: 0.1 };
+        entry.t12 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, cert: Detail::None, elapsed: 0.2 };
+        entry.t13 = TlsCheck { status: DpiStatus::RedirSuspect, detail: redirect.clone(), cert: Detail::None, elapsed: 0.3 };
 
         let (_http, _t12, _t13, _quic, details) = build_domain_row(&entry);
         assert_eq!(
             details,
             vec![
-                DetailLine::Tagged(Some("TLS12"), Detail::RstHello),
-                DetailLine::Tagged(Some("TLS13"), Detail::TlsHandshakeTimeout),
+                DetailLine::Tagged(vec!["HTTP", "TLS13"], redirect),
+                DetailLine::Tagged(vec!["TLS12"], Detail::RstHello),
+            ]
+        );
+    }
+
+    /// The same rule at its simplest: every failing leg of the row failed for one
+    /// reason, so the line carries no name — the badges beside the cell already
+    /// say which columns are not OK — and the reader sees `→ m.megafonpro.ru`
+    /// once. Regression: the cell printed the same sentence twice, once under
+    /// `TLS:` and once without.
+    #[test]
+    fn test_build_domain_row_drops_the_names_when_one_reason_is_the_whole_row() {
+        let mut entry = DomainEntry::pending("blocked.example".to_string(), None, None);
+        let redirect = Detail::Redirect { host: "m.megafonpro.ru".to_string() };
+        entry.http = HttpCheck { status: DpiStatus::RedirSuspect, detail: redirect.clone(), elapsed: 0.1 };
+        entry.t12 = TlsCheck { status: DpiStatus::RedirSuspect, detail: redirect.clone(), cert: Detail::None, elapsed: 0.2 };
+        entry.t13 = TlsCheck { status: DpiStatus::RedirSuspect, detail: redirect.clone(), cert: Detail::None, elapsed: 0.3 };
+
+        let (_http, _t12, _t13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(details, vec![DetailLine::Tagged(vec![], redirect)]);
+    }
+
+    /// A row DNS settled for the whole row is that case with four columns: three
+    /// of them carry the verdict that decided the row (the QUIC cell reuses the
+    /// sibling detail), so the cell is one line and no name.
+    #[test]
+    fn test_build_domain_row_dns_settled_row_is_one_unnamed_line() {
+        let none: HashSet<IpAddr> = HashSet::new();
+        let miss = entry_for("gone.example", None, false, &none);
+
+        let (_http, _t12, _t13, quic, details) = build_domain_row(&miss);
+        assert_eq!(quic, DpiStatus::DnsFail);
+        assert_eq!(details, vec![DetailLine::Tagged(vec![], Detail::DomainNotFound)]);
+    }
+
+    #[test]
+    fn test_tls_versions_that_disagree_keep_their_own_tags() {
+        // The other half of the rule: with the versions apart, one shared line
+        // would hide which one failed — the columns say `TLS RST` beside `TLS
+        // DROP`, and two reasons get two lines, each naming its own version.
+        let mut entry = DomainEntry::pending("example.test".to_string(), None, None);
+        entry.http = HttpCheck::at(DpiStatus::Ok, Detail::None);
+        entry.t12 = TlsCheck { status: DpiStatus::TlsRst, detail: Detail::RstHello, cert: Detail::None, elapsed: 0.1 };
+        entry.t13 = TlsCheck { status: DpiStatus::TlsDropped, detail: Detail::TlsHandshakeTimeout, cert: Detail::None, elapsed: 5.0 };
+
+        let (_http, _t12, _t13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(
+            details,
+            vec![
+                DetailLine::Tagged(vec!["TLS12"], Detail::RstHello),
+                DetailLine::Tagged(vec!["TLS13"], Detail::TlsHandshakeTimeout),
             ]
         );
     }

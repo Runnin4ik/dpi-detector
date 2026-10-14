@@ -49,6 +49,23 @@ pub enum Detail {
     DpiAlertHandshakeFailure,
     ProtocolVersionAlert,
     FakeTlsAlert,
+    /// The peer answered with a TLS version the probe never offered: rustls
+    /// spells it `PeerIncompatible::ServerTlsVersionIsDisabledByOurConfig`
+    /// (`vendor/rustls/src/error.rs`), a message that names no version and
+    /// therefore cannot say which direction the answer went. The *leg* resolves
+    /// it: a pinned-1.2 leg can only have been answered with 1.3 — an answer the
+    /// host never gave, which is [`WrongVersion`](Self::WrongVersion) and
+    /// `TLS SPOOF` — while the pinned-1.3 leg reads the column's own
+    /// [`NoTls13`](Self::NoTls13). Where no pin exists (the browser-shaped hello
+    /// an HTTP exchange over TLS uses) the case stays unclassified, named.
+    PeerVersionMismatch,
+    /// rustls's `peer is incompatible: …` family that names **no** version: the
+    /// two sides share no cipher suite, key-exchange group or signature scheme
+    /// (`vendor/rustls/src/error.rs`, `PeerIncompatible`). A capability mismatch
+    /// — the badge is `TLS ERR` — and *not* `NO TLS1.3`, which is what this
+    /// family used to read as: the variant that does name a version has its own
+    /// [`PeerVersionMismatch`](Self::PeerVersionMismatch) above.
+    PeerIncompatible,
     /// A peer alert that named its description: the code is
     /// `alert_<description>` (`alert_illegal_parameter`).
     Alert(AlertKind),
@@ -182,6 +199,13 @@ pub enum Detail {
     UpgradeHttps { status: Option<u16> },
     /// An HTTP status line.
     HttpStatus(u16),
+    /// The bytes that came back are not an HTTP response at all: hyper's own
+    /// parse failures (`invalid HTTP version parsed`, `invalid HTTP status
+    /// parsed`). The status stays unclassified — a stack that cannot read an
+    /// answer is not by itself evidence of interception, the same reading
+    /// [`StackFailure`](Self::StackFailure) gets — but the detail is ours, so the
+    /// row says what happened in the report's own words instead of a library's.
+    NotHttpResponse,
     /// How long a successful check took.
     Elapsed(f64),
 
@@ -351,6 +375,8 @@ impl Detail {
             DpiAlertHandshakeFailure => Cow::Borrowed("dpi_alert_handshake_failure"),
             ProtocolVersionAlert => Cow::Borrowed("protocol_version_alert"),
             FakeTlsAlert => Cow::Borrowed("fake_tls_alert"),
+            PeerVersionMismatch => Cow::Borrowed("peer_version_mismatch"),
+            PeerIncompatible => Cow::Borrowed("peer_incompatible"),
             Alert(kind) => Cow::Owned(format!("alert_{}", kind.code())),
             StackFailure(kind) => Cow::Owned(format!("tls_{}", kind.code())),
             NoRootCa => Cow::Borrowed("no_root_certificates"),
@@ -401,6 +427,7 @@ impl Detail {
             Redirect { .. } => Cow::Borrowed("redirect_to_host"),
             UpgradeHttps { .. } => Cow::Borrowed("upgrade_https"),
             HttpStatus(code) => Cow::Owned(format!("http_{}", code)),
+            NotHttpResponse => Cow::Borrowed("not_http_response"),
             Elapsed(secs) => Cow::Owned(format!("elapsed_{}ms", (secs * 1000.0).round() as u64)),
             Other(text) => Cow::Owned(text.clone()),
         }
@@ -476,6 +503,9 @@ mod tests {
             Detail::WriteTimeoutWord,
             Detail::TimeoutWord,
             Detail::HttpStatus(403),
+            Detail::NotHttpResponse,
+            Detail::PeerVersionMismatch,
+            Detail::PeerIncompatible,
             Detail::Elapsed(0.3),
             Detail::Alert(AlertKind::IllegalParameter),
             Detail::Alert(AlertKind::BadCertificateStatusResponse),

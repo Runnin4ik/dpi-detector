@@ -1184,6 +1184,7 @@ pub(crate) async fn run_test_suite(
                         tls13_detail: e.t13.detail.clone(),
                         quic: e.quic.status.as_str(),
                         quic_detail: e.quic.detail.clone(),
+                        cert_detail: e.cert_mark(),
                     })
                     .collect(),
             );

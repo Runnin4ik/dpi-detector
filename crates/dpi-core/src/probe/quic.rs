@@ -21,7 +21,9 @@
 //! * `VN` — version negotiation: the endpoint does not speak v1.
 //! * `SPOOF` — a Retry whose integrity tag does not match, i.e. a packet
 //!   that did not come from the endpoint.
-//! * `DROP` — nothing came back, the silence `SYN DROP` is for TCP.
+//! * `TIMEOUT` — nothing came back within the window: the silence `SYN DROP`
+//!   is for TCP. The details column stays empty for it — the badge carries the
+//!   whole finding — and `--json` still names it `quic_drop`.
 //!
 //! A sixth state is not a verdict: the dash (`quic_unsupported`) is a row whose
 //! endpoint serves no HTTP/3 at all, known before the probe from the shipped

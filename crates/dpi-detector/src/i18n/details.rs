@@ -53,6 +53,8 @@ fn detail_wording(detail: &Detail, lang: Language) -> String {
         Detail::DpiAlertHandshakeFailure => t4(lang, "Алерт DPI (handshake failure)", "DPI alert (handshake failure)", "DPI 警报（handshake failure）", "Alert-e DPI (handshake failure)"),
         Detail::ProtocolVersionAlert => t4(lang, "Алерт версии протокола", "Protocol version alert", "协议版本警报", "Alert-e version-e protocol"),
         Detail::FakeTlsAlert => t4(lang, "Поддельный TLS Alert", "Fake TLS alert", "伪造的 TLS 警报", "Alert-e TLS-e ja'li"),
+        Detail::PeerVersionMismatch => t4(lang, "Ответ с другой версией TLS (мы её не предлагали)", "Answer with a TLS version we did not offer", "以我们未提供的 TLS 版本回应", "Pasokh ba version-e digar-e TLS (ma pishnahad nakardim)"),
+        Detail::PeerIncompatible => t4(lang, "Нет общих параметров с сервером (шифры, группы, подписи)", "No parameters in common with the server (ciphers, groups, signatures)", "与服务器没有共同参数（加密套件、群、签名）", "Parametr-e moshtarak ba server nist (cipher, group, signature)"),
         Detail::NoRootCa => t4(lang, "Отсутствуют корневые сертификаты", "Missing root certificates", "缺少根证书", "Certificate haye rishe vojud nadarad"),
         Detail::CertExpired => t4(lang, "Сертификат просрочен", "Certificate expired", "证书已过期", "Certificate monghazi shode ast"),
         Detail::SelfSigned => t4(lang, "Самоподписанный сертификат", "Self-signed certificate", "自签名证书", "Certificate-e self-signed"),
@@ -117,6 +119,7 @@ fn detail_wording(detail: &Detail, lang: Language) -> String {
         Detail::IspBlockpage { arrow: false, ip } => format!("{} {}", msg.detail_isp_stub, ip),
         Detail::LocalIp { ip } => format!("{} -> {}", msg.detail_local_ip, ip),
         Detail::HttpStatus(code) => format!("HTTP {}", code),
+        Detail::NotHttpResponse => t4(lang, "Ответ не разбирается: это не HTTP", "The answer is not an HTTP response", "响应无法解析：这不是 HTTP", "Pasokh HTTP nist (baz nemishavad)"),
         // The target of a redirect is a host and a scheme, not prose: the arrow
         // is the same in every language (and maps to `->` on an ASCII console).
         Detail::Redirect { host } => format!("→ {host}"),
@@ -283,6 +286,9 @@ mod tests {
             Detail::DpiAlertHandshakeFailure,
             Detail::ProtocolVersionAlert,
             Detail::FakeTlsAlert,
+            Detail::PeerVersionMismatch,
+            Detail::PeerIncompatible,
+            Detail::NotHttpResponse,
             Detail::Alert(AlertKind::IllegalParameter),
             Detail::StackFailure(StackKind::DecryptError),
             Detail::NoRootCa,

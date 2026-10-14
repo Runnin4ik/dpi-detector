@@ -344,8 +344,8 @@ pub(crate) fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("CLOSED", "The endpoint answered with a protected CONNECTION_CLOSE or a stateless reset: the path works, the handshake does not run — the detail names the transport error"),
             ("VN", "The endpoint does not speak QUIC v1 and listed the versions it does"),
             ("SPOOF", "A Retry whose integrity tag does not match: the packet did not come from the endpoint, since only a party that saw the Initial can compute that tag"),
-            ("DROP", "No reply to the Initial: UDP 443 is filtered or the endpoint is down — the silence SYN DROP is for TCP"),
-            ("REFUSED", "ICMP says nothing listens on UDP 443: the path works and the endpoint runs no QUIC at all — not a block (a block is DROP)"),
+            ("TIMEOUT", "Initial timeout: no reply to the Initial at all — UDP 443 is filtered or the endpoint is down (the silence SYN DROP is for TCP); the row carries no detail line, the badge says it all"),
+            ("REFUSED", "ICMP says nothing listens on UDP 443: the path works and the endpoint runs no QUIC at all — not a block (a block is TIMEOUT)"),
             ("—", "The endpoint serves no HTTP/3 at all, so no Initial was sent: the host is in the shipped quic_unsupported.txt (the two online testers say so), and the summary counts this column without it"),
         ]),
         ("— Other —", vec![

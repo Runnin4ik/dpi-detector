@@ -200,6 +200,13 @@ pub(crate) struct DomainRow {
     /// The QUIC column: the `DpiStatus` token of the Initial probe on UDP 443.
     pub quic: &'static str,
     pub quic_detail: Detail,
+    /// What the bundled Mozilla roots said about the chain the TLS legs were
+    /// shown, judged after the handshake: `fake_cert`, `cert_expired`,
+    /// `self_signed`, `hostname_mismatch` or `no_root_certificates` when they
+    /// reject it, empty when they accept it, when no handshake completed or when
+    /// the row never dialled. A mark beside the columns, never one of their
+    /// statuses: `tls12`/`tls13` above read the same with and without it.
+    pub cert_detail: Detail,
 }
 
 #[derive(Serialize)]

@@ -477,9 +477,7 @@ fn build_config(profile: &TlsProfile) -> ClientConfig {
     };
 
     let mut config = if profile.verify {
-        let mut root_store = RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        builder.with_root_certificates(root_store).with_no_client_auth()
+        builder.with_root_certificates(roots()).with_no_client_auth()
     } else {
         builder
             .dangerous()
@@ -488,6 +486,53 @@ fn build_config(profile: &TlsProfile) -> ClientConfig {
     };
     apply_profile(&mut config, profile);
     config
+}
+
+/// The bundled Mozilla roots, assembled once for the whole process.
+///
+/// Every verifying config needs them (the DoT/DoH probes build one per shape),
+/// and so does [`verify_peer_chain`], which judges a chain an *insecure*
+/// handshake already collected. The store is read-only once filled, so one `Arc`
+/// per process is all this needs; the verifier's name index is per config and
+/// stays where it is ([`verifying_config`]).
+fn roots() -> Arc<RootCertStore> {
+    static ROOTS: LazyLock<Arc<RootCertStore>> = LazyLock::new(|| {
+        let mut store = RootCertStore::empty();
+        store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        Arc::new(store)
+    });
+    Arc::clone(&ROOTS)
+}
+
+/// Judges a peer chain against the bundled Mozilla roots, offline.
+///
+/// The probes complete their handshake with [`InsecureDpiCertVerifier`], because
+/// the certificate a censor's middlebox presents is *evidence* and the answer
+/// behind it — the registry blockpage, the redirect target — is the finding: a
+/// verifying handshake aborts before either can be read. This is the mark those
+/// probes add afterwards, from the chain the handshake already collected, so one
+/// row can say both `→ <blockpage host>` and "this certificate is not the
+/// host's". It never gates a verdict, and the statuses it does not move are the
+/// reason test 2 can read a spoofed site as `REDIR` rather than as `NO CA
+/// BUNDLE`.
+///
+/// `chain` is what `ClientConnection::peer_certificates` returned: the leaf
+/// first, intermediates after.
+pub fn verify_peer_chain(
+    chain: &[CertificateDer<'static>],
+    name: &ServerName<'_>,
+) -> Result<(), RustlsError> {
+    static VERIFIER: LazyLock<Arc<rustls::client::WebPkiServerVerifier>> = LazyLock::new(|| {
+        rustls::client::WebPkiServerVerifier::builder(roots())
+            .build()
+            .expect("the bundled Mozilla roots build a verifier")
+    });
+    let (leaf, intermediates) = chain
+        .split_first()
+        .ok_or(RustlsError::NoCertificatesPresented)?;
+    VERIFIER
+        .verify_server_cert(leaf, intermediates, name, &[], UnixTime::now())
+        .map(|_| ())
 }
 
 /// Installs the profile and keeps the baseline wire shape intact.
@@ -916,6 +961,23 @@ mod tests {
                 assert_eq!(variants, vec![SIBLING.to_string(), PADDED.to_string()]);
             }
         }
+    }
+
+    /// The mark test 2's rows carry: a chain the bundled roots cannot reach is
+    /// rejected, and the failure is the one the classifier reads as
+    /// "no root for this chain". Every fixture leaf is signed by the fixture CA
+    /// and by nothing else, so all three must fail whatever the key type.
+    #[test]
+    fn a_chain_outside_the_bundle_is_rejected() {
+        let ca = CertificateDer::from(CA.to_vec());
+        let server = ServerName::try_from("localhost").expect("a dns name");
+        for (name, leaf, _) in LEAVES {
+            let chain = vec![CertificateDer::from(leaf.to_vec()), ca.clone()];
+            let err = verify_peer_chain(&chain, &server).expect_err(name);
+            assert!(err.to_string().contains("UnknownIssuer"), "{name}: {err}");
+        }
+        // A handshake that carried no certificate has nothing to judge.
+        assert!(verify_peer_chain(&[], &server).is_err());
     }
 
     /// `t13d1516h2_8daaf6152771_e5627efa2ab1`: protocol and version, the SNI and

@@ -44,6 +44,14 @@ fn unclassified_detail(msg_lower: &str, raw: &str) -> Detail {
     if is_unimplemented_element(msg_lower) {
         return Detail::Other(short_detail(raw));
     }
+    // hyper's parse failures say the bytes that came back are not HTTP at all.
+    // The wording is ours, because the reader is reading a censorship report and
+    // not a hyper log line; the status stays unclassified, exactly as it does for
+    // a TLS-stack failure (see `stack`), so this names the case without claiming
+    // it is interception.
+    if msg_lower.contains("invalid http version") || msg_lower.contains("invalid http status") {
+        return Detail::NotHttpResponse;
+    }
     match stack::from_message(msg_lower) {
         Some(kind) => stack::detail_for(kind),
         None => Detail::Other(short_detail(raw)),
@@ -159,11 +167,30 @@ pub fn classify_ssl_error(
         return (DpiStatus::TlsEof, detail);
     }
 
+    // rustls spells one wording — `peer is incompatible: …` — for twenty-one
+    // different `PeerIncompatible` variants (`vendor/rustls/src/error.rs`), and
+    // the whole family used to read as `NO TLS1.3`, which said the opposite of
+    // what happened in the field: measured on `aliexpress.ru`, whose TLS 1.2
+    // column read `no_tls13` while the answer was a ServerHello for a version the
+    // leg never offered. Only one variant is about a version, and its message
+    // names none: `ServerTlsVersionIsDisabledByOurConfig` is raised both when the
+    // peer picks a version *above* our offer and when it picks one *below* it
+    // (`client/hs.rs`), so the classifier cannot name the direction — the leg can,
+    // and does (`probe::domains::check_domain_tls`). Everything else in the
+    // family is a capability mismatch, never a version claim.
+    if msg.contains("peer is incompatible") {
+        if msg.contains("servertlsversion") {
+            return (DpiStatus::Unknown, Detail::PeerVersionMismatch);
+        }
+        if msg.contains("serverdoesnotsupporttls12or13") {
+            return (DpiStatus::NoTls13, Detail::NoTls13);
+        }
+        return (DpiStatus::TlsErr, Detail::PeerIncompatible);
+    }
+
     if msg.contains("no tls 1.3")
         || msg.contains("no tls1.3")
         || msg.contains("server has no tls 1.3")
-        || msg.contains("servertlsversion")
-        || msg.contains("peer is incompatible")
     {
         return (DpiStatus::NoTls13, Detail::NoTls13);
     }
@@ -709,13 +736,36 @@ mod tests {
         );
         assert_eq!(s, DpiStatus::NoCa);
 
+        // rustls spells one wording for twenty-one `PeerIncompatible` variants,
+        // and the whole family used to read as `NO TLS1.3` — which told the
+        // reader the opposite of what a version-shaped answer means (measured on
+        // `aliexpress.ru`, TLS 1.2 column). Only the variant that names a version
+        // is about a version at all, and its message names none: it covers a peer
+        // picking a version above our offer and one picking below it, so the
+        // classifier leaves the direction to the pin (`probe::domains`).
         let (s, d) = classify_ssl_error(
-            "peer is incompatible: ServerTlsVersionIsDifferent(Tls12)",
+            "peer is incompatible: ServerTlsVersionIsDisabledByOurConfig",
             0,
             ConnectionStage::TlsClientHelloSent,
         );
-        assert_eq!(s, DpiStatus::NoTls13);
-        assert_eq!(d, Detail::NoTls13);
+        assert_eq!((s, d), (DpiStatus::Unknown, Detail::PeerVersionMismatch));
+
+        // The rest of the family says nothing about a version: the two sides
+        // share no cipher suite, group or signature scheme. `NO TLS1.3` only
+        // survives where rustls says exactly that.
+        let (s, d) = classify_ssl_error(
+            "peer is incompatible: NoKxGroupsInCommon",
+            0,
+            ConnectionStage::TlsClientHelloSent,
+        );
+        assert_eq!((s, d), (DpiStatus::TlsErr, Detail::PeerIncompatible));
+
+        let (s, d) = classify_ssl_error(
+            "peer is incompatible: ServerDoesNotSupportTls12Or13",
+            0,
+            ConnectionStage::TlsClientHelloSent,
+        );
+        assert_eq!((s, d), (DpiStatus::NoTls13, Detail::NoTls13));
 
         let (s, _) = classify_ssl_error(
             "unexpected EOF",
@@ -723,6 +773,36 @@ mod tests {
             ConnectionStage::TlsClientHelloSent,
         );
         assert_eq!(s, DpiStatus::TlsRst);
+    }
+
+    /// The HTTP half of "the bytes that came back are not a response": hyper's
+    /// own parse failures get our wording, and the status stays unclassified —
+    /// a parser that cannot read an answer is not by itself evidence of
+    /// interception, the same reading a TLS-stack failure gets. Measured on
+    /// `aliexpress.ru`, whose HTTP cell read `unknown`,
+    /// `invalid HTTP version parsed` — hyper's sentence, in a censorship report.
+    #[test]
+    fn a_reply_that_is_not_http_is_named() {
+        let (s, d) = classify_ssl_error(
+            "invalid HTTP version parsed",
+            0,
+            ConnectionStage::TlsHandshakeDone,
+        );
+        assert_eq!((s, d), (DpiStatus::Unknown, Detail::NotHttpResponse));
+
+        // The wrapped form `hyper_err_info` builds when an io error is in the
+        // chain still names the case. The plain one is what the field shows:
+        // a parse failure has no io error behind it.
+        let (s, d) = classify_ssl_error(
+            "invalid HTTP status parsed | unexpected end of file",
+            0,
+            ConnectionStage::TlsHandshakeDone,
+        );
+        assert_eq!((s, d), (DpiStatus::Unknown, Detail::NotHttpResponse));
+
+        // Anything else keeps its own words.
+        let (_, d) = classify_ssl_error("hyper: some other message", 0, ConnectionStage::TlsHandshakeDone);
+        assert_ne!(d, Detail::NotHttpResponse);
     }
 
     #[test]
