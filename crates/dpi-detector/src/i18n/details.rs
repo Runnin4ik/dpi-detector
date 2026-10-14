@@ -56,7 +56,7 @@ fn detail_wording(detail: &Detail, lang: Language) -> String {
         Detail::PeerVersionMismatch => t4(lang, "Ответ с другой версией TLS (мы её не предлагали)", "Answer with a TLS version we did not offer", "以我们未提供的 TLS 版本回应", "Pasokh ba version-e digar-e TLS (ma pishnahad nakardim)"),
         Detail::PeerIncompatible => t4(lang, "Нет общих параметров с сервером (шифры, группы, подписи)", "No parameters in common with the server (ciphers, groups, signatures)", "与服务器没有共同参数（加密套件、群、签名）", "Parametr-e moshtarak ba server nist (cipher, group, signature)"),
         Detail::NoRootCa => t4(lang, "Отсутствуют корневые сертификаты", "Missing root certificates", "缺少根证书", "Certificate haye rishe vojud nadarad"),
-        Detail::RuTrustedCa => t4(lang, "Сертификат российского УЦ Минцифры (после отзыва международных)", "Russian Ministry of Digital Development certificate (its international one was revoked)", "俄罗斯数字发展部签发的证书 (国际证书被吊销后)", "Gavahi-e Vezarat-e Tose'e-ye Digital-e Rusie (pas az laghv-e beynolmelali)"),
+        Detail::RuTrustedCa => t4(lang, "Сертификат УЦ Минцифры", "Russian CA", "俄罗斯 CA", "CA-e Rusie"),
         Detail::CertExpired => t4(lang, "Сертификат просрочен", "Certificate expired", "证书已过期", "Certificate monghazi shode ast"),
         Detail::SelfSigned => t4(lang, "Самоподписанный сертификат", "Self-signed certificate", "自签名证书", "Certificate-e self-signed"),
         Detail::HostnameMismatch => t4(lang, "Hostname не совпадает", "Hostname mismatch", "主机名不匹配", "Adam-e tatabogh-e hostname"),
