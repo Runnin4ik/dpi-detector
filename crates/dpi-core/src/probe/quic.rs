@@ -195,7 +195,12 @@ const BASELINE_SHAPE: TlsFingerprint = TlsFingerprint::Chrome146;
 /// The TCP record header is dropped: a QUIC `CRYPTO` frame carries the handshake
 /// message itself (RFC 9001 §4.1.1), and the five bytes of TLS record framing
 /// are not part of it.
-fn quic_hello(fingerprint: TlsFingerprint, sni: &str, scid: &[u8]) -> Vec<u8> {
+fn quic_hello(
+    fingerprint: TlsFingerprint,
+    sni: &str,
+    scid: &[u8],
+    extra: Option<&HelloVariant>,
+) -> Vec<u8> {
     let fingerprint = if fingerprint == TlsFingerprint::Rustls { BASELINE_SHAPE } else { fingerprint };
     let profile = TlsProfile {
         version: TlsVersion::Tls13,
@@ -226,6 +231,11 @@ fn quic_hello(fingerprint: TlsFingerprint, sni: &str, scid: &[u8]) -> Vec<u8> {
     // the extension still on the wire.
     for id in TCP_ONLY_FOR_QUIC {
         edits.push(HelloVariant::DropExtension(*id));
+    }
+    // The caller's own delta goes on last: it is the operator's word, and in test
+    // 6 it is the one field the round measures against (`--burst-variant`).
+    if let Some(extra) = extra {
+        edits.push(extra.clone());
     }
     let record = hello_record_for(&profile, Some(&HelloVariant::Chain(edits)), sni);
     record.get(5..).map(<[u8]>::to_vec).unwrap_or_default()
@@ -423,7 +433,7 @@ pub async fn check_domain_quic(
     let timeout_dur = reply_window(cfg.timeout);
     let addr = SocketAddr::new(target, QUIC_PORT);
     let fingerprint = TlsFingerprint::from_config(cfg);
-    match probe_addr(addr, domain, fingerprint, timeout_dur).await {
+    match probe_addr(addr, domain, fingerprint, timeout_dur, None, MAX_RETRANSMITS).await {
         Ok((status, detail)) => QuicCheck { status, detail, elapsed: started.elapsed().as_secs_f64() },
         Err((status, detail)) => QuicCheck { status, detail, elapsed: started.elapsed().as_secs_f64() },
     }
@@ -483,6 +493,8 @@ async fn probe_addr(
     sni: &str,
     fingerprint: TlsFingerprint,
     timeout_dur: Duration,
+    variant: Option<&HelloVariant>,
+    retransmits_allowed: u32,
 ) -> Result<(DpiStatus, Detail), (DpiStatus, Detail)> {
     let dcid = random_cid();
     let scid = random_cid();
@@ -494,7 +506,7 @@ async fn probe_addr(
     // same way, and both go through `net::tls::server_name` so they cannot drift.
     crate::net::tls::server_name(sni)
         .map_err(|error| (DpiStatus::Err, Detail::Other(format!("bad SNI: {error}"))))?;
-    let hello = quic_hello(fingerprint, sni, &scid);
+    let hello = quic_hello(fingerprint, sni, &scid, variant);
     let mut flight = quic::client_initials(&keys, &dcid, &scid, &hello, 0)
         .map_err(|error| (DpiStatus::Err, Detail::Other(error.to_string())))?;
 
@@ -535,7 +547,7 @@ async fn probe_addr(
         if left.is_zero() {
             break;
         }
-        if retransmits < MAX_RETRANSMITS && !verdict.settled() && now >= next_retransmit {
+        if retransmits < retransmits_allowed && !verdict.settled() && now >= next_retransmit {
             flight = quic::client_initials(&keys, &dcid, &scid, &hello, next_pn)
                 .map_err(|error| (DpiStatus::Err, Detail::Other(error.to_string())))?;
             next_pn += flight.len() as u64;
@@ -552,7 +564,7 @@ async fn probe_addr(
         // `timeout(..)` a zero duration, and the loop would spin on `continue`
         // until the deadline, burning a runtime worker — there are two of them on
         // a router build.
-        let until_retransmit = if retransmits >= MAX_RETRANSMITS {
+        let until_retransmit = if retransmits >= retransmits_allowed {
             left
         } else {
             next_retransmit.saturating_duration_since(Instant::now()).min(left)
@@ -599,6 +611,33 @@ async fn probe_addr(
     Ok((status, detail))
 }
 
+/// One QUIC attempt for a caller that fires many of them: one flight of Initials
+/// and the window the caller names.
+///
+/// [`check_domain_quic`] owns the retransmit ladder because its column asks
+/// whether the endpoint serves HTTP/3 at all — measured against Cloudflare's
+/// edge, the first flight is met with a packet no key opens and the ServerHello
+/// arrives only once the client repeats its Initial. A burst asks a different
+/// question: what the *k-th* attempt got, and whether the block landed between
+/// two of them. A repeat there would blur which attempt was refused and stretch
+/// the round past the window the operator set, so this entry point takes the
+/// ladder's count as zero and leaves the verdict vocabulary alone — one physics,
+/// one word.
+///
+/// `variant` is the caller's own edit, applied on top of the ones that make the
+/// TCP shape a QUIC one (`--burst-variant` in test 6).
+pub(crate) async fn attempt_once(
+    addr: SocketAddr,
+    sni: &str,
+    fingerprint: TlsFingerprint,
+    window: Duration,
+    variant: Option<&HelloVariant>,
+) -> (DpiStatus, Detail) {
+    match probe_addr(addr, sni, fingerprint, window, variant, 0).await {
+        Ok(verdict) | Err(verdict) => verdict,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,7 +657,7 @@ mod tests {
         // QUIC, and a server treats a non-empty one as PROTOCOL_VIOLATION —
         // Cloudflare answers `illegal_parameter` (`CRYPTO_ERROR 0x12f`) instead
         // of a ServerHello. The byte after the 32-byte random is its length.
-        let hello = quic_hello(TlsFingerprint::Chrome146, "example.com", &[0x5a; 8]);
+        let hello = quic_hello(TlsFingerprint::Chrome146, "example.com", &[0x5a; 8], None);
         assert_eq!(hello[0], 0x01, "a ClientHello message");
         assert_eq!(hello[38], 0, "the QUIC hello's session id is empty");
 
@@ -664,7 +703,7 @@ mod tests {
     /// Measured with `scripts/quic/tp_dump.py --extensions` on a capture of each.
     #[test]
     fn the_quic_hello_carries_no_grease() {
-        let hello = quic_hello(TlsFingerprint::Chrome146, "example.com", &[0x5a; 8]);
+        let hello = quic_hello(TlsFingerprint::Chrome146, "example.com", &[0x5a; 8], None);
         let ciphers = crate::net::ja3::cipher_suites(&hello);
         assert!(!ciphers.is_empty(), "the hello must offer cipher suites");
         assert!(
@@ -712,7 +751,7 @@ mod tests {
     #[test]
     fn the_quic_hello_carries_the_browser_signature_algorithms() {
         let fingerprint = TlsFingerprint::Chrome146;
-        let hello = quic_hello(fingerprint, "example.com", &[0x5a; 8]);
+        let hello = quic_hello(fingerprint, "example.com", &[0x5a; 8], None);
         let extensions = crate::net::ja3::extensions(&hello);
         let body = extensions
             .iter()
@@ -789,7 +828,7 @@ mod tests {
         // The whole trick in one assertion: the shape is the run's own, the ALPN
         // is h3, and extension 0x39 holds the parameter an endpoint requires.
         let scid = [0x5a; 8];
-        let hello = quic_hello(TlsFingerprint::Chrome107, "example.com", &scid);
+        let hello = quic_hello(TlsFingerprint::Chrome107, "example.com", &scid, None);
         assert_eq!(hello[0], 0x01, "a ClientHello message, with no record header");
 
         let extensions = crate::net::ja3::extensions(&hello);
@@ -807,7 +846,7 @@ mod tests {
         // Application settings over QUIC say h3, not the h2 the same shape sends
         // over TCP: a live Chrome's QUIC hello carries 0003026833 here, and the
         // capture of this probe's own hello carried 0003026832 before the edit.
-        let chrome146 = quic_hello(TlsFingerprint::Chrome146, "example.com", &scid);
+        let chrome146 = quic_hello(TlsFingerprint::Chrome146, "example.com", &scid, None);
         let alps = crate::net::ja3::extensions(&chrome146)
             .iter()
             .find(|(id, _)| *id == EXT_APPLICATION_SETTINGS_NEW)
@@ -817,7 +856,7 @@ mod tests {
 
         // Firefox sends no application settings over either transport, and the
         // edit must not add one: that would be a shape no client sends either.
-        let firefox = quic_hello(TlsFingerprint::Firefox133, "example.com", &scid);
+        let firefox = quic_hello(TlsFingerprint::Firefox133, "example.com", &scid, None);
         assert!(
             !crate::net::ja3::extensions(&firefox)
                 .iter()
@@ -838,7 +877,7 @@ mod tests {
         // The baseline shape has no profile to edit, so the column substitutes a
         // browser one: without the parameters an endpoint would answer
         // TRANSPORT_PARAMETER_ERROR for every host.
-        let baseline = quic_hello(TlsFingerprint::Rustls, "example.com", &scid);
+        let baseline = quic_hello(TlsFingerprint::Rustls, "example.com", &scid, None);
         let baseline_ext = crate::net::ja3::extensions(&baseline);
         assert!(
             baseline_ext.iter().any(|(id, body)| *id == EXT_TRANSPORT_PARAMETERS
@@ -930,7 +969,9 @@ mod tests {
         let closed = tokio::net::UdpSocket::bind("127.0.0.1:0").await.expect("a local socket");
         let closed_addr = closed.local_addr().expect("an address");
         drop(closed);
-        let refused = probe_addr(closed_addr, "example.com", TlsFingerprint::Chrome107, timeout_dur).await;
+        let refused =
+            probe_addr(closed_addr, "example.com", TlsFingerprint::Chrome107, timeout_dur, None, MAX_RETRANSMITS)
+                .await;
         assert_eq!(
             refused,
             Err((DpiStatus::Refused, Detail::QuicPortUnreachable)),
@@ -941,7 +982,9 @@ mod tests {
         // caller is told so it can try another address.
         let silent = tokio::net::UdpSocket::bind("127.0.0.1:0").await.expect("a local socket");
         let silent_addr = silent.local_addr().expect("an address");
-        let dropped = probe_addr(silent_addr, "example.com", TlsFingerprint::Chrome107, timeout_dur).await;
+        let dropped =
+            probe_addr(silent_addr, "example.com", TlsFingerprint::Chrome107, timeout_dur, None, MAX_RETRANSMITS)
+                .await;
         assert_eq!(dropped, Err((DpiStatus::QuicDrop, Detail::QuicTimeout)));
     }
 
@@ -1012,7 +1055,15 @@ mod tests {
             }
         });
 
-        let verdict = probe_addr(addr, "example.com", TlsFingerprint::Chrome107, reply_window(3.0)).await;
+        let verdict = probe_addr(
+            addr,
+            "example.com",
+            TlsFingerprint::Chrome107,
+            reply_window(3.0),
+            None,
+            MAX_RETRANSMITS,
+        )
+        .await;
         answering.abort();
         assert_eq!(
             verdict,

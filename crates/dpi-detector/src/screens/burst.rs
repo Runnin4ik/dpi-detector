@@ -216,7 +216,9 @@ async fn burst_settings_loop(
                 BURST_ROW_GAP => gap_ms = step_gap(gap_ms, false),
                 // The TLS axis has three values, so each direction steps it.
                 BURST_ROW_TLS => tls = flip_tls(tls, false),
-                BURST_ROW_HTTP => alpn = flip_alpn(alpn),
+                // The ALPN axis has three values too, and the third one leaves
+                // TCP: `h3` runs over QUIC.
+                BURST_ROW_HTTP => alpn = flip_alpn(alpn, false),
                 BURST_ROW_PROFILES => {
                     let next = (profile_index + PROFILE_CHOICES - 1) % PROFILE_CHOICES;
                     profile_index = next;
@@ -238,7 +240,7 @@ async fn burst_settings_loop(
                 BURST_ROW_TIMEOUT => timeout_secs = (timeout_secs + 1).min(BURST_MAX_TIMEOUT_SECS),
                 BURST_ROW_GAP => gap_ms = step_gap(gap_ms, true),
                 BURST_ROW_TLS => tls = flip_tls(tls, true),
-                BURST_ROW_HTTP => alpn = flip_alpn(alpn),
+                BURST_ROW_HTTP => alpn = flip_alpn(alpn, true),
                 BURST_ROW_PROFILES => {
                     let next = (profile_index + 1) % PROFILE_CHOICES;
                     profile_index = next;
@@ -479,11 +481,21 @@ fn flip_tls(tls: BurstTlsVersion, forward: bool) -> BurstTlsVersion {
     TLS_CHOICES[next]
 }
 
-fn flip_alpn(alpn: BurstAlpn) -> BurstAlpn {
-    match alpn {
-        BurstAlpn::Http2 => BurstAlpn::Http11,
-        BurstAlpn::Http11 => BurstAlpn::Http2,
-    }
+/// Choices of the ALPN cycler: the browsers' own list, HTTP/1.1 alone, and the
+/// one value that changes the transport — `h3` runs over QUIC, so that round
+/// leaves TCP and the TLS row stops applying to it (`BurstAlpn::is_quic`).
+const ALPN_CHOICES: [BurstAlpn; 3] = [BurstAlpn::Http2, BurstAlpn::Http11, BurstAlpn::H3];
+
+/// Either direction steps through [`ALPN_CHOICES`], the way [`flip_tls`] steps
+/// through its three.
+fn flip_alpn(alpn: BurstAlpn, forward: bool) -> BurstAlpn {
+    let at = ALPN_CHOICES.iter().position(|choice| *choice == alpn).unwrap_or(0);
+    let next = if forward {
+        (at + 1) % ALPN_CHOICES.len()
+    } else {
+        (at + ALPN_CHOICES.len() - 1) % ALPN_CHOICES.len()
+    };
+    ALPN_CHOICES[next]
 }
 
 /// Choices of the profile cycler: every shape there is, all of them at once, or
@@ -674,6 +686,27 @@ mod tests {
         assert_eq!(step_gap(BURST_MIN_LAUNCH_GAP_MS, false), BURST_MIN_LAUNCH_GAP_MS, "zero stays zero");
         assert_eq!(step_gap(BURST_MAX_LAUNCH_GAP_MS, true), BURST_MAX_LAUNCH_GAP_MS, "the ceiling holds");
         assert_eq!(step_gap(BURST_MAX_LAUNCH_GAP_MS - 1, true), BURST_MAX_LAUNCH_GAP_MS, "and the last press lands on it");
+    }
+
+    /// The ALPN row offers the browsers' own list, HTTP/1.1 alone, and `h3` — the
+    /// one value that leaves TCP. It must be reachable in both directions, never
+    /// skipped, and every value it can land on must be one the CLI takes.
+    #[test]
+    fn the_alpn_cycler_reaches_the_quic_value_in_both_directions() {
+        assert_eq!(ALPN_CHOICES.len(), 3, "every value the axis has");
+        assert_eq!(flip_alpn(BurstAlpn::Http2, true), BurstAlpn::Http11);
+        assert_eq!(flip_alpn(BurstAlpn::Http11, true), BurstAlpn::H3);
+        assert_eq!(flip_alpn(BurstAlpn::H3, true), BurstAlpn::Http2, "forward wraps");
+        assert_eq!(flip_alpn(BurstAlpn::Http2, false), BurstAlpn::H3, "backward reaches h3 too");
+        assert_eq!(flip_alpn(BurstAlpn::H3, false), BurstAlpn::Http11);
+        let mut alpn = BurstAlpn::Http2;
+        for _ in 0..ALPN_CHOICES.len() {
+            alpn = flip_alpn(alpn, true);
+        }
+        assert_eq!(alpn, BurstAlpn::Http2, "a full turn comes back");
+        for value in ALPN_CHOICES {
+            assert_eq!(BurstAlpn::parse(value.token()), Some(value), "{value:?}");
+        }
     }
 
     /// The row offers every shape the detector can present, one press away, and

@@ -23,8 +23,9 @@ use crate::i18n::{legend_text, Language, Messages};
 use dpi_core::net::fingerprint::{HelloVariant, TlsFingerprint};
 use dpi_core::net::netinfo::{detect_bypass_tools, fetch_public_ips, get_system_dns, is_tun_name};
 use dpi_core::probe::burst::{
-    burst_targets, BurstAlpn, BurstObserver, BurstProfileReport, BurstSettings, BurstTarget,
-    BurstTlsVersion, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_LAUNCH_GAP_MS, BURST_DEFAULT_TIMEOUT_SECS,
+    answered_status, burst_targets, BurstAlpn, BurstObserver, BurstProfileReport, BurstSettings,
+    BurstTarget, BurstTlsVersion, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_LAUNCH_GAP_MS,
+    BURST_DEFAULT_TIMEOUT_SECS,
 };
 use dpi_core::dns::cymru::{fetch_ip_cymru, IpCymruInfo};
 use dpi_core::net::ggc::{
@@ -1412,7 +1413,7 @@ pub(crate) async fn run_test_suite(
                         .profiles
                         .iter()
                         .map(|profile| {
-                            let failed = profile.attempts.iter().find(|a| !a.status.is_ok_status());
+                            let failed = profile.attempts.iter().find(|a| !answered_status(a.status));
                             let stat = crate::json::BurstProfile {
                                 answered: profile.answered(),
                                 attempts: profile.attempts.len(),
@@ -1426,7 +1427,14 @@ pub(crate) async fn run_test_suite(
                 .collect();
             results.fingerprint_burst = Some(crate::json::FingerprintBurst {
                 attempts: settings.attempts,
-                tls: settings.tls.code().to_string(),
+                // A QUIC round has one version to offer, so the axis the operator
+                // left on the command line is not what ran: the report says the
+                // truth rather than the setting (`BurstAlpn::is_quic`).
+                tls: if settings.alpn.is_quic() {
+                    "1.3".to_string()
+                } else {
+                    settings.tls.code().to_string()
+                },
                 alpn: settings.alpn.token().to_string(),
                 timeout_secs: settings.timeout.as_secs(),
                 gap_ms: settings.launch_gap.as_millis() as u64,

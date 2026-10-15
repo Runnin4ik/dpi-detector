@@ -163,11 +163,18 @@ impl BurstTlsVersion {
 /// `Http2` is the browsers' own list (`h2, http/1.1`), `Http11` asks for
 /// HTTP/1.1 alone. It shapes the ClientHello (and JA4's ALPN field), and it
 /// decides which client speaks the request that follows the handshake.
+///
+/// `H3` is not another list over the same transport: HTTP/3 runs over QUIC
+/// (RFC 9114 §3), so this choice takes the round off TCP entirely — one Initial
+/// per attempt on UDP 443, TLS 1.3 by construction, and the same hello edits
+/// test 2's QUIC column sends. The `tls` axis is inert here and the report says
+/// `1.3`, because a QUIC client has no other version to offer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BurstAlpn {
     #[default]
     Http2,
     Http11,
+    H3,
 }
 
 impl BurstAlpn {
@@ -176,6 +183,7 @@ impl BurstAlpn {
         match self {
             Self::Http2 => "h2",
             Self::Http11 => "http/1.1",
+            Self::H3 => "h3",
         }
     }
 
@@ -184,7 +192,18 @@ impl BurstAlpn {
         match self {
             Self::Http2 => None,
             Self::Http11 => Some(vec![b"http/1.1".to_vec()]),
+            // The QUIC hello writes `h3` into the ClientHello itself
+            // (`probe::quic::quic_hello`); a TCP profile never gets this list.
+            Self::H3 => Some(vec![b"h3".to_vec()]),
         }
+    }
+
+    /// True for the choice that leaves TCP: the round fires QUIC Initials.
+    ///
+    /// One predicate, so the two places that have to branch — the round and the
+    /// report's `tls` field — cannot disagree about which transport ran.
+    pub fn is_quic(self) -> bool {
+        self == Self::H3
     }
 
     /// Parses a CLI/screen value. `None` for anything unknown.
@@ -192,6 +211,7 @@ impl BurstAlpn {
         match value.trim().to_ascii_lowercase().as_str() {
             "h2" | "http2" | "http/2" => Some(Self::Http2),
             "http1.1" | "http/1.1" | "h1" | "http" => Some(Self::Http11),
+            "h3" | "http3" | "http/3" => Some(Self::H3),
             _ => None,
         }
     }
@@ -315,10 +335,12 @@ pub struct BurstProfileReport {
 
 impl BurstProfileReport {
     /// Attempts that came back whole: the handshake was answered *and* the
-    /// request returned something the probes call OK. A row that handshook and
-    /// then got nothing back is a lost attempt, not an answered one.
+    /// request returned something the probes call OK — over QUIC, the Initial was
+    /// answered with a ServerHello or an authenticated Retry
+    /// ([`answered_status`]). A row that handshook and then got nothing back is a
+    /// lost attempt, not an answered one.
     pub fn answered(&self) -> usize {
-        self.attempts.iter().filter(|a| a.status.is_ok_status()).count()
+        self.attempts.iter().filter(|a| answered_status(a.status)).count()
     }
 
     /// Attempts that got nothing back.
@@ -335,13 +357,24 @@ impl BurstProfileReport {
     }
 }
 
+/// True for a verdict that means "the endpoint did what this round asked".
+///
+/// [`DpiStatus::Ok`] is the TCP answer and [`DpiStatus::QuicOk`] the QUIC one — a
+/// ServerHello, or a Retry whose integrity tag checked out. A QUIC status can
+/// only come from a QUIC round, so one predicate serves both transports and the
+/// table's `M/N` reads the same in either mode. Without it a working h3 round
+/// printed `0/3` and listed its own `OK` among the failures.
+pub fn answered_status(status: DpiStatus) -> bool {
+    status.is_ok_status() || status == DpiStatus::QuicOk
+}
+
 /// The failures among `statuses`, grouped by status and ordered the way every
 /// detail row reads them: most frequent first. The sort is stable, so two
 /// statuses with the same count keep the order they were first seen in and the
 /// same input always renders the same row.
 pub fn group_failures(statuses: impl Iterator<Item = DpiStatus>) -> Vec<(DpiStatus, usize)> {
     let mut counts: Vec<(DpiStatus, usize)> = Vec::new();
-    for status in statuses.filter(|s| !s.is_ok_status()) {
+    for status in statuses.filter(|s| !answered_status(*s)) {
         match counts.iter_mut().find(|(seen, _)| *seen == status) {
             Some(entry) => entry.1 += 1,
             None => counts.push((status, 1)),
@@ -526,6 +559,8 @@ async fn resolve_targets(
 /// that the block, once triggered, lands *between* two starts instead of after
 /// all of them. Three attempts is the shortest run that can show it: the first
 /// two answer, the third is refused, and `M/N` reads 2.
+///
+/// With [`BurstAlpn::H3`] the same overlap runs over QUIC — see [`quic_profile`].
 pub async fn burst_profile(
     addr: &SocketAddr,
     domain: &str,
@@ -533,6 +568,11 @@ pub async fn burst_profile(
     settings: &BurstSettings,
     cfg: &Arc<AppConfig>,
 ) -> BurstProfileReport {
+    // HTTP/3 is QUIC, so this round never builds a TLS profile: the offer, the
+    // hello edits and the verdicts all belong to `probe::quic`.
+    if settings.alpn.is_quic() {
+        return quic_profile(addr, domain, fingerprint, settings).await;
+    }
     let mut profile = offer_for(settings.tls, fingerprint);
     if let Some(alpn) = settings.alpn.offered() {
         profile = profile.alpn(alpn);
@@ -581,6 +621,61 @@ pub async fn burst_profile(
     // Collected by launch order, which is the order the report prints them in:
     // the k-th line is the k-th connection that went out, not the k-th that
     // finished.
+    let mut slots: Vec<Option<BurstAttempt>> = (0..round_attempts).map(|_| None).collect();
+    while let Some(joined) = launches.join_next().await {
+        if let Ok((index, attempt)) = joined {
+            slots[index] = Some(attempt);
+        }
+    }
+    let attempts = slots
+        .into_iter()
+        .map(|slot| {
+            slot.unwrap_or(BurstAttempt {
+                status: DpiStatus::Err,
+                detail: Detail::Other("attempt aborted".to_string()),
+                ms: 0,
+            })
+        })
+        .collect();
+    BurstProfileReport { fingerprint, attempts }
+}
+
+/// One profile's round over QUIC: the same overlap as the TCP round, one Initial
+/// per attempt, and the window the operator set for each.
+///
+/// The verdicts are the QUIC column's own (`probe::quic`), so a round reads
+/// `ok`/`closed`/`spoof`/`timeout` in the words that column prints — one physics,
+/// one vocabulary. There is no retransmit ladder here: the question is what the
+/// k-th attempt got, and a repeat would blur which attempt the block landed on
+/// (`probe::quic::attempt_once` documents the same split).
+async fn quic_profile(
+    addr: &SocketAddr,
+    domain: &str,
+    fingerprint: TlsFingerprint,
+    settings: &BurstSettings,
+) -> BurstProfileReport {
+    let round_attempts = if settings.attempts == 0 { BURST_MIN_ATTEMPTS } else { settings.attempts };
+    let mut launches = JoinSet::new();
+    for index in 0..round_attempts {
+        let addr = *addr;
+        let domain = domain.to_string();
+        let limit = settings.timeout;
+        let launch_gap = settings.launch_gap;
+        let variant = settings.variant.clone();
+        launches.spawn(async move {
+            // The clock, not the previous attempt's completion: this is what
+            // keeps the round inside a rate window on a slow link.
+            if index > 0 {
+                tokio::time::sleep(launch_gap * index as u32).await;
+            }
+            let started = Instant::now();
+            let (status, detail) =
+                crate::probe::quic::attempt_once(addr, &domain, fingerprint, limit, variant.as_ref())
+                    .await;
+            (index, BurstAttempt { status, detail, ms: started.elapsed().as_millis() as u64 })
+        });
+    }
+    // Collected by launch order, which is the order the report prints them in.
     let mut slots: Vec<Option<BurstAttempt>> = (0..round_attempts).map(|_| None).collect();
     while let Some(joined) = launches.join_next().await {
         if let Ok((index, attempt)) = joined {
@@ -1193,17 +1288,110 @@ mod tests {
         for value in ["http/1.1", "http1.1", "h1", "http"] {
             assert_eq!(BurstAlpn::parse(value), Some(BurstAlpn::Http11), "{value}");
         }
-        assert_eq!(BurstAlpn::parse("h3"), None);
+        for value in ["h3", "http3", "HTTP/3"] {
+            assert_eq!(BurstAlpn::parse(value), Some(BurstAlpn::H3), "{value}");
+        }
         assert_eq!(BurstAlpn::parse(""), None);
 
         // The HTTP/1.1 choice is the one that has to replace the profile's list.
         assert_eq!(BurstAlpn::Http11.offered(), Some(vec![b"http/1.1".to_vec()]));
         assert_eq!(BurstAlpn::Http2.token(), "h2");
         assert_eq!(BurstAlpn::Http11.token(), "http/1.1");
+        // `h3` is the one value that changes the transport, and the report reads
+        // that from this predicate alone.
+        assert_eq!(BurstAlpn::H3.token(), "h3");
+        assert!(BurstAlpn::H3.is_quic());
+        assert!(!BurstAlpn::Http2.is_quic());
+        assert!(!BurstAlpn::Http11.is_quic());
         assert_eq!(BurstTlsVersion::Tls13And12.code(), "1.3+1.2");
         assert_eq!(BurstTlsVersion::Tls13Only.code(), "1.3");
         assert_eq!(BurstTlsVersion::Tls12Only.token(), "TLS 1.2");
         assert_eq!(BurstTlsVersion::Tls13And12.token(), "TLS 1.3+1.2");
+    }
+
+    /// A round over QUIC answers when the peer seals a ServerHello back, and the
+    /// verdicts are the QUIC column's own — the round reads `ok` in the words
+    /// that column prints, because it is the same attempt primitive.
+    #[tokio::test]
+    async fn a_quic_round_reads_the_server_hello_its_peer_sends() {
+        let server = tokio::net::UdpSocket::bind("127.0.0.1:0").await.expect("a local socket");
+        let addr = server.local_addr().expect("an address");
+        let answering = tokio::spawn(async move {
+            let mut buf = vec![0u8; 1500];
+            while let Ok((len, from)) = server.recv_from(&mut buf).await {
+                if len < 8 {
+                    continue;
+                }
+                // Per datagram, not per socket: every attempt binds its own
+                // client socket and picks its own connection IDs, so a reply
+                // sealed with the first attempt's keys opens for nobody else —
+                // which is what a cached `state` here produced.
+                let dcid_len = usize::from(buf[5]);
+                let dcid = buf[6..6 + dcid_len].to_vec();
+                let at = 6 + dcid_len;
+                let scid_len = usize::from(buf[at]);
+                let scid = buf[at + 1..at + 1 + scid_len].to_vec();
+                // The client's destination connection ID is what both directions
+                // of the Initial keys come from (RFC 9001 §5.2), and its source
+                // ID is who the reply is addressed to.
+                let keys = crate::net::quic::InitialKeys::derive(&dcid).expect("initial keys");
+                // A ServerHello is `0x02`, its three-byte length, then the body:
+                // the ladder reads the handshake type and the retry random.
+                let mut hello = vec![0x02, 0x00, 0x00, 0x2c, 0x03, 0x03];
+                hello.extend_from_slice(&[0x11; 32]);
+                let mut frames = vec![0x06]; // CRYPTO
+                crate::net::quic::write_varint(&mut frames, 0);
+                crate::net::quic::write_varint(&mut frames, hello.len() as u64);
+                frames.extend_from_slice(&hello);
+                let packet = crate::net::quic::seal_server_initial(&keys, &scid, &dcid, 0, frames)
+                    .expect("a sealed reply");
+                let _ = server.send_to(&packet, from).await;
+            }
+        });
+
+        let mut plan = settings(3, 500, vec![]);
+        plan.alpn = BurstAlpn::H3;
+        plan.launch_gap = Duration::from_millis(0);
+        let report =
+            burst_profile(&addr, "example.com", TlsFingerprint::Chrome146, &plan, &Arc::new(AppConfig::default()))
+                .await;
+        answering.abort();
+
+        assert_eq!(report.attempts.len(), 3);
+        assert_eq!(report.answered(), 3, "{:?}", report.attempts);
+        assert!(
+            report.attempts.iter().all(|a| a.status == DpiStatus::QuicOk),
+            "{:?}",
+            report.attempts
+        );
+        assert_eq!(report.attempts[0].detail, Detail::QuicServerHello);
+    }
+
+    /// The silence that means "nothing came back" is the QUIC column's `TIMEOUT`,
+    /// not a TCP one: the round reports the transport that actually ran.
+    #[tokio::test]
+    async fn a_silent_quic_peer_reads_as_the_quic_timeout() {
+        let silent = tokio::net::UdpSocket::bind("127.0.0.1:0").await.expect("a local socket");
+        let addr = silent.local_addr().expect("an address");
+
+        let mut plan = settings(2, 300, vec![]);
+        plan.alpn = BurstAlpn::H3;
+        let report =
+            burst_profile(&addr, "example.com", TlsFingerprint::Chrome146, &plan, &Arc::new(AppConfig::default()))
+                .await;
+        drop(silent);
+
+        assert_eq!(report.attempts.len(), 2);
+        assert_eq!(report.answered(), 0);
+        assert_eq!(report.lost(), 2);
+        assert!(
+            report
+                .attempts
+                .iter()
+                .all(|a| a.status == DpiStatus::QuicDrop && a.detail == Detail::QuicTimeout),
+            "{:?}",
+            report.attempts
+        );
     }
 
     /// Grouping is by status, not by the detail behind it, and the order is by
