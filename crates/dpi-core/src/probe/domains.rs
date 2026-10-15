@@ -26,6 +26,7 @@ use tokio::time::timeout;
 
 use crate::classify::{
     classify_connect_error_full, classify_ssl_error, ConnectionStage, Detail, DpiStatus, ProbeStage,
+    StackKind,
 };
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
@@ -157,12 +158,54 @@ impl HttpCheck {
     }
 }
 
-/// Single TLS check against `target` with SNI/host = `domain`: TCP connect, a
-/// version-pinned handshake (TLS 1.2 or 1.3), then GET `/` reading up to 64 KB of body.
+/// Which question one TLS leg asks.
+///
+/// The `TLS1.2` column offers 1.2 alone. The `TLS1.3` column offers what a
+/// browser offers — 1.3 and 1.2 — and re-asks with 1.3 alone when the peer
+/// chooses 1.2: one answer cannot say whether the host *has* no 1.3 or the offer
+/// was interfered with, and the re-ask is what separates the two
+/// ([`tls13_pair_verdict`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsLeg {
+    /// Offer TLS 1.2 only — the `TLS1.2` column.
+    Tls12,
+    /// Offer what a browser offers, TLS 1.3 and 1.2 — the `TLS1.3` column.
+    Browser,
+    /// Offer TLS 1.3 only: the `TLS1.3` column's re-ask.
+    Tls13Pinned,
+}
+
+impl TlsLeg {
+    /// The shape this leg presents: a pinned hello, or the browser's own.
+    fn profile(self, fingerprint: TlsFingerprint) -> TlsProfile {
+        match self {
+            Self::Tls12 => TlsProfile::insecure(fingerprint).tls12(),
+            Self::Browser => TlsProfile::insecure(fingerprint),
+            Self::Tls13Pinned => TlsProfile::insecure(fingerprint).tls13(),
+        }
+    }
+
+    /// True when the hello named TLS 1.2, which is what decides how a
+    /// version-naming answer is read ([`resolve_peer_version_mismatch`]).
+    fn offers_tls12(self) -> bool {
+        matches!(self, Self::Tls12 | Self::Browser)
+    }
+}
+
+/// Single TLS check against `target` with SNI/host = `domain`: TCP connect, the
+/// handshake `leg` asks for, then GET `/` reading up to 64 KB of body.
+///
+/// The `TLS1.3` leg runs twice when the peer answers its browser-shaped hello
+/// with 1.2, and reports the pair rather than the landing — see
+/// [`tls13_pair_verdict`]. A leg also runs a second time when the shape it sent
+/// advertises a code point this stack cannot run and the peer picks it: that is
+/// the offer's own limitation rather than the peer's answer, so the leg re-asks
+/// with the baseline hello and reports the pair — see [`suite_reask_verdict`].
 pub async fn check_domain_tls(
     domain: &str,
     target: IpAddr,
-    tls12_only: bool,
+    leg: TlsLeg,
+    fingerprint: TlsFingerprint,
     cfg: &AppConfig,
 ) -> TlsCheck {
     let start = Instant::now();
@@ -179,14 +222,9 @@ pub async fn check_domain_tls(
             }
         };
 
-        // TLS handshake (version-pinned client)
+        // TLS handshake (the shape the leg asks for)
         *stage.lock() = ProbeStage::TlsHandshake;
-        let fingerprint = TlsFingerprint::from_config(cfg);
-        let profile = if tls12_only {
-            TlsProfile::insecure(fingerprint).tls12()
-        } else {
-            TlsProfile::insecure(fingerprint).tls13()
-        };
+        let profile = leg.profile(fingerprint);
         let rustls_conn = RustlsConnector::from(profile);
         let server_name = match crate::net::tls::server_name(domain) {
             Ok(n) => n,
@@ -204,21 +242,59 @@ pub async fn check_domain_tls(
         {
             Ok(Ok(stream)) => stream,
             Ok(Err(e)) => {
-                let st = tracker.state.lock();
-                if let Some(status) = st.last_status {
-                    let detail = st.last_error_msg.clone().unwrap_or(Detail::RstHello);
-                    return (status, detail, 0usize, Detail::None);
-                }
-                drop(st);
+                // The tracker reads the stream as it arrives and can name a
+                // verdict the connect error cannot; the classifier below reads
+                // the stack's own sentence. Either way the *kind* of a stack
+                // failure survives only in the raw text, which is what `-v`
+                // prints.
+                let tracked = {
+                    let st = tracker.state.lock();
+                    st.last_status
+                        .map(|status| (status, st.last_error_msg.clone().unwrap_or(Detail::RstHello)))
+                };
                 let msg = e.to_string();
-                let (status, detail) = classify_connect_error_full(&msg, e.raw_os_error(), Some(e.kind()), 0, ProbeStage::TlsHandshake);
-                if status != DpiStatus::Unknown {
+                tracing::debug!("TLS handshake failed for {domain}: {msg}");
+                let (status, detail) = match tracked {
+                    Some(verdict) => verdict,
+                    None => {
+                        let (status, detail) = classify_connect_error_full(
+                            &msg,
+                            e.raw_os_error(),
+                            Some(e.kind()),
+                            0,
+                            ProbeStage::TlsHandshake,
+                        );
+                        if status != DpiStatus::Unknown {
+                            (status, detail)
+                        } else {
+                            let (ssl_status, ssl_detail) =
+                                classify_ssl_error(&msg, 0, ConnectionStage::TlsClientHelloSent);
+                            resolve_peer_version_mismatch(ssl_status, ssl_detail, leg.offers_tls12())
+                        }
+                    }
+                };
+
+                // A profile advertises code points this stack cannot run — that
+                // is part of looking like the client it imitates — and a server
+                // may pick one. rustls words that as `PeerMisbehaved`, which reads
+                // as a peer that broke the protocol, while it is the offer's own
+                // limitation. Re-ask with the baseline hello, whose list this
+                // stack can complete, and report what the host answers.
+                if let Detail::StackFailure(kind) = &detail
+                    && kind.is_our_offer()
+                    && fingerprint != TlsFingerprint::Rustls
+                {
+                    let kind = *kind;
+                    tracing::debug!(
+                        "re-asking {domain} with the baseline hello: {msg} is the offer's limit"
+                    );
+                    let reask =
+                        Box::pin(check_domain_tls(domain, target, leg, TlsFingerprint::Rustls, cfg))
+                            .await;
+                    let (status, detail) = suite_reask_verdict(&reask, kind);
                     return (status, detail, 0usize, Detail::None);
                 }
-                let (ssl_status, ssl_detail) = classify_ssl_error(&msg, 0, ConnectionStage::TlsClientHelloSent);
-                let (pinned_status, pinned_detail) =
-                    resolve_peer_version_mismatch(ssl_status, ssl_detail, tls12_only);
-                return (pinned_status, pinned_detail, 0usize, Detail::None);
+                return (status, detail, 0usize, Detail::None);
             }
             Err(_) => {
                 return (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout, 0usize, Detail::None);
@@ -226,6 +302,20 @@ pub async fn check_domain_tls(
         };
 
         *stage.lock() = ProbeStage::TlsConnected;
+        // A browser-shaped hello that landed below 1.3 says nothing about 1.3 on
+        // its own: the peer may have no 1.3 at all, or something may have taken
+        // 1.3 out of the offer. The pinned re-ask separates the two, and the pair
+        // reports the re-ask's certificate mark — the browser-shaped handshake's
+        // own chain is what the `TLS1.2` column carries a moment later.
+        if leg == TlsLeg::Browser
+            && tls_stream.get_ref().1.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3)
+        {
+            let pinned =
+                Box::pin(check_domain_tls(domain, target, TlsLeg::Tls13Pinned, fingerprint, cfg))
+                    .await;
+            let (status, detail) = tls13_pair_verdict(&pinned);
+            return (status, detail, 0usize, pinned.cert);
+        }
         // The chain this leg was shown, judged *after* the handshake: the probe
         // hands rustls an insecure profile on purpose (the certificate is
         // evidence here, not a gate), so this is the only place the row can learn
@@ -297,31 +387,119 @@ fn peer_cert_mark(conn: &rustls::ClientConnection, domain: &str) -> Detail {
     }
 }
 
-/// Reads a version-naming `PeerIncompatible` answer against the leg that met it.
+/// Reads a version-naming `PeerIncompatible` answer against the offer that met it.
 ///
 /// rustls raises `PeerIncompatible::ServerTlsVersionIsDisabledByOurConfig` both
 /// when a peer picks a version *above* our offer and when it picks one *below*
 /// it, and the message names neither (`vendor/rustls/src/error.rs` renders the
-/// variant's Debug name). The pin does: the TLS-1.2 leg offered 1.2 alone, so a
-/// peer that selected anything else selected **1.3** — an answer this host never
-/// gave, which is the spoofed answer `TLS SPOOF` names — while the TLS-1.3 leg
-/// meeting the same message met a host without TLS 1.3 (or a box that downgraded
-/// it), and that column keeps its own `NO TLS1.3`.
+/// variant's Debug name). The offer does: a hello that named TLS 1.2 — the
+/// `TLS1.2` column, and the browser-shaped hello the `TLS1.3` column sends first
+/// — can only have been answered above it, with **1.3**, an answer this host
+/// never gave, which is the spoofed answer `TLS SPOOF` names. A hello that named
+/// 1.3 alone answered with 1.2 met a host without TLS 1.3 (or a box that
+/// downgraded it), and that leg keeps its own `NO TLS1.3`.
 ///
 /// Every other verdict passes through untouched, the record-level
-/// "wrong version number" included: that one is a spoof on either leg.
+/// "wrong version number" included: that one is a spoof on either offer.
 fn resolve_peer_version_mismatch(
     status: DpiStatus,
     detail: Detail,
-    tls12_only: bool,
+    offers_tls12: bool,
 ) -> (DpiStatus, Detail) {
     if detail != Detail::PeerVersionMismatch {
         return (status, detail);
     }
-    if tls12_only {
+    if offers_tls12 {
         (DpiStatus::TlsSpoof, Detail::WrongVersion)
     } else {
         (DpiStatus::NoTls13, Detail::NoTls13)
+    }
+}
+
+/// The `TLS1.3` column's verdict when its browser-shaped hello landed below 1.3.
+///
+/// One answer cannot say whether the peer *has* no TLS 1.3 or something took 1.3
+/// out of the offer, so the column re-asks with 1.3 alone and reads the pair:
+///
+/// * the re-ask refused with `protocol_version` or `handshake_failure` — the peer
+///   answered 1.2 a moment ago and refuses 1.3 now, which is what a host without
+///   TLS 1.3 says: `NO TLS1.3`, the badge that means "the server does not support
+///   TLS 1.3", never a block. `protocol_version` is the alert RFC 8446 names for
+///   "no version in common"; `handshake_failure` is what the rest of the field
+///   answers instead, and what keeps either one honest is the pair itself — the
+///   browser-shaped hello answered 1.2 and completed, so the path carries real
+///   TLS to this host. Measured 2026-10-15: `ukdevilz.com` and `yummyani.me`
+///   answer `protocol_version`; `online.sberbank.ru`, `rzd.ru` and `pochta.ru`
+///   answer `handshake_failure` while the browser-shaped hello completes TLS 1.2
+///   against them (159 ms) and `curl --impersonate safari260` reaches them (302),
+///   and an outside scan (`api.ssllabs.com`) shows the first two serving TLS 1.2
+///   alone — the tap in front of `online.sberbank.ru` shows its ServerHello
+///   carrying no `supported_versions`, so it chose 1.2 over an offer that named
+///   1.3, and the alert was the host's own answer, not a filter's. A box that
+///   forges either alert *and* rewrites 1.3 out of the browser-shaped hello
+///   answers this pair byte for byte, so from here it cannot be told apart from a
+///   host without 1.3: the hole is narrow — a box that drops the 1.3-only hello
+///   reads `TLS DROP`, one that refuses the browser-shaped hello too reads `TLS
+///   BLOCK` — but it is real, and only a second vantage closes it. The
+///   `handshake_failure` arm makes that hole wider rather than narrower, that
+///   being the alert a censor is most often blamed for (`classify::alert`), and
+///   the trade is taken deliberately: the badge has to name what the *host* does,
+///   and the alert it answered with is a capability answer the pair has already
+///   checked against a handshake that completed. `PROXY_URL` is not one:
+///   it reaches the DNS layer alone (`dns::socks`), so these legs always dial from
+///   this machine's own route;
+/// * the re-ask answered 1.2 — a peer that ignores `supported_versions`, or a box
+///   that rewrote the offer: `NO TLS1.3`, the read
+///   [`resolve_peer_version_mismatch`] already gives that answer on this leg;
+/// * the re-ask answered **1.3** — one peer gave two offers different versions,
+///   where a server that has 1.3 answers the hello that offers it (test 6 reads a
+///   1.2 landing on its both-versions offer as the anomaly, `burst::answered`), so
+///   the browser-shaped hello was very likely rewritten on the way: `TLS BLOCK`
+///   with the version anomaly named. A server is free to prefer 1.2 when both are
+///   offered, so this arm can also be a server's own quirk — its false-positive
+///   side, and the reason the badge stays the shared `TLS BLOCK` rather than a
+///   downgrade one of its own;
+/// * the re-ask died where the browser-shaped hello did not — a drop or a reset
+///   aimed at the offer's own shape: the re-ask's verdict stands.
+fn tls13_pair_verdict(pinned: &TlsCheck) -> (DpiStatus, Detail) {
+    match (pinned.status, &pinned.detail) {
+        // Refused 1.3 while it had just answered 1.2: the host has no 1.3. Both
+        // codes a server without a version in common may send are read here —
+        // `protocol_version`, the one RFC 8446 names, and `handshake_failure`,
+        // which the rest of the field answers instead.
+        (DpiStatus::TlsBlock, Detail::ProtocolVersionAlert)
+        | (DpiStatus::TlsAlert, Detail::TlsAlertHandshakeFailure) => (DpiStatus::NoTls13, Detail::NoTls13),
+        // 1.2 to a 1.3-only offer: the leg already read this, the pair keeps it.
+        (DpiStatus::NoTls13, _) => (DpiStatus::NoTls13, Detail::NoTls13),
+        // 1.3 to the pinned offer, 1.2 to the browser-shaped one: the two offers
+        // disagree, so the browser-shaped hello was very likely rewritten on the
+        // way. Named apart from `PeerVersionMismatch`: there no answer was a
+        // version we never offered, here our own two offers disagree.
+        (DpiStatus::Ok, _) => (DpiStatus::TlsBlock, Detail::OfferVersionDisagreement),
+        // Anything else is the re-ask's own failure — a drop, a reset, an alert of
+        // its own — and the column keeps it.
+        _ => (pinned.status, pinned.detail.clone()),
+    }
+}
+
+/// The verdict a leg reports after re-asking with the baseline hello.
+///
+/// The shape that failed advertised a code point this stack cannot run — a
+/// cipher suite, a key-exchange group or a compression method — and the peer
+/// picked it. rustls words that as `PeerMisbehaved`, which would read as a peer
+/// that broke the protocol; it is the offer's own limitation. The baseline hello
+/// asks the same question without the code points this stack cannot complete, so
+/// its answer is the host's own — and the row keeps the named kind as its reason:
+/// the badge says what the host does, the detail says why the profile could not
+/// ask it.
+///
+/// A baseline that hit a limitation of its own is left as the re-ask read it:
+/// the baseline advertises nothing this stack cannot run, so that would be a
+/// report about the stack rather than about the offer.
+fn suite_reask_verdict(reask: &TlsCheck, kind: StackKind) -> (DpiStatus, Detail) {
+    match &reask.detail {
+        Detail::StackFailure(other) if other.is_our_offer() => (reask.status, reask.detail.clone()),
+        _ => (reask.status, Detail::StackFailure(kind)),
     }
 }
 
@@ -456,6 +634,10 @@ pub async fn check_http_injection(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
+        // The verdict below turns on this pair and nothing else, and the detail
+        // it produces names only the host: a `REDIR` that no independent client
+        // can reproduce is undebuggable without the raw answer.
+        tracing::debug!("HTTP {domain_owned}: status {status}, location {location:?}");
 
         // The body is read for the reason test 3 reads one: a DPI that cuts a
         // transfer cuts it inside a window of the stream, and where it died is
@@ -787,12 +969,19 @@ async fn probe_domain(
     let quic = start_quic(&domain, target, applicable, cfg, sem, ticks, &mut entry);
     entry.t13 = {
         let _permit = crate::probe::permit(sem).await;
-        check_domain_tls(&domain, target, false, cfg).await
+        check_domain_tls(
+            &domain,
+            target,
+            TlsLeg::Browser,
+            TlsFingerprint::from_config(cfg),
+            cfg,
+        )
+        .await
     };
     ticks.fire(&ticks.t13);
     entry.t12 = {
         let _permit = crate::probe::permit(sem).await;
-        check_domain_tls(&domain, target, true, cfg).await
+        check_domain_tls(&domain, target, TlsLeg::Tls12, TlsFingerprint::from_config(cfg), cfg).await
     };
     ticks.fire(&ticks.t12);
     entry.http = {
@@ -1057,16 +1246,31 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Dp
     // once — and two stages the moment they disagree: a reader looking at
     // `TLS RST` beside `TLS DROP` has to know which version did what, so each
     // leg then carries its own version.
+    // A leg whose profile could not ask — it advertised a code point this stack
+    // cannot run and the peer picked it — keeps its reason even though the re-ask
+    // answered: the badge says what the host does, this line says why the shape
+    // could not ask it (see `suite_reask_verdict`).
+    let caveat =
+        |detail: &Detail| matches!(detail, Detail::StackFailure(kind) if kind.is_our_offer());
     let tls_agree = e.t12.status == e.t13.status && e.t12.detail == e.t13.detail;
     if tls_agree {
-        if !t12_ok && e.t12.detail != Detail::None && !is_timeout_detail(&e.t12.detail) {
+        if (!t12_ok || caveat(&e.t12.detail))
+            && e.t12.detail != Detail::None
+            && !is_timeout_detail(&e.t12.detail)
+        {
             failures.push(("TLS", e.t12.detail.clone()));
         }
     } else {
-        if !t12_ok && e.t12.detail != Detail::None && !is_timeout_detail(&e.t12.detail) {
+        if (!t12_ok || caveat(&e.t12.detail))
+            && e.t12.detail != Detail::None
+            && !is_timeout_detail(&e.t12.detail)
+        {
             failures.push(("TLS12", e.t12.detail.clone()));
         }
-        if !t13_ok && e.t13.detail != Detail::None && !is_timeout_detail(&e.t13.detail) {
+        if (!t13_ok || caveat(&e.t13.detail))
+            && e.t13.detail != Detail::None
+            && !is_timeout_detail(&e.t13.detail)
+        {
             failures.push(("TLS13", e.t13.detail.clone()));
         }
     }
@@ -1123,9 +1327,12 @@ pub fn build_domain_row(e: &DomainEntry) -> (DpiStatus, DpiStatus, DpiStatus, Dp
     if http_ok && t12_ok && t13_ok && e.quic.status == DpiStatus::QuicOk {
         details.clear();
         details.push(DetailLine::Timings([e.http.elapsed, e.t12.elapsed, e.t13.elapsed, e.quic.elapsed]));
-    } else if t12_ok && t13_ok && !quic_failed {
-        // One protocol is missing its pass but TLS is not it: the best TLS time
-        // stands alone, as it did before the four-timing line.
+    } else if t12_ok && t13_ok && !quic_failed && details.is_empty() {
+        // One protocol is missing its pass but TLS is not it, and nothing else
+        // has a line of its own: the best TLS time stands alone, as it did before
+        // the four-timing line. A reason already there — a foreign redirect on
+        // the HTTP column, a profile that could not ask — is not thrown away to
+        // make room for a timing.
         let mut times: Vec<f64> = Vec::new();
         if e.t12.elapsed > 0.0 {
             times.push(e.t12.elapsed);
@@ -1409,6 +1616,63 @@ mod tests {
         assert_eq!(details, vec![DetailLine::Tagged(vec!["TLS"], Detail::Elapsed(0.28))]);
     }
 
+    /// The re-ask reports the host's own answer and keeps the kind as the reason:
+    /// the badge is the host's, the line is the offer's limitation.
+    #[test]
+    fn test_suite_reask_verdict_keeps_the_kind_beside_the_hosts_answer() {
+        let mut answered = TlsCheck {
+            status: DpiStatus::Ok,
+            detail: Detail::None,
+            cert: Detail::None,
+            elapsed: 0.2,
+        };
+        assert_eq!(
+            suite_reask_verdict(&answered, StackKind::SelectedUnofferedCipherSuite),
+            (DpiStatus::Ok, Detail::StackFailure(StackKind::SelectedUnofferedCipherSuite))
+        );
+        answered.status = DpiStatus::NoTls13;
+        answered.detail = Detail::NoTls13;
+        assert_eq!(
+            suite_reask_verdict(&answered, StackKind::SelectedUnofferedKxGroup),
+            (DpiStatus::NoTls13, Detail::StackFailure(StackKind::SelectedUnofferedKxGroup))
+        );
+    }
+
+    /// A profile that could not ask — the peer picked a code point this stack
+    /// cannot run — keeps its reason even though the re-ask answered: the badge
+    /// says what the host does, the line says why the shape could not ask.
+    #[test]
+    fn test_build_domain_row_keeps_the_reask_reason_beside_the_pass() {
+        let mut entry = DomainEntry::pending("megafon.ru".to_string(), None, None);
+        entry.http = HttpCheck::at(DpiStatus::Ok, Detail::UpgradeHttps { status: Some(301) });
+        entry.t12 = TlsCheck {
+            status: DpiStatus::Ok,
+            detail: Detail::StackFailure(StackKind::SelectedUnofferedCipherSuite),
+            cert: Detail::None,
+            elapsed: 0.31,
+        };
+        entry.t13 = TlsCheck {
+            status: DpiStatus::NoTls13,
+            detail: Detail::StackFailure(StackKind::SelectedUnofferedCipherSuite),
+            cert: Detail::None,
+            elapsed: 0.42,
+        };
+
+        let (_, tls12, tls13, _quic, details) = build_domain_row(&entry);
+        assert_eq!(tls12, DpiStatus::Ok, "the baseline hello answered");
+        assert_eq!(tls13, DpiStatus::NoTls13, "and the host has no TLS 1.3");
+        // One reason for the row, so it names no protocol: the badges already say
+        // which columns are not OK.
+        assert_eq!(
+            details,
+            vec![DetailLine::Tagged(
+                Vec::new(),
+                Detail::StackFailure(StackKind::SelectedUnofferedCipherSuite)
+            )],
+            "the reason the profile could not ask stays in the row"
+        );
+    }
+
     /// Every protocol passed: the cell is the four stage timings, in the columns'
     /// order (HTTP, TLS 1.2, TLS 1.3, QUIC) and with nothing else in it.
     #[test]
@@ -1565,13 +1829,14 @@ mod tests {
         assert_eq!(details, vec![DetailLine::Tagged(vec!["TLS"], Detail::Elapsed(0.3))]);
     }
 
-    /// The version-naming answer, read against the leg that met it. rustls's
-    /// message names no version, and the two legs resolve it in opposite
-    /// directions — a 1.2-pinned leg can only have been answered with 1.3 (an
-    /// answer the host never gave), a 1.3-pinned leg met a host without 1.3.
-    /// Everything else passes through untouched.
+    /// The version-naming answer, read against the offer that met it. rustls's
+    /// message names no version, and the two offers resolve it in opposite
+    /// directions — a hello that named 1.2 (the browser-shaped one included) can
+    /// only have been answered above it, with 1.3, an answer the host never gave;
+    /// a hello that named 1.3 alone met a host without 1.3. Everything else
+    /// passes through untouched.
     #[test]
-    fn test_peer_version_mismatch_resolves_against_the_pin() {
+    fn test_peer_version_mismatch_resolves_against_the_offer() {
         assert_eq!(
             resolve_peer_version_mismatch(DpiStatus::Unknown, Detail::PeerVersionMismatch, true),
             (DpiStatus::TlsSpoof, Detail::WrongVersion)
@@ -1582,18 +1847,74 @@ mod tests {
         );
 
         // A verdict that is not the version-naming one keeps its pair on the
-        // 1.3-pinned leg too: the record-level wrong version number is a spoof
-        // whichever leg reads it.
-        for tls12_only in [true, false] {
+        // 1.3-only offer too: the record-level wrong version number is a spoof
+        // whichever offer reads it.
+        for offers_tls12 in [true, false] {
             assert_eq!(
-                resolve_peer_version_mismatch(DpiStatus::TlsSpoof, Detail::WrongVersion, tls12_only),
+                resolve_peer_version_mismatch(DpiStatus::TlsSpoof, Detail::WrongVersion, offers_tls12),
                 (DpiStatus::TlsSpoof, Detail::WrongVersion)
             );
             assert_eq!(
-                resolve_peer_version_mismatch(DpiStatus::TlsErr, Detail::PeerIncompatible, tls12_only),
+                resolve_peer_version_mismatch(DpiStatus::TlsErr, Detail::PeerIncompatible, offers_tls12),
                 (DpiStatus::TlsErr, Detail::PeerIncompatible)
             );
         }
+    }
+
+    /// The `TLS1.3` column's pair: a browser-shaped hello that landed on 1.2 is
+    /// re-asked with 1.3 alone, and the two answers together decide the badge.
+    ///
+    /// The failure this pins is the one measured on 2026-10-15: `ukdevilz.com`
+    /// and `yummyani.me` refuse 1.3 with a `protocol_version` alert while serving
+    /// 1.2 without trouble, and wore `TLS BLOCK` — which reads as censorship —
+    /// where `NO TLS1.3` is the truth. The re-ask is what tells that apart from a
+    /// filter, so each of its four answers has its own verdict.
+    #[test]
+    fn test_tls13_pair_reads_the_re_ask() {
+        let leg = |status, detail| TlsCheck { status, detail, cert: Detail::None, elapsed: 0.2 };
+
+        // Refused 1.3 after answering 1.2 a moment ago: the host has no 1.3.
+        assert_eq!(
+            tls13_pair_verdict(&leg(DpiStatus::TlsBlock, Detail::ProtocolVersionAlert)),
+            (DpiStatus::NoTls13, Detail::NoTls13)
+        );
+        // The same refusal spelled the other way: a server without a version in
+        // common may answer `handshake_failure` instead of `protocol_version` —
+        // `online.sberbank.ru`, `rzd.ru` and `pochta.ru` all do — and the pair
+        // reads it the same, because the browser-shaped hello that just answered
+        // 1.2 is what makes it a capability answer rather than a filter's.
+        assert_eq!(
+            tls13_pair_verdict(&leg(DpiStatus::TlsAlert, Detail::TlsAlertHandshakeFailure)),
+            (DpiStatus::NoTls13, Detail::NoTls13)
+        );
+        // Any other alert on the re-ask keeps its own verdict: an
+        // `unrecognized_name` there is SNI filtering, not a capability answer.
+        assert_eq!(
+            tls13_pair_verdict(&leg(DpiStatus::TlsAlert, Detail::SniBlockUnrecognizedName)),
+            (DpiStatus::TlsAlert, Detail::SniBlockUnrecognizedName)
+        );
+        // 1.2 to the 1.3-only offer: the leg already read this, the pair keeps it.
+        assert_eq!(
+            tls13_pair_verdict(&leg(DpiStatus::NoTls13, Detail::NoTls13)),
+            (DpiStatus::NoTls13, Detail::NoTls13)
+        );
+        // 1.3 to the 1.3-only offer while the browser-shaped one got 1.2: one peer
+        // gave two offers different versions, so the browser-shaped hello was
+        // rewritten on the way.
+        assert_eq!(
+            tls13_pair_verdict(&leg(DpiStatus::Ok, Detail::None)),
+            (DpiStatus::TlsBlock, Detail::OfferVersionDisagreement)
+        );
+        // A re-ask that died where the browser-shaped hello did not keeps its own
+        // verdict: a drop aimed at the offer's shape is not a capability answer.
+        assert_eq!(
+            tls13_pair_verdict(&leg(DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout)),
+            (DpiStatus::TlsDropped, Detail::TlsHandshakeTimeout)
+        );
+        assert_eq!(
+            tls13_pair_verdict(&leg(DpiStatus::TlsRst, Detail::RstHello)),
+            (DpiStatus::TlsRst, Detail::RstHello)
+        );
     }
 
     /// A row whose only failure is the QUIC Initial that never got an answer:
@@ -1821,6 +2142,9 @@ mod tests {
             ("https://holod.media", 302, "//evil.com/block", DpiStatus::RedirSuspect, Detail::Redirect { host: "evil.com".into() }),
             ("http://holod.media", 302, "//evil.com/block", DpiStatus::RedirSuspect, Detail::Redirect { host: "evil.com".into() }),
             ("https://holod.media", 302, "https://evil.com/block", DpiStatus::RedirSuspect, Detail::Redirect { host: "evil.com".into() }),
+            // A Location that names no host is not a host to name: the row prints
+            // the raw value, which is the whole evidence of the rewrite.
+            ("http://holod.media", 307, "https:///", DpiStatus::RedirSuspect, Detail::Redirect { host: "https:///".into() }),
             ("https://holod.media", 302, "https://not-holod.media/", DpiStatus::RedirSuspect, Detail::Redirect { host: "not-holod.media".into() }),
             ("https://holod.media", 302, "https://holod.media.evil.com/", DpiStatus::RedirSuspect, Detail::Redirect { host: "holod.media.evil.com".into() }),
         ];

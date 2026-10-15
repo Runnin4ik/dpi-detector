@@ -116,15 +116,20 @@ impl TlsProfile {
     /// writes `supported_versions` from the config, so a pinned browser profile
     /// advertises `[GREASE, 0x0304]` where the Chrome 107 it imitates sends
     /// `[GREASE, 0x0304, 0x0303]` (Firefox, which does not grease, sends
-    /// `[0x0304]` against a browser's `[0x0304, 0x0303]`).
-    ///
-    /// One version per hello is the price of test 2's two columns: a hello
-    /// offering both lets the server choose, and the "TLS 1.3" column would
-    /// silently carry a TLS 1.2 result. It stays a fingerprintable deviation —
-    /// JA3 and JA4 cannot see it (extension codes, and the maximum version, are
-    /// all they hash), but a middlebox that reads the body can, which is why
+    /// `[0x0304]` against a browser's `[0x0304, 0x0303]`). It stays a
+    /// fingerprintable deviation — JA3 and JA4 cannot see it (extension codes,
+    /// and the maximum version, are all they hash), but a middlebox that reads
+    /// the body can, which is why
     /// `net::fingerprint::tests::grease_version_leads_supported_versions` pins
     /// both lists for both phases.
+    ///
+    /// The `TLS1.2` column pins for a reason of its own: a hello offering both
+    /// lets the server choose, and that column would silently carry a 1.3 result.
+    /// The `TLS1.3` column sends a browser's own hello instead — 1.3 and 1.2 both
+    /// offered, which is what a browser really sends — and re-asks with this
+    /// pinned shape only when the peer answers 1.2, because one answer cannot say
+    /// whether the host *has* no 1.3 or the offer was interfered with
+    /// (`probe::domains::tls13_pair_verdict`).
     #[must_use = "the change is in the returned profile; the receiver is consumed"]
     pub fn tls13(mut self) -> Self {
         self.version = TlsVersion::Tls13;
