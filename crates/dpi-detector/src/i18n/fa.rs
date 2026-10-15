@@ -297,7 +297,7 @@ pub(crate) fn legend_sections_fa() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("TLS ERR", "Khata-ye TLS: gavahi nemitavanad male-e in site bashad (marja'-e nashenakhte, monghazi, adam-e tatabogh-e name)"),
             ("NO CA BUNDLE", "Zanjire-ye gavahi be rishe-ye Mozilla dar abzar nemiresad: gavahi zir-e rishe-ye Vezarat-e Tose'e-ye Digital-e Rusie (bank ha pas az laghv-e gavahi haye beynolmelali), dastkari-e TLS ya CA-ye ghadimi"),
             ("RU CA", "Gavahi zir-e rishe-ye Vezarat-e Tose'e-ye Digital-e Rusie sader shode (bank ha va site haye dolati pas az laghv-e beynolmelali): site javab dad, vali browser ghofl neshan nemidehad"),
-            ("TLS BLOCK", "Masdoodsazi-e noskhe ya kole protocol-e TLS (ekhtar-e protocol_version)"),
+            ("TLS BLOCK", "Taraf-e moghabel khod-e version-e TLS ra rad kard (ekhtar-e protocol_version); hosti ke TLS 1.3 nadarad ham hamin javab ra midahad, pas sotun dobare faghat ba 1.3 miporsad va an host NO TLS1.3 khande mishavad"),
             ("TLS RST", "Baste-ye fa'al-e TCP RST pas az ersal-e ClientHello (reset-e mosafhe-ye TLS)"),
             ("TLS DROP", "Etmam-e mohlat-e mosafhe-ye TLS - packet ha hazf shodand"),
             ("TLS ALERT", "Taraf-e moghabel ekhtar-e TLS ferestad (handshake failure, access denied, ...); no'-e ekhtar dar tafsilat ast"),

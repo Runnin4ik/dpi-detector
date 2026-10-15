@@ -80,7 +80,11 @@ pub fn from_message(msg_lower: &str) -> Option<AlertKind> {
 /// [`Detail::Alert`].
 pub fn detail_for(kind: AlertKind) -> Detail {
     match kind {
-        HandshakeFailure => Detail::DpiAlertHandshakeFailure,
+        // The alert a censor is most often blamed for, named for what the
+        // message actually carries: the peer refused a hello it had just agreed
+        // a version with. Which side sent it is not in this message, so the name
+        // does not claim a DPI.
+        HandshakeFailure => Detail::TlsAlertHandshakeFailure,
         UnrecognisedName => Detail::SniBlockUnrecognizedName,
         ProtocolVersion => Detail::ProtocolVersionAlert,
         named => Detail::Alert(named),
@@ -148,11 +152,12 @@ mod tests {
         assert_eq!(from_message("received fatal alert: Unknown(5)"), None);
     }
 
-    /// The three descriptions the vocabulary already had a code for keep it;
-    /// every other one carries its IANA name.
+    /// Two descriptions keep the code the vocabulary already had; every other one
+    /// carries its IANA name. `handshake_failure` is no longer one of the two:
+    /// its old code said `dpi_`, which the message cannot support.
     #[test]
     fn the_detail_code_is_the_iana_name() {
-        assert_eq!(detail_for(HandshakeFailure).code(), "dpi_alert_handshake_failure");
+        assert_eq!(detail_for(HandshakeFailure).code(), "tls_alert_handshake_failure");
         assert_eq!(detail_for(UnrecognisedName).code(), "sni_block_unrecognized_name");
         assert_eq!(detail_for(ProtocolVersion).code(), "protocol_version_alert");
         assert_eq!(detail_for(IllegalParameter).code(), "alert_illegal_parameter");

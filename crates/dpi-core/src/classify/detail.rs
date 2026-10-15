@@ -46,7 +46,12 @@ pub enum Detail {
     /// `unrecognized_name` alert — the SNI itself was rejected.
     SniBlockUnrecognizedName,
     /// `handshake_failure` right after the ClientHello.
-    DpiAlertHandshakeFailure,
+    ///
+    /// The name says TLS, not DPI: what the peer answered is a fact, and this
+    /// message does not say who sent it — a server that dislikes the hello sends
+    /// the same alert. Only the hello's *shape* tells the two apart, and that is
+    /// not in this message (see `alert.rs`).
+    TlsAlertHandshakeFailure,
     ProtocolVersionAlert,
     FakeTlsAlert,
     /// The peer answered with a TLS version the probe never offered: rustls
@@ -59,6 +64,18 @@ pub enum Detail {
     /// [`NoTls13`](Self::NoTls13). Where no pin exists (the browser-shaped hello
     /// an HTTP exchange over TLS uses) the case stays unclassified, named.
     PeerVersionMismatch,
+    /// The `TLS1.3` column's two offers got different versions from one peer: the
+    /// browser-shaped hello, which named 1.3 and 1.2, landed on 1.2, while the
+    /// re-ask, which named 1.3 alone, was answered with 1.3.
+    ///
+    /// A server that has 1.3 answers the hello that offers it, so the
+    /// browser-shaped hello was very likely rewritten on the way — the one arm of
+    /// `probe::domains::tls13_pair_verdict` that reads a rewrite rather than a
+    /// capability answer. It is named apart from
+    /// [`PeerVersionMismatch`](Self::PeerVersionMismatch) because that one means
+    /// an answer with a version we never offered, while here our own two offers
+    /// disagree with each other.
+    OfferVersionDisagreement,
     /// rustls's `peer is incompatible: …` family that names **no** version: the
     /// two sides share no cipher suite, key-exchange group or signature scheme
     /// (`vendor/rustls/src/error.rs`, `PeerIncompatible`). A capability mismatch
@@ -342,6 +359,22 @@ pub enum StackKind {
     InappropriateHandshakeMessage,
     /// `peer misbehaved: …`.
     PeerMisbehaved,
+    /// `peer misbehaved: SelectedUnofferedCipherSuite`: the peer picked a suite
+    /// out of the list this hello carried but this stack cannot run.
+    SelectedUnofferedCipherSuite,
+    /// `peer misbehaved: SelectedUnusableCipherSuiteForVersion`: the suite the
+    /// peer picked cannot be used with the version it answered with.
+    SelectedUnusableCipherSuiteForVersion,
+    /// `peer misbehaved: SelectedUnofferedKxGroup`: the peer picked a key-exchange
+    /// group this hello advertised but this stack has no implementation for.
+    SelectedUnofferedKxGroup,
+    /// `peer misbehaved: SelectedUnofferedCertCompression`: the peer picked a
+    /// certificate-compression method this hello advertised but this stack cannot
+    /// decompress.
+    SelectedUnofferedCertCompression,
+    /// `peer misbehaved: SelectedUnofferedCompression`: the same, for the legacy
+    /// record-compression method.
+    SelectedUnofferedCompression,
     /// `peer doesn't support any known protocol`: no ALPN in common.
     NoApplicationProtocol,
 }
@@ -357,8 +390,31 @@ impl StackKind {
             InappropriateMessage => "inappropriate_message",
             InappropriateHandshakeMessage => "inappropriate_handshake_message",
             PeerMisbehaved => "peer_misbehaved",
+            SelectedUnofferedCipherSuite => "selected_unoffered_cipher_suite",
+            SelectedUnusableCipherSuiteForVersion => "selected_unusable_cipher_suite_for_version",
+            SelectedUnofferedKxGroup => "selected_unoffered_kx_group",
+            SelectedUnofferedCertCompression => "selected_unoffered_cert_compression",
+            SelectedUnofferedCompression => "selected_unoffered_compression",
             NoApplicationProtocol => "no_application_protocol",
         }
+    }
+
+    /// True for the kinds that name a limitation of *our own* offer rather than a
+    /// peer that broke the protocol: the peer picked a suite, group or
+    /// compression method this stack cannot run, out of the list the profile
+    /// advertised. rustls words every one of them as `PeerMisbehaved`, which is
+    /// why they are read apart: the probe re-asks with the baseline hello on them
+    /// and reports what the *host* answers (see `probe::domains`).
+    pub fn is_our_offer(self) -> bool {
+        use StackKind::*;
+        matches!(
+            self,
+            SelectedUnofferedCipherSuite
+                | SelectedUnusableCipherSuiteForVersion
+                | SelectedUnofferedKxGroup
+                | SelectedUnofferedCertCompression
+                | SelectedUnofferedCompression
+        )
     }
 }
 
@@ -378,10 +434,11 @@ impl Detail {
             WrongVersion => Cow::Borrowed("response_spoofing_wrong_version"),
             GarbageData => Cow::Borrowed("response_spoofing_garbage_data"),
             SniBlockUnrecognizedName => Cow::Borrowed("sni_block_unrecognized_name"),
-            DpiAlertHandshakeFailure => Cow::Borrowed("dpi_alert_handshake_failure"),
+            TlsAlertHandshakeFailure => Cow::Borrowed("tls_alert_handshake_failure"),
             ProtocolVersionAlert => Cow::Borrowed("protocol_version_alert"),
             FakeTlsAlert => Cow::Borrowed("fake_tls_alert"),
             PeerVersionMismatch => Cow::Borrowed("peer_version_mismatch"),
+            OfferVersionDisagreement => Cow::Borrowed("offer_version_disagreement"),
             PeerIncompatible => Cow::Borrowed("peer_incompatible"),
             Alert(kind) => Cow::Owned(format!("alert_{}", kind.code())),
             StackFailure(kind) => Cow::Owned(format!("tls_{}", kind.code())),
@@ -498,6 +555,32 @@ impl<'de> Deserialize<'de> for Detail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the kinds that name a limitation of *our own* offer answer true: the
+    /// probe re-asks with the baseline hello on those, because the peer picked
+    /// something the profile advertised and this stack cannot run.
+    #[test]
+    fn only_the_offers_own_limits_are_our_offer() {
+        for kind in [
+            StackKind::SelectedUnofferedCipherSuite,
+            StackKind::SelectedUnusableCipherSuiteForVersion,
+            StackKind::SelectedUnofferedKxGroup,
+            StackKind::SelectedUnofferedCertCompression,
+            StackKind::SelectedUnofferedCompression,
+        ] {
+            assert!(kind.is_our_offer(), "{kind:?}");
+        }
+        for kind in [
+            StackKind::PeerMisbehaved,
+            StackKind::DecryptError,
+            StackKind::InvalidMessage,
+            StackKind::InappropriateMessage,
+            StackKind::InappropriateHandshakeMessage,
+            StackKind::NoApplicationProtocol,
+        ] {
+            assert!(!kind.is_our_offer(), "{kind:?}");
+        }
+    }
 
     #[test]
     fn codes_are_snake_case_and_distinct() {

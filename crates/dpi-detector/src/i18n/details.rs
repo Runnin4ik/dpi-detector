@@ -50,10 +50,14 @@ fn detail_wording(detail: &Detail, lang: Language) -> String {
         Detail::WrongVersion => t4(lang, "Подмена ответа (Wrong Version)", "Response spoofing (Wrong Version)", "响应伪造（Wrong Version）", "Spoofing-e pasokh (Wrong Version)"),
         Detail::GarbageData => t4(lang, "Подмена ответа (Garbage Data)", "Response spoofing (Garbage Data)", "响应伪造（Garbage Data）", "Spoofing-e pasokh (Garbage Data)"),
         Detail::SniBlockUnrecognizedName => t4(lang, "Блок SNI (unrecognized name)", "SNI block (unrecognized name)", "SNI 封锁（unrecognized name）", "Block-e SNI (unrecognized name)"),
-        Detail::DpiAlertHandshakeFailure => t4(lang, "Алерт DPI (handshake failure)", "DPI alert (handshake failure)", "DPI 警报（handshake failure）", "Alert-e DPI (handshake failure)"),
+        // The IANA alert name, Latin in every language like any other protocol
+        // token (Rule 4): the row's tag already names the column, so this is the
+        // whole description — `TLS13:handshake failure`.
+        Detail::TlsAlertHandshakeFailure => "handshake failure".to_string(),
         Detail::ProtocolVersionAlert => t4(lang, "Алерт версии протокола", "Protocol version alert", "协议版本警报", "Alert-e version-e protocol"),
         Detail::FakeTlsAlert => t4(lang, "Поддельный TLS Alert", "Fake TLS alert", "伪造的 TLS 警报", "Alert-e TLS-e ja'li"),
         Detail::PeerVersionMismatch => t4(lang, "Ответ с другой версией TLS (мы её не предлагали)", "Answer with a TLS version we did not offer", "以我们未提供的 TLS 版本回应", "Pasokh ba version-e digar-e TLS (ma pishnahad nakardim)"),
+        Detail::OfferVersionDisagreement => t4(lang, "Два предложения получили разные версии TLS", "The two hellos got different TLS versions", "两个握手请求得到了不同的 TLS 版本", "Do hello-e ersali version-haye mokhtalef-e TLS gereftand"),
         Detail::PeerIncompatible => t4(lang, "Нет общих параметров с сервером (шифры, группы, подписи)", "No parameters in common with the server (ciphers, groups, signatures)", "与服务器没有共同参数（加密套件、群、签名）", "Parametr-e moshtarak ba server nist (cipher, group, signature)"),
         Detail::NoRootCa => t4(lang, "Отсутствуют корневые сертификаты", "Missing root certificates", "缺少根证书", "Certificate haye rishe vojud nadarad"),
         Detail::RuTrustedCa => t4(lang, "Сертификат УЦ Минцифры", "Russian CA", "俄罗斯 CA", "CA-e Rusie"),
@@ -208,6 +212,10 @@ mod tests {
             let text = detail_text(&Detail::TlsHandshakeTimeout, lang);
             assert!(text.contains("TLS"), "{text}");
             assert!(!text.is_empty());
+            // The IANA alert name is a protocol token, not prose: the same Latin
+            // string in every language, and the row's tag names the column it
+            // arrived on.
+            assert_eq!(detail_text(&Detail::TlsAlertHandshakeFailure, lang), "handshake failure", "{lang:?}");
         }
     }
 
@@ -284,10 +292,10 @@ mod tests {
             Detail::WrongVersion,
             Detail::GarbageData,
             Detail::SniBlockUnrecognizedName,
-            Detail::DpiAlertHandshakeFailure,
             Detail::ProtocolVersionAlert,
             Detail::FakeTlsAlert,
             Detail::PeerVersionMismatch,
+            Detail::OfferVersionDisagreement,
             Detail::PeerIncompatible,
             Detail::NotHttpResponse,
             Detail::Alert(AlertKind::IllegalParameter),

@@ -37,6 +37,16 @@ const TABLE: &[(&str, StackKind)] = &[
     ("receivedunexpectedmessage", InappropriateMessage),
     ("receivedcorruptmessageoftype", InvalidMessage),
     ("cannotdecryptpeer'smessage", DecryptError),
+    // The five "we advertised it, this stack cannot run it" kinds come before the
+    // generic wording: they name a limitation of *our own* offer, not a peer that
+    // broke the protocol, and the probe re-asks with the baseline hello on them
+    // (`StackKind::is_our_offer`). A server that picks one of them is answering
+    // the offer it was handed.
+    ("selectedunofferedcertcompression", SelectedUnofferedCertCompression),
+    ("selectedunusableciphersuiteforversion", SelectedUnusableCipherSuiteForVersion),
+    ("selectedunofferedciphersuite", SelectedUnofferedCipherSuite),
+    ("selectedunofferedkxgroup", SelectedUnofferedKxGroup),
+    ("selectedunofferedcompression", SelectedUnofferedCompression),
     ("peermisbehaved", PeerMisbehaved),
     ("doesn'tsupportanyknownprotocol", NoApplicationProtocol),
 ];
@@ -80,6 +90,17 @@ mod tests {
                 InappropriateHandshakeMessage,
             ),
             ("peer misbehaved: UnsolicitedServerHelloExtension", PeerMisbehaved),
+            ("peer misbehaved: SelectedUnofferedCipherSuite", SelectedUnofferedCipherSuite),
+            (
+                "peer misbehaved: SelectedUnusableCipherSuiteForVersion",
+                SelectedUnusableCipherSuiteForVersion,
+            ),
+            ("peer misbehaved: SelectedUnofferedKxGroup", SelectedUnofferedKxGroup),
+            (
+                "peer misbehaved: SelectedUnofferedCertCompression",
+                SelectedUnofferedCertCompression,
+            ),
+            ("peer misbehaved: SelectedUnofferedCompression", SelectedUnofferedCompression),
             ("peer doesn't support any known protocol", NoApplicationProtocol),
         ] {
             let lower = msg.to_ascii_lowercase();

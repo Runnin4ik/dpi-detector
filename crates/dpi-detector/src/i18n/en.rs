@@ -301,7 +301,7 @@ pub(crate) fn legend_sections_en() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("TLS ERR", "TLS error: the certificate cannot be the site's (unknown CA, expired, hostname mismatch)"),
             ("NO CA BUNDLE", "The chain does not reach a Mozilla root the tool ships: a certificate under Russia's Ministry of Digital Development root (banks, after their international certificates were revoked), TLS interception or a legacy CA"),
             ("RU CA", "The certificate is issued under Russia's Ministry of Digital Development root (banks and government sites, after their international ones were revoked): the site answered, but a browser would draw no padlock"),
-            ("TLS BLOCK", "TLS version or protocol blocked wholesale (protocol_version alert)"),
+            ("TLS BLOCK", "The peer refused the TLS version itself (protocol_version alert); a host that merely has no TLS 1.3 answers the same, so the column re-asks with 1.3 alone and reads such a host as NO TLS1.3"),
             ("TLS RST", "Active TCP RST on ClientHello (TLS handshake reset)"),
             ("TLS DROP", "TLS handshake timeout — packets silently dropped (no RST)"),
             ("TLS ALERT", "The peer sent a TLS alert (handshake failure, access denied, …); the detail names the alert"),

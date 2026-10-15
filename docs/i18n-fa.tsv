@@ -262,7 +262,7 @@ detail.DET_TLS_RST_HELLO	TLS RST (connection reset after ClientHello)	TLS RST (e
 detail.DET_WRONG_VERSION	Response spoofing (Wrong Version)	Spoofing-e pasokh (Wrong Version)
 detail.DET_GARBAGE_DATA	Response spoofing (Garbage Data)	Spoofing-e pasokh (Garbage Data)
 detail.DET_SNI_BLOCK_UNREC	SNI block (unrecognized name)	Block-e SNI (unrecognized name)
-detail.DET_DPI_ALERT_HS_FAIL	DPI alert (handshake failure)	Alert-e DPI (handshake failure)
+detail.DET_TLS_ALERT_HS_FAIL	handshake failure	handshake failure
 detail.DET_PROTOCOL_VERSION_ALERT	Protocol version alert	Alert-e version-e protocol
 detail.DET_FAKE_TLS_ALERT	Fake TLS alert	Alert-e TLS-e ja'li
 detail.DET_NO_ROOT_CA	Missing root certificates	Certificate haye rishe vojud nadarad

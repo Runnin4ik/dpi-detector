@@ -297,7 +297,7 @@ pub(crate) fn legend_sections_zh() -> Vec<(&'static str, Vec<(&'static str, &'st
             ("TLS ERR", "TLS 错误: 证书不属于该站点 (未知 CA、证书过期、域名不匹配)"),
             ("NO CA BUNDLE", "证书链未到达工具内置的 Mozilla 根证书: 俄罗斯数字发展部根证书签发的证书 (银行在国际证书被吊销后改用)、TLS 被拦截或 CA 过旧"),
             ("RU CA", "证书由俄罗斯数字发展部根证书签发 (银行与政府站点在国际证书被吊销后改用): 站点可访问, 但浏览器不会显示锁标"),
-            ("TLS BLOCK", "TLS 版本或整个协议被阻断 (protocol_version alert)"),
+            ("TLS BLOCK", "对端拒绝了 TLS 版本本身 (protocol_version alert); 只是不支持 TLS 1.3 的主机也会这样回答, 因此该列会再单独询问 1.3, 这类主机读作 NO TLS1.3"),
             ("TLS RST", "发送 ClientHello 后收到主动 TCP RST (TLS 握手被重置)"),
             ("TLS DROP", "TLS 握手超时 — 数据包被静默丢弃 (未收到 RST)"),
             ("TLS ALERT", "对端发来 TLS alert (握手失败、访问被拒等); 详情中会指明具体 alert"),
