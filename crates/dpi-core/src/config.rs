@@ -1452,10 +1452,10 @@ mod tests {
     }
 
     /// Every preset names a token and a non-empty list, the three lists do not
-    /// overlap, and `default` plus `youtube` are exactly the 72 hosts the tool
-    /// shipped before presets existed. A host in two presets would be measured
-    /// twice under two names; a host lost in the split would silently stop
-    /// being probed, which is the failure this pins.
+    /// overlap, and `default` plus `youtube` are the 71 hosts the tool shipped
+    /// before presets less `vk.ru`, which the RU preset owns. A host in two
+    /// presets would be measured twice under two names; a host lost in the split
+    /// would silently stop being probed, which is the failure this pins.
     #[test]
     fn test_domain_presets_are_total_and_disjoint() {
         use std::collections::HashSet;
@@ -1481,8 +1481,8 @@ mod tests {
         assert_eq!(DomainPreset::parse("nope"), None);
         assert_eq!(
             DomainPreset::Default.embedded().len() + DomainPreset::Youtube.embedded().len(),
-            72,
-            "default plus youtube are the whole list the tool shipped before presets"
+            71,
+            "default plus youtube are the list the tool shipped before presets, less vk.ru, which the RU preset owns since 2026-10-15"
         );
     }
 
@@ -1546,8 +1546,10 @@ mod tests {
     fn test_embedded_lists_match_files() {
         let domains = embedded_domains();
         assert!(!domains.is_empty(), "the fallback ships a list");
-        assert!(domains.contains(&"vk.ru".to_string()));
         assert!(domains.contains(&"www.instagram.com".to_string()));
+        // `vk.ru` left this list on 2026-10-15 — it is the RU preset's host, and
+        // the presets stay disjoint — so the spot check names one it kept.
+        assert!(domains.contains(&"meduza.io".to_string()));
         // The list is data, not a constant - it grows and shrinks with the file,
         // so pin the invariant instead of a count: no shipped line may be
         // dropped by the cleaner.

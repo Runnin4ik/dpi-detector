@@ -31,7 +31,6 @@ danbooru.donmai.us
 browserleaks.com
 www.cdn77.com
 shikimori.io
-vk.ru
 www.google.com
 dl.google.com
 play.google.com

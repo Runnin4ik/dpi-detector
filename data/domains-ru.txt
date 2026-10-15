@@ -7,9 +7,15 @@
 # разными именами. Зарубежные сервисы из тех же топов (Google, YouTube, Wikipedia,
 # TikTok, WhatsApp, Telegram, Twitch, Reddit, Booking) сюда не входят - они не
 # русские; взрослые сайты исключены, потому что дерево публичное.
+#
+# Остались только хосты, чей адрес отвечает из России: проверено 2026-10-15 по
+# регистрации адреса (ip-api) и по пути (mtr с этой линии). Хосты за Cloudflare
+# убраны по тому же признаку - у них видна страна края, и ни один замер отсюда не
+# говорит, где их origin. У двух хостов, `www.nalog.gov.ru` и `wink.ru`, ip-api
+# назвал германский адрес NGENIX, но трейс дошёл до российского узла (15-31 мс),
+# поэтому они остались.
 
 # Поиск, порталы, почта
-yandex.ru
 ya.ru
 mail.ru
 rambler.ru
@@ -21,20 +27,16 @@ music.yandex.ru
 pochta.ru
 
 # Соцсети, блоги, сообщества
-vk.com
+vk.ru
 ok.ru
 vkvideo.ru
 pikabu.ru
-yaplakal.com
 drive2.ru
 irecommend.ru
 habr.com
-4pda.to
 woman.ru
 azbyka.ru
 livejournal.com
-author.today
-ficbook.net
 
 # Медиа, новости, спорт
 ria.ru
@@ -51,9 +53,6 @@ life.ru
 fontanka.ru
 e1.ru
 ura.news
-seldon.news
-echo.msk.ru
-the-village.ru
 sport-express.ru
 sports.ru
 championat.com
@@ -66,7 +65,7 @@ ixbt.com
 # Госуслуги, финансы, право
 gosuslugi.ru
 mos.ru
-nalog.ru
+www.nalog.gov.ru
 fias.nalog.ru
 nalog.gov.ru
 sberbank.ru
@@ -75,7 +74,6 @@ sberbank.com
 tbank.ru
 tinkoff.ru
 alfabank.ru
-vtb.ru
 banki.ru
 sravni.ru
 nspk.ru
@@ -94,9 +92,9 @@ eldorado.ru
 mvideo.ru
 lemanapro.ru
 lamoda.ru
-detsky-mir.ru
+www.detmir.ru
 vprok.ru
-sbermarket.ru
+kuper.ru
 samokat.ru
 vseinstrumenti.ru
 aliexpress.ru
@@ -105,7 +103,6 @@ rustore.ru
 cian.ru
 domclick.ru
 tutu.ru
-aviasales.ru
 ostrovok.ru
 hh.ru
 
@@ -113,33 +110,19 @@ hh.ru
 kinopoisk.ru
 ivi.ru
 wink.ru
-more.tv
-amediateka.ru
 rutube.ru
 gismeteo.ru
 muzofond.fm
-ukdevilz.com
 knigavuhe.org
 litres.ru
 stepik.org
 skyeng.ru
-geekbrains.ru
+gb.ru
 skillbox.ru
 uchi.ru
-znanija.com
 gdz.ru
-adme.media
 maximonline.ru
-russianfood.com
-mangalib.me
-mangabuff.ru
-remanga.org
-anilib.me
-amedia.lol
-yummy-anime.ru
-anime-bit.online
-mult-fan.tv
-doramalive.news
+anime-bit.ru
 
 # Телеком
 mts.ru
