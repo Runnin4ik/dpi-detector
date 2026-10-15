@@ -648,6 +648,16 @@ fn strip_www(host: &str) -> &str {
 /// answers `301` to `video.google.com` over plain HTTP and to `www.google.com`
 /// over TLS. All four targets are Google's own hosts, so the hop is the site's
 /// behaviour rather than a foreign redirect — the exact pair, still directional.
+///
+/// The Russian sign-in hops are the same shape, measured the same way: the mail
+/// service `mail.ru` and the video portal `vkvideo.ru` both answer `302` to
+/// `login.vk.ru`'s autologin, and the article portal `dzen.ru` answers `302` to
+/// `sso.passport.yandex.ru`'s push. Each is its own operator's account host, so
+/// the hop is the site's behaviour rather than a foreign redirect — the exact
+/// pair, still directional. The classifier returns `Detail::Redirect` for it like
+/// any other hop; a row whose four columns all passed then collapses that line
+/// into its timings, which is the difference between these pairs and the red
+/// `REDIR` they replaced.
 const REDIRECT_EXCEPTIONS: &[(&str, &str)] = &[
     ("messenger.com", "facebook.com"),
     ("instagram.com", "facebook.com"),
@@ -655,6 +665,9 @@ const REDIRECT_EXCEPTIONS: &[(&str, &str)] = &[
     ("studio.youtube.com", "accounts.google.com"),
     ("googlevideo.com", "google.com"),
     ("googlevideo.com", "video.google.com"),
+    ("mail.ru", "login.vk.ru"),
+    ("vkvideo.ru", "login.vk.ru"),
+    ("dzen.ru", "sso.passport.yandex.ru"),
 ];
 
 /// True when `from` → `to` is a declared exception in [`REDIRECT_EXCEPTIONS`].
@@ -732,6 +745,11 @@ fn site_of(host: &str) -> Option<&str> {
 /// same-host hop to https reads `301 → https`, elsewhere `→ https`), a foreign
 /// host → REDIR with the host it named.
 ///
+/// A `Location` that names no host at all (`https:///`, measured on a line that
+/// rewrites plain-HTTP answers) is REDIR too, and its detail carries the raw
+/// value rather than a host: there is no host to compare against the site, and
+/// the value itself is the evidence.
+///
 /// "Same family" is any of three things, with a leading `www.` ignored on both
 /// sides:
 /// * the same name (`holod.media` → `www.holod.media`);
@@ -762,7 +780,16 @@ pub(crate) fn classify_redirect(
         || norm_loc.ends_with(&format!(".{}", norm_dom))
         || norm_dom.ends_with(&format!(".{}", norm_loc))
         || (site_loc.is_some() && site_loc == site_of(&norm_dom));
-    let short_host: String = loc_host.chars().take(30).collect();
+    // A Location that names no host at all — `https:///` is the measured shape,
+    // the kind of header a rewriting middlebox leaves behind — is not a host to
+    // name: the raw value is the whole evidence, and the row prints it instead.
+    // Every other case keeps naming just the host, which is what a reader
+    // compares against the site they asked for.
+    let short_host: String = if loc_host.is_empty() {
+        location.chars().take(30).collect()
+    } else {
+        loc_host.chars().take(30).collect()
+    };
 
     // A declared exception ([`REDIRECT_EXCEPTIONS`]) is the site's own redirect:
     // OK, and the detail still names the host the browser is sent to — the pair
@@ -1229,6 +1256,37 @@ mod tests {
         );
         assert_eq!(
             classify_redirect("notgooglevideo.com", "https://notgooglevideo.com", 301, "https://www.google.com/", false).0,
+            DpiStatus::RedirSuspect
+        );
+    }
+
+    /// The Russian sign-in hops read `OK` with the target named, the same shape
+    /// as the Google pairs: measured live, `mail.ru` and `vkvideo.ru` answer
+    /// `302` to `login.vk.ru`'s autologin and `dzen.ru` `302` to
+    /// `sso.passport.yandex.ru`'s push. Without the pair each is a red `REDIR` —
+    /// `site_of` reads the two hosts as different sites — which blames the
+    /// network for the site's own account host answering.
+    #[test]
+    fn the_declared_signin_redirects_read_ok() {
+        let cases: &[(&str, &str)] = &[
+            ("mail.ru", "https://login.vk.ru/?act=autologin&app_id=7539952&redirect_uri=https%3A%2F%2Faccount.mail.ru%2Flogin"),
+            ("vkvideo.ru", "https://login.vk.ru/?act=autologin&redirect_uri=https://vkvideo.ru"),
+            ("dzen.ru", "https://sso.passport.yandex.ru/push?uuid=75461044&retpath=https%3A%2F%2Fdzen.ru%2F"),
+        ];
+        for (domain, location) in cases {
+            let base = format!("https://{domain}");
+            let (s, d) = classify_redirect(domain, &base, 302, location, false);
+            assert_eq!(s, DpiStatus::Ok, "{domain} + {location} -> {}", d.code());
+            assert!(matches!(d, Detail::Redirect { .. }), "{domain} names the target it was sent to");
+        }
+        // The pair is exact and directional: the hop back, and a host that only
+        // wears the name, keep the default red verdict.
+        assert_eq!(
+            classify_redirect("login.vk.ru", "https://login.vk.ru", 302, "https://vkvideo.ru/", false).0,
+            DpiStatus::RedirSuspect
+        );
+        assert_eq!(
+            classify_redirect("notvkvideo.ru", "https://notvkvideo.ru", 302, "https://login.vk.ru/", false).0,
             DpiStatus::RedirSuspect
         );
     }
