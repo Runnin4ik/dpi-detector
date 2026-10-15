@@ -640,14 +640,15 @@ pub async fn burst_profile(
     BurstProfileReport { fingerprint, attempts }
 }
 
-/// One profile's round over QUIC: the same overlap as the TCP round, one Initial
-/// per attempt, and the window the operator set for each.
+/// One profile's round over QUIC: the same overlap as the TCP round, one attempt
+/// per slot, and the window the operator set for each.
 ///
 /// The verdicts are the QUIC column's own (`probe::quic`), so a round reads
 /// `ok`/`closed`/`spoof`/`timeout` in the words that column prints — one physics,
-/// one vocabulary. There is no retransmit ladder here: the question is what the
-/// k-th attempt got, and a repeat would blur which attempt the block landed on
-/// (`probe::quic::attempt_once` documents the same split).
+/// one vocabulary. The attempt carries the column's retransmit ladder
+/// ([`crate::probe::quic::attempt_once`]), truncated by the operator's window
+/// rather than stretching it: without the repeat, a host that answers only a
+/// repeated flight reads as `TIMEOUT` — a verdict about our own probe.
 async fn quic_profile(
     addr: &SocketAddr,
     domain: &str,
@@ -1309,6 +1310,34 @@ mod tests {
         assert_eq!(BurstTlsVersion::Tls13And12.token(), "TLS 1.3+1.2");
     }
 
+    /// The reply a local peer sends for one client datagram: a ServerHello sealed
+    /// with the Initial keys that datagram's destination connection ID derives.
+    ///
+    /// Per datagram, not per socket: every attempt binds its own client socket and
+    /// picks its own connection IDs, so a reply sealed with the first attempt's
+    /// keys opens for nobody else — which is what a cached `state` here produced.
+    fn server_hello_reply(datagram: &[u8]) -> Vec<u8> {
+        let dcid_len = usize::from(datagram[5]);
+        let dcid = datagram[6..6 + dcid_len].to_vec();
+        let at = 6 + dcid_len;
+        let scid_len = usize::from(datagram[at]);
+        let scid = datagram[at + 1..at + 1 + scid_len].to_vec();
+        // The client's destination connection ID is what both directions of the
+        // Initial keys come from (RFC 9001 §5.2), and its source ID is who the
+        // reply is addressed to.
+        let keys = crate::net::quic::InitialKeys::derive(&dcid).expect("initial keys");
+        // A ServerHello is `0x02`, its three-byte length, then the body: the
+        // ladder reads the handshake type and the retry random.
+        let mut hello = vec![0x02, 0x00, 0x00, 0x2c, 0x03, 0x03];
+        hello.extend_from_slice(&[0x11; 32]);
+        let mut frames = vec![0x06]; // CRYPTO
+        crate::net::quic::write_varint(&mut frames, 0);
+        crate::net::quic::write_varint(&mut frames, hello.len() as u64);
+        frames.extend_from_slice(&hello);
+        crate::net::quic::seal_server_initial(&keys, &scid, &dcid, 0, frames)
+            .expect("a sealed reply")
+    }
+
     /// A round over QUIC answers when the peer seals a ServerHello back, and the
     /// verdicts are the QUIC column's own — the round reads `ok` in the words
     /// that column prints, because it is the same attempt primitive.
@@ -1322,29 +1351,7 @@ mod tests {
                 if len < 8 {
                     continue;
                 }
-                // Per datagram, not per socket: every attempt binds its own
-                // client socket and picks its own connection IDs, so a reply
-                // sealed with the first attempt's keys opens for nobody else —
-                // which is what a cached `state` here produced.
-                let dcid_len = usize::from(buf[5]);
-                let dcid = buf[6..6 + dcid_len].to_vec();
-                let at = 6 + dcid_len;
-                let scid_len = usize::from(buf[at]);
-                let scid = buf[at + 1..at + 1 + scid_len].to_vec();
-                // The client's destination connection ID is what both directions
-                // of the Initial keys come from (RFC 9001 §5.2), and its source
-                // ID is who the reply is addressed to.
-                let keys = crate::net::quic::InitialKeys::derive(&dcid).expect("initial keys");
-                // A ServerHello is `0x02`, its three-byte length, then the body:
-                // the ladder reads the handshake type and the retry random.
-                let mut hello = vec![0x02, 0x00, 0x00, 0x2c, 0x03, 0x03];
-                hello.extend_from_slice(&[0x11; 32]);
-                let mut frames = vec![0x06]; // CRYPTO
-                crate::net::quic::write_varint(&mut frames, 0);
-                crate::net::quic::write_varint(&mut frames, hello.len() as u64);
-                frames.extend_from_slice(&hello);
-                let packet = crate::net::quic::seal_server_initial(&keys, &scid, &dcid, 0, frames)
-                    .expect("a sealed reply");
+                let packet = server_hello_reply(&buf[..len]);
                 let _ = server.send_to(&packet, from).await;
             }
         });
@@ -1365,6 +1372,52 @@ mod tests {
             report.attempts
         );
         assert_eq!(report.attempts[0].detail, Detail::QuicServerHello);
+    }
+
+    /// An endpoint that answers only a repeated flight is a working endpoint. The
+    /// burst runs the column's ladder inside the operator's window, so the repeat
+    /// goes out at the first PTO — measured on `clients6.google.com`, where the
+    /// first flight of `chrome116`, `chrome123` and `tor145` is met with silence
+    /// and the repeat is answered. With the ladder's count at zero the round read
+    /// that host as `TIMEOUT` while the column beside it read the same profile as
+    /// `OK`: a verdict about our own probe, not about the middlebox.
+    #[tokio::test]
+    async fn a_peer_that_answers_only_the_repeat_is_still_answered() {
+        let server = tokio::net::UdpSocket::bind("127.0.0.1:0").await.expect("a local socket");
+        let addr = server.local_addr().expect("an address");
+        let answering = tokio::spawn(async move {
+            let mut buf = vec![0u8; 1500];
+            let mut firsts: Vec<std::net::SocketAddr> = Vec::new();
+            while let Ok((len, from)) = server.recv_from(&mut buf).await {
+                if len < 8 {
+                    continue;
+                }
+                // One client socket per attempt, so a source address seen once is
+                // that attempt's first flight: drop it, answer the repeat.
+                if !firsts.contains(&from) {
+                    firsts.push(from);
+                    continue;
+                }
+                let packet = server_hello_reply(&buf[..len]);
+                let _ = server.send_to(&packet, from).await;
+            }
+        });
+
+        let mut plan = settings(3, 2000, vec![]);
+        plan.alpn = BurstAlpn::H3;
+        plan.launch_gap = Duration::from_millis(0);
+        let report =
+            burst_profile(&addr, "example.com", TlsFingerprint::Chrome146, &plan, &Arc::new(AppConfig::default()))
+                .await;
+        answering.abort();
+
+        assert_eq!(report.attempts.len(), 3);
+        assert_eq!(report.answered(), 3, "{:?}", report.attempts);
+        assert!(
+            report.attempts.iter().all(|a| a.status == DpiStatus::QuicOk),
+            "{:?}",
+            report.attempts
+        );
     }
 
     /// The silence that means "nothing came back" is the QUIC column's `TIMEOUT`,

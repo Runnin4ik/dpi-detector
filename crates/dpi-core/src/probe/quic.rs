@@ -611,18 +611,25 @@ async fn probe_addr(
     Ok((status, detail))
 }
 
-/// One QUIC attempt for a caller that fires many of them: one flight of Initials
-/// and the window the caller names.
+/// One QUIC attempt for a caller that fires many of them: the column's own
+/// retransmit ladder, inside the window the caller names.
 ///
-/// [`check_domain_quic`] owns the retransmit ladder because its column asks
-/// whether the endpoint serves HTTP/3 at all — measured against Cloudflare's
-/// edge, the first flight is met with a packet no key opens and the ServerHello
-/// arrives only once the client repeats its Initial. A burst asks a different
-/// question: what the *k-th* attempt got, and whether the block landed between
-/// two of them. A repeat there would blur which attempt was refused and stretch
-/// the round past the window the operator set, so this entry point takes the
-/// ladder's count as zero and leaves the verdict vocabulary alone — one physics,
-/// one word.
+/// The ladder is not extra time — it is what a QUIC client does inside its own
+/// window. Measured against Cloudflare's edge the first flight is met with a
+/// packet no key opens, and on `clients6.google.com` the first flight of
+/// `chrome116`, `chrome123` and `tor145` is met with silence while the repeat is
+/// answered. With the ladder's count at zero this entry point read that host as
+/// `TIMEOUT` while the column beside it read the same profile as `OK` — a verdict
+/// about our own probe, not about the middlebox. So the count is
+/// [`MAX_RETRANSMITS`], the column's, and the verdict vocabulary is the column's
+/// too: one physics, one word.
+///
+/// What a burst does not take from the column is its window floor
+/// ([`MIN_WINDOW`]): `--burst-timeout` is the pacing instrument of the round, so
+/// the ladder is truncated by that window rather than stretching it. At the
+/// default eight seconds all three repeats fit; at the one-second floor only the
+/// first does, and the verdict then describes the window — which is what the
+/// operator asked for.
 ///
 /// `variant` is the caller's own edit, applied on top of the ones that make the
 /// TCP shape a QUIC one (`--burst-variant` in test 6).
@@ -633,7 +640,7 @@ pub(crate) async fn attempt_once(
     window: Duration,
     variant: Option<&HelloVariant>,
 ) -> (DpiStatus, Detail) {
-    match probe_addr(addr, sni, fingerprint, window, variant, 0).await {
+    match probe_addr(addr, sni, fingerprint, window, variant, MAX_RETRANSMITS).await {
         Ok(verdict) | Err(verdict) => verdict,
     }
 }
