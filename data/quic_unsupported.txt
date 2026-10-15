@@ -16,10 +16,24 @@
 # do answer a handshake when one is forced on them — they just never advertise
 # HTTP/3, and a browser that is never told does not use it. They stay listed.
 #
-# Regenerate the data with:  python scripts/quic/online_h3.py
+# The declared block below is the RU preset (`domains-ru.txt`) listed whole, and
+# it is a decision rather than a measurement: a host with no HTTP/3 endpoint
+# answers an Initial with silence, the column reads that silence as `TIMEOUT`,
+# and on this preset that answer stopped meaning anything — it is what such a
+# host is supposed to say. Two of the preset's hosts keep their probe
+# (ozon.ru, ya.ru): they do answer QUIC. Two more that did — 4pda.to and
+# ukdevilz.com — left the preset on 2026-10-15 with the hosts reached only behind
+# Cloudflare's edge, and their rows here are simply unused.
+#
+# `python scripts/quic/online_h3.py` regenerates the *measured* block only — it
+# writes target/validation/online-h3.txt, and its rows are what that block was
+# curated from; the declared block is not its output and a fresh run does not
+# replace it.
 #
 # One host per line, `#` starts a comment, the host is matched whole
 # (case-insensitive) against the domain's host part.
+
+# Measured: neither source names h3 for these.
 aws.amazon.com
 browserleaks.com
 gateway.discord.gg
@@ -37,3 +51,102 @@ www.svoboda.org
 www.themoscowtimes.com
 www.torproject.org
 x.com
+
+# Declared: the RU preset, TCP/TLS only (the two that answer QUIC are absent).
+1tv.ru
+2gis.ru
+aif.ru
+alfabank.ru
+aliexpress.ru
+anime-bit.ru
+avito.ru
+azbyka.ru
+banki.ru
+beeline.ru
+cdek.ru
+championat.com
+cian.ru
+citilink.ru
+consultant.ru
+dns-shop.ru
+domclick.ru
+drive2.ru
+dzen.ru
+e1.ru
+eda.yandex.ru
+eldorado.ru
+fias.nalog.ru
+fontanka.ru
+garant.ru
+gazeta.ru
+gb.ru
+gdz.ru
+gismeteo.ru
+gosuslugi.ru
+habr.com
+hh.ru
+irecommend.ru
+ivi.ru
+ixbt.com
+iz.ru
+kinopoisk.ru
+knigavuhe.org
+kommersant.ru
+kp.ru
+kuper.ru
+lamoda.ru
+lemanapro.ru
+lenta.ru
+life.ru
+litres.ru
+livejournal.com
+mail.ru
+market.yandex.ru
+maximonline.ru
+megafon.ru
+mk.ru
+mos.ru
+mts.ru
+music.yandex.ru
+muzofond.fm
+mvideo.ru
+nalog.gov.ru
+nspk.ru
+ok.ru
+online.sberbank.ru
+ostrovok.ru
+pikabu.ru
+playground.ru
+pochta.ru
+rambler.ru
+rbc.ru
+ria.ru
+rustore.ru
+rutube.ru
+rzd.ru
+samokat.ru
+sberbank.com
+sberbank.ru
+skillbox.ru
+skyeng.ru
+sport-express.ru
+sportbox.ru
+sports.ru
+sravni.ru
+stepik.org
+stopgame.ru
+tbank.ru
+tinkoff.ru
+travel.yandex.ru
+tutu.ru
+uchi.ru
+ura.news
+vedomosti.ru
+vkvideo.ru
+vprok.ru
+vseinstrumenti.ru
+wildberries.ru
+wink.ru
+woman.ru
+www.detmir.ru
+www.nalog.gov.ru
