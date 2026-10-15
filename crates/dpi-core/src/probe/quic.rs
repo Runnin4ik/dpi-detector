@@ -536,6 +536,16 @@ async fn probe_addr(
     // every real client does on a loss timeout (RFC 9002 §6.2) and a probe that
     // sends once does not, so it reports silence for an endpoint that is
     // answering every browser on the same address.
+    //
+    // Measured on Google's edge (2026-10-15), where the rule is the flight's
+    // size and not the profile: a hello small enough to fit one datagram —
+    // `chrome116`, `chrome123`, `tor145`, every shape that offers no
+    // post-quantum key share — is answered only after the client repeats, while
+    // the same shape padded past 1200 bytes, or any shape that offers
+    // X25519MLKEM768 and so splits the flight in two, is answered on the first
+    // flight. Removing the key share from `chrome146` (`--burst-variant
+    // key-shares:0x001d`) moved it from 0.1 s to 0.7 s; padding `chrome116` to
+    // 1500 bytes moved it back. Cloudflare's edge answers either size at once.
     let mut next_pn = flight.len() as u64;
     let mut next_retransmit = Instant::now() + PTO_FIRST;
     let mut retransmits: u32 = 0;
