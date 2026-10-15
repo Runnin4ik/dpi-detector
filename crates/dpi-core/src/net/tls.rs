@@ -586,7 +586,9 @@ pub fn is_russian_trusted_ca(chain: &[CertificateDer<'static>]) -> bool {
 /// the hello's `alpn` extension is written from the *profile*, while rustls
 /// validates the server's selection against `ClientConfig::alpn_protocols` — a
 /// profile that offered http/1.1 while the config offered nothing made every
-/// server answer `SelectedUnofferedApplicationProtocol`.
+/// server answer `SelectedUnofferedApplicationProtocol`. A pin also lifts a
+/// shape's own suppression of the extension, so a profile that sends no ALPN
+/// of its own still offers the one the caller named.
 fn apply_profile(config: &mut ClientConfig, profile: &TlsProfile) {
     // The decompressor list is what makes rustls set `offered_cert_compression`,
     // and that is what puts extension 27 into the hello; the *offered algorithm
@@ -609,7 +611,15 @@ fn apply_profile(config: &mut ClientConfig, profile: &TlsProfile) {
             if let Some(profile) = config.hello_profile.as_mut() {
                 // Copy-on-write: the shared profile is only cloned for a caller
                 // that asked for a different offer.
-                Arc::make_mut(profile).alpn = Some(alpn.clone());
+                let profile = Arc::make_mut(profile);
+                profile.alpn = Some(alpn.clone());
+                // A pin is the caller's word and it outranks a shape's own
+                // "never sends ALPN": `go127` reproduces a Go client with no
+                // `NextProtos` and suppresses extension 16, which dropped the pin
+                // silently. Measured: that shape's QUIC hello went out with no
+                // ALPN at all and an h3 endpoint answered `no_application_protocol`
+                // (`quic_close_376`) — a verdict about our own hello.
+                profile.suppress_extensions.retain(|id| *id != crate::net::fingerprint::EXT_ALPN);
             }
         }
         None => {
@@ -792,6 +802,31 @@ mod tests {
     /// a certificate signed by such a key carries: rustls hands these to path
     /// validation, and a pair that does not match the certificate is a
     /// verification failure that no ClientHello-level test can see.
+    /// A caller that pins an ALPN list has said which protocol this hello
+    /// offers, and that word outranks a shape's own "never sends ALPN": `go127`
+    /// reproduces a Go client with no `NextProtos`, and without this its QUIC
+    /// hello went out with no ALPN at all — an h3 endpoint answers that with
+    /// `no_application_protocol` (`quic_close_376`), which reads as a block that
+    /// is really our own hello. JA4 carries the offer, so it is the assertion:
+    /// `t13d131000` unpinned (ten extensions, no ALPN), `t13d1311h3` pinned.
+    #[test]
+    fn a_pinned_alpn_outranks_the_shapes_own_suppression() {
+        let pinned = hello_record_for(
+            &TlsProfile::insecure(TlsFingerprint::Go127).alpn(vec![b"h3".to_vec()]),
+            None,
+            "example.com",
+        );
+        let ja4 = crate::net::ja4::client_hello_ja4(&pinned);
+        assert!(ja4.starts_with("t13d1311h3"), "{ja4}");
+
+        // The shape itself is untouched: with no pin it still offers none, which
+        // is what its capture, its record and its pinned JA4 all say.
+        let bare =
+            hello_record_for(&TlsProfile::insecure(TlsFingerprint::Go127), None, "example.com");
+        let ja4 = crate::net::ja4::client_hello_ja4(&bare);
+        assert!(ja4.starts_with("t13d131000"), "unpinned go127 offers no ALPN: {ja4}");
+    }
+
     #[test]
     fn provider_reports_the_algorithm_identifiers_a_certificate_carries() {
         let provider = crypto_provider();

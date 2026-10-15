@@ -140,8 +140,8 @@ pub use variant::{HelloVariant, HelloVariantError};
 pub(crate) use variant::install_variant;
 
 pub(crate) use shapes::{
-    EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW, EXT_FAKE_CHANNEL_ID, EXT_SCT,
-    EXT_SIGNATURE_ALGORITHMS, EXT_STATUS_REQUEST,
+    EXT_ALPN, EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW, EXT_FAKE_CHANNEL_ID,
+    EXT_SCT, EXT_SIGNATURE_ALGORITHMS, EXT_STATUS_REQUEST,
 };
 // The two list-carrying extensions the QUIC hello's GREASE test walks; nothing in
 // the library itself needs them by name.
