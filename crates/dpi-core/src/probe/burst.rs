@@ -348,6 +348,22 @@ impl BurstProfileReport {
         self.attempts.len() - self.answered()
     }
 
+    /// Mean duration of the attempts this profile answered, in whole
+    /// milliseconds — the number the table prints beside `M/N`.
+    ///
+    /// The mean is over the attempts the ratio counts, so the two describe one
+    /// set: a cell reads "how many came back, and how fast". A lost attempt's
+    /// duration is the window it waited out, which would read as a response time
+    /// it never got, and a profile that answered none has no mean at all.
+    pub fn avg_ms(&self) -> Option<u64> {
+        let (sum, count) = self
+            .attempts
+            .iter()
+            .filter(|a| answered_status(a.status))
+            .fold((0u64, 0u64), |(sum, count), a| (sum + a.ms, count + 1));
+        (count > 0).then(|| sum / count)
+    }
+
     /// Every failure of this profile, grouped by the status it produced: most
     /// frequent first, ties in the order the statuses were first seen, empty
     /// when nothing failed. Grouping by status is what a row displays — the
@@ -1308,6 +1324,29 @@ mod tests {
         assert_eq!(BurstTlsVersion::Tls13Only.code(), "1.3");
         assert_eq!(BurstTlsVersion::Tls12Only.token(), "TLS 1.2");
         assert_eq!(BurstTlsVersion::Tls13And12.token(), "TLS 1.3+1.2");
+    }
+
+    /// The mean beside `M/N` is over the attempts the ratio counts, so a lost
+    /// attempt's wait — the whole window — never reads as a response time, and a
+    /// profile that answered none has no mean to print.
+    #[test]
+    fn the_mean_duration_covers_the_attempts_the_ratio_counts() {
+        let profile = |statuses: &[(DpiStatus, u64)]| BurstProfileReport {
+            fingerprint: TlsFingerprint::Chrome107,
+            attempts: statuses
+                .iter()
+                .map(|(status, ms)| BurstAttempt { status: *status, detail: Detail::None, ms: *ms })
+                .collect(),
+        };
+
+        assert_eq!(profile(&[(DpiStatus::Ok, 100), (DpiStatus::Ok, 300)]).avg_ms(), Some(200));
+        // A reset is not an answer: its 30 ms stays out, and the mean is over the
+        // one attempt that came back.
+        assert_eq!(profile(&[(DpiStatus::Ok, 100), (DpiStatus::TlsRst, 30)]).avg_ms(), Some(100));
+        // The QUIC answer counts exactly like the TCP one.
+        assert_eq!(profile(&[(DpiStatus::QuicOk, 800)]).avg_ms(), Some(800));
+        assert_eq!(profile(&[(DpiStatus::TlsRst, 30)]).avg_ms(), None);
+        assert_eq!(profile(&[]).avg_ms(), None);
     }
 
     /// The reply a local peer sends for one client datagram: a ServerHello sealed

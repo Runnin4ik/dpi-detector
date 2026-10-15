@@ -11,7 +11,8 @@ use dpi_core::probe::burst::{group_failures, BurstReport, BurstSettings};
 use crate::tui::widgets::{cell_color, status_color, table_preset};
 
 /// Test 6's table: one row per profile, one column per host, the cell being how
-/// many of the overlapping handshakes came back. Rows are the shapes and columns
+/// many of the overlapping handshakes came back and the mean duration of those
+/// that did. Rows are the shapes and columns
 /// are the hosts because one run can hold every shape at once — twenty host
 /// columns would be wider than any terminal, while twenty shapes read down the
 /// list. The header names each host, a host whose name did not resolve carries
@@ -56,10 +57,17 @@ pub(crate) fn render_burst_table(reports: &[BurstReport], settings: &BurstSettin
         let mut row = vec![Cell::new(fingerprint.display_label())];
         for report in reports {
             let cell = match report.profiles.iter().find(|p| p.fingerprint == *fingerprint) {
-                Some(profile) => cell_color(
-                    &format!("{}/{}", profile.answered(), profile.attempts.len()),
-                    cell_color_for(profile.answered(), profile.attempts.len()),
-                ),
+                Some(profile) => {
+                    // `M/N` and how fast those M came back. The mean is over the
+                    // same attempts the ratio counts (`BurstProfileReport::avg_ms`),
+                    // so a cell reads "how many, and how quick"; `{:.1}s` is the
+                    // elapsed-timing format the other tables print.
+                    let mut text = format!("{}/{}", profile.answered(), profile.attempts.len());
+                    if let Some(avg) = profile.avg_ms() {
+                        let _ = write!(text, " {:.1}s", avg as f64 / 1000.0);
+                    }
+                    cell_color(&text, cell_color_for(profile.answered(), profile.attempts.len()))
+                }
                 // A host that never resolved has no attempts to show, and one
                 // the runner did not fire this shape at has none either.
                 None => cell_color("—", Color::DarkGrey),
@@ -123,6 +131,38 @@ mod tests {
 
     fn attempt(status: DpiStatus) -> dpi_core::probe::burst::BurstAttempt {
         dpi_core::probe::burst::BurstAttempt { status, detail: Detail::RstHello, ms: 10 }
+    }
+
+    fn attempt_ms(status: DpiStatus, ms: u64) -> dpi_core::probe::burst::BurstAttempt {
+        dpi_core::probe::burst::BurstAttempt { status, detail: Detail::RstHello, ms }
+    }
+
+    /// The cell says how many came back *and* how fast: the mean sits beside the
+    /// ratio, over the attempts the ratio counts, in the elapsed-timing format the
+    /// other tables print. A failure is still named in the detail cell beside it.
+    #[test]
+    fn the_cell_carries_the_mean_duration_beside_the_ratio() {
+        let msg = get_messages(crate::i18n::Language::En);
+        let settings = BurstSettings {
+            profiles: vec![TlsFingerprint::Chrome146],
+            ..Default::default()
+        };
+        let reports = vec![BurstReport {
+            domain: "host.example".to_string(),
+            resolved: Some("192.0.2.1".parse().unwrap()),
+            profiles: vec![dpi_core::probe::burst::BurstProfileReport {
+                fingerprint: TlsFingerprint::Chrome146,
+                attempts: vec![
+                    attempt_ms(DpiStatus::Ok, 700),
+                    attempt_ms(DpiStatus::Ok, 900),
+                    attempt_ms(DpiStatus::TlsRst, 20),
+                ],
+            }],
+        }];
+        let out = strip_ansi(&render_burst_table(&reports, &settings, &msg));
+        let row = out.lines().find(|line| line.contains("CHROME")).expect("a shape row");
+        assert!(row.contains("2/3 0.8s"), "the mean of the answered pair: {row}");
+        assert!(row.contains("TLS RST ×1"), "the failure stays named: {row}");
     }
 
     fn report(
