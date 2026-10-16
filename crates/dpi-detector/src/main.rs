@@ -29,8 +29,8 @@ use screens::{
     post_run::{default_report_name, export_report, read_post_test_action, PostTestAction},
 };
 use runner::{
-    burst_plan_from_cli, burst_targets_after_screen, load_burst_domains, load_domains,
-    load_tcp16_targets, load_whitelist_sni_list, mask_proxy, run_test_suite,
+    burst_axes_given, burst_plan_from_cli, burst_targets_after_screen, load_burst_domains,
+    load_domains, load_tcp16_targets, load_whitelist_sni_list, mask_proxy, run_test_suite,
 };
 use render::{
     asc, clean_output, output_str, plain_mode, render_banner, render_fingerprint_header,
@@ -757,11 +757,15 @@ async fn run() {
         // Test 6 is destructive for its targets, so it asks for its own settings
         // screen before it runs instead of starting with guesses: cancelling the
         // screen drops test 6 from the selection and runs the rest. The screen
-        // belongs to the test itself, so an explicit `-t 6` gets it too — but
-        // only on a terminal at both ends: with stdin or stdout redirected there
-        // is nobody to answer the screen, and the CLI flags stand in for it.
+        // belongs to the test itself, so an explicit `-t 6` gets it too — but not
+        // when there is nobody to answer it or nothing left to ask: with stdin or
+        // stdout redirected the CLI flags stand in for it, and a command line
+        // that already names one of the test's own axes is that same answer, so
+        // the run starts straight away with the flags it was given and the
+        // defaults for everything they leave out.
         let settings_screen = !args.json
             && selection.contains('6')
+            && !burst_axes_given(&args)
             && std::io::stdin().is_terminal()
             && std::io::stdout().is_terminal()
             && tui_available();

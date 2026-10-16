@@ -45,12 +45,12 @@ cargo run --release --example tls_fingerprint diff a.hex b.hex
 `dump-alpn` pins the ALPN offer (which moves JA4's ALPN field and nothing
 else), `variant` applies one delta to the profile's own hello (`sigalg-swap`,
 `+grease`, `+ext:<id>`, `-ext:<id>`, `+group:<id>`, `padding:<n>`,
-`no-padding`, `alpn-reverse`), and `dump-hex`/`hello` move one shape out of the
-process and back so a capture from anywhere — a live browser, a uTLS build —
-can be measured without a profile of ours and without a network. The deltas
-whose JA4 does not move (`+grease`, `padding:<n>`, `sigalg-swap` for JA3) are
-the controls: a verdict that changes on one of them says the matcher reads more
-than the hash.
+`no-padding`, `alpn-reverse`, `ech-len:<n>`), and `dump-hex`/`hello` move one
+shape out of the process and back so a capture from anywhere — a live browser,
+a uTLS build — can be measured without a profile of ours and without a network.
+The deltas whose JA4 does not move (`+grease`, `padding:<n>`, `sigalg-swap` for
+JA3) are the controls: a verdict that changes on one of them says the matcher
+reads more than the hash.
 
 `diff` compares two captures field by field — ours, the bundle's, a uTLS
 build's, a live browser's — under the same rule this tool's `hello_diff`
@@ -59,6 +59,16 @@ what turns `tools/fingerprint/utls` into a measurement rather than a dump:
 `diff` of a uTLS `HelloChrome_133` capture and our `chrome146` reports the
 extension order and nothing else, which is the whole difference between the two
 clients' hellos.
+
+**`SAME SHAPE` is not "the same bytes", and the `bytes` line is where that is
+settled.** Every check `diff` makes excuses a draw a client takes per connection
+— the GREASE values, the ECH payload length *and* its random body, the key
+shares, the session id — so two hellos it calls the same shape still differ in
+most of their bytes: the same `chrome146` pinned to one capture order and one ECH
+length differs from that capture in 1530 of 1751 bytes. The only way two records
+ever match byte for byte is a `replay` of one capture, and a claim about bytes
+has to be read off the `bytes` count, never off the closing verdict. `hello-diff`
+prints the same count for the same reason.
 
 ## uTLS captures (`utls/`)
 
@@ -82,9 +92,11 @@ cargo run --release --example tls_fingerprint -- hello target/fingerprint/utls-c
 listener instead of marshalling the spec, and `HelloGolang` needs it: the library
 builds that one with `crypto/tls` and ignores the uTLS extension list, so
 marshalling it would emit a hello with no extensions vector at all (the dumper
-refuses rather than write that). The two routes agree byte for byte on a profile
-that draws nothing per connection — `HelloChrome_100` is `SAME` either way — and
-differ by exactly the per-connection draw on one that does.
+refuses rather than write that). The two routes agree on the *shape* — `diff`
+reports `SAME SHAPE` for `HelloChrome_100` either way — and are never the same
+bytes: that profile draws a session id, a key share and its GREASE values per
+run, so two dumps of it differ in 108 of 517 bytes, whether they come from the
+two routes or from one route twice.
 
 It prints hex and nothing else — no JA3, no JA4, no verdict — so a uTLS capture
 and a live-browser capture are read by the one implementation in

@@ -26,10 +26,11 @@
 //! instrument. `dump-alpn` pins the ALPN offer (it moves JA4's ALPN field and
 //! nothing else), `variant` applies one delta to the profile's own hello
 //! (`sigalg-swap`, `+grease`, `+ext:<id>`, `-ext:<id>`, `+group:<id>`,
-//! `padding:<n>`, `no-padding`, `alpn-reverse`) so a difference in a verdict can
-//! only come from that one change, and `hello` reads a ClientHello captured
-//! anywhere else — a live browser, a uTLS build, a bundle `.hex` — and prints
-//! its JA3/JA4 without needing a profile of ours or a network.
+//! `padding:<n>`, `no-padding`, `alpn-reverse`, `ech-len:<n>`) so a difference
+//! in a verdict can only come from that one change, and `hello` reads a
+//! ClientHello captured anywhere else — a live browser, a uTLS build, a bundle
+//! `.hex` — and prints its JA3/JA4 without needing a profile of ours or a
+//! network.
 //! `tools/fingerprint/utls` produces such a capture from a named uTLS profile
 //! (`go run . dump HelloChrome_133 -o capture.hex`), which is what a
 //! circumvention tool puts on the wire — a different question from what a
@@ -538,6 +539,14 @@ const ECH_PAYLOAD_LENGTHS: [usize; 4] = [144, 176, 208, 240];
 /// `hello_diff`, so both tools agree on what "the same shape" means. What is new
 /// here is the input: any two captures — ours, the bundle's, a uTLS build's, a
 /// live browser's — with no network, no Python and no bundle.
+///
+/// The verdict is about the **shape**, never about the bytes: every check below
+/// excuses a draw that a client makes per connection (the GREASE values, the ECH
+/// payload, the key shares, the session id), so two independent connections are
+/// never byte for byte alike. The `bytes` line prints how many bytes really
+/// differ, and only a `replay` of one capture puts the same bytes on the wire
+/// twice — which is why a claim about bytes has to come from that count and not
+/// from the closing verdict.
 fn diff_files(a_path: &str, b_path: &str) {
     let (a_label, a_record) = capture(a_path);
     let (b_label, b_record) = capture(b_path);
@@ -627,9 +636,35 @@ fn diff_files(a_path: &str, b_path: &str) {
         }
     }
 
-    match found.len() {
-        0 => println!("result     = SAME"),
-        n => println!("result     = {n} difference(s): {}", found.join(", ")),
+    // The shape is not the bytes, and this line is the difference between them.
+    // Every draw the checks above excuse — the session id, the GREASE values, the
+    // ECH payload, the key shares — still differs on the wire, so two independent
+    // connections are never byte for byte the same even when every check above
+    // says `SAME`. Only a replay of one capture puts identical bytes on the wire
+    // twice, and a claim about the bytes has to be read off this count.
+    let differing = a_record
+        .iter()
+        .zip(b_record.iter())
+        .filter(|(left, right)| left != right)
+        .count()
+        + a_record.len().abs_diff(b_record.len());
+    let byte_for_byte = differing == 0 && a_record.len() == b_record.len();
+    println!(
+        "  {:24} {:4}  {} of {} bytes differ",
+        "bytes",
+        if byte_for_byte { "SAME" } else { "DIFF" },
+        differing,
+        a_record.len().max(b_record.len()),
+    );
+
+    if found.is_empty() {
+        // `SAME SHAPE` and never a bare `SAME`: the sentinel is what
+        // `tools/fingerprint/fingerprint.py` reads back (its `pair_kind`), and the
+        // word `shape` is what keeps this verdict from being read as a statement
+        // about the bytes.
+        println!("result     = SAME SHAPE");
+    } else {
+        println!("result     = {} difference(s): {}", found.len(), found.join(", "));
     }
 }
 

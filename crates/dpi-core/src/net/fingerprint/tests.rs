@@ -295,6 +295,70 @@ fn only_the_chromium_profiles_shuffle_their_extension_order() {
     }
 }
 
+/// A shuffling record moves every extension it is allowed to move.
+///
+/// The sibling test above
+/// (`only_the_chromium_profiles_shuffle_their_extension_order`) sees that the
+/// *order* changes, which is a weaker claim: one extension pinned at a fixed
+/// position while the rest rotate still leaves every connection with a
+/// different order, and still sends an invariant a browser never sends.
+/// `encrypted_client_hello` was pinned exactly that way, on the belief that
+/// BoringSSL adds it outside the loop it shuffles. It does not:
+/// `ssl/extensions.cc` carries it as a row of the `kExtensions[]` table that
+/// `ssl_setup_extension_permutation` reorders. Measured on a real Chrome (155,
+/// two clean connections): ECH sat at index 5 in one JA3 and index 1 in the
+/// other, which moved the JA3 hash and left the JA4 one alone. Only the GREASE
+/// pair, padding and `pre_shared_key` hold their slots.
+#[test]
+fn every_extension_a_shuffling_record_may_move_does_move() {
+    // `padding` and `pre_shared_key`: the entries BoringSSL writes outside the
+    // loop it shuffles, so a record is allowed to pin them.
+    const PINNED: [u16; 2] = [21, 41];
+    // With fewer movable extensions than this, sixteen connections could agree
+    // by chance — the odds are `(1/n)^15` — so the claim is only made where it
+    // is a measurement and not a coin toss.
+    const FLOOR: usize = 4;
+
+    for fingerprint in TlsFingerprint::ALL {
+        if !fingerprint.spec().permute_extensions {
+            continue;
+        }
+        let hello = || {
+            let config = create_tls_config(&TlsProfile::insecure(fingerprint));
+            let name = rustls::pki_types::ServerName::try_from("example.com").expect("valid name");
+            let mut conn = rustls::ClientConnection::new(config, name).expect("client conn");
+            let mut buf = Vec::new();
+            conn.write_tls(&mut buf).expect("write ClientHello");
+            buf
+        };
+
+        let mut movable = std::collections::BTreeSet::new();
+        let mut positions: std::collections::BTreeMap<u16, std::collections::BTreeSet<usize>> =
+            std::collections::BTreeMap::new();
+        for _ in 0..16 {
+            let record = hello();
+            for (index, ext) in crate::net::ja3::extension_types(&record).into_iter().enumerate() {
+                if crate::net::ja3::is_grease(ext) || PINNED.contains(&ext) {
+                    continue;
+                }
+                movable.insert(ext);
+                positions.entry(ext).or_default().insert(index);
+            }
+        }
+        if movable.len() < FLOOR {
+            continue;
+        }
+        for (ext, seen) in &positions {
+            assert!(
+                seen.len() > 1,
+                "{} pins extension {ext} at position {seen:?} across 16 connections: \
+                 a browser moves it",
+                fingerprint.code()
+            );
+        }
+    }
+}
+
 /// Every shape that permutes is one of the Chromium records the browser's own
 /// captures mark, and no other shape permutes.
 #[test]

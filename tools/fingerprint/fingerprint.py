@@ -372,6 +372,18 @@ def body_diff(kind, mine, theirs):
     return None if mine == theirs else f"{mine.hex()} vs {theirs.hex()}"
 
 
+def byte_difference(a, b):
+    """How many bytes of two records differ, length mismatch included.
+
+    Every check `hello_diff` makes excuses a draw a client takes per connection —
+    the GREASE values, the ECH payload, the key shares, the session id — so two
+    hellos this tool calls the same *shape* are still not the same *bytes*. This
+    count is the only place a claim about bytes can be read off, and `0` means one
+    capture was replayed, which is the only way two records ever match exactly.
+    """
+    return sum(left != right for left, right in zip(a, b)) + abs(len(a) - len(b))
+
+
 def hello_diff(mine, theirs, show_same=False):
     """Every difference between two parsed ClientHellos, as printable lines."""
     lines = []
@@ -1215,17 +1227,22 @@ def stage_hello_diff(harness, args):
         if not os.path.exists(mine_path) or not os.path.exists(theirs_path):
             log(f"  {code:16} no capture; run the `hello` stage first")
             continue
-        mine = parse_hello(bytes.fromhex(open(mine_path).read()))
-        theirs = parse_hello(bytes.fromhex(open(theirs_path).read()))
+        mine_raw = bytes.fromhex(open(mine_path).read())
+        theirs_raw = bytes.fromhex(open(theirs_path).read())
+        mine = parse_hello(mine_raw)
+        theirs = parse_hello(theirs_raw)
         labels = hello_labels(mine, theirs)
         verdict(code, "hello-diff", labels)
         if args.summary:
             log(f"  {code:16} ours {mine['total']:5} B, bundle {theirs['total']:5} B, "
-                f"{'SAME' if not labels else '; '.join(labels)}")
+                f"{'SAME SHAPE' if not labels else '; '.join(labels)}")
             continue
         log(f"\n  {code} <- {wrapper}")
         log(f"    size             ours {mine['total']} bytes / {mine['hello_len']} hello, "
             f"bundle {theirs['total']} / {theirs['hello_len']}")
+        log(f"    bytes            {'SAME' if mine_raw == theirs_raw else 'DIFF'}  "
+            f"{byte_difference(mine_raw, theirs_raw)} of "
+            f"{max(len(mine_raw), len(theirs_raw))} differ")
         for line in hello_diff(mine, theirs, show_same=args.show_same):
             log("  " + line)
 
@@ -1366,8 +1383,8 @@ DRAW_LABELS = {
 
 def pair_kind(labels):
     """What a difference between two clients is, judged by the labels `diff` printed."""
-    if labels == "SAME":
-        return "identical"
+    if labels == "SAME SHAPE":
+        return "the same shape"
     parts = set(labels.split(", "))
     if parts == {"ext order"}:
         return "the extension order"
@@ -1380,7 +1397,7 @@ def stage_utls(harness, args):
     section("utls — the library's own profiles against the wrapper that copies the same client")
     dumper = utls_dumper(harness, args)
     root = os.path.join(harness.work, "utls")
-    counts, missing = {}, []
+    counts, missing, unparsed = {}, [], []
     for spec, counterpart, handshake in UTLS_PAIRS:
         mine = os.path.join(root, spec + (".handshake" if handshake else "") + ".hex")
         if not os.path.exists(mine):
@@ -1400,13 +1417,28 @@ def stage_utls(harness, args):
         for line in text.splitlines():
             if line.startswith("result"):
                 labels = line.split("=", 1)[1].strip()
-        # `3 difference(s): a, b` and `SAME` — the labels are what follows the colon.
-        if ": " in labels:
+        # `3 difference(s): a, b` and `SAME SHAPE` — the labels are what follows
+        # the colon, and the sentinel is the whole rest of the line. It names the
+        # *shape* because that is all this comparison covers: the bytes differ on
+        # every pair (the per-connection draws), which the `bytes` line above the
+        # verdict prints.
+        if labels == "SAME SHAPE":
+            pass
+        elif ": " in labels:
             labels = labels.split(": ", 1)[1]
+        else:
+            # Neither the sentinel nor a difference list. The example and this
+            # tool ship together and are built from one tree, so the only way here
+            # is one of them having been reworded alone — and reading a verdict
+            # this parser does not know as "shape" would be a wrong answer rather
+            # than a missing one.
+            log(f"  {spec:32} verdict this parser does not know: {labels!r}")
+            unparsed.append(spec)
+            continue
         kind = pair_kind(labels)
         counts[kind] = counts.get(kind, 0) + 1
         log(f"  {spec:32} vs {counterpart:20} {labels:44} {kind}")
-        if not args.summary and labels != "SAME":
+        if not args.summary and labels != "SAME SHAPE":
             for line in text.splitlines():
                 if line.startswith("  ") and "DIFF" in line:
                     log("    " + line.strip())
@@ -1414,6 +1446,8 @@ def stage_utls(harness, args):
     log(f"\n  {len(UTLS_PAIRS)} pairs: {total}")
     if missing:
         log(f"  not captured: {', '.join(missing)}")
+    if unparsed:
+        log(f"  verdicts this parser does not know: {', '.join(unparsed)}")
 
 
 # ---------------------------------------------------------------------------
@@ -1599,8 +1633,17 @@ SAMPLES = 24
 
 
 def verdict(code, stage, labels):
-    """Records one profile's outcome for the closing table."""
-    VERDICTS.setdefault(code, {})[stage] = ", ".join(labels) if labels else "SAME"
+    """Records one profile's outcome for the closing table.
+
+    A hello comparison that finds nothing is recorded as `SAME SHAPE` rather than
+    `SAME`: what it checked is the shape, and every one of those hellos' bytes
+    differs from the other's (the per-connection draws), so the short word would
+    claim more than the check made.
+    """
+    if labels:
+        VERDICTS.setdefault(code, {})[stage] = ", ".join(labels)
+        return
+    VERDICTS.setdefault(code, {})[stage] = "SAME SHAPE" if stage == "hello-diff" else "SAME"
 
 
 def hello_variation(harness, code):
@@ -1697,7 +1740,11 @@ def print_verdicts(harness, args):
         row = VERDICTS.get(code)
         if row is None:
             continue
-        differing = {stage: row[stage] for stage in stages if row.get(stage) not in (None, "SAME")}
+        differing = {
+            stage: row[stage]
+            for stage in stages
+            if row.get(stage) not in (None, "SAME", "SAME SHAPE")
+        }
         if not differing:
             clean += 1
             log(f"  {code:16} SAME in every comparison")

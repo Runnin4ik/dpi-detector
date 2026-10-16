@@ -86,8 +86,10 @@
 //! * `chrome123` and `chrome131android` are the only shapes whose hello can fall
 //!   under the 512-byte floor a browser pads to — 497 bytes with the shortest
 //!   GREASE ECH body — and both are padded there the way BoringSSL does it: the
-//!   padding slot counts the extensions that follow it (the ECH the encoder
-//!   appends last), so the message lands on 512 exactly, and the other three body
+//!   padding slot counts the extensions that follow it — the tail is written
+//!   into a scratch buffer first and the pad sized against the finished hello,
+//!   which keeps ECH's moving position out of the arithmetic — so the message
+//!   lands on 512 exactly, and the other three body
 //!   lengths leave it above the floor with no padding at all. Both outcomes are
 //!   the client's own: it pads on one connection in four.
 //! * A hello whose version is pinned for isolation — test 2's two columns and

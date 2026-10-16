@@ -147,6 +147,13 @@ pub(crate) const CHROME_TLS_DROP12_PADDING: &[u16] = &[EXT_SUPPORTED_VERSIONS, E
 /// and the order-insensitive JA4. The two records whose hello can fall under the
 /// 512-byte floor name the padding slot too
 /// ([`CHROME_PADDING_AND_ECH_EXT_ORDER`]).
+///
+/// `encrypted_client_hello` sits ahead of the key share, where a browser puts
+/// it, and never last: the position is not free, since a middlebox that drops
+/// the shape was measured to read it — `CHROME 146` answered `8/8` with ECH last
+/// and `1/8` with the same list, same bodies and same length, ECH moved into the
+/// middle, on the same host a minute apart. The encoder appends ECH last only
+/// when the order does not name its place, which is why the place is named here.
 const CHROME_NO_PADDING_EXT_ORDER: &[u16] = &[
 GREASE_EXTENSION_MARKER,
 EXT_SERVER_NAME,
@@ -159,13 +166,13 @@ EXT_ALPN,
 EXT_STATUS_REQUEST,
 EXT_SIGNATURE_ALGORITHMS,
 EXT_SCT,
+EXT_ENCRYPTED_CLIENT_HELLO,
 EXT_KEY_SHARE,
 EXT_PSK_KEY_EXCHANGE_MODES,
 EXT_SUPPORTED_VERSIONS,
 EXT_COMPRESS_CERTIFICATE,
 EXT_APPLICATION_SETTINGS,
 GREASE_EXTENSION_MARKER,
-EXT_ENCRYPTED_CLIENT_HELLO,
 ];
 
 /// Chrome 119–131's extension order where the hello can fall under the floor:
@@ -175,6 +182,10 @@ EXT_ENCRYPTED_CLIENT_HELLO,
 /// names padding before the ECH the encoder appends; `curl_chrome123` and
 /// `curl_chrome131_android` both pad when the shortest GREASE ECH body leaves
 /// them at 497 bytes, and both carry extension 21 on those connections.
+///
+/// ECH itself sits ahead of the key share like every other record's — see
+/// [`CHROME_NO_PADDING_EXT_ORDER`] for the measurement that keeps it out of last
+/// place.
 const CHROME_PADDING_AND_ECH_EXT_ORDER: &[u16] = &[
 GREASE_EXTENSION_MARKER,
 EXT_SERVER_NAME,
@@ -187,6 +198,7 @@ EXT_ALPN,
 EXT_STATUS_REQUEST,
 EXT_SIGNATURE_ALGORITHMS,
 EXT_SCT,
+EXT_ENCRYPTED_CLIENT_HELLO,
 EXT_KEY_SHARE,
 EXT_PSK_KEY_EXCHANGE_MODES,
 EXT_SUPPORTED_VERSIONS,
@@ -194,11 +206,14 @@ EXT_COMPRESS_CERTIFICATE,
 EXT_APPLICATION_SETTINGS,
 GREASE_EXTENSION_MARKER,
 EXT_PADDING,
-EXT_ENCRYPTED_CLIENT_HELLO,
 ];
 
 /// Chrome 133–146's extension order, uTLS `HelloChrome_133`'s pre-shuffle list:
 /// the same entries as above with ALPS at its new code point.
+///
+/// ECH sits ahead of the key share here too — see
+/// [`CHROME_NO_PADDING_EXT_ORDER`] for why its place is named rather than left
+/// to the encoder.
 const CHROME_ALPS_NEW_EXT_ORDER: &[u16] = &[
 GREASE_EXTENSION_MARKER,
 EXT_SERVER_NAME,
@@ -211,13 +226,13 @@ EXT_ALPN,
 EXT_STATUS_REQUEST,
 EXT_SIGNATURE_ALGORITHMS,
 EXT_SCT,
+EXT_ENCRYPTED_CLIENT_HELLO,
 EXT_KEY_SHARE,
 EXT_PSK_KEY_EXCHANGE_MODES,
 EXT_SUPPORTED_VERSIONS,
 EXT_COMPRESS_CERTIFICATE,
 EXT_APPLICATION_SETTINGS_NEW,
 GREASE_EXTENSION_MARKER,
-EXT_ENCRYPTED_CLIENT_HELLO,
 ];
 
 /// The bodies Chrome 133–146 emit verbatim: the shared set with ALPS at its new
@@ -428,6 +443,11 @@ const CHROME115_PQ_KEY_SHARE_GROUPS: &[u16] = &[29]; // X25519
 // Where the chain breaks it is kept: Chrome 107 shuffles nothing, Chrome 120
 // adds ECH, Chrome 131 adds the hybrid group, and this one moves ALPS to
 // 17613.
+//
+// No `pre_shared_key` (41): a browser sends none on a clean handshake. Measured
+// on a real Chrome — two connections from fresh profiles, neither carrying the
+// extension — and the bundle's own recordings of Chrome 107, 133 and 142 agree,
+// so a dummy offer here would be a shape no browser sends.
 pub(crate) const CHROME146: TlsShape = TlsShape {
     variant: TlsFingerprint::Chrome146,
     code: "chrome146",

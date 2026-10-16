@@ -1,6 +1,6 @@
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/builder.rs b/src/client/builder.rs
---- a/src/client/builder.rs	2006-07-24 05:21:28.000000000 +0400
-+++ b/src/client/builder.rs	2026-09-25 17:28:52.357111600 +0300
+--- a/src/client/builder.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/client/builder.rs	2026-09-25 17:26:00.052126100 +0300
 @@ -35,6 +35,18 @@
  }
  
@@ -30,8 +30,8 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
              resumption: Resumption::default(),
              max_fragment_size: None,
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/client_conn.rs b/src/client/client_conn.rs
---- a/src/client/client_conn.rs	2006-07-24 05:21:28.000000000 +0400
-+++ b/src/client/client_conn.rs	2026-09-25 17:28:52.358140900 +0300
+--- a/src/client/client_conn.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/client/client_conn.rs	2026-09-25 17:26:00.057654400 +0300
 @@ -5,7 +5,9 @@
  
  use pki_types::{ServerName, UnixTime};
@@ -109,17 +109,24 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      }
  }
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/ech.rs b/src/client/ech.rs
---- a/src/client/ech.rs	2006-07-24 05:21:28.000000000 +0400
-+++ b/src/client/ech.rs	2026-09-25 17:28:52.360140200 +0300
-@@ -218,7 +218,6 @@
+--- a/src/client/ech.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/client/ech.rs	2026-10-16 19:22:07.034884400 +0300
+@@ -214,11 +214,13 @@
+     ///
+     /// See <https://datatracker.ietf.org/doc/html/draft-ietf-tls-esni-18#name-grease-ech> for
+     /// more information.
++    /// `pinned_payload_len` is a profile's own `ech_payload_len`
++    /// (`hello_profile`), `None` for the draw described below.
+     pub(crate) fn grease_ext(
          &self,
          secure_random: &'static dyn SecureRandom,
          inner_name: ServerName<'static>,
 -        outer_hello: &ClientHelloPayload,
++        pinned_payload_len: Option<u16>,
      ) -> Result<EncryptedClientHello, Error> {
          trace!("Preparing GREASE ECH extension");
  
-@@ -230,7 +229,7 @@
+@@ -230,7 +232,7 @@
  
          // Construct a dummy ECH state - we don't have a real ECH config from a server since
          // this is for GREASE.
@@ -128,7 +135,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
              &EchConfig {
                  config: EchConfigPayload::V18(EchConfigContents {
                      key_config: HpkeKeyConfig {
-@@ -251,12 +250,17 @@
+@@ -251,19 +253,30 @@
              false, // Does not matter if we enable/disable SNI here. Inner hello is not used.
          )?;
  
@@ -138,6 +145,13 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 -
 -        // Generate a payload of random data equivalent in length to a real inner hello.
 -        let payload_len = encoded_inner_hello.len()
+-            + suite
+-                .sym
+-                .aead_id
+-                .tag_len()
+-                // Safety: we have confirmed the AEAD is supported when building the config. All
+-                //  supported AEADs have a tag length.
+-                .unwrap();
 +        // Size the payload the way BoringSSL sizes it, rather than by encoding the inner hello
 +        // this client would really send: BoringSSL estimates an EncodedClientHelloInner at 128,
 +        // 160, 192 or 224 bytes — the estimate is rounded to 32 bytes, the granularity the real
@@ -146,15 +160,28 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +        // names the extensions an inner hello carries. The measured result is an ECH extension
 +        // body of 186 to 282 bytes; the encoding of this client's own inner hello is 446, a
 +        // length no browser produces, which is a stable identifier of this build.
-+        let estimated_inner_hello_len =
-+            32 * (4 + usize::from(crate::rand::random_u16(secure_random)? % 4));
-+        let payload_len = estimated_inner_hello_len
-             + suite
-                 .sym
-                 .aead_id
++        //
++        // dpi-detector patch: a profile that names `ech_payload_len` pins the
++        // body instead, which is what a byte-for-byte comparison against one
++        // capture needs; with it unset the estimate is the draw above.
++        let tag_len = suite
++            .sym
++            .aead_id
++            .tag_len()
++            // Safety: we have confirmed the AEAD is supported when building the config. All
++            //  supported AEADs have a tag length.
++            .unwrap();
++        let estimated_inner_hello_len = match pinned_payload_len {
++            Some(pinned) => usize::from(pinned).saturating_sub(tag_len),
++            None => 32 * (4 + usize::from(crate::rand::random_u16(secure_random)? % 4)),
++        };
++        let payload_len = estimated_inner_hello_len + tag_len;
+         let mut payload = vec![0; payload_len];
+         secure_random.fill(&mut payload)?;
+ 
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/follow_up.rs b/src/client/follow_up.rs
 --- a/src/client/follow_up.rs	1970-01-01 03:00:00.000000000 +0300
-+++ b/src/client/follow_up.rs	2026-09-25 17:28:52.360140200 +0300
++++ b/src/client/follow_up.rs	2026-09-25 17:26:00.065229700 +0300
 @@ -0,0 +1,54 @@
 +//! Client-side follow-up messages (dpi-detector patch).
 +//!
@@ -211,8 +238,9 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +    fn messages(&self, acknowledged: &[u16], transcript_hash: &[u8]) -> Vec<(u8, Vec<u8>)>;
 +}
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/hello_profile.rs b/src/client/hello_profile.rs
-+++ b/src/client/hello_profile.rs	1970-01-01 03:00:00.000000000 +0300
-@@ -0,0 +1,460 @@
+--- a/src/client/hello_profile.rs	1970-01-01 03:00:00.000000000 +0300
++++ b/src/client/hello_profile.rs	2026-10-17 01:54:26.806400600 +0300
+@@ -0,0 +1,486 @@
 +//! ClientHello profile override (dpi-detector patch).
 +//!
 +//! Upstream rustls fixes the ClientHello shape: the cipher-suite list and its
@@ -330,10 +358,27 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +    /// therefore different on every connection, and a build that pins one order
 +    /// is the one shape a modern Chromium never sends.
 +    ///
-+    /// The GREASE slots, the trailing padding and the extensions TLS 1.3
-+    /// requires last (ECH, PSK) keep their positions — BoringSSL adds those
-+    /// outside the loop it shuffles.
++    /// The GREASE slots, the trailing padding and `pre_shared_key` keep their
++    /// positions — BoringSSL adds those outside the loop it shuffles.
++    /// `encrypted_client_hello` is not one of them: it is a row of the table
++    /// that shuffle reorders, and a real Chrome moves it on every connection.
 +    pub permute_extensions: bool,
++
++    /// Pin the GREASE ECH payload length, `None` to draw one of the four a
++    /// browser picks.
++    ///
++    /// BoringSSL's `setup_ech_grease()` estimates an `EncodedClientHelloInner`
++    /// at 128, 160, 192 or 224 bytes, draws one of the four per connection and
++    /// appends the AEAD tag — so a browser's `encrypted_client_hello` body is
++    /// 186, 218, 250 or 282 bytes and never the same twice. `None` keeps that
++    /// draw. `Some(n)` writes a payload of exactly `n` bytes, which is what
++    /// comparing one hello against one capture byte for byte needs: the four the
++    /// draw can produce are 144, 176, 208 and 240, and anything else is a shape
++    /// no browser sends.
++    ///
++    /// Nothing else about the extension moves: the suite, the `config_id` and
++    /// the encapsulation key are the same either way.
++    pub ech_payload_len: Option<u16>,
 +
 +    /// Certificate compression algorithms to advertise (`compress_certificate`).
 +    pub cert_compression: Option<Vec<u16>>,
@@ -563,8 +608,12 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +///
 +/// * GREASE slots — its pair is written around the permuted table;
 +/// * padding (21) — appended last, which is also where RFC 7685 padding belongs;
-+/// * `encrypted_client_hello` (65037) and `pre_shared_key` (41) — TLS 1.3
-+///   requires them last, and rustls places them there regardless.
++/// * `pre_shared_key` (41) — RFC 8446 §4.2.11 requires it last, and rustls
++///   appends it after the binder is computed.
++///
++/// Everything else moves, `encrypted_client_hello` (65037) included: BoringSSL
++/// keeps it in the table the shuffle reorders, so a build that pins it sends an
++/// order no browser sends.
 +///
 +/// The seed is 128 bits drawn from the CSPRNG per connection and expanded by a
 +/// splitmix64 stream. BoringSSL draws one random byte per position, so its space
@@ -588,15 +637,20 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +}
 +
 +/// Whether BoringSSL's shuffle is free to move this entry.
++///
++/// `encrypted_client_hello` (65037) is deliberately absent: BoringSSL carries
++/// it as one row of the `kExtensions[]` table that
++/// `ssl_setup_extension_permutation` reorders (`ssl/extensions.cc`), so it
++/// moves with every other row. Pinning it here sent one shape no browser sends
++/// — measured on a real Chrome, whose two clean connections put ECH at
++/// different positions, which moved its JA3 and left its JA4 alone.
 +fn is_movable(ext_type: u16) -> bool {
 +    const PADDING: u16 = 21;
 +    const PRE_SHARED_KEY: u16 = 41;
-+    const ENCRYPTED_CLIENT_HELLO: u16 = 65037;
 +
 +    ext_type != GREASE_EXTENSION_MARKER
 +        && ext_type != PADDING
 +        && ext_type != PRE_SHARED_KEY
-+        && ext_type != ENCRYPTED_CLIENT_HELLO
 +}
 +
 +/// A splitmix64 stream over a 128-bit seed: the permutation's only randomness,
@@ -673,10 +727,9 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +    /// `renegotiation_info`
 +    pub const RENEGOTIATION_INFO: u16 = 65281;
 +}
-
-
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/hs.rs b/src/client/hs.rs
-+++ b/src/client/hs.rs	2026-09-26 02:38:15.631586800 +0300
+--- a/src/client/hs.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/client/hs.rs	2026-10-16 19:22:07.037920300 +0300
 @@ -56,7 +56,7 @@
      //
      // If this is `None` then we do not support early data.
@@ -898,15 +951,19 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      let mut chp_payload = ClientHelloPayload {
          client_version: ProtocolVersion::TLSv1_2,
          random: input.random,
-@@ -409,7 +475,6 @@
+@@ -409,7 +475,10 @@
              EchMode::Grease(cfg) => Some(cfg.grease_ext(
                  config.provider.secure_random,
                  input.server_name.clone(),
 -                &chp_payload,
++                config
++                    .hello_profile
++                    .as_ref()
++                    .and_then(|profile| profile.ech_payload_len),
              )),
              _ => None,
          });
-@@ -442,8 +507,10 @@
+@@ -442,8 +511,10 @@
          _ => {}
      }
  
@@ -919,7 +976,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      input.hello.offered_cipher_suites = chp_payload.cipher_suites.clone();
  
      let mut chp = HandshakeMessagePayload(HandshakePayload::ClientHello(chp_payload));
-@@ -527,12 +594,12 @@
+@@ -527,12 +598,12 @@
          input,
          transcript_buffer,
          early_data_key_schedule,
@@ -934,7 +991,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
          Box::new(ExpectServerHelloOrHelloRetryRequest {
              next,
              extra_exts: extra_exts.into_owned(),
-@@ -839,7 +906,7 @@
+@@ -839,7 +910,7 @@
                      transcript,
                      self.early_data_key_schedule,
                      // We always send a key share when TLS 1.3 is enabled.
@@ -943,7 +1000,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
                      &m,
                      self.ech_state,
                      self.input,
-@@ -880,21 +947,28 @@
+@@ -880,21 +951,28 @@
          cx.common.check_aligned_handshake()?;
  
          // We always send a key share when TLS 1.3 is enabled.
@@ -980,7 +1037,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
                  return Err({
                      cx.common.send_fatal_alert(
                          AlertDescription::IllegalParameter,
-@@ -1022,8 +1096,19 @@
+@@ -1022,8 +1100,19 @@
              cx.data.early_data.rejected();
          }
  
@@ -1002,7 +1059,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
                  let Some(skxg) = config.find_kx_group(group, ProtocolVersion::TLSv1_3) else {
                      return Err(cx.common.send_fatal_alert(
                          AlertDescription::IllegalParameter,
-@@ -1032,15 +1117,15 @@
+@@ -1032,15 +1121,15 @@
                  };
  
                  cx.common.kx_state = KxState::Start(skxg);
@@ -1021,11 +1078,9 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
              self.extra_exts,
              Some(cs),
              self.next.input,
-
-
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/client/tls13.rs b/src/client/tls13.rs
---- a/src/client/tls13.rs	2006-07-24 05:21:28.000000000 +0400
-+++ b/src/client/tls13.rs	2026-09-25 17:28:52.369232600 +0300
+--- a/src/client/tls13.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/client/tls13.rs	2026-09-25 17:26:00.081578500 +0300
 @@ -21,6 +21,7 @@
  use crate::enums::{
      AlertDescription, ContentType, HandshakeType, ProtocolVersion, SignatureScheme,
@@ -1173,10 +1228,11 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
          hs::process_alpn_protocol(
              cx.common,
              &self.hello.alpn_protocols,
-@@ -1403,6 +1476,25 @@
+@@ -1402,6 +1475,25 @@
+                 }
              }
          }
- 
++
 +        // dpi-detector patch: the follow-up messages a profile owes a server
 +        // that acknowledged one of its application extensions. BoringSSL sends
 +        // them in this flight, ahead of the Finished, and hashes them into the
@@ -1195,30 +1251,28 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +                }
 +            }
 +        }
-+
+ 
          let (key_schedule_pre_finished, verify_data) = st
              .key_schedule
-             .into_pre_finished_client_traffic(
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/crypto/hpke.rs b/src/crypto/hpke.rs
---- a/src/crypto/hpke.rs	2006-07-24 05:21:28.000000000 +0400
-+++ b/src/crypto/hpke.rs	2026-09-25 17:28:52.399730500 +0300
-@@ -5,9 +5,14 @@
+--- a/src/crypto/hpke.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/crypto/hpke.rs	2026-09-25 17:26:00.085636100 +0300
+@@ -5,8 +5,13 @@
  use zeroize::Zeroize;
  
  use crate::Error;
 -use crate::msgs::enums::HpkeKem;
 -use crate::msgs::handshake::HpkeSymmetricCipherSuite;
- 
++
 +// dpi-detector patch: an implementation of `Hpke` that lives outside this crate
 +// has to be able to *name* the suite it implements — `aws_lc_rs` can, because it
 +// is inside. `rustls-rustcrypto`, which this build uses as its provider, cannot
 +// until these are re-exported from here.
 +pub use crate::msgs::enums::{HpkeAead, HpkeKdf, HpkeKem};
 +pub use crate::msgs::handshake::HpkeSymmetricCipherSuite;
-+
+ 
  /// An HPKE suite, specifying a key encapsulation mechanism and a symmetric cipher suite.
  #[derive(Clone, Copy, Debug, Eq, PartialEq)]
- pub struct HpkeSuite {
 @@ -118,6 +123,13 @@
      pub fn secret_bytes(&self) -> &[u8] {
          self.0.as_slice()
@@ -1234,8 +1288,8 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
  
  impl From<Vec<u8>> for HpkePrivateKey {
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs	2006-07-24 05:21:28.000000000 +0400
-+++ b/src/lib.rs	2026-09-25 17:28:52.420510600 +0300
+--- a/src/lib.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/lib.rs	2026-09-25 17:26:00.091221200 +0300
 @@ -584,8 +584,10 @@
      mod client_conn;
      mod common;
@@ -1257,8 +1311,8 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      #[cfg(any(feature = "std", feature = "hashbrown"))]
      pub use handy::ClientSessionMemoryCache;
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/msgs/handshake.rs b/src/msgs/handshake.rs
---- a/src/msgs/handshake.rs	2006-07-24 05:21:28.000000000 +0400
-+++ b/src/msgs/handshake.rs	2026-09-25 17:28:52.452855700 +0300
+--- a/src/msgs/handshake.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/msgs/handshake.rs	2026-10-16 19:22:07.037920300 +0300
 @@ -694,10 +694,23 @@
  /// ignore the preference of the client.
  ///
@@ -1355,7 +1409,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
          } = self;
          ClientExtensions {
              server_name: server_name.map(|x| x.into_owned()),
-@@ -1038,12 +1086,65 @@
+@@ -1038,12 +1086,68 @@
              encrypted_client_hello_outer,
              order_seed,
              contiguous_extensions,
@@ -1369,12 +1423,15 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      pub(crate) fn used_extensions_in_encoding_order(&self) -> Vec<ExtensionType> {
 -        let mut exts = self.order_insensitive_extensions_in_random_order();
 -        exts.extend(&self.contiguous_extensions);
-+        // ECH and PSK must stay last (RFC 8446). A profile may still place its
-+        // own verbatim ECH (grease) entry, since that body is profile-owned.
++        // ECH and PSK must stay last (RFC 8446) — unless the profile names them
++        // in its own order, which is the shape a browser that puts ECH ahead of
++        // its key share sends. A profile may also place a verbatim ECH (grease)
++        // entry, since that body is profile-owned.
 +        let suppressed = |t: &ExtensionType| self.suppress_extensions.contains(t);
 +        let has_raw = |t: ExtensionType| self.raw_extensions.iter().any(|(raw, _)| *raw == t);
 +        let must_be_last = |t: ExtensionType| {
 +            !has_raw(t)
++                && !self.profile_order.as_ref().is_some_and(|po| po.contains(&t))
 +                && matches!(
 +                    t,
 +                    ExtensionType::EncryptedClientHello
@@ -1423,16 +1480,21 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
  
          if self
              .encrypted_client_hello_outer
-@@ -1051,7 +1152,7 @@
+@@ -1051,7 +1155,12 @@
          {
              exts.push(ExtensionType::EncryptedClientHelloOuterExtensions);
          }
 -        if self.encrypted_client_hello.is_some() {
-+        if self.encrypted_client_hello.is_some() && !has_raw(ExtensionType::EncryptedClientHello) {
++        // A profile that already placed ECH in its order (see `must_be_last`)
++        // has it in `exts`, and pushing it again would send it twice.
++        if self.encrypted_client_hello.is_some()
++            && !has_raw(ExtensionType::EncryptedClientHello)
++            && !exts.contains(&ExtensionType::EncryptedClientHello)
++        {
              exts.push(ExtensionType::EncryptedClientHello);
          }
          if self.preshared_key_offer.is_some() {
-@@ -1093,6 +1194,23 @@
+@@ -1093,6 +1202,23 @@
  
          order
      }
@@ -1456,7 +1518,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
  }
  
  impl<'a> Codec<'a> for ClientExtensions<'a> {
-@@ -1104,9 +1222,51 @@
+@@ -1104,9 +1230,51 @@
          }
  
          let body = LengthPrefixedBuffer::new(ListLength::U16, bytes);
@@ -1477,7 +1539,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +        let mut tail = Vec::new();
 +        for item in order[tail_from..].iter() {
 +            self.encode_extension(*item, &mut tail);
-         }
++        }
 +
 +        for (index, item) in order.iter().enumerate() {
 +            if Some(index) == padding_at {
@@ -1504,13 +1566,13 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
 +                continue;
 +            }
 +            self.encode_extension(*item, body.buf);
-+        }
+         }
 +
 +        body.buf.extend_from_slice(&tail);
      }
  
      fn read(r: &mut Reader<'a>) -> Result<Self, InvalidMessage> {
-@@ -1252,6 +1412,22 @@
+@@ -1252,6 +1420,22 @@
  }
  
  impl ServerExtensions<'_> {
@@ -1533,7 +1595,7 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
      fn into_owned(self) -> ServerExtensions<'static> {
          let Self {
              ec_point_formats,
-@@ -1756,7 +1932,16 @@
+@@ -1756,7 +1940,16 @@
          let mut sub = r.sub(len)?;
  
          while sub.any_left() {
@@ -1552,8 +1614,8 @@ diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock
              })?;
          }
 diff -ruN --strip-trailing-cr -x .cargo-ok -x .cargo_vcs_info.json -x Cargo.lock -x Cargo.toml.orig a/src/server/test.rs b/src/server/test.rs
---- a/src/server/test.rs	2006-07-24 05:21:28.000000000 +0400
-+++ b/src/server/test.rs	2026-09-25 17:28:52.479826900 +0300
+--- a/src/server/test.rs	2006-07-24 04:21:28.000000000 +0300
++++ b/src/server/test.rs	2026-09-25 17:26:00.103413100 +0300
 @@ -484,6 +484,7 @@
              supported_versions: Some(SupportedProtocolVersions {
                  tls12: true,

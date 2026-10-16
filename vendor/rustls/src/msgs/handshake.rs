@@ -1094,12 +1094,15 @@ impl ClientExtensions<'_> {
     }
 
     pub(crate) fn used_extensions_in_encoding_order(&self) -> Vec<ExtensionType> {
-        // ECH and PSK must stay last (RFC 8446). A profile may still place its
-        // own verbatim ECH (grease) entry, since that body is profile-owned.
+        // ECH and PSK must stay last (RFC 8446) — unless the profile names them
+        // in its own order, which is the shape a browser that puts ECH ahead of
+        // its key share sends. A profile may also place a verbatim ECH (grease)
+        // entry, since that body is profile-owned.
         let suppressed = |t: &ExtensionType| self.suppress_extensions.contains(t);
         let has_raw = |t: ExtensionType| self.raw_extensions.iter().any(|(raw, _)| *raw == t);
         let must_be_last = |t: ExtensionType| {
             !has_raw(t)
+                && !self.profile_order.as_ref().is_some_and(|po| po.contains(&t))
                 && matches!(
                     t,
                     ExtensionType::EncryptedClientHello
@@ -1152,7 +1155,12 @@ impl ClientExtensions<'_> {
         {
             exts.push(ExtensionType::EncryptedClientHelloOuterExtensions);
         }
-        if self.encrypted_client_hello.is_some() && !has_raw(ExtensionType::EncryptedClientHello) {
+        // A profile that already placed ECH in its order (see `must_be_last`)
+        // has it in `exts`, and pushing it again would send it twice.
+        if self.encrypted_client_hello.is_some()
+            && !has_raw(ExtensionType::EncryptedClientHello)
+            && !exts.contains(&ExtensionType::EncryptedClientHello)
+        {
             exts.push(ExtensionType::EncryptedClientHello);
         }
         if self.preshared_key_offer.is_some() {

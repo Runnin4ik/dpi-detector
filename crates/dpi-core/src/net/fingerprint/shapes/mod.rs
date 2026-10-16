@@ -232,6 +232,11 @@ impl TlsShape {
             suppress_extensions: self.suppress.to_vec(),
             grease: self.grease,
             permute_extensions: self.permute_extensions,
+            // The browser's own draw: the four BoringSSL estimates. A shape is
+            // a browser, and no browser pins one — the pin is a variant's
+            // (`--burst-variant ech-len:<n>`), for comparing one hello against
+            // one capture byte for byte.
+            ech_payload_len: None,
             cert_compression: Some(self.cert_compression.to_vec()),
             padding_to: self.padding_to,
             legacy_versions: self.legacy_versions.to_vec(),

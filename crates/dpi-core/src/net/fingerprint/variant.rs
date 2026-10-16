@@ -64,6 +64,14 @@ pub enum HelloVariant {
     Groups(Vec<u16>),
     /// The groups a key share is sent for, in wire order.
     KeyShares(Vec<u16>),
+    /// Pin the GREASE ECH payload to exactly this many bytes.
+    ///
+    /// A shape draws one of the four BoringSSL estimates per connection (a
+    /// payload of 144, 176, 208 or 240 bytes), so no two of its hellos are the
+    /// same length — and a length is what a middlebox that hashes neither body
+    /// nor extension set can still read. This pins one, which is what comparing
+    /// a hello against a single capture byte for byte needs.
+    EchLen(u16),
     /// Several edits applied in the order they are written. A key that reads a
     /// configuration rather than a field — a group list *and* the shares sent for
     /// it — can only be told from a key that reads one of them by moving both in
@@ -181,6 +189,7 @@ impl HelloVariant {
             "ext-order" => list().map(Self::ExtOrder),
             "groups" => list().map(Self::Groups),
             "key-shares" => list().map(Self::KeyShares),
+            "ech-len" => one().map(Self::EchLen),
             other => Err(HelloVariantError::UnknownVariant { other: other.to_string() }),
         }
     }
@@ -207,6 +216,7 @@ impl HelloVariant {
             Self::ExtOrder(order) => format!("ext-order:{}", list(order)),
             Self::Groups(groups) => format!("groups:{}", list(groups)),
             Self::KeyShares(groups) => format!("key-shares:{}", list(groups)),
+            Self::EchLen(bytes) => format!("ech-len:{bytes}"),
             Self::Chain(parts) => parts.iter().map(Self::name).collect::<Vec<_>>().join(";"),
         }
     }
@@ -301,6 +311,7 @@ impl HelloVariant {
             }
             Self::Groups(groups) => hello.groups = Some(groups.clone()),
             Self::KeyShares(groups) => hello.key_share_groups = Some(groups.clone()),
+            Self::EchLen(bytes) => hello.ech_payload_len = Some(*bytes),
             Self::Chain(parts) => {
                 for part in parts {
                     part.apply(hello, alpn_protocols);
@@ -441,6 +452,67 @@ mod tests {
     }
 
     #[test]
+    fn an_extension_order_can_place_the_encrypted_client_hello() {
+        // The bundle's own hello carries ECH ahead of its key share, which the
+        // specification's "ECH last" rule would otherwise override. A pinned
+        // order has to be the order that reaches the wire: without this, the
+        // delta silently measures a shape nobody can send, and the field it was
+        // meant to move is the one it cannot.
+        let pinned = shaped(
+            TlsFingerprint::Chrome146,
+            "ext-order:0x0a0a,51,10,11,16,0,43,45,23,65037,5,18,17613,13,65281,35,27,0x0a0a",
+        );
+        let pinned_order = order(&pinned);
+        let ech = pinned_order.iter().position(|ext| *ext == 65037).expect("ECH is sent");
+        let share = pinned_order.iter().position(|ext| *ext == 51).expect("a key share is sent");
+        assert!(ech > share, "ECH keeps the position the order names: {pinned_order:?}");
+        assert_ne!(ech, pinned_order.len() - 1, "and is not moved to the tail: {pinned_order:?}");
+        // And nothing is sent twice: the rule that would move ECH must not also
+        // append a second copy of it behind the profile's own.
+        assert_eq!(pinned_order.len(), 18, "{pinned_order:?}");
+        let mut unique = pinned_order.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), pinned_order.len(), "no extension twice: {pinned_order:?}");
+        // A profile that does not name ECH keeps the rule — the tail is still
+        // where an unlisted ECH goes.
+        let unlisted = shaped(TlsFingerprint::Chrome146, "ext-order:0,23,65281,10,11,35,16,5,13,18,51,45,43,27,17613");
+        assert_eq!(order(&unlisted).last(), Some(&65037));
+    }
+
+    /// The payload length a GREASE ECH body declares: `type(1) suite(4)
+    /// config_id(1) enc<2+len> payload<2+len>` — the layout the shape test reads.
+    fn ech_payload_len(record: &[u8]) -> usize {
+        let body = body(record, 65037);
+        let enc_len = u16::from_be_bytes([body[6], body[7]]) as usize;
+        u16::from_be_bytes([body[8 + enc_len], body[9 + enc_len]]) as usize
+    }
+
+    #[test]
+    fn a_pinned_ech_length_is_the_payload_the_hello_carries() {
+        // The four a browser draws, and one it never sends: pinning is what makes
+        // two hellos comparable byte for byte, and the payload's length is the
+        // only place the difference shows — the suite, the `config_id` and the
+        // encapsulation key are the same either way.
+        for pinned in [144u16, 176, 208, 240, 160] {
+            let record = shaped(TlsFingerprint::Chrome146, &format!("ech-len:{pinned}"));
+            assert_eq!(ech_payload_len(&record), usize::from(pinned), "ech-len:{pinned}");
+        }
+        // Unpinned, the shape keeps BoringSSL's draw: sixteen connections give
+        // more than one length, and every one of them is one of the four.
+        let drawn: std::collections::BTreeSet<usize> = (0..16)
+            .map(|_| {
+                ech_payload_len(&hello_record(&TlsProfile::insecure(TlsFingerprint::Chrome146)))
+            })
+            .collect();
+        assert!(
+            drawn.iter().all(|len| [144, 176, 208, 240].contains(len)),
+            "a drawn payload is one of the four a browser sends: {drawn:?}"
+        );
+        assert!(drawn.len() > 1, "the draw is per connection: {drawn:?}");
+    }
+
+    #[test]
     fn a_body_swap_keeps_the_type_and_changes_the_bytes() {
         // `chrome107`'s ALPS carries `00 03 02 68 32`; replacing the body leaves
         // the code point and its place in the order alone, which is the one edit
@@ -488,6 +560,7 @@ mod tests {
             "ext-order:0,23,65281",
             "groups:29,4588,23",
             "key-shares:29",
+            "ech-len:176",
             "groups:29,23,24;key-shares:29",
             "-ext:17513;no-padding",
         ] {

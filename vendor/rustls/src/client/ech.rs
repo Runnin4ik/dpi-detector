@@ -214,10 +214,13 @@ impl EchGreaseConfig {
     ///
     /// See <https://datatracker.ietf.org/doc/html/draft-ietf-tls-esni-18#name-grease-ech> for
     /// more information.
+    /// `pinned_payload_len` is a profile's own `ech_payload_len`
+    /// (`hello_profile`), `None` for the draw described below.
     pub(crate) fn grease_ext(
         &self,
         secure_random: &'static dyn SecureRandom,
         inner_name: ServerName<'static>,
+        pinned_payload_len: Option<u16>,
     ) -> Result<EncryptedClientHello, Error> {
         trace!("Preparing GREASE ECH extension");
 
@@ -258,16 +261,22 @@ impl EchGreaseConfig {
         // names the extensions an inner hello carries. The measured result is an ECH extension
         // body of 186 to 282 bytes; the encoding of this client's own inner hello is 446, a
         // length no browser produces, which is a stable identifier of this build.
-        let estimated_inner_hello_len =
-            32 * (4 + usize::from(crate::rand::random_u16(secure_random)? % 4));
-        let payload_len = estimated_inner_hello_len
-            + suite
-                .sym
-                .aead_id
-                .tag_len()
-                // Safety: we have confirmed the AEAD is supported when building the config. All
-                //  supported AEADs have a tag length.
-                .unwrap();
+        //
+        // dpi-detector patch: a profile that names `ech_payload_len` pins the
+        // body instead, which is what a byte-for-byte comparison against one
+        // capture needs; with it unset the estimate is the draw above.
+        let tag_len = suite
+            .sym
+            .aead_id
+            .tag_len()
+            // Safety: we have confirmed the AEAD is supported when building the config. All
+            //  supported AEADs have a tag length.
+            .unwrap();
+        let estimated_inner_hello_len = match pinned_payload_len {
+            Some(pinned) => usize::from(pinned).saturating_sub(tag_len),
+            None => 32 * (4 + usize::from(crate::rand::random_u16(secure_random)? % 4)),
+        };
+        let payload_len = estimated_inner_hello_len + tag_len;
         let mut payload = vec![0; payload_len];
         secure_random.fill(&mut payload)?;
 

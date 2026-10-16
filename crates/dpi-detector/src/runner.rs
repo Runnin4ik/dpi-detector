@@ -323,6 +323,33 @@ pub(crate) fn warn_unknown_axis(msg: &Messages, args: &CliArgs, flag: &str, valu
     );
 }
 
+/// One row of the axes table: the flag and where it lands in `CliArgs`.
+type BurstAxis = (&'static str, fn(&CliArgs) -> bool);
+
+/// Test 6's own axes, each with the flag that names it and where that flag lands
+/// in `CliArgs`. The table is the source of truth for the screen-skip rule, and a
+/// test holds it against the command the parser builds: a test-6 flag added
+/// without a row here would leave the settings screen in front of the very run
+/// that named it.
+pub(crate) const BURST_AXES: [BurstAxis; 7] = [
+    ("--burst", |args| args.burst.is_some()),
+    ("--burst-timeout", |args| args.burst_timeout.is_some()),
+    ("--burst-gap", |args| args.burst_gap.is_some()),
+    ("--burst-profiles", |args| args.burst_profiles.is_some()),
+    ("--burst-tls", |args| args.burst_tls.is_some()),
+    ("--burst-alpn", |args| args.burst_alpn.is_some()),
+    ("--burst-variant", |args| args.burst_variant.is_some()),
+];
+
+/// Whether the command line names any of test 6's own axes. A run that does is
+/// the operator's own word about how the burst goes, so it starts straight away
+/// instead of opening the settings screen: the flags are the answer, and
+/// everything they leave out comes from the defaults. `--trace` is not one of
+/// them — it says what to record, not how the burst goes.
+pub(crate) fn burst_axes_given(args: &CliArgs) -> bool {
+    BURST_AXES.iter().any(|(_, given)| given(args))
+}
+
 /// Builds test 6's plan from the CLI. An unknown profile name is reported (the
 /// test then runs the profiles it did understand) rather than silently swapped
 /// for a different set.
@@ -1684,6 +1711,45 @@ mod tests {
     fn the_control_is_placed_by_its_address_not_its_name() {
         assert!(!node_name_is_local_ru(GGC_CONTROL_HOSTS[0]));
         assert_eq!(placement(Some("15169"), Some("41754"), node_name_is_local_ru(GGC_CONTROL_HOSTS[0])), GgcPlacement::Global);
+    }
+
+    /// The screen-skip rule is driven by a table, so the table has to name every
+    /// flag the parser builds: one added without a row here would leave the
+    /// settings screen in front of the run that named it.
+    #[test]
+    fn every_burst_flag_is_in_the_axes_table() {
+        let msg = get_messages(Language::En);
+        let mut declared: Vec<String> = crate::args::command(&msg)
+            .get_arguments()
+            .map(|arg| format!("--{}", arg.get_id()))
+            .filter(|flag| flag.starts_with("--burst"))
+            .collect();
+        let mut listed: Vec<String> = BURST_AXES.iter().map(|(flag, _)| flag.to_string()).collect();
+        declared.sort();
+        listed.sort();
+        assert_eq!(declared, listed, "a test-6 flag outside the table brings the screen back");
+    }
+
+    /// A bare `-t 6` asks — it is the one form that has nothing to go on — and any
+    /// single axis is enough to start without the screen.
+    #[test]
+    fn a_named_axis_skips_the_settings_screen() {
+        assert!(!burst_axes_given(&CliArgs::default()), "a bare `-t 6` still asks");
+        let one_axis = [
+            CliArgs { burst: Some(10), ..CliArgs::default() },
+            CliArgs { burst_timeout: Some(8), ..CliArgs::default() },
+            CliArgs { burst_gap: Some(20), ..CliArgs::default() },
+            CliArgs { burst_profiles: Some("chrome146".to_string()), ..CliArgs::default() },
+            CliArgs { burst_tls: Some("1.3".to_string()), ..CliArgs::default() },
+            CliArgs { burst_alpn: Some("h2".to_string()), ..CliArgs::default() },
+            CliArgs { burst_variant: Some("+grease".to_string()), ..CliArgs::default() },
+        ];
+        assert_eq!(one_axis.len(), BURST_AXES.len(), "one case per axis");
+        for args in one_axis {
+            assert!(burst_axes_given(&args), "{args:?}");
+        }
+        // `--trace` records a run, it does not describe one: the screen still asks.
+        assert!(!burst_axes_given(&CliArgs { trace: Some(String::new()), ..CliArgs::default() }));
     }
 }
 

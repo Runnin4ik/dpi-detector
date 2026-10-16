@@ -115,10 +115,27 @@ pub struct ClientHelloProfile {
     /// therefore different on every connection, and a build that pins one order
     /// is the one shape a modern Chromium never sends.
     ///
-    /// The GREASE slots, the trailing padding and the extensions TLS 1.3
-    /// requires last (ECH, PSK) keep their positions — BoringSSL adds those
-    /// outside the loop it shuffles.
+    /// The GREASE slots, the trailing padding and `pre_shared_key` keep their
+    /// positions — BoringSSL adds those outside the loop it shuffles.
+    /// `encrypted_client_hello` is not one of them: it is a row of the table
+    /// that shuffle reorders, and a real Chrome moves it on every connection.
     pub permute_extensions: bool,
+
+    /// Pin the GREASE ECH payload length, `None` to draw one of the four a
+    /// browser picks.
+    ///
+    /// BoringSSL's `setup_ech_grease()` estimates an `EncodedClientHelloInner`
+    /// at 128, 160, 192 or 224 bytes, draws one of the four per connection and
+    /// appends the AEAD tag — so a browser's `encrypted_client_hello` body is
+    /// 186, 218, 250 or 282 bytes and never the same twice. `None` keeps that
+    /// draw. `Some(n)` writes a payload of exactly `n` bytes, which is what
+    /// comparing one hello against one capture byte for byte needs: the four the
+    /// draw can produce are 144, 176, 208 and 240, and anything else is a shape
+    /// no browser sends.
+    ///
+    /// Nothing else about the extension moves: the suite, the `config_id` and
+    /// the encapsulation key are the same either way.
+    pub ech_payload_len: Option<u16>,
 
     /// Certificate compression algorithms to advertise (`compress_certificate`).
     pub cert_compression: Option<Vec<u16>>,
@@ -348,8 +365,12 @@ impl ClientHelloProfile {
 ///
 /// * GREASE slots — its pair is written around the permuted table;
 /// * padding (21) — appended last, which is also where RFC 7685 padding belongs;
-/// * `encrypted_client_hello` (65037) and `pre_shared_key` (41) — TLS 1.3
-///   requires them last, and rustls places them there regardless.
+/// * `pre_shared_key` (41) — RFC 8446 §4.2.11 requires it last, and rustls
+///   appends it after the binder is computed.
+///
+/// Everything else moves, `encrypted_client_hello` (65037) included: BoringSSL
+/// keeps it in the table the shuffle reorders, so a build that pins it sends an
+/// order no browser sends.
 ///
 /// The seed is 128 bits drawn from the CSPRNG per connection and expanded by a
 /// splitmix64 stream. BoringSSL draws one random byte per position, so its space
@@ -373,15 +394,20 @@ fn permuted_order(order: &[u16], seed: [u8; 16]) -> Vec<u16> {
 }
 
 /// Whether BoringSSL's shuffle is free to move this entry.
+///
+/// `encrypted_client_hello` (65037) is deliberately absent: BoringSSL carries
+/// it as one row of the `kExtensions[]` table that
+/// `ssl_setup_extension_permutation` reorders (`ssl/extensions.cc`), so it
+/// moves with every other row. Pinning it here sent one shape no browser sends
+/// — measured on a real Chrome, whose two clean connections put ECH at
+/// different positions, which moved its JA3 and left its JA4 alone.
 fn is_movable(ext_type: u16) -> bool {
     const PADDING: u16 = 21;
     const PRE_SHARED_KEY: u16 = 41;
-    const ENCRYPTED_CLIENT_HELLO: u16 = 65037;
 
     ext_type != GREASE_EXTENSION_MARKER
         && ext_type != PADDING
         && ext_type != PRE_SHARED_KEY
-        && ext_type != ENCRYPTED_CLIENT_HELLO
 }
 
 /// A splitmix64 stream over a 128-bit seed: the permutation's only randomness,

@@ -179,7 +179,7 @@ why the host stays in the live sweep.
 | `the_baseline_is_the_only_shape_that_impersonates_nobody` | a record that impersonates nothing but is not `rustls` |
 | `every_advertised_code_point_is_served_or_named` | profile ⊆ provider: every cipher, group and scheme is either served or named in `UNIMPLEMENTED` with a reason; a stale record fails the test too |
 | `the_advertised_group_list_opens_with_the_group_we_share` | a group list that opens with a group other than the one the share is sent for |
-| `only_the_chromium_profiles_shuffle_their_extension_order` | shuffling where there is none, and its absence where there is; non-shuffling shapes must be reproducible byte for byte |
+| `only_the_chromium_profiles_shuffle_their_extension_order` | shuffling where there is none, and its absence where there is; a non-shuffling shape must send one extension order every time (its *bytes* still differ per connection — the GREASE values, the key shares and the ECH payload are drawn — so the order, not the bytes, is what is pinned) |
 | `the_ech_shapes_carry_the_grease_extension_and_the_others_do_not` | ECH in those whose wrapper names `--ech true`, and in `firefox120` from the uTLS spec; the body length comes from four BoringSSL values, while for `firefox120` the source pins one (recorded in §5) |
 | `every_identity_is_spelled_the_way_its_client_writes_it` | `User-Agent` and the spelling of header names |
 | `every_profile_sends_the_key_shares_its_wrapper_asks_for` | key shares against `--tls-key-shares-limit` |
