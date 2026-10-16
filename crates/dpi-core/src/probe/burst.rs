@@ -576,7 +576,7 @@ async fn resolve_targets(
 /// all of them. Three attempts is the shortest run that can show it: the first
 /// two answer, the third is refused, and `M/N` reads 2.
 ///
-/// With [`BurstAlpn::H3`] the same overlap runs over QUIC — see [`quic_profile`].
+/// With [`BurstAlpn::H3`] the same overlap runs over QUIC — see `quic_profile`.
 pub async fn burst_profile(
     addr: &SocketAddr,
     domain: &str,

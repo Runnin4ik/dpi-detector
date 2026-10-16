@@ -16,7 +16,7 @@
 //! is the lookup that explains what it measured.
 //!
 //! A node is placed by its address, not by its name. The name is a convention
-//! ([`is_russian_cluster`]) while the address this run actually reached is the
+//! (`is_russian_cluster`) while the address this run actually reached is the
 //! path the packets take: the run's own AS means a cache next door, the AS of
 //! Google's own network means a PoP over transit ([`placement`]). The name
 //! decides only where no address could.

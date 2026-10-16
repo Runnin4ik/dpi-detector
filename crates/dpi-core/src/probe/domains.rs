@@ -164,7 +164,7 @@ impl HttpCheck {
 /// browser offers — 1.3 and 1.2 — and re-asks with 1.3 alone when the peer
 /// chooses 1.2: one answer cannot say whether the host *has* no 1.3 or the offer
 /// was interfered with, and the re-ask is what separates the two
-/// ([`tls13_pair_verdict`]).
+/// (`tls13_pair_verdict`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TlsLeg {
     /// Offer TLS 1.2 only — the `TLS1.2` column.
@@ -197,10 +197,10 @@ impl TlsLeg {
 ///
 /// The `TLS1.3` leg runs twice when the peer answers its browser-shaped hello
 /// with 1.2, and reports the pair rather than the landing — see
-/// [`tls13_pair_verdict`]. A leg also runs a second time when the shape it sent
+/// `tls13_pair_verdict`. A leg also runs a second time when the shape it sent
 /// advertises a code point this stack cannot run and the peer picks it: that is
 /// the offer's own limitation rather than the peer's answer, so the leg re-asks
-/// with the baseline hello and reports the pair — see [`suite_reask_verdict`].
+/// with the baseline hello and reports the pair — see `suite_reask_verdict`.
 pub async fn check_domain_tls(
     domain: &str,
     target: IpAddr,
