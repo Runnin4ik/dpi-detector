@@ -8,7 +8,7 @@ use super::chrome::{
 };
 use super::super::h2::EDGE101_H2;
 use super::super::identity::EDGE101_HEADERS;
-use super::{BROTLI, H2_AND_HTTP11};
+use super::{BROTLI, CHROMIUM_QUIC, H2_AND_HTTP11};
 use super::TlsShape;
 
 // Edge 101, as `curl_edge101` of curl-impersonate v2.2.3 sends it, with
@@ -25,6 +25,7 @@ pub(crate) const EDGE101: TlsShape = TlsShape {
     token: "EDGE",
     label: "EDGE 101",
     source: "curl-impersonate v2.2.3 / uTLS HelloEdge_106 (v1.8.2)",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME_TLS_CIPHERS,
     groups: CHROME_TLS_GROUPS,

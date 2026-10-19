@@ -11,7 +11,7 @@ use super::*;
 
 use crate::net::tls::{create_tls_config, crypto_provider, crypto_provider_with_pq, TlsProfile};
 
-/// Pinned from the `curl-impersonate v2.2.2` bundle (see
+/// Pinned from the `curl-impersonate v2.2.3` bundle (see
 /// [`tests::bundle_versions_match_their_ja4`]).
 const CHROME_107_JA4: &str = "t13d1516h2_8daaf6152771_e5627efa2ab1";
 const CHROME_107_JA3: &str = "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-\
@@ -60,11 +60,12 @@ const UTLS_REFERENCED: [TlsFingerprint; 9] = [
 /// for the clients that send it there, which the second column pins.
 #[test]
 fn every_identity_is_spelled_the_way_its_client_writes_it() {
-    let expected: [(TlsFingerprint, &str, bool); 30] = [
+    let expected: [(TlsFingerprint, &str, bool); 33] = [
         (TlsFingerprint::Rustls, "accept-encoding", false),
         (TlsFingerprint::Firefox133, "Accept-Encoding", true),
         (TlsFingerprint::Chrome107, "Accept-Encoding", false),
         (TlsFingerprint::Safari155, "Accept-Encoding", false),
+        (TlsFingerprint::Chrome150, "Accept-Encoding", false),
         (TlsFingerprint::Chrome146, "Accept-Encoding", false),
         // Chrome 133 sends the 146 header block under the 133 brand list and UA,
         // so its spelling is the same one — see `CHROME133_HEADERS`.
@@ -73,6 +74,7 @@ fn every_identity_is_spelled_the_way_its_client_writes_it() {
         (TlsFingerprint::Edge101, "Accept-Encoding", false),
         (TlsFingerprint::Chrome99Android, "Accept-Encoding", false),
         (TlsFingerprint::Chrome116, "Accept-Encoding", false),
+        (TlsFingerprint::Chrome124, "Accept-Encoding", false),
         (TlsFingerprint::Chrome123, "Accept-Encoding", false),
         (TlsFingerprint::Chrome131, "Accept-Encoding", false),
         (TlsFingerprint::Chrome131Android, "Accept-Encoding", false),
@@ -82,6 +84,7 @@ fn every_identity_is_spelled_the_way_its_client_writes_it() {
         (TlsFingerprint::Safari172Ios, "Accept-Encoding", false),
         (TlsFingerprint::Safari184Ios, "accept-encoding", false),
         (TlsFingerprint::Safari260, "accept-encoding", false),
+        (TlsFingerprint::Safari2601, "accept-encoding", false),
         (TlsFingerprint::Safari260Ios, "accept-encoding", false),
         (TlsFingerprint::Tor145, "Accept-Encoding", true),
         // The nine uTLS-referenced records: the four Chromium ones spell the
@@ -156,11 +159,18 @@ fn every_profile_sends_the_key_shares_its_wrapper_asks_for() {
         (TlsFingerprint::Firefox133, "4588,29,23"),
         (TlsFingerprint::Chrome107, "29"),
         (TlsFingerprint::Safari155, "29"),
+        (TlsFingerprint::Chrome150, "4588,29"),
         (TlsFingerprint::Chrome146, "4588,29"),
         (TlsFingerprint::Safari180, "29"),
         (TlsFingerprint::Edge101, "29"),
         (TlsFingerprint::Chrome99Android, "29"),
         (TlsFingerprint::Chrome116, "29"),
+        // Chrome 124 offers the draft hybrid group and shares X25519 alone: the
+        // provider has no group for `X25519Kyber768Draft00` (see
+        // `UNIMPLEMENTED`), so the share a censor reads is the same one
+        // `chrome115pq` sends, where the wrapper puts a 1216-byte draft share
+        // first.
+        (TlsFingerprint::Chrome124, "29"),
         (TlsFingerprint::Chrome123, "29"),
         (TlsFingerprint::Chrome131, "4588,29"),
         (TlsFingerprint::Chrome131Android, "29"),
@@ -171,6 +181,7 @@ fn every_profile_sends_the_key_shares_its_wrapper_asks_for() {
         (TlsFingerprint::Safari172Ios, "29"),
         (TlsFingerprint::Safari184Ios, "29"),
         (TlsFingerprint::Safari260, "4588,29"),
+        (TlsFingerprint::Safari2601, "4588,29"),
         (TlsFingerprint::Safari260Ios, "29"),
         (TlsFingerprint::Tor145, "29,23,24"),
         // The nine uTLS-referenced records. `chrome115pq` is the one row that
@@ -371,7 +382,17 @@ fn the_shuffling_shapes_are_the_chromium_ones_from_110_on() {
     permuting.sort_unstable();
     assert_eq!(
         permuting,
-        ["chrome115pq", "chrome116", "chrome123", "chrome131", "chrome131android", "chrome133", "chrome146"]
+        [
+            "chrome115pq",
+            "chrome116",
+            "chrome123",
+            "chrome124",
+            "chrome131",
+            "chrome131android",
+            "chrome133",
+            "chrome146",
+            "chrome150",
+        ]
     );
 }
 
@@ -483,10 +504,12 @@ fn the_ech_shapes_carry_the_grease_extension_and_the_others_do_not() {
         carrying,
         [
             "chrome123",
+            "chrome124",
             "chrome131",
             "chrome131android",
             "chrome133",
             "chrome146",
+            "chrome150",
             "firefox120",
             "firefox133",
             "firefox147",
@@ -508,7 +531,9 @@ fn http_identity_names_the_version_the_hello_imitates() {
         (TlsFingerprint::Safari180, "Version/18.0"),
         (TlsFingerprint::Edge101, "Edg/101.0.1210.47"),
         (TlsFingerprint::Chrome99Android, "Chrome/99.0.4844.58 Mobile"),
-        (TlsFingerprint::Chrome116, "Chrome/116.0.0.0"),
+        (TlsFingerprint::Chrome150, "Chrome/150.0.0.0"),
+        (TlsFingerprint::Chrome146, "Chrome/146.0.0.0"),
+        (TlsFingerprint::Chrome124, "Chrome/124.0.0.0"),
         (TlsFingerprint::Chrome123, "Chrome/123.0.0.0"),
         (TlsFingerprint::Chrome131, "Chrome/131.0.0.0"),
         (TlsFingerprint::Chrome131Android, "Chrome/131.0.0.0 Mobile"),
@@ -519,6 +544,7 @@ fn http_identity_names_the_version_the_hello_imitates() {
         (TlsFingerprint::Safari172Ios, "Version/17.2 Mobile"),
         (TlsFingerprint::Safari184Ios, "Version/18.4 Mobile"),
         (TlsFingerprint::Safari260, "Version/26.0"),
+        (TlsFingerprint::Safari2601, "Version/26.0.1"),
         (TlsFingerprint::Safari260Ios, "Version/26.0 Mobile"),
         (TlsFingerprint::Tor145, "Firefox/128.0"),
         // uTLS carries no HTTP layer, so what these nine rows pin is the
@@ -562,10 +588,12 @@ fn http_identity_names_the_version_the_hello_imitates() {
             .expect("every identity states its encoding");
         let expected = match fingerprint {
             TlsFingerprint::Firefox133
+            | TlsFingerprint::Chrome150
             | TlsFingerprint::Chrome146
             | TlsFingerprint::Chrome133
             | TlsFingerprint::Chrome131
             | TlsFingerprint::Chrome131Android
+            | TlsFingerprint::Chrome124
             | TlsFingerprint::Chrome123
             | TlsFingerprint::Firefox147
             | TlsFingerprint::Safari260
@@ -581,6 +609,9 @@ fn http_identity_names_the_version_the_hello_imitates() {
             | TlsFingerprint::Safari170
             | TlsFingerprint::Safari172Ios
             | TlsFingerprint::Safari184Ios
+            // Safari 26.0.1 dropped the `zstd` codec 26.0 asked for, which is
+            // the one value its identity changes besides the UA.
+            | TlsFingerprint::Safari2601
             | TlsFingerprint::Chrome87
             | TlsFingerprint::Chrome72
             | TlsFingerprint::Chrome70
@@ -667,7 +698,7 @@ fn every_h2_preface_matches_the_wrapper_it_copies() {
     /// header order, request priority.
     type Row = (TlsFingerprint, &'static str, u32, PseudoOrder, Option<(u16, bool)>);
 
-    let expected: [Row; 20] = [
+    let expected: [Row; 23] = [
         (TlsFingerprint::Firefox133, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
         (TlsFingerprint::Firefox147, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
         (TlsFingerprint::Tor145, "1:65536;2:0;4:131072;5:16384", 12_517_377, MethodPathAuthorityScheme, Some((42, false))),
@@ -675,10 +706,15 @@ fn every_h2_preface_matches_the_wrapper_it_copies() {
         (TlsFingerprint::Chrome99Android, "1:65536;3:1000;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Edge101, "1:65536;3:1000;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Chrome116, "1:65536;2:0;3:1000;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        (TlsFingerprint::Chrome124, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Chrome123, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Chrome131, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Chrome131Android, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         (TlsFingerprint::Chrome146, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
+        // Chrome 150's preface is the 146 one: measured on the binary's own
+        // `--impersonate chrome150` target, where every SETTINGS value, the
+        // window, the pseudo-header order and the priority match.
+        (TlsFingerprint::Chrome150, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
         // Chrome 133's hello is the 146 one (see the shape's own comment), so this
         // row pins the shared preface instead of naming 146 a second time.
         (TlsFingerprint::Chrome133, "1:65536;2:0;4:6291456;6:262144", 15_663_105, MethodAuthoritySchemePath, Some((256, true))),
@@ -689,6 +725,9 @@ fn every_h2_preface_matches_the_wrapper_it_copies() {
         (TlsFingerprint::Safari180, "2:0;3:100;4:2097152;8:1;9:1", 10_420_225, MethodSchemeAuthorityPath, Some((256, false))),
         (TlsFingerprint::Safari184Ios, "2:0;3:100;4:2097152;9:1", 10_420_225, MethodSchemeAuthorityPath, Some((256, false))),
         (TlsFingerprint::Safari260, "2:0;3:100;4:2097152;9:1", 10_420_225, MethodSchemeAuthorityPath, None),
+        // Safari 26.0.1 sends 26.0's preface unchanged — the only thing the
+        // patch release moved is the session ticket in the hello.
+        (TlsFingerprint::Safari2601, "2:0;3:100;4:2097152;9:1", 10_420_225, MethodSchemeAuthorityPath, None),
         (TlsFingerprint::Safari260Ios, "2:0;3:100;4:2097152;9:1", 10_420_225, MethodSchemeAuthorityPath, None),
     ];
 
@@ -715,6 +754,9 @@ fn display_labels_name_the_pinned_version() {
     assert_eq!(TlsFingerprint::Chrome146.display_label(), "CHROME 146");
     assert_eq!(TlsFingerprint::Safari180.display_label(), "SAFARI 180");
     assert_eq!(TlsFingerprint::Edge101.display_label(), "EDGE 101");
+    assert_eq!(TlsFingerprint::Chrome150.display_label(), "CHROME 150");
+    assert_eq!(TlsFingerprint::Chrome124.display_label(), "CHROME 124");
+    assert_eq!(TlsFingerprint::Safari2601.display_label(), "SAFARI 2601");
     for fp in TlsFingerprint::ALL {
         assert!(fp.display_label().starts_with(fp.token()), "{fp:?}");
         assert!(fp.display_label().is_ascii(), "{fp:?}");
@@ -735,6 +777,9 @@ fn fingerprint_parses_known_values_and_rejects_others() {
     assert_eq!(TlsFingerprint::parse("rustls"), Some(TlsFingerprint::Rustls));
     assert_eq!(TlsFingerprint::parse("FIREFOX147"), Some(TlsFingerprint::Firefox147));
     assert_eq!(TlsFingerprint::parse(" firefox147 "), Some(TlsFingerprint::Firefox147));
+    assert_eq!(TlsFingerprint::parse("chrome150"), Some(TlsFingerprint::Chrome150));
+    assert_eq!(TlsFingerprint::parse("chrome124"), Some(TlsFingerprint::Chrome124));
+    assert_eq!(TlsFingerprint::parse("safari2601"), Some(TlsFingerprint::Safari2601));
     // The unnumbered names are gone rather than aliased: a config or a script
     // that still says `firefox` is told it is unknown instead of silently
     // measuring a version it does not name.
@@ -1036,7 +1081,7 @@ fn client_hello_full(
 }
 
 /// The three profiles must send exactly the JA3 their pinned
-/// `curl-impersonate` version sends, measured from the v2.2.2 bundle with a
+/// `curl-impersonate` version sends, measured from the v2.2.3 bundle with a
 /// local ClientHello sniffer (`curl_chrome107`, `curl_safari155`,
 /// `curl_firefox133`).
 ///
@@ -1165,7 +1210,7 @@ fn bundle_versions_match_their_ja3() {
     }
 
     // BoringSSL pads a 1.3 browser hello to exactly 512 bytes — the
-    // `curl-impersonate v2.2.2` chrome107/safari155 hellos measure 512 — and
+    // `curl-impersonate v2.2.3` chrome107/safari155 hellos measure 512 — and
     // the padding extension is part of the JA3s above, so both the size and a
     // lost pad are checked here. A 1.2 hello is shorter than the 256-byte
     // floor, so it carries no padding at all: the bundle's 1.2 hellos measure
@@ -1451,6 +1496,14 @@ fn profiles_that_share_a_tls_shape_send_the_same_hello() {
 ///
 /// Chrome 133, 136, 142, 145 and 146 send one hello, so `chrome136`
 /// repeats Chrome 133's pin rather than carrying a second constant.
+///
+/// Three more shapes arrived with the v2.2.3 pin — `chrome124`, `chrome150` and
+/// `safari2601` — and they are pinned below to the values their own sources
+/// send. The Windows build of that release wraps only `chrome124` by script:
+/// `chrome150` and `safari2601` live in the binary's impersonation table alone,
+/// so their numbers come from driving `--impersonate` at a local listener, with
+/// the fork's `chrome_150.0.7871.127_macOS.yaml` and
+/// `safari_26.0.1_macOS.yaml` as the second reading.
 #[test]
 fn added_shapes_match_the_captures_they_were_read_from() {
     for (fingerprint, ja4) in [
@@ -1503,6 +1556,24 @@ fn added_shapes_match_the_captures_they_were_read_from() {
         let expected = if length == 512 { padded } else { ours };
         assert_eq!(got, expected, "{fingerprint}: {length}-byte hello");
         assert_eq!(got.split('_').nth(1), Some("8daaf6152771"), "{fingerprint}: cipher hash");
+    }
+
+    // The three shapes the v2.2.3 pin added, each pinned to the value its own
+    // source sends. Only `chrome124` has a wrapper script in the Windows build;
+    // `chrome150` and `safari2601` are the binary's own `--impersonate` targets,
+    // driven through a local listener, with the fork's `chrome_150…` and
+    // `safari_26.0.1…` captures as the second reading.
+    //
+    // `chrome124` answering with Chrome 123's key is the record's whole point:
+    // JA4 hashes neither the group list nor the key shares, so the draft hybrid
+    // it adds is invisible to the key and visible to a JA3 reader alone.
+    for (fingerprint, ja4) in [
+        (TlsFingerprint::Chrome124, "t13d1516h2_8daaf6152771_02713d6af862"),
+        (TlsFingerprint::Chrome150, "t13d1516h2_8daaf6152771_806a8c22fdea"),
+        (TlsFingerprint::Safari2601, "t13d2013h2_a09f3c656075_7f0f34a4126d"),
+    ] {
+        let (_, _, got) = client_hello_full(fingerprint, TlsVersion::Any);
+        assert_eq!(got, ja4, "{fingerprint}: the source's own JA4");
     }
 
     // Chrome 133's record is Chrome 146's hello under the 133 identity: the pin
@@ -1821,6 +1892,14 @@ const UNIMPLEMENTED: &[(Unimplemented, u16, &str)] = &[
     // middlebox reads, and shares X25519 — see its record and
     // `the_advertised_group_list_opens_with_the_group_we_share`.
     (Unimplemented::Group, 0x6399, "X25519Kyber768Draft00: the provider has no draft-Kyber hybrid group"),
+    // --- ML-DSA: Chrome 150 offers the three post-quantum signature schemes and
+    // this provider verifies none of them — `ring` carries no ML-DSA verifier.
+    // The same kind of gap the draft hybrid group above is: the list is what a
+    // censor reads, and trimming it would change the JA4 extension hash the
+    // record exists to reproduce.
+    (Unimplemented::SignatureScheme, 0x0904, "mldsa44: no ML-DSA verifier in the provider"),
+    (Unimplemented::SignatureScheme, 0x0905, "mldsa65: no ML-DSA verifier in the provider"),
+    (Unimplemented::SignatureScheme, 0x0906, "mldsa87: no ML-DSA verifier in the provider"),
     // --- Signature schemes: the provider verifies ECDSA P-256/P-384, Ed25519
     // and RSA PSS/PKCS1 with SHA-256 and above. SHA-1 is gone from both rustls
     // and the provider, and a P-521 verifier is missing with its group.

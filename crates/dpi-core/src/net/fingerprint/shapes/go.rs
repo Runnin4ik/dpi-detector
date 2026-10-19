@@ -4,7 +4,7 @@ use super::super::TlsFingerprint;
 use super::super::identity::GO127_HEADERS;
 use super::safari::SAFARI_TLS_PQ_GROUPS;
 use super::{
-    EXT_ALPN, EXT_EC_POINT_FORMATS, EXT_EXTENDED_MASTER_SECRET, EXT_KEY_SHARE,
+    BASELINE_QUIC, EXT_ALPN, EXT_EC_POINT_FORMATS, EXT_EXTENDED_MASTER_SECRET, EXT_KEY_SHARE,
     EXT_PSK_KEY_EXCHANGE_MODES, EXT_RENEGOTIATION_INFO, EXT_SCT, EXT_SERVER_NAME,
     EXT_SESSION_TICKET, EXT_SIGNATURE_ALGORITHMS, EXT_STATUS_REQUEST, EXT_SUPPORTED_GROUPS,
     EXT_SUPPORTED_VERSIONS,
@@ -131,6 +131,7 @@ pub(crate) const GO127: TlsShape = TlsShape {
     token: "GO",
     label: "GO 1.27",
     source: "Go 1.27 crypto/tls, through uTLS HelloGolang",
+    quic: BASELINE_QUIC,
     baseline: false,
     ciphers: GO_TLS_CIPHERS,
     groups: GO_TLS_GROUPS,

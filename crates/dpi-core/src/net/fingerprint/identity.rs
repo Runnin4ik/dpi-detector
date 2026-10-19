@@ -3,7 +3,7 @@
 //! sends them.
 //!
 //! One table per impersonated client, taken from the same
-//! `curl-impersonate v2.2.2` wrapper the ClientHello is pinned to, so a probe
+//! `curl-impersonate v2.2.3` wrapper the ClientHello is pinned to, so a probe
 //! that looks like `curl_chrome107` at the TLS layer also looks like it at the
 //! HTTP layer. The nine newest profiles — the uTLS v1.8.2 ones, `chrome87` to
 //! `go127` — are the exception: their reference has no HTTP layer at all, so
@@ -285,6 +285,34 @@ pub(crate) const CHROME123_HEADERS: &[(&str, &str)] = &[
     ("Accept-Language", "en-US,en;q=0.9"),
 ];
 
+/// Chrome 124 headers, in `curl_chrome124.bat` order: Chrome 123's block plus
+/// the `Priority` line this release added, under the 124 brand list and UA.
+///
+/// The `Priority` header is the whole of what this identity adds to 123's —
+/// which is why the 123 record has none — and the block is otherwise 131's,
+/// whose brand list reads differently because Chromium reorders it per release.
+pub(crate) const CHROME124_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#""Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99""#),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", r#""macOS""#),
+    ("Upgrade-Insecure-Requests", "1"),
+    (
+        "User-Agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    ),
+    (
+        "Accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    ),
+    ("Sec-Fetch-Site", "none"),
+    ("Sec-Fetch-Mode", "navigate"),
+    ("Sec-Fetch-User", "?1"),
+    ("Sec-Fetch-Dest", "document"),
+    ("Accept-Encoding", "gzip, deflate, br, zstd"),
+    ("Accept-Language", "en-US,en;q=0.9"),
+    ("Priority", "u=0, i"),
+];
+
 /// Chrome 131 headers, in `curl_chrome131.bat` order: Chrome 133's set with the
 /// version it names.
 pub(crate) const CHROME131_HEADERS: &[(&str, &str)] = &[
@@ -306,7 +334,7 @@ pub(crate) const CHROME131_HEADERS: &[(&str, &str)] = &[
     ("Sec-Fetch-Dest", "document"),
     ("Accept-Encoding", "gzip, deflate, br, zstd"),
     ("Accept-Language", "en-US,en;q=0.9"),
-    ("priority", "u=0, i"),
+    ("Priority", "u=0, i"),
 ];
 
 /// Chrome 131 on Android headers, in `curl_chrome131_android.bat` order. The
@@ -332,7 +360,7 @@ pub(crate) const CHROME131_ANDROID_HEADERS: &[(&str, &str)] = &[
     ("Sec-Fetch-Dest", "document"),
     ("Accept-Encoding", "gzip, deflate, br, zstd"),
     ("Accept-Language", "en-US,en;q=0.9"),
-    ("priority", "u=0, i"),
+    ("Priority", "u=0, i"),
 ];
 
 /// Chrome 133 headers: the block Chrome 133–146 send, with the 133 brand list
@@ -359,7 +387,7 @@ pub(crate) const CHROME133_HEADERS: &[(&str, &str)] = &[
     ("Sec-Fetch-Dest", "document"),
     ("Accept-Encoding", "gzip, deflate, br, zstd"),
     ("Accept-Language", "en-US,en;q=0.9"),
-    ("priority", "u=0, i"),
+    ("Priority", "u=0, i"),
 ];
 
 /// Chrome 146 headers: the block Chrome 133–146 send, with the 146 brand list
@@ -386,7 +414,37 @@ pub(crate) const CHROME146_HEADERS: &[(&str, &str)] = &[
     ("Sec-Fetch-Dest", "document"),
     ("Accept-Encoding", "gzip, deflate, br, zstd"),
     ("Accept-Language", "en-US,en;q=0.9"),
-    ("priority", "u=0, i"),
+    ("Priority", "u=0, i"),
+];
+
+/// Chrome 150 headers: the block Chrome 133–150 send, with the 150 brand list
+/// and UA.
+///
+/// Measured on the binary's own target (`--impersonate chrome150`) through the
+/// harness's h1 listener, since the Windows build ships no wrapper script for
+/// it: the names, their case, their order and every value are Chrome 146's
+/// except the two version strings, and the `Priority` line reaches h2 only
+/// (`TlsShape::priority_on_h1` is false, as it is for every Chrome).
+pub(crate) const CHROME150_HEADERS: &[(&str, &str)] = &[
+    ("sec-ch-ua", r#""Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150""#),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", r#""macOS""#),
+    ("Upgrade-Insecure-Requests", "1"),
+    (
+        "User-Agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+    ),
+    (
+        "Accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    ),
+    ("Sec-Fetch-Site", "none"),
+    ("Sec-Fetch-Mode", "navigate"),
+    ("Sec-Fetch-User", "?1"),
+    ("Sec-Fetch-Dest", "document"),
+    ("Accept-Encoding", "gzip, deflate, br, zstd"),
+    ("Accept-Language", "en-US,en;q=0.9"),
+    ("Priority", "u=0, i"),
 ];
 
 /// Chrome 115 PQ headers.
@@ -572,6 +630,29 @@ pub(crate) const SAFARI260_HEADERS: &[(&str, &str)] = &[
     ("accept-language", "en-US,en;q=0.9"),
     ("priority", "u=0, i"),
     ("accept-encoding", "gzip, deflate, br, zstd"),
+];
+
+/// Safari 26.0.1 headers, in the order the binary's own `safari2601` target
+/// sends them: Safari 26.0's block with the patch version in the UA and one
+/// value less in `accept-encoding`.
+///
+/// Measured through the harness's h1 listener (`--impersonate safari2601`, the
+/// Windows build shipping no wrapper script for it) and cross-checked against
+/// the fork's `safari_26.0.1_macOS.yaml`, which lists the same names and the
+/// same `gzip, deflate, br`: **the `zstd` codec 26.0 asked for is gone in
+/// 26.0.1**, which is the one value this identity changes.
+pub(crate) const SAFARI2601_HEADERS: &[(&str, &str)] = &[
+    ("sec-fetch-dest", "document"),
+    (
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0.1 Safari/605.1.15",
+    ),
+    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "navigate"),
+    ("accept-language", "en-US,en;q=0.9"),
+    ("priority", "u=0, i"),
+    ("accept-encoding", "gzip, deflate, br"),
 ];
 
 /// Safari 26.0 on iOS headers, in `curl_safari260_ios.bat` order.

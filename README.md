@@ -115,7 +115,7 @@ irm https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.ps1 | 
       --burst-profiles <LIST>    Fingerprint для теста 6: all или имена профилей через запятую; список печатает --legend [по умолчанию: набор по умолчанию]
       --burst-tls <VERSION>      TLS для теста 6: 1.3+1.2 (предложение браузера, ответ должен быть 1.3)|1.3 (только 1.3)|1.2 (только 1.2) [по умолчанию: 1.3+1.2]
       --burst-alpn <PROTOCOL>    ALPN для теста 6: h2 (предлагает h2 с откатом на http/1.1)|http/1.1 (только http/1.1)|h3 (QUIC по UDP 443, TLS 1.3; ось TLS не применяется) [по умолчанию: h2]
-      --burst-variant <DELTA>    Тест 6, вариант: одна правка ClientHello каждого профиля, чтобы вердикт читался против формы, отличающейся одним полем — -ext:ID, ext-body:ID:HEX, +ext:ID, groups:A,B,…, key-shares:A,B,…, ext-order:A,B,… (0x0a0a — слот GREASE), ech-len:N, padding:N, no-padding, sigalg-swap, +grease, +group:ID, alpn-reverse; `;` применяет несколько сразу [по умолчанию: нет]
+      --burst-variant <DELTA>    Тест 6, вариант: одна правка ClientHello каждого профиля, чтобы вердикт читался против формы, отличающейся одним полем — -ext:ID, ext-body:ID:HEX, +ext:ID, ciphers:A,B,…, groups:A,B,…, key-shares:A,B,…, ext-order:A,B,… (0x0a0a — слот GREASE), ech-len:N, padding:N, no-padding, sigalg-swap, +grease, +group:ID, alpn-reverse; `;` применяет несколько сразу [по умолчанию: нет]
       --trace [<PATH>]           Трассировка теста 6: строка на каждую попытку (раунд, отпечаток, домен, статус, деталь, мс); без пути — в stderr, с путём — в указанный файл [по умолчанию: выключено]
   -h, --help                     Показать справку
   -V, --version                  Показать версию

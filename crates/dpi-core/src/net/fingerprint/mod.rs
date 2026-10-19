@@ -149,6 +149,7 @@ pub(crate) use shapes::{
 // the library itself needs them by name.
 #[cfg(test)]
 pub(crate) use shapes::{EXT_SUPPORTED_GROUPS, EXT_SUPPORTED_VERSIONS};
+pub(crate) use shapes::{QuicCidLen, QuicInitialPn, QuicShape};
 use shapes::{TlsShape, SHAPES};
 
 /// Which ClientHello shape the probes present.
@@ -182,6 +183,12 @@ pub enum TlsFingerprint {
     /// Chrome 116's (`curl_chrome116`): Chrome 107's hello with the extension
     /// order shuffled, which Chromium turned on at 110 and has kept since.
     Chrome116,
+    /// Chrome 124's (`curl_chrome124`): Chrome 123's hello with the draft
+    /// hybrid group `X25519Kyber768Draft00` in front of the others, which is
+    /// the whole of what it adds — the fork's own capture says so in one line.
+    /// JA4 cannot see a group list, so it answers with 123's key; the group list
+    /// is what the row is for.
+    Chrome124,
     /// Chrome 123's (`curl_chrome123`): the first release here whose hello
     /// carries ECH (as GREASE) and shuffles its extension order per connection.
     /// Chrome 119 through 123 send this one hello; the record carries the newest
@@ -192,10 +199,17 @@ pub enum TlsFingerprint {
     /// Chrome 131's on Android (`curl_chrome131_android`): the same shape
     /// without the hybrid group, behind the phone's identity.
     Chrome131Android,
-    /// Chrome 146's (`curl_chrome146`): the newest desktop Chromium in the
-    /// bundle. Chrome 133 through 146 send one hello — same JA4, same extension
-    /// set, same h2 preface — so a single record covers them, under the newest
-    /// identity; keeping four names for it would only multiply the report.
+    /// Chrome 150's (the bundle's own `--impersonate chrome150` target): the
+    /// newest desktop Chromium here, and the first shape whose signature-scheme
+    /// list carries ML-DSA. One difference from [`Self::Chrome146`] — three
+    /// schemes in front of the list — and it is a generation boundary: JA4
+    /// hashes that list, so the two answer with different keys.
+    Chrome150,
+    /// Chrome 146's (`curl_chrome146`): the newest release of the 133–146
+    /// generation. Chrome 133 through 146 send one hello — same JA4, same
+    /// extension set, same h2 preface — so a single record covers them, under
+    /// the newest identity; keeping four names for it would only multiply the
+    /// report.
     Chrome146,
     /// Chrome 133's (`curl_chrome133a`): Chrome 146's hello under the 133
     /// identity. The bundle sends one hello for 133 through 146, so this record
@@ -231,6 +245,10 @@ pub enum TlsFingerprint {
     /// Safari 26.0's (`curl_safari260`): the hybrid group, no padding and no
     /// request priority.
     Safari260,
+    /// Safari 26.0.1's (the bundle's own `--impersonate safari2601` target):
+    /// Safari 26.0's shape with the session ticket gone and `zstd` dropped from
+    /// `accept-encoding`. One extension less is a different JA4 key.
+    Safari2601,
     /// Safari 26.0's on iOS (`curl_safari260_ios`): X25519 first, padding back.
     Safari260Ios,
     /// Tor Browser 14.5's (`curl_tor145`): Firefox 128 ESR's hello, ungreased.
@@ -332,7 +350,7 @@ impl TlsFingerprint {
     /// browser — then one browser at a time alphabetically, newest version
     /// first inside each browser (a desktop shape before the phone shape of the
     /// same version). A new record goes where its browser and version put it —
-    /// `chrome146` heads the Chromium block, `safari153` closes Safari's.
+    /// `chrome150` heads the Chromium block, `safari153` closes Safari's.
     ///
     /// The single hand-written list on this side of the table: `spec()` panics
     /// on a variant missing from `SHAPES`, and the totality test compares this
@@ -342,13 +360,15 @@ impl TlsFingerprint {
     /// default; the rest are older and newer releases of the same clients plus
     /// the mobile, Tor and missing-version shapes, selectable one at a time
     /// (`--fingerprint`) or as a burst list (`--burst-profiles all`).
-    pub const ALL: [TlsFingerprint; 30] = [
+    pub const ALL: [TlsFingerprint; 33] = [
         Self::Rustls,
         Self::Go127,
+        Self::Chrome150,
         Self::Chrome146,
         Self::Chrome133,
         Self::Chrome131,
         Self::Chrome131Android,
+        Self::Chrome124,
         Self::Chrome123,
         Self::Chrome116,
         Self::Chrome115Pq,
@@ -365,6 +385,7 @@ impl TlsFingerprint {
         Self::Firefox99,
         Self::Firefox65,
         Self::Safari260,
+        Self::Safari2601,
         Self::Safari260Ios,
         Self::Safari184Ios,
         Self::Safari180,
@@ -384,11 +405,16 @@ impl TlsFingerprint {
     /// `chrome123` with it — the two differ by one extension), and one refused
     /// shape per key family, so a run says both whether a site is reachable and
     /// whether the censor on the path is carrying a table at all. The other
-    /// fourteen shapes are a flag away (`--burst-profiles`), and the rows the
+    /// twenty-six shapes are a flag away (`--burst-profiles`), and the rows the
     /// measurements named as duplicates of these — `edge101` and
     /// `chrome99android` answer with `chrome107`'s key, `safari170`,
     /// `safari172ios` and `safari184ios` with another Safari row's — are not in
     /// the default set for exactly that reason.
+    ///
+    /// The Chromium slot holds `chrome146` rather than the newer `chrome150`:
+    /// this set is chosen for what a shape *answers*, and 146 is the one that
+    /// was measured — a network run against the TSPU — where 150 has only just
+    /// arrived and would change the fingerprint every default run presents.
     ///
     /// Kept apart from [`Self::ALL`] because the network budget of test 6 is
     /// `profiles × hosts × 2 version axes`: every shape added here is paid for
@@ -497,16 +523,26 @@ pub(crate) fn sig_algs(fingerprint: TlsFingerprint) -> &'static [u16] {
     fingerprint.spec().sig_algs
 }
 
+/// The QUIC shape this profile presents: the Initial's packet number, its
+/// connection-ID lengths, and the size the datagram is padded to.
+///
+/// Read by test 2's QUIC column, which asks the same host the TLS columns ask —
+/// so what it puts on the wire has to be the impersonated client's header and
+/// not this build's. [`QuicShape`] carries the measurements behind each value.
+pub(crate) fn quic_shape(fingerprint: TlsFingerprint) -> QuicShape {
+    fingerprint.spec().quic
+}
+
 /// True when this shape carries `encrypted_client_hello` (65037) as GREASE.
 ///
-/// Nine shapes do: the eight wrappers that name `--ech true` —
-/// `curl_chrome123`, `curl_chrome131`, `curl_chrome131_android`,
-/// `curl_chrome133a`, `curl_chrome146`, `curl_firefox133`, `curl_firefox147`
-/// and `curl_tor145` — plus `firefox120`, whose reference is the uTLS ladder
-/// rather than a wrapper and whose own spec pins GREASE ECH. The eight send it
-/// as grease because curl needs DoH or an explicit `--ecl:` to have a real
-/// config at all; the wrappers' own flags, and `firefox120`'s spec, are the
-/// source, and the captures agree
+/// Eleven shapes do: the ten wrappers that name `--ech true` —
+/// `curl_chrome123`, `curl_chrome124`, `curl_chrome131`, `curl_chrome131_android`,
+/// `curl_chrome133a`, `curl_chrome146`, `curl_chrome150`, `curl_firefox133`,
+/// `curl_firefox147` and `curl_tor145` — plus `firefox120`, whose reference is
+/// the uTLS ladder rather than a wrapper and whose own spec pins GREASE ECH. The
+/// ten send it as grease because curl needs DoH or an explicit `--ecl:` to have
+/// a real config at all; the wrappers' own flags, and `firefox120`'s spec, are
+/// the source, and the captures agree
 /// (`encrypted_client_hello` in `firefox_133.0.3_linux.yaml`,
 /// `chrome_136.0.7103.93.yaml` and the rest).
 pub(crate) fn sends_ech(fingerprint: TlsFingerprint) -> bool {

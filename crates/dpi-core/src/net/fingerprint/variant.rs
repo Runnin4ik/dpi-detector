@@ -55,6 +55,14 @@ pub enum HelloVariant {
     /// Reverse the ALPN list (and the config's copy, which rustls validates
     /// the server's choice against).
     AlpnReverse,
+    /// Cipher suites in wire order, replacing the provider-derived list.
+    ///
+    /// The suite list is the one field outside the extension block, and the
+    /// block's own offset follows its length: a swap of two suites keeps both,
+    /// which is the only way to ask whether the *contents* of this list are read
+    /// rather than its position. The profile's GREASE slot is added around the
+    /// list, not named by it.
+    Ciphers(Vec<u16>),
     /// The exact extension order, with the per-connection shuffle turned off:
     /// one order rather than the set of orders a Chromium draws. A GREASE slot is
     /// named with [`GREASE_EXTENSION_MARKER`] (`0x0a0a`), since the value itself
@@ -186,6 +194,7 @@ impl HelloVariant {
             "padding" => one().map(Self::Padding),
             "no-padding" => Ok(Self::NoPadding),
             "alpn-reverse" => Ok(Self::AlpnReverse),
+            "ciphers" => list().map(Self::Ciphers),
             "ext-order" => list().map(Self::ExtOrder),
             "groups" => list().map(Self::Groups),
             "key-shares" => list().map(Self::KeyShares),
@@ -213,6 +222,7 @@ impl HelloVariant {
             Self::Padding(n) => format!("padding:{n}"),
             Self::NoPadding => "no-padding".into(),
             Self::AlpnReverse => "alpn-reverse".into(),
+            Self::Ciphers(suites) => format!("ciphers:{}", list(suites)),
             Self::ExtOrder(order) => format!("ext-order:{}", list(order)),
             Self::Groups(groups) => format!("groups:{}", list(groups)),
             Self::KeyShares(groups) => format!("key-shares:{}", list(groups)),
@@ -303,6 +313,7 @@ impl HelloVariant {
                     *alpn_protocols = protocols.clone();
                 }
             }
+            Self::Ciphers(suites) => hello.cipher_suites = Some(suites.clone()),
             Self::ExtOrder(order) => {
                 hello.extension_order = Some(order.clone());
                 // A shuffle would overwrite the order on the way out, so pinning
@@ -395,6 +406,20 @@ mod tests {
         out.into_iter().filter(|group| !is_grease(*group)).collect()
     }
 
+    /// The cipher suites the hello offers, in wire order, GREASE filtered.
+    fn ciphers(record: &[u8]) -> Vec<u16> {
+        let hello = &record[9..]; // past the record header and the handshake header
+        let at = 35 + usize::from(hello[34]); // version, random, session id
+        let len = usize::from(u16::from_be_bytes([hello[at], hello[at + 1]]));
+        hello[at + 2..at + 2 + len]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_be_bytes(*pair))
+            .filter(|suite| !is_grease(*suite))
+            .collect()
+    }
+
     /// The extension type order, GREASE slots kept as their own value.
     fn order(record: &[u8]) -> Vec<u16> {
         extensions(&record[5..]).into_iter().map(|(ext_type, _)| ext_type).collect()
@@ -436,6 +461,32 @@ mod tests {
         // names: the body is the only place the difference shows.
         assert_eq!(shares(&named), vec![29]);
         assert!(shares(&drawn).len() > shares(&named).len());
+    }
+
+    #[test]
+    fn a_cipher_list_is_what_the_hello_offers() {
+        // The suite list is the one field outside the extension block, and the
+        // block's own offset follows its length. A swap of two suites moves
+        // neither, so a verdict read against it answers whether the *contents* of
+        // this list are compared — the question an addition of a suite, which
+        // shifts everything behind it by two bytes, cannot ask on its own.
+        let plain = hello_record(&TlsProfile::insecure(TlsFingerprint::Chrome146));
+        let swapped = shaped(
+            TlsFingerprint::Chrome146,
+            "ciphers:4865,4867,4866,49195,49199,49196,49200,52393,52392,49171,49172,156,157,47,53",
+        );
+        assert_eq!(ciphers(&plain)[..3], [4865, 4866, 4867]);
+        assert_eq!(ciphers(&swapped)[..3], [4865, 4867, 4866]);
+        assert_eq!(ciphers(&plain).len(), ciphers(&swapped).len(), "a swap moves no offset");
+        // JA4 sorts the suite list before hashing it, so a swap is invisible to
+        // it while an addition is not — the same asymmetry the extension order
+        // shows, and the reason a verdict has to be read with a variant.
+        assert_eq!(client_hello_ja4(&plain), client_hello_ja4(&swapped));
+        let added = shaped(
+            TlsFingerprint::Chrome146,
+            "ciphers:4865,4866,4867,49195,49199,49196,49200,52393,52392,49171,49172,156,157,47,53,255",
+        );
+        assert_ne!(client_hello_ja4(&plain), client_hello_ja4(&added));
     }
 
     #[test]
@@ -557,6 +608,7 @@ mod tests {
             "padding:1200",
             "no-padding",
             "alpn-reverse",
+            "ciphers:4865,4866,4867",
             "ext-order:0,23,65281",
             "groups:29,4588,23",
             "key-shares:29",

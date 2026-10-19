@@ -2,7 +2,7 @@
 //! goes out.
 
 use super::super::TlsFingerprint;
-use super::TlsShape;
+use super::{BASELINE_QUIC, TlsShape};
 
 pub(crate) const RUSTLS: TlsShape = TlsShape {
     variant: TlsFingerprint::Rustls,
@@ -10,6 +10,7 @@ pub(crate) const RUSTLS: TlsShape = TlsShape {
     token: "RUSTLS",
     label: "RUSTLS",
     source: "rustls (unmodified)",
+    quic: BASELINE_QUIC,
     baseline: true,
     ciphers: &[],
     groups: &[],

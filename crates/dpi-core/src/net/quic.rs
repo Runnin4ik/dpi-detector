@@ -33,7 +33,12 @@ pub const VERSION_1: u32 = 0x0000_0001;
 
 /// The smallest datagram a client may send in an Initial (RFC 9000 §14.1): a
 /// server may — and several do — drop anything shorter.
-pub const INITIAL_DATAGRAM: usize = 1200;
+///
+/// The *floor*, not the size: a client pads to at least this and to its own
+/// target where that is larger. Chromium pads to 1250, which is what the QUIC
+/// column hands [`client_initials`] for a Chromium profile
+/// (`QuicShape::initial_datagram`); every other client here stops at the floor.
+pub const INITIAL_FLOOR: usize = 1200;
 
 /// The sample length header protection reads (RFC 9001 §5.4.2) and the AEAD tag
 /// length, which the three Initial-suite AEADs share.
@@ -277,7 +282,8 @@ pub fn read_varint(buf: &[u8], at: usize) -> Result<(u64, usize), QuicError> {
 }
 
 /// The client's first flight: `crypto` split across as many Initial datagrams as
-/// it takes, each padded to [`INITIAL_DATAGRAM`].
+/// it takes, each padded to `datagram` — the impersonated client's own target,
+/// clamped up to [`INITIAL_FLOOR`], because a server may discard a shorter one.
 ///
 /// A browser-shaped ClientHello is usually larger than one datagram — a
 /// post-quantum key share alone is 1216 bytes — and the RFC's answer is not a
@@ -296,6 +302,7 @@ pub fn client_initials(
     scid: &[u8],
     crypto: &[u8],
     first_pn: u64,
+    datagram: usize,
 ) -> Result<Vec<Vec<u8>>, QuicError> {
     for cid in [dcid, scid] {
         if cid.len() > MAX_CID {
@@ -303,13 +310,16 @@ pub fn client_initials(
         }
     }
 
-    // The length field is a two-byte varint for any packet padded to 1200 bytes,
-    // which every packet here is, so the header's size is known before the
-    // frames are built and the padding can go straight into them.
+    // The RFC's floor is a floor: a target below it would send an Initial the
+    // peer is allowed to discard, so the clamp is here rather than in the caller.
+    let datagram = datagram.max(INITIAL_FLOOR);
+    // The length field is a two-byte varint for any packet padded to 1200 bytes
+    // or more, which every packet here is, so the header's size is known before
+    // the frames are built and the padding can go straight into them.
     let header_len = 1 + 4 + 1 + dcid.len() + 1 + scid.len() + 1 + 2 + PN_LEN;
-    let capacity = INITIAL_DATAGRAM
+    let capacity = datagram
         .checked_sub(header_len + TAG_LEN)
-        .ok_or(QuicError::Oversized { frame: header_len + TAG_LEN, datagram: INITIAL_DATAGRAM })?;
+        .ok_or(QuicError::Oversized { frame: header_len + TAG_LEN, datagram })?;
 
     let mut out = Vec::new();
     let mut offset = 0usize;
@@ -379,7 +389,7 @@ fn seal_with(
     packet_number: u64,
     frames: Vec<u8>,
 ) -> Result<Vec<u8>, QuicError> {
-    let mut packet = Vec::with_capacity(INITIAL_DATAGRAM);
+    let mut packet = Vec::with_capacity(INITIAL_FLOOR);
     packet.push(0xc0 | (PN_LEN as u8 - 1)); // long header, Initial, fixed bit
     packet.extend_from_slice(&VERSION_1.to_be_bytes());
     packet.push(dcid.len() as u8);
@@ -986,9 +996,9 @@ fce7f7b37ba1d1632e96677825ddf739\
             .chain(std::iter::repeat_n(0x41u8, 0x20))
             .collect::<Vec<u8>>();
         let keys = InitialKeys::derive(&dcid).expect("a key schedule");
-        let flight = client_initials(&keys, &dcid, &scid, &hello, 0).expect("a datagram");
+        let flight = client_initials(&keys, &dcid, &scid, &hello, 0, INITIAL_FLOOR).expect("a datagram");
         assert_eq!(flight.len(), 1, "a 38-byte hello fits one datagram");
-        assert_eq!(flight[0].len(), INITIAL_DATAGRAM);
+        assert_eq!(flight[0].len(), INITIAL_FLOOR);
 
         let (pn, frames) = open_our_initial(&keys, &dcid, &scid, &flight[0]);
         assert_eq!(pn, 0);
@@ -996,12 +1006,34 @@ fce7f7b37ba1d1632e96677825ddf739\
         let pn_offset = 1 + 4 + 1 + dcid.len() + 1 + scid.len() + 1 + 2;
         assert_eq!(
             frames[1],
-            Frame::Padding(INITIAL_DATAGRAM - pn_offset - PN_LEN - TAG_LEN - (3 + hello.len()))
+            Frame::Padding(INITIAL_FLOOR - pn_offset - PN_LEN - TAG_LEN - (3 + hello.len()))
         );
         // §17.2: the destination is ours, the source is the one we chose.
         assert_eq!(flight[0][5], dcid.len() as u8);
         assert_eq!(&flight[0][6..6 + dcid.len()], dcid.as_slice());
         assert_eq!(flight[0][6 + dcid.len()], scid.len() as u8);
+    }
+
+    /// The datagram is the impersonated client's target, and the RFC's floor
+    /// still holds when a smaller one is handed in.
+    ///
+    /// Chromium pads to 1250 and starts at packet number 1
+    /// (lexiforest/curl-impersonate#298, #303); nothing may pad below 1200, where
+    /// a server is allowed to discard the Initial (§14.1).
+    #[test]
+    fn the_datagram_is_the_target_and_never_below_the_floor() {
+        let dcid = unhex("0011223344556677");
+        let scid = unhex("8899aabbccddeeff");
+        let hello: Vec<u8> = (0..38).map(|i| (i % 251) as u8).collect();
+        let keys = InitialKeys::derive(&dcid).expect("a key schedule");
+
+        let chromium = client_initials(&keys, &dcid, &scid, &hello, 1, 1250).expect("a datagram");
+        assert_eq!(chromium[0].len(), 1250, "Chromium's target");
+        let (pn, _) = open_our_initial(&keys, &dcid, &scid, &chromium[0]);
+        assert_eq!(pn, 1, "and the number Chromium starts at");
+
+        let short = client_initials(&keys, &dcid, &scid, &hello, 0, 900).expect("a datagram");
+        assert_eq!(short[0].len(), INITIAL_FLOOR, "a target below the floor is clamped up");
     }
 
     /// A retransmission is the same CRYPTO data under new packet numbers
@@ -1014,9 +1046,10 @@ fce7f7b37ba1d1632e96677825ddf739\
         let scid = unhex("8899aabbccddeeff");
         let hello = std::iter::repeat_n(0x41u8, 1800).collect::<Vec<u8>>();
         let keys = InitialKeys::derive(&dcid).expect("a key schedule");
-        let first = client_initials(&keys, &dcid, &scid, &hello, 0).expect("a flight");
+        let first = client_initials(&keys, &dcid, &scid, &hello, 0, INITIAL_FLOOR).expect("a flight");
         assert!(first.len() > 1, "a 1800-byte hello does not fit one datagram");
-        let again = client_initials(&keys, &dcid, &scid, &hello, first.len() as u64).expect("a flight");
+        let again = client_initials(&keys, &dcid, &scid, &hello, first.len() as u64, INITIAL_FLOOR)
+            .expect("a flight");
         assert_eq!(again.len(), first.len(), "a repeat has the same shape");
 
         for (index, (before, after)) in first.iter().zip(&again).enumerate() {
@@ -1037,9 +1070,9 @@ fce7f7b37ba1d1632e96677825ddf739\
         let scid = unhex("8899aabbccddeeff");
         let hello: Vec<u8> = (0..1700).map(|i| (i % 251) as u8).collect();
         let keys = InitialKeys::derive(&dcid).expect("a key schedule");
-        let flight = client_initials(&keys, &dcid, &scid, &hello, 0).expect("a flight");
+        let flight = client_initials(&keys, &dcid, &scid, &hello, 0, INITIAL_FLOOR).expect("a flight");
         assert_eq!(flight.len(), 2, "1700 bytes do not fit one 1200-byte datagram");
-        assert!(flight.iter().all(|packet| packet.len() == INITIAL_DATAGRAM));
+        assert!(flight.iter().all(|packet| packet.len() == INITIAL_FLOOR));
 
         let mut stream = CryptoStream::new();
         for (index, packet) in flight.iter().enumerate() {
@@ -1060,7 +1093,7 @@ fce7f7b37ba1d1632e96677825ddf739\
         let scid = [0x02; 8];
         let hello: Vec<u8> = (0..5000).map(|i| (i % 253) as u8).collect();
         let keys = InitialKeys::derive(&dcid).expect("a key schedule");
-        let flight = client_initials(&keys, &dcid, &scid, &hello, 0).expect("a flight");
+        let flight = client_initials(&keys, &dcid, &scid, &hello, 0, INITIAL_FLOOR).expect("a flight");
         assert_eq!(flight.len(), 5, "5000 bytes need five 1200-byte datagrams");
         let mut stream = CryptoStream::new();
         for packet in &flight {
@@ -1130,7 +1163,7 @@ fce7f7b37ba1d1632e96677825ddf739\
         let keys = InitialKeys::derive(&unhex(DCID)).expect("a key schedule");
         let long = [0u8; 21];
         assert_eq!(
-            client_initials(&keys, &long, &[0u8; 8], b"hello", 0),
+            client_initials(&keys, &long, &[0u8; 8], b"hello", 0, INITIAL_FLOOR),
             Err(QuicError::ConnectionId { len: 21 })
         );
     }

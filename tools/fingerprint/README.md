@@ -3,7 +3,8 @@
 `crates/dpi-core/examples/tls_fingerprint.rs` dumps what *we* send. This tool is
 the other half: it drives the client each profile is transcribed from and diffs
 the two of us, so a profile can be re-checked whenever its data changes. For
-every profile but nine that client is the `curl-impersonate` bundle's wrapper.
+every profile but eleven that client is the `curl-impersonate` bundle itself —
+its wrapper script, or the target inside its binary (see below).
 
 `PROFILES` in `fingerprint.py` is the one place a code name maps to its
 reference, and the reference is not always a wrapper: the nine shapes the bundle
@@ -17,6 +18,20 @@ layer to compare and no wrapper flags for the verdict to read — which is also
 why their identity is a minimum and their h2 preface is hyper's default. The
 `utls` stage's pair table is where those nine are compared spec-to-record, its
 `ours:<code>` rows.
+
+A third form exists for a target the *tarball* ships no script for while the
+bundle's own binary carries it: `impersonate:<target>`, which runs
+`curl-impersonate --compressed --impersonate <target>` — the one-liner the
+fork's `bin/` holds for exactly those targets. Two rows use it, and both are
+packaging gaps rather than missing clients: the Windows build of **v2.2.3** ships
+neither `curl_chrome150.bat` nor `curl_safari2601.bat`, although `bin/` has both
+(the fork added the Chrome 150 script in a PR merged *after* that release —
+lexiforest/curl-impersonate#321 — and has never added the Safari one). Unlike a
+`utls:` row an `impersonate:` row has an HTTP layer, so every stage but `flags`
+applies to it, and `captures` compares it against the fork's own
+`chrome_150.0.7871.127_macOS.yaml` / `safari_26.0.1_macOS.yaml`. When a release
+does ship the script, the row can go back to naming it — the binary's table and
+the script are the same client.
 
 ```
 python tools/fingerprint/fingerprint.py all                 # every stage, every profile
@@ -201,11 +216,21 @@ The stage ends with the same data inverted — which clients share a JA4 — and
 is the list a matcher needs, because a block on one hash takes every member:
 seventeen clients share `t13d1516h2_8daaf6152771_e5627efa2ab1` (Chrome 96 to 116,
 Edge 99/101, QQ), seven share the `d8a2da3f94cd` of Chrome 133 to 146, and nine
-share `02713d6af862` across two key-share generations (MLKEM768, the Kyber draft,
-and none) with both extension counts. The one exception is the padding coin: a
-client that draws two hashes is listed under both, so a single-hash block drops
-only the connections that draw it — which is the case where "that version is
-blocked" and "half of its connections are blocked" look the same from outside.
+share `02713d6af862` across three key-share generations — the draft hybrid
+`X25519Kyber768Draft00` with X25519 (`curl_chrome124`), X25519 alone (Chrome
+119–123) and the final `X25519MLKEM768` with X25519 (Chrome 131) — with both
+extension counts. The one exception is the padding coin: a client that draws two
+hashes is listed under both, so a single-hash block drops only the connections
+that draw it — which is the case where "that version is blocked" and "half of its
+connections are blocked" look the same from outside.
+
+Two rows of the table are not in this list at all, and that is a packaging fact
+rather than a shape one: `chrome150` and `safari2601` are `impersonate:` rows,
+and this stage enumerates the *bundle's* wrappers and the uTLS specs, so a target
+that only the binary carries is invisible to it. Their keys —
+`t13d1516h2_8daaf6152771_806a8c22fdea` and
+`t13d2013h2_a09f3c656075_7f0f34a4126d` — come from the same binary driven at a
+listener (`hello`, `hello-diff`) and are pinned in `tests.rs`.
 
 Dumping the library is also how a client the bundle does not wrap becomes a
 profile of ours at all: nine of the records are transcribed from these specs
@@ -243,9 +268,14 @@ extension *set* that moves marks the padding floor's coin flip (the bundle names
 mark every Chromium from 110 up, so a flag alone would miss `chrome116`), and a
 wrapper that names `--tls-key-shares-limit` explains its own key-share count.
 Everything else is printed as `to look at`, because only the named differences
-below can say whether it is expected: a full run covers twenty-eight profiles,
-and its nineteen bundle rows still come out `13 clean, 6 explained by their own
-client, 0 to look at`. The nine uTLS-backed rows are judged by `hello` alone —
+below can say whether it is expected: a full run covers the thirty-three rows of
+`PROFILES` — twenty-three that drive the bundle, and the nine uTLS specs — and
+the rows that were there before the v2.2.3 pin still come out `13 clean, 6
+explained by their own client, 0 to look at`. The three rows that pin added come
+out as the byte diff reports them: `safari2601` `SAME SHAPE`, `chrome150` the
+shuffle alone, `chrome124` the shuffle plus its draft key share (all three are
+listed under "Differences the tool will keep reporting"). The nine uTLS-backed
+rows are judged by `hello` alone —
 there are no wrapper flags to explain anything with — and the differences named
 below are the ones that list excuses for them: a length the spec pins and a
 share the provider cannot serve.
@@ -282,7 +312,7 @@ part of it that the tool itself drives.
 
 These are deliberate. Anything *else* it reports is a bug.
 
-* **ECH body content.** The seven shapes whose wrapper names `--ech true` send
+* **ECH body content.** The ten shapes whose wrapper names `--ech true` send
   `encrypted_client_hello` (65037) as GREASE, like the wrapper does. `enc` and the
   payload are rebuilt per connection, so the extension's *bytes* always differ —
   for a real browser too. What `hello-diff` compares instead is the length the
@@ -291,7 +321,7 @@ These are deliberate. Anything *else* it reports is a bug.
   tag, `setup_ech_grease()` in its `ssl/encrypted_client_hello.cc`). A body of
   any other size — the 400 bytes an inner-hello encoding produced here before —
   is reported as a difference.
-* **One ECH body length, on one shape.** `firefox120` is the eighth shape that
+* **One ECH body length, on one shape.** `firefox120` is the eleventh shape that
   sends `encrypted_client_hello` and the only one whose reference is a spec
   literal: uTLS writes a single length into it (`CandidatePayloadLens = {223}`, a
   239-byte payload and a 281-byte extension body on the wire), while our record
@@ -309,7 +339,7 @@ These are deliberate. Anything *else* it reports is a bug.
   against 561, never a smaller hello on our side. The same coin flip makes
   `echo-diff` report a JA3 difference for these two shapes more often than for
   the other shufflers, since the padding extension is part of JA3 and JA4.
-* **Extension order, in the byte diff only.** The five Chrome 110+ records
+* **Extension order, in the byte diff only.** The Chrome 110+ records
   shuffle their extension order per connection because their wrapper names
   `--tls-permute-extensions`, and the bundle's own captures do too; `chrome115pq`
   shuffles for the same reason without a wrapper, since its spec calls
@@ -333,6 +363,23 @@ These are deliberate. Anything *else* it reports is a bug.
   padding slot either. What a provider gap leaves, not a transcription choice —
   JA3 and JA4 read the group list and the extension set, not the shares, and stay
   the capture's.
+* **`chrome124`'s draft share, the same gap with a wrapper.** `curl_chrome124`
+  leads its group list with the same `X25519Kyber768Draft00` and puts a
+  1216-byte share for it on the wire; our record advertises the group and shares
+  X25519, so `hello-diff` reports `body key_share` and a hello of about 560 bytes
+  against the wrapper's 1719. Nothing else differs — the group list itself, the
+  extension set, the ciphers, the ALPS code point and the shuffle all match, and
+  JA4 (which sees no group list and no share) is the wrapper's own
+  `02713d6af862`, the key `chrome123` and `chrome131` also answer with.
+* **`chrome150`'s ML-DSA schemes.** Chrome 150 puts `mldsa44`, `mldsa65` and
+  `mldsa87` (0x0904–0x0906) in front of the eight schemes Chrome 146 offers, and
+  `ring` verifies none of them, so the three are advertised and named in
+  `tests::UNIMPLEMENTED`. They are also what moves the record's JA4 extension
+  hash — `806a8c22fdea` against 146's `d8a2da3f94cd` — because JA4 hashes the
+  signature-algorithms list. This is the one divergence on the shape that no
+  stage reports as a difference: our hello carries the same eleven schemes, so
+  `hello-diff` sees a matching body and the keys match; what a peer notices is a
+  server that *selects* one of the three, which ends the handshake.
 
 ## Requirements
 

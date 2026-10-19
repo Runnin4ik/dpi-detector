@@ -21,6 +21,9 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from decrypt import TSHARK, keys_for, parse_long_header, read_varint  # noqa: E402
 
 V1 = 0x00000001
+# The probe pads each Initial to the profile's own record (`QuicShape` in
+# `crates/dpi-core/src/net/fingerprint/shapes/mod.rs`): 1250 for a Chromium
+# profile, the RFC's 1200 floor for every other. This harness replays the floor.
 PADDING = 1200
 # The probe's own schedule, mirrored here on purpose: `PTO_FIRST` and
 # `MAX_RETRANSMITS` in `crates/dpi-core/src/probe/quic.rs`, and the window is

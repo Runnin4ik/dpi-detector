@@ -123,6 +123,14 @@ PROFILES = [
     # whether the identity is read; see docs/ADDING_A_PROFILE.md.
     ("chrome146", "curl_chrome146", None),
     ("chrome133", "curl_chrome133a", None),
+    # The v2.2.3 additions. `chrome124` has a wrapper script in the Windows
+    # tarball and the fork publishes its capture; `chrome150` and `safari2601`
+    # have neither — the tarball ships no `.bat` for them and `win/bin/` never
+    # got the one-liner `bin/` holds — so their reference is the binary's own
+    # `--impersonate` table, which is what the fork's `bin/` script runs.
+    ("chrome124", "curl_chrome124", "chrome_124.0.6367.60.yaml"),
+    ("chrome150", "impersonate:chrome150", "chrome_150.0.7871.127_macOS.yaml"),
+    ("safari2601", "impersonate:safari2601", "safari_26.0.1_macOS.yaml"),
     ("firefox147", "curl_firefox147", "firefox_144.0.0_linux.yaml"),
     ("safari153", "curl_safari153", "safari_15.3_macos11.6.4.yaml"),
     ("safari184ios", "curl_safari184_ios", "safari_18.4_iOS.yaml"),
@@ -490,8 +498,33 @@ def wrapper_flags(bundle, wrapper):
     return {"flags": flags, "headers": headers}
 
 
+def impersonate_binary(bundle):
+    """The bundle's single binary, which carries the `--impersonate` table."""
+    for name in ("curl-impersonate.exe", "curl-impersonate"):
+        path = os.path.join(bundle, name)
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def run_wrapper(bundle, wrapper, url, extra=()):
-    """Run a wrapper against `url`, returning (stdout, stderr)."""
+    """Run a reference client against `url`, returning (stdout, stderr).
+
+    `wrapper` is a bundle wrapper script, or `impersonate:<target>` for a target
+    the tarball ships no script for. The Windows build of v2.2.3 is the case that
+    forced the second form: it has neither `curl_chrome150.bat` nor
+    `curl_safari2601.bat` (the fork's `bin/` has both, `win/bin/` never got
+    them), while the binary's own impersonation table carries the targets. What
+    `bin/curl_chrome150` does is exactly the one-liner below.
+    """
+    if is_impersonate(wrapper):
+        binary = impersonate_binary(bundle)
+        if binary is None:
+            raise SystemExit(f"no curl-impersonate binary in {bundle}")
+        argv = [binary, "--compressed", "--impersonate", wrapper.split(":", 1)[1],
+                *extra, "-s", "-k", url]
+        done = subprocess.run(argv, cwd=bundle, capture_output=True)
+        return done.stdout.decode("utf-8", "replace"), done.stderr.decode("utf-8", "replace")
     path = wrapper_path(bundle, wrapper)
     if path is None:
         raise SystemExit(f"wrapper {wrapper} not found in {bundle}")
@@ -603,8 +636,8 @@ def capture_fetch(harness, ref):
 
     The captures in `tests/signatures/` are the fork's recordings of the clients
     (and of real browsers); the profile table names one file per profile. The tag
-    is derived from the bundle directory name, so a v2.2.2 bundle is compared
-    against v2.2.2's captures rather than master's.
+    is derived from the bundle directory name, so a v2.2.3 bundle is compared
+    against v2.2.3's captures rather than master's.
     """
     section(f"captures — fetching {CAPTURE_REPO} {ref or '(default branch)'}")
     dest = harness.captures
@@ -626,7 +659,7 @@ def capture_fetch(harness, ref):
 
 
 def capture_ref(bundle):
-    """`v2.2.2` out of `curl-impersonate-v2.2.2.x86_64-win32`, else None."""
+    """`v2.2.3` out of `curl-impersonate-v2.2.3.x86_64-win32`, else None."""
     match = re.search(r"v(\d+\.\d+\.\d+)", os.path.basename(bundle or ""))
     return f"v{match.group(1)}" if match else None
 
@@ -967,7 +1000,7 @@ def stage_headers(harness, args):
             listener.done.wait(8)
         theirs = listener.request
         open(os.path.join(root, "ours", code + ".txt"), "wb").write(mine)
-        open(os.path.join(root, "bundle", wrapper + ".txt"), "wb").write(theirs)
+        open(os.path.join(root, "bundle", reference_name(wrapper) + ".txt"), "wb").write(theirs)
         if not mine or not theirs:
             log(f"  {code:16} capture failed (ours {len(mine)}, bundle {len(theirs)} bytes)")
             continue
@@ -981,7 +1014,7 @@ def stage_headers_diff(harness, args):
         if not wrapper or is_utls(wrapper):
             continue
         ours_path = os.path.join(root, "ours", code + ".txt")
-        theirs_path = os.path.join(root, "bundle", wrapper + ".txt")
+        theirs_path = os.path.join(root, "bundle", reference_name(wrapper) + ".txt")
         if not os.path.exists(ours_path) or not os.path.exists(theirs_path):
             log(f"  {code:16} no capture; run the `headers` stage first")
             continue
@@ -1035,7 +1068,7 @@ def stage_echo(harness, args):
         if not wrapper or is_utls(wrapper):
             continue
         stdout, _ = run_wrapper(harness.bundle, wrapper, args.echo_url)
-        open(os.path.join(harness.work, "echo", "bundle", wrapper + ".json"), "w",
+        open(os.path.join(harness.work, "echo", "bundle", reference_name(wrapper) + ".json"), "w",
              encoding="utf-8").write(stdout)
         log(f"  bundle {wrapper:24} {len(stdout)} bytes"
             f"{'' if stdout.lstrip().startswith('{') else ' (NOT JSON — is the service reachable?)'}")
@@ -1096,7 +1129,7 @@ def stage_echo_diff(harness, args):
         if not wrapper or is_utls(wrapper):
             continue
         ours_path = os.path.join(harness.work, "echo", "ours", code + ".txt")
-        theirs_path = os.path.join(harness.work, "echo", "bundle", wrapper + ".json")
+        theirs_path = os.path.join(harness.work, "echo", "bundle", reference_name(wrapper) + ".json")
         if not os.path.exists(ours_path) or not os.path.exists(theirs_path):
             log(f"  {code:16} no echo report; run the `echo` stage first")
             continue
@@ -1254,7 +1287,7 @@ def stage_hello_diff(harness, args):
 def stage_flags(harness, args):
     section(f"flags — what each wrapper names (bundle: {harness.bundle})")
     for code, wrapper, _ in selected(args):
-        if not wrapper or is_utls(wrapper):
+        if not wrapper or is_utls(wrapper) or is_impersonate(wrapper):
             continue
         parsed = wrapper_flags(harness.bundle, wrapper)
         if parsed is None:
@@ -1314,6 +1347,18 @@ def is_utls(wrapper):
     return bool(wrapper) and wrapper.startswith("utls:")
 
 
+def is_impersonate(wrapper):
+    """True when a profile's reference is the bundle binary's own `--impersonate` table.
+
+    The form exists for a target the tarball ships no wrapper script for: the
+    Windows build of v2.2.3 wraps neither `chrome150` nor `safari2601`, and both
+    are in the binary. Unlike a `utls:` row it has an HTTP layer, so `headers`,
+    `echo` and `hello` all apply; only `flags` skips it, there being no script to
+    read the flags out of.
+    """
+    return bool(wrapper) and wrapper.startswith("impersonate:")
+
+
 def read_hex(path):
     """The bytes in a capture file: pure hex, or hex with `#` comments and row breaks.
 
@@ -1359,7 +1404,7 @@ def counterpart_capture(harness, counterpart, args):
             harness.example("liveany", code, SNI, timeout=60)
             listener.done.wait(8)
     else:
-        path = os.path.join(root, "bundle_" + counterpart + ".hex")
+        path = os.path.join(root, "bundle_" + reference_name(counterpart) + ".hex")
         with Listener(PORT) as listener:
             run_wrapper(harness.bundle, counterpart, f"https://{SNI}/",
                         extra=("--connect-to", f"{SNI}:{PORT}:127.0.0.1:{PORT}", "--max-time", "10"))

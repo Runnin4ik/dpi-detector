@@ -10,7 +10,7 @@ use super::{
     EXT_ENCRYPTED_CLIENT_HELLO, EXT_EXTENDED_MASTER_SECRET, EXT_KEY_SHARE,
     EXT_PSK_KEY_EXCHANGE_MODES, EXT_RECORD_SIZE_LIMIT, EXT_RENEGOTIATION_INFO, EXT_SERVER_NAME,
     EXT_SESSION_TICKET, EXT_SIGNATURE_ALGORITHMS, EXT_STATUS_REQUEST, EXT_SUPPORTED_GROUPS,
-    EXT_SUPPORTED_VERSIONS, H2_AND_HTTP11,
+    EXT_SUPPORTED_VERSIONS, FIREFOX_QUIC, H2_AND_HTTP11,
 };
 use super::TlsShape;
 
@@ -101,7 +101,8 @@ pub(crate) const TOR145: TlsShape = TlsShape {
     code: "tor145",
     token: "TOR",
     label: "TOR 145",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: FIREFOX_QUIC,
     baseline: false,
     ciphers: TOR_TLS_CIPHERS,
     groups: TOR_TLS_GROUPS,

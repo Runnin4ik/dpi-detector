@@ -6,12 +6,13 @@ use rustls::client::hello_profile::GREASE_EXTENSION_MARKER;
 use super::super::TlsFingerprint;
 use super::super::h2::{CHROME123_H2, CHROME99_ANDROID_H2, CHROME_H2};
 use super::super::identity::{
-    CHROME115_PQ_HEADERS, CHROME116_HEADERS, CHROME123_HEADERS, CHROME131_ANDROID_HEADERS,
-    CHROME131_HEADERS, CHROME133_HEADERS, CHROME146_HEADERS, CHROME70_HEADERS, CHROME72_HEADERS, CHROME87_HEADERS,
+    CHROME115_PQ_HEADERS, CHROME116_HEADERS, CHROME123_HEADERS, CHROME124_HEADERS,
+    CHROME131_ANDROID_HEADERS, CHROME131_HEADERS, CHROME133_HEADERS, CHROME146_HEADERS,
+    CHROME150_HEADERS, CHROME70_HEADERS, CHROME72_HEADERS, CHROME87_HEADERS,
     CHROME99_ANDROID_HEADERS, CHROME_HEADERS,
 };
 use super::{
-    BROTLI, EXT_ALPN, EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW,
+    BROTLI, CHROMIUM_QUIC, EXT_ALPN, EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW,
     EXT_COMPRESS_CERTIFICATE, EXT_EC_POINT_FORMATS, EXT_ENCRYPTED_CLIENT_HELLO,
     EXT_EXTENDED_MASTER_SECRET, EXT_FAKE_CHANNEL_ID, EXT_KEY_SHARE, EXT_PADDING,
     EXT_PSK_KEY_EXCHANGE_MODES, EXT_RENEGOTIATION_INFO, EXT_SCT, EXT_SERVER_NAME,
@@ -43,6 +44,38 @@ pub(crate) const CHROME_TLS_CIPHERS: &[u16] = &[
 
 /// Chrome 99–133's signature schemes, in all three Chromium records.
 pub(crate) const CHROME_TLS_SIG_ALGS: &[u16] = &[
+    0x0403, // ECDSA P-256 SHA-256
+    0x0804, // RSA-PSS SHA-256
+    0x0401, // RSA-PKCS1 SHA-256
+    0x0503, // ECDSA P-384 SHA-384
+    0x0805, // RSA-PSS SHA-384
+    0x0501, // RSA-PKCS1 SHA-384
+    0x0806, // RSA-PSS SHA-512
+    0x0601, // RSA-PKCS1 SHA-512
+];
+
+/// Chrome 150's signature schemes: the three ML-DSA code points in front of
+/// [`CHROME_TLS_SIG_ALGS`], in the order `curl-impersonate --impersonate
+/// chrome150` sends them.
+///
+/// The eleven entries are the whole difference between this shape and Chrome
+/// 146's — the extension *set* is 146's own — and they are what moves its JA4
+/// extension hash (`806a8c22fdea` against `d8a2da3f94cd`), because JA4 hashes the
+/// signature-algorithms list when the hello carries it.
+///
+/// Measured two ways, and the fork's own capture agrees with the wire: the
+/// body read out of the binary's hello is
+/// `0x0904-0x0905-0x0906-0x0403-0x0804-0x0401-0x0503-0x0805-0x0501-0x0806-0x0601`,
+/// and `chrome_150.0.7871.127_macOS.yaml` lists the same eleven numbers.
+///
+/// `ring` verifies none of the three ML-DSA schemes (named in
+/// `tests::UNIMPLEMENTED`), which is the same kind of gap the draft hybrid group
+/// is: the list is what a censor reads, and trimming it would change the
+/// fingerprint the record exists to reproduce.
+const CHROME150_TLS_SIG_ALGS: &[u16] = &[
+    0x0904, // ML-DSA-44
+    0x0905, // ML-DSA-65
+    0x0906, // ML-DSA-87
     0x0403, // ECDSA P-256 SHA-256
     0x0804, // RSA-PSS SHA-256
     0x0401, // RSA-PKCS1 SHA-256
@@ -251,7 +284,7 @@ const CHROME_ALPS_NEW_RAW_EXTS: &[(u16, &[u8])] = &[
 /// 512-byte floor never fires on it and the release never sends extension 21.
 ///
 /// This build cannot share the hybrid group that makes the spec hello that large
-/// ([`CHROME115_PQ_KEY_SHARE_GROUPS`]), so its own hello falls under the floor,
+/// ([`CHROME_DRAFT_PQ_KEY_SHARE_GROUPS`]), so its own hello falls under the floor,
 /// where the padding *rule* would add a slot a real Chrome 115 never has. The
 /// slot is therefore left out of the order: what the record reproduces is the
 /// measured extension set, 15 types including ALPS and without padding, which is
@@ -402,34 +435,153 @@ const CHROME70_TLS_RAW_EXTS: &[(u16, &[u8])] = &[
 (EXT_PADDING, &[]),
 ];
 
-/// Chrome 115 PQ's groups: the draft hybrid group that release offered, then the
-/// three Chrome 87–107 lists. `X25519Kyber768Draft00` (25497) is what Chrome 115
-/// put in front of X25519; Chrome 120 replaced it with the final
-/// `X25519MLKEM768` (4588), which is [`CHROME_TLS_PQ_GROUPS`].
+/// The draft hybrid group Chrome 115 PQ's spec and `curl_chrome124` both lead
+/// with, ahead of the three Chrome 87–107 lists.
+///
+/// `X25519Kyber768Draft00` (25497) is the first post-quantum group Chromium
+/// offered, and the one Chrome 131 replaced with the final `X25519MLKEM768`
+/// (4588, [`CHROME_TLS_PQ_GROUPS`]). Two records carry this list — `chrome115pq`
+/// (uTLS `HelloChrome_115_PQ`) and `chrome124` (the bundle's own wrapper) — so it
+/// is named for the group rather than for one of them.
 ///
 /// The draft group is advertised without ever being shared: this build serves no
-/// `0x6399` (named in `tests::UNIMPLEMENTED`), and the record's key share is the
+/// `0x6399` (named in `tests::UNIMPLEMENTED`), and both records' key share is the
 /// X25519 entry below it.
-const CHROME115_PQ_TLS_GROUPS: &[u16] = &[
+const CHROME_DRAFT_PQ_TLS_GROUPS: &[u16] = &[
 25497, // X25519Kyber768Draft00
 29,    // X25519
 23,    // secp256r1
 24,    // secp384r1
 ];
 
-/// The one key share `chrome115pq` sends: X25519, the second of the two the uTLS
-/// spec puts on the wire.
+/// The one key share the two draft-hybrid records send: X25519, the entry after
+/// the hybrid in both sources.
 ///
-/// The spec shares `X25519Kyber768Draft00` first and X25519 after it; this build
-/// has no draft-00 group to share it with — the PQ provider carries
-/// `X25519MLKEM768`, a different group at a different code point — and a share
-/// for a group the handshake cannot complete fails rather than degrades. So the
-/// record names the one exchange it can run, which is also a group the advertised
-/// list carries, where the spec's hybrid share is not one this build has.
-const CHROME115_PQ_KEY_SHARE_GROUPS: &[u16] = &[29]; // X25519
+/// `chrome115pq`'s spec shares `X25519Kyber768Draft00` first and X25519 after it,
+/// and `curl_chrome124` puts a 1216-byte share for the same draft group on the
+/// wire; this build has no draft-00 group to share it with — the PQ provider
+/// carries `X25519MLKEM768`, a different group at a different code point — and a
+/// share for a group the handshake cannot complete fails rather than degrades. So
+/// both records name the one exchange they can run, which is also a group the
+/// advertised list carries, where the source's hybrid share is not one this build
+/// has.
+const CHROME_DRAFT_PQ_KEY_SHARE_GROUPS: &[u16] = &[29]; // X25519
 
-// Chrome 146, as `curl_chrome146` sends it: the newest desktop Chromium in
-// this bundle, and the only desktop Chrome profile past 131.
+// Chrome 150, as the bundle's own `--impersonate chrome150` target sends it:
+// the newest desktop Chromium here, and the first shape whose signature-scheme
+// list carries ML-DSA.
+//
+// One difference from Chrome 146, and it is a generation boundary: the three
+// ML-DSA code points lead the signature list ([`CHROME150_TLS_SIG_ALGS`]), which
+// moves the JA4 extension hash — `806a8c22fdea` against 146's `d8a2da3f94cd`,
+// because JA4 hashes that list. The extension *set* is 146's own (sixteen types,
+// ALPS at 17613), and so are the ciphers, the hybrid group, the share it brings,
+// the ECH grease, the shuffle, the h2 preface and every header.
+//
+// The provenance has two halves, because the Windows build of v2.2.3 ships no
+// `curl_chrome150.bat`: the fork's `bin/curl_chrome150` is a one-liner over
+// `--impersonate chrome150`, and `win/bin/` never got it. The numbers were
+// therefore read from the binary's own impersonation table — the target driven
+// through a local listener — and cross-checked against the fork's capture
+// `chrome_150.0.7871.127_macOS.yaml`, which lists the same eleven schemes.
+// `tools/fingerprint` drives that form as `impersonate:chrome150`.
+//
+// The three ML-DSA schemes are advertised and not served: `ring` verifies none
+// of them (named in `tests::UNIMPLEMENTED`). That is the same kind of gap
+// `chrome115pq`'s draft group is — the list is what a censor reads, and trimming
+// it would change the fingerprint the record exists to reproduce.
+pub(crate) const CHROME150: TlsShape = TlsShape {
+    variant: TlsFingerprint::Chrome150,
+    code: "chrome150",
+    token: "CHROME",
+    label: "CHROME 150",
+    source: "curl-impersonate v2.2.3 (--impersonate chrome150)",
+    quic: CHROMIUM_QUIC,
+    baseline: false,
+    ciphers: CHROME_TLS_CIPHERS,
+    groups: CHROME_TLS_PQ_GROUPS,
+    sig_algs: CHROME150_TLS_SIG_ALGS,
+    ext_order: CHROME_ALPS_NEW_EXT_ORDER,
+    raw_exts: CHROME_ALPS_NEW_RAW_EXTS,
+    suppress: &[],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_ALPS_NEW,
+    alpn: H2_AND_HTTP11,
+    padding_to: None,
+    grease: true,
+    permute_extensions: true,
+    ech: true,
+    priority_on_h1: false,
+    cert_compression: BROTLI,
+    key_share_groups: None,
+    pq: true,
+    legacy_versions: &[],
+    headers: Some(CHROME150_HEADERS),
+    h2: Some(&CHROME123_H2),
+};
+
+// Chrome 124, as `curl_chrome124` sends it: Chrome 123's hello with the draft
+// hybrid group in front of the others, and nothing else.
+//
+// The fork's own capture says it in one line — "The only difference from Chrome
+// 123 is: supported_groups with X25519Kyber768" — and the diff of the two
+// wrapper hellos agrees: the group list gains `X25519Kyber768Draft00` (25497)
+// ahead of X25519, the key share gains its 1216-byte entry, and the extension
+// set, the cipher list, the ALPS code point (17513), the ECH grease and the
+// shuffle are 123's. JA4 cannot see a group list, so the two records answer with
+// one key (`02713d6af862`) — the group list is the whole of what this row adds,
+// which is also why it is a record of its own rather than a second identity for
+// 123.
+//
+// It is the generation Chrome 115 PQ's spec also describes and the one Chrome
+// 131 replaced: 115 and 124 offer the draft group, 131 the final
+// `X25519MLKEM768`. The draft share is the provider's gap — see
+// [`CHROME_DRAFT_PQ_KEY_SHARE_GROUPS`] — so this build advertises 25497 and
+// shares X25519 alone, exactly as `chrome115pq` does.
+//
+// The missing share is also why the padding slot is absent. A real Chrome 124 is
+// 1778 bytes and never near BoringSSL's 512-byte floor; this build's hello, with
+// the draft share gone, is about 560 and can dip under the floor with the
+// shortest GREASE ECH body — where the padding *rule* would add an extension the
+// source never sends. So the order leaves the slot out, and what the record
+// reproduces is the measured extension set, sixteen types, no padding.
+//
+// Above TLS it is 123 plus the one header that arrived with this release:
+// `priority: u=0, i`, which Chrome added at 124 — which is why the 123 record's
+// header list has none ([`CHROME124_HEADERS`]).
+pub(crate) const CHROME124: TlsShape = TlsShape {
+    variant: TlsFingerprint::Chrome124,
+    code: "chrome124",
+    token: "CHROME",
+    label: "CHROME 124",
+    source: "curl-impersonate v2.2.3",
+    quic: CHROMIUM_QUIC,
+    baseline: false,
+    ciphers: CHROME_TLS_CIPHERS,
+    groups: CHROME_DRAFT_PQ_TLS_GROUPS,
+    sig_algs: CHROME_TLS_SIG_ALGS,
+    ext_order: CHROME_NO_PADDING_EXT_ORDER,
+    raw_exts: CHROME_TLS_RAW_EXTS,
+    suppress: &[],
+    drop13: CHROME_TLS_DROP13,
+    drop12: CHROME_TLS_DROP12_ALPS,
+    alpn: H2_AND_HTTP11,
+    padding_to: None,
+    grease: true,
+    permute_extensions: true,
+    ech: true,
+    priority_on_h1: false,
+    cert_compression: BROTLI,
+    key_share_groups: Some(CHROME_DRAFT_PQ_KEY_SHARE_GROUPS),
+    pq: false,
+    legacy_versions: &[],
+    headers: Some(CHROME124_HEADERS),
+    h2: Some(&CHROME123_H2),
+};
+
+// Chrome 146, as `curl_chrome146` sends it: the newest release of the 133–146
+// generation, and the shape a censor's Chrome table is most likely to carry a
+// key for.
 //
 // Chrome 133, 136, 142, 145 and 146 send one hello — the same cipher, group,
 // signature-scheme and extension lists, the same JA4
@@ -453,7 +605,8 @@ pub(crate) const CHROME146: TlsShape = TlsShape {
     code: "chrome146",
     token: "CHROME",
     label: "CHROME 146",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME_TLS_CIPHERS,
     groups: CHROME_TLS_PQ_GROUPS,
@@ -493,7 +646,8 @@ pub(crate) const CHROME133: TlsShape = TlsShape {
     code: "chrome133",
     token: "CHROME",
     label: "CHROME 133",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME_TLS_CIPHERS,
     groups: CHROME_TLS_PQ_GROUPS,
@@ -530,7 +684,8 @@ pub(crate) const CHROME131: TlsShape = TlsShape {
     code: "chrome131",
     token: "CHROME",
     label: "CHROME 131",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME_TLS_CIPHERS,
     groups: CHROME_TLS_PQ_GROUPS,
@@ -566,7 +721,8 @@ pub(crate) const CHROME131_ANDROID: TlsShape = TlsShape {
     code: "chrome131android",
     token: "CHROME",
     label: "CHROME 131 ANDROID",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME_TLS_CIPHERS,
     groups: CHROME_TLS_GROUPS,
@@ -620,7 +776,8 @@ pub(crate) const CHROME123: TlsShape = TlsShape {
     code: "chrome123",
     token: "CHROME",
     label: "CHROME 123",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME_TLS_CIPHERS,
     groups: CHROME_TLS_GROUPS,
@@ -667,7 +824,8 @@ pub(crate) const CHROME116: TlsShape = TlsShape {
     code: "chrome116",
     token: "CHROME",
     label: "CHROME 116",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME_TLS_CIPHERS,
     groups: CHROME_TLS_GROUPS,
@@ -727,9 +885,10 @@ pub(crate) const CHROME115_PQ: TlsShape = TlsShape {
     token: "CHROME",
     label: "CHROME 115 PQ",
     source: "uTLS v1.8.2 HelloChrome_115_PQ",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME_TLS_CIPHERS,
-    groups: CHROME115_PQ_TLS_GROUPS,
+    groups: CHROME_DRAFT_PQ_TLS_GROUPS,
     sig_algs: CHROME_TLS_SIG_ALGS,
     ext_order: CHROME115_PQ_TLS_EXT_ORDER,
     raw_exts: CHROME_TLS_RAW_EXTS,
@@ -746,7 +905,7 @@ pub(crate) const CHROME115_PQ: TlsShape = TlsShape {
     ech: false,
     priority_on_h1: false,
     cert_compression: BROTLI,
-    key_share_groups: Some(CHROME115_PQ_KEY_SHARE_GROUPS),
+    key_share_groups: Some(CHROME_DRAFT_PQ_KEY_SHARE_GROUPS),
     pq: false,
     // The spec's `supported_versions` is GREASE, 1.3, 1.2 — Chrome 115 no
     // longer lists 1.1 and 1.0 behind them.
@@ -757,7 +916,7 @@ pub(crate) const CHROME115_PQ: TlsShape = TlsShape {
 // The `curl_chrome107` shape — Chrome 107, and the same TLS shape as Edge
 // 99–101.
 //
-// Taken from the `curl-impersonate v2.2.2` bundle this repository measures
+// Taken from the `curl-impersonate v2.2.3` bundle this repository measures
 // against (`.bat` wrapper `curl_chrome107`), and identical to what
 // `curl_chrome99..104` send: one key,
 // `t13d1516h2_8daaf6152771_e5627efa2ab1` (`--legend` prints it), covers this
@@ -782,7 +941,8 @@ pub(crate) const CHROME107: TlsShape = TlsShape {
     code: "chrome107",
     token: "CHROME",
     label: "CHROME 107",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME_TLS_CIPHERS,
     groups: CHROME_TLS_GROUPS,
@@ -829,7 +989,8 @@ pub(crate) const CHROME99_ANDROID: TlsShape = TlsShape {
     code: "chrome99android",
     token: "CHROME",
     label: "CHROME 99 ANDROID",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME_TLS_CIPHERS,
     groups: CHROME_TLS_GROUPS,
@@ -880,6 +1041,7 @@ pub(crate) const CHROME87: TlsShape = TlsShape {
     token: "CHROME",
     label: "CHROME 87",
     source: "uTLS v1.8.2 HelloChrome_87",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME_TLS_CIPHERS,
     groups: CHROME_TLS_GROUPS,
@@ -924,6 +1086,7 @@ pub(crate) const CHROME72: TlsShape = TlsShape {
     token: "CHROME",
     label: "CHROME 72",
     source: "uTLS v1.8.2 HelloChrome_72",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME70_TLS_CIPHERS,
     groups: CHROME_TLS_GROUPS,
@@ -967,6 +1130,7 @@ pub(crate) const CHROME70: TlsShape = TlsShape {
     token: "CHROME",
     label: "CHROME 70",
     source: "uTLS v1.8.2 HelloChrome_70",
+    quic: CHROMIUM_QUIC,
     baseline: false,
     ciphers: CHROME70_TLS_CIPHERS,
     groups: CHROME_TLS_GROUPS,

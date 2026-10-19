@@ -359,6 +359,13 @@ contradicted their own records). Six proposals were examined and refused:
 | Replace `TlsShape::token` with a derivation from `label` | They differ exactly where the token is not the label (`--legend` prints the token); deriving it needs the same table the field already is, at the cost of a lookup per call. |
 | Give the QUIC column its own ECH handling instead of inheriting the shape's GREASE ECH | The column sends what the shape sends, and a live Chrome's QUIC hello carries extension 65037 with a GREASE body (measured: `0xfe0d` in `tp_dump.py`'s dump of its hello). Documenting and testing that coupling is a follow-up, not a divergence. |
 
+**Added 2026-10-17 by the QUIC header work.** One proposal was examined and refused;
+the decision it lost to puts four numbers on the wire, so it is recorded here:
+
+| Proposal | Reason |
+| --- | --- |
+| Keep the Initial's header constants in `probe/quic.rs` (`CID_LEN`, the 1200-byte pad) and take only the ClientHello from the shape | Those four numbers — the packet number, the destination and source connection-ID lengths, the pad — are what a censor reads off an Initial before it decrypts any of it, so they are the impersonated client's and not the probe's: Chromium sends **no** source connection ID, starts at packet number 1 and pads to 1250, Firefox sends a three-byte one and draws both numbers, Safari sends the eight-byte pair at the RFC's floor. They now live in `TlsShape::quic` (`QuicShape`, `net/fingerprint/shapes/mod.rs`) beside the hello; `net/quic::client_initials` takes the pad as an argument and clamps it to the §14.1 floor itself, and the probe still draws the connection-ID *values* at random — only their lengths are the profile's. Measured live: `--fingerprint chrome146` (empty SCID, 1250 bytes) and `firefox133` (drawn DCID, SCID 3) both read `OK` on Cloudflare's and Google's edges. |
+
 **Superseded 2026-09-24.** The first two rows above were acted on, and the second
 of them only partly as written:
 

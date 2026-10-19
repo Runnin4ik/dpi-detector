@@ -51,6 +51,14 @@ pub(crate) struct TlsShape {
     /// bundle a shape is pinned to, and the capture it was read out of. Reads in
     /// `--legend`, and is the reason a pin can be re-measured.
     pub(crate) source: &'static str,
+    /// The QUIC shape this client presents — the Initial's packet number, its
+    /// connection-ID lengths and the size it is padded to.
+    ///
+    /// A record's own data like the h2 preface, and for the same reason: the
+    /// QUIC column of test 2 asks the same host the TLS columns ask, so what it
+    /// sends has to be the impersonated client's shape and not this build's.
+    /// [`QuicShape`] carries the measurements and the issues behind each value.
+    pub(crate) quic: QuicShape,
     /// The untouched rustls hello: no profile is installed, nobody is
     /// impersonated, and every earlier measurement was taken with it.
     pub(crate) baseline: bool,
@@ -87,12 +95,13 @@ pub(crate) struct TlsShape {
     pub(crate) grease: bool,
     /// Whether the impersonated client carries `encrypted_client_hello` (65037).
     ///
-    /// Nine of the thirty shapes do, and every one of them does it as GREASE:
-    /// their wrappers say `--ech true`, and curl can only fetch an ECHConfigList
-    /// through DoH or `--ecl:`, neither of which the wrappers pass — so what
-    /// reaches the wire is a grease extension. Measured on the bundle's own
-    /// hello: `curl_chrome136`, `curl_firefox133` and `curl_tor145` all send the
-    /// same kind of body — `outer`, suite `0001 0001`, a random `config_id`, a
+    /// Eleven of the thirty-three shapes do, and every one of them does it as
+    /// GREASE: their wrappers say `--ech true`, and curl can only fetch an
+    /// ECHConfigList through DoH or `--ecl:`, neither of which the wrappers
+    /// pass — so what reaches the wire is a grease extension. Measured on the
+    /// bundle's own hello: `curl_chrome136`, `curl_firefox133` and
+    /// `curl_tor145` all send the same kind of body — `outer`, suite
+    /// `0001 0001`, a random `config_id`, a
     /// 32-byte `enc` and a random payload of 144, 176, 208 or 240 bytes, which is
     /// an extension of 186, 218, 250 or 282 bytes — the same shape on three
     /// different browsers, which a real config never is.
@@ -150,6 +159,120 @@ pub(crate) struct TlsShape {
     pub(crate) h2: Option<&'static H2Fingerprint>,
 }
 
+/// The QUIC shape a client presents: the four numbers a censor reads off an
+/// Initial's header before any of it is decrypted, plus the size the datagram is
+/// padded to.
+///
+/// The values come from the fork's own impersonation table — its
+/// `quic_cid_length` profiles (`"webkit"`: DCID 8, no SCID; `"firefox"`: SCID 3,
+/// a drawn DCID) and `quic_initial_packet_number` (`1` for Chromium, `-1` for
+/// Firefox, `0` by default) — and from the browser measurements in the issues
+/// that table came from: lexiforest/curl-impersonate#291 (Chrome's destination
+/// connection ID is 8 bytes, not ngtcp2's 20), #303 (Chromium starts at packet
+/// number 1, Safari at 0, Firefox draws one) and #298 (a real Chrome pads its
+/// Initial to 1250 where the bundle's ngtcp2 stops at its own 1200-byte
+/// ceiling).
+///
+/// The fork names a profile for Chromium and Firefox only. Safari's lengths are
+/// therefore the eight-byte pair this probe has always sent, recorded here as a
+/// declared boundary rather than a measurement; its packet number (0) and its
+/// 1200-byte datagram are the ones #303 and #298 measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct QuicShape {
+    /// The packet number the first Initial carries.
+    pub(crate) initial_pn: QuicInitialPn,
+    /// How long the destination connection ID is.
+    pub(crate) dcid_len: QuicCidLen,
+    /// How long the source connection ID is. Zero for Chromium, whose first
+    /// Initial carries an empty one — and therefore an empty
+    /// `initial_source_connection_id` (RFC 9000 §7.3, which requires the two to
+    /// agree).
+    pub(crate) scid_len: u8,
+    /// The size every client Initial datagram is padded to. RFC 9000 §14.1 makes
+    /// 1200 the floor below which a server may discard an Initial; Chromium pads
+    /// to 1250 on top of it.
+    pub(crate) initial_datagram: u16,
+}
+
+/// The packet number an impersonated client starts its first Initial at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QuicInitialPn {
+    /// Zero: ngtcp2's default, Safari's own, and what this probe sent before the
+    /// value was a record.
+    Zero,
+    /// One: Chromium's.
+    One,
+    /// Neqo's biased draw, which Firefox uses: `(r0 & 0x1f) + ((r1 > 224 ? r1 -
+    /// 224 : 0) << 5) + 1`, the formula the fork implements — so 87.9 % of
+    /// connections land in 1..=32 and the rest up to 1024.
+    NeqoRandom,
+}
+
+/// How long an impersonated client's destination connection ID is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QuicCidLen {
+    /// One length, every connection.
+    Fixed(u8),
+    /// Neqo's draw, which Firefox uses: `5 + (v & (v >> 4))` over one random
+    /// byte, floored at 8 — so 8..=20, most often 8..=12.
+    FirefoxDraw,
+}
+
+/// Chromium's Initial header: destination connection ID 8, **no** source
+/// connection ID, packet number 1, and a datagram padded to 1250.
+///
+/// Measured, not assumed: the fork's `"webkit"` profile is the first two, its
+/// `quic_initial_packet_number = 1` the third, and #298 the fourth — the bundle
+/// itself pads to 1200 because `NGTCP2_MAX_UDP_PAYLOAD_SIZE` caps it there, which
+/// is the one place this record deliberately does not follow the bundle.
+pub(crate) const CHROMIUM_QUIC: QuicShape = QuicShape {
+    initial_pn: QuicInitialPn::One,
+    dcid_len: QuicCidLen::Fixed(8),
+    scid_len: 0,
+    initial_datagram: 1250,
+};
+
+/// Firefox's Initial header, from the fork's `"firefox"` profile: source
+/// connection ID 3, a destination connection ID drawn in 8..=20, Neqo's random
+/// packet number and the RFC's own 1200-byte floor.
+///
+/// The 1200 is the floor and not a claim about the browser: Firefox splits its
+/// flight over two smaller Initials, which this column does not reproduce (it
+/// sends one padded datagram and continues the CRYPTO stream in the next packet
+/// at its own offset — see `net::quic::client_initials`).
+pub(crate) const FIREFOX_QUIC: QuicShape = QuicShape {
+    initial_pn: QuicInitialPn::NeqoRandom,
+    dcid_len: QuicCidLen::FirefoxDraw,
+    scid_len: 3,
+    initial_datagram: 1200,
+};
+
+/// Safari's Initial header: packet number 0 and the RFC's 1200-byte datagram,
+/// both measured (#303, #298).
+///
+/// The two connection-ID lengths are the declared boundary: the fork names a
+/// profile for Chromium and Firefox and nothing for Safari, so this record keeps
+/// the eight-byte pair the probe has always sent, which is Chromium's own.
+pub(crate) const SAFARI_QUIC: QuicShape = QuicShape {
+    initial_pn: QuicInitialPn::Zero,
+    dcid_len: QuicCidLen::Fixed(8),
+    scid_len: 8,
+    initial_datagram: 1200,
+};
+
+/// The baseline's Initial header — untouched rustls, and Go 1.27's
+/// `crypto/tls`, which has no QUIC client in this tree at all.
+///
+/// Packet number 0 is ngtcp2's default and what every earlier measurement of this
+/// column was taken with; the connection IDs and the datagram are the values
+/// this probe has always sent.
+pub(crate) const BASELINE_QUIC: QuicShape = QuicShape {
+    initial_pn: QuicInitialPn::Zero,
+    dcid_len: QuicCidLen::Fixed(8),
+    scid_len: 8,
+    initial_datagram: 1200,
+};
+
 /// Both protocols, exactly what every Chromium profile offers; the probes
 /// branch on the negotiated protocol (see `probe::tls`).
 const H2_AND_HTTP11: &[&[u8]] = &[b"h2", b"http/1.1"];
@@ -175,10 +298,12 @@ const ZLIB: &[u16] = &[1];
 pub(crate) static SHAPES: &[TlsShape] = &[
     baseline::RUSTLS,
     go::GO127,
+    chrome::CHROME150,
     chrome::CHROME146,
     chrome::CHROME133,
     chrome::CHROME131,
     chrome::CHROME131_ANDROID,
+    chrome::CHROME124,
     chrome::CHROME123,
     chrome::CHROME116,
     chrome::CHROME115_PQ,
@@ -195,6 +320,7 @@ pub(crate) static SHAPES: &[TlsShape] = &[
     firefox::FIREFOX99,
     firefox::FIREFOX65,
     safari::SAFARI260,
+    safari::SAFARI2601,
     safari::SAFARI260_IOS,
     safari::SAFARI184_IOS,
     safari::SAFARI180,
@@ -263,7 +389,7 @@ pub(crate) const EXT_SUPPORTED_VERSIONS: u16 = 43;
 pub(crate) const EXT_PSK_KEY_EXCHANGE_MODES: u16 = 45;
 pub(crate) const EXT_KEY_SHARE: u16 = 51;
 pub(crate) const EXT_RENEGOTIATION_INFO: u16 = 65281;
-/// `encrypted_client_hello` (draft-ietf-tls-esni), the extension nine shapes
+/// `encrypted_client_hello` (draft-ietf-tls-esni), the extension eleven shapes
 /// carry as GREASE.
 pub(crate) const EXT_ENCRYPTED_CLIENT_HELLO: u16 = 65037;
 /// Chrome's ALPS (draft-vvv-tls-alps), as Chrome 107 and Safari send it.

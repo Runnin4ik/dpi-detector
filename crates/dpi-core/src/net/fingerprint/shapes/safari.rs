@@ -1,4 +1,4 @@
-//! Safari's constants and records: macOS and iOS, 15.3 through 26.0.
+//! Safari's constants and records: macOS and iOS, 15.3 through 26.0.1.
 
 use rustls::client::hello_profile::GREASE_EXTENSION_MARKER;
 
@@ -8,13 +8,14 @@ use super::super::h2::{
 };
 use super::super::identity::{
     SAFARI153_HEADERS, SAFARI170_HEADERS, SAFARI172_IOS_HEADERS, SAFARI184_IOS_HEADERS,
-    SAFARI18_HEADERS, SAFARI260_HEADERS, SAFARI260_IOS_HEADERS, SAFARI_HEADERS,
+    SAFARI18_HEADERS, SAFARI2601_HEADERS, SAFARI260_HEADERS, SAFARI260_IOS_HEADERS,
+    SAFARI_HEADERS,
 };
 use super::{
     EXT_ALPN, EXT_COMPRESS_CERTIFICATE, EXT_EC_POINT_FORMATS, EXT_EXTENDED_MASTER_SECRET,
     EXT_KEY_SHARE, EXT_PADDING, EXT_PSK_KEY_EXCHANGE_MODES, EXT_RENEGOTIATION_INFO, EXT_SCT,
     EXT_SERVER_NAME, EXT_SESSION_TICKET, EXT_SIGNATURE_ALGORITHMS, EXT_STATUS_REQUEST,
-    EXT_SUPPORTED_GROUPS, EXT_SUPPORTED_VERSIONS, H2_AND_HTTP11, ZLIB,
+    EXT_SUPPORTED_GROUPS, EXT_SUPPORTED_VERSIONS, H2_AND_HTTP11, SAFARI_QUIC, ZLIB,
 };
 use super::TlsShape;
 
@@ -241,6 +242,33 @@ const SAFARI260_TLS_EXT_ORDER: &[u16] = &[
     GREASE_EXTENSION_MARKER,
 ];
 
+/// Safari 26.0.1's extension order: 26.0's list with the session ticket taken
+/// out, which is the whole difference between the two shapes.
+///
+/// Measured: the diff of the two wrapper hellos reports two differences —
+/// the extension *set* (fifteen types against sixteen) and `body 35` — and
+/// nothing else, and the fork's `safari_26.0.1_macOS.yaml` lists the same
+/// thirteen extensions without it. JA4 sees it twice, in the count and in the
+/// extension hash (`t13d2013h2_a09f3c656075_7f0f34a4126d` against 26.0's
+/// `t13d2014h2_…_d0a99439f9b1`).
+const SAFARI2601_TLS_EXT_ORDER: &[u16] = &[
+    GREASE_EXTENSION_MARKER,
+    EXT_SERVER_NAME,
+    EXT_EXTENDED_MASTER_SECRET,
+    EXT_RENEGOTIATION_INFO,
+    EXT_SUPPORTED_GROUPS,
+    EXT_EC_POINT_FORMATS,
+    EXT_ALPN,
+    EXT_STATUS_REQUEST,
+    EXT_SIGNATURE_ALGORITHMS,
+    EXT_SCT,
+    EXT_KEY_SHARE,
+    EXT_PSK_KEY_EXCHANGE_MODES,
+    EXT_SUPPORTED_VERSIONS,
+    EXT_COMPRESS_CERTIFICATE,
+    GREASE_EXTENSION_MARKER,
+];
+
 /// Safari 26.0 iOS's extension order: the same with padding, which iOS still
 /// sends — its hello measures 512 bytes, macOS 26's does not.
 const SAFARI260_IOS_TLS_EXT_ORDER: &[u16] = &[
@@ -308,7 +336,8 @@ pub(crate) const SAFARI260: TlsShape = TlsShape {
     code: "safari260",
     token: "SAFARI",
     label: "SAFARI 260",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: SAFARI_QUIC,
     baseline: false,
     ciphers: SAFARI260_TLS_CIPHERS,
     groups: SAFARI_TLS_PQ_GROUPS,
@@ -335,6 +364,54 @@ pub(crate) const SAFARI260: TlsShape = TlsShape {
     headers: Some(SAFARI260_HEADERS),
     h2: Some(&SAFARI260_H2),
 };
+// Safari 26.0.1 on macOS, as the binary's own `safari2601` target sends it:
+// Safari 26.0's shape with the session ticket gone.
+//
+// One difference and nothing else — the extension list loses `session_ticket`
+// (35) and the `accept-encoding` loses `zstd` — which is what makes it a record
+// rather than a second identity for 26.0: JA4 counts the extension and hashes
+// the set, so the two answer with different keys. Everything else is 26.0's:
+// the reordered TLS 1.3 suites, the hybrid group, no padding, the preface with
+// no request priority.
+//
+// Like Chrome 150, the provenance has two halves because the Windows build of
+// v2.2.3 ships no `curl_safari2601.bat` (the fork's `bin/` has the one-liner,
+// `win/bin/` never got it): the numbers come from the binary's own
+// `--impersonate safari2601` target, driven through the harness's listeners, and
+// the fork's `safari_26.0.1_macOS.yaml` agrees on the extension list, the
+// cipher order and the header set. `tools/fingerprint` drives that form as
+// `impersonate:safari2601`.
+pub(crate) const SAFARI2601: TlsShape = TlsShape {
+    variant: TlsFingerprint::Safari2601,
+    code: "safari2601",
+    token: "SAFARI",
+    label: "SAFARI 2601",
+    source: "curl-impersonate v2.2.3 (--impersonate safari2601)",
+    quic: SAFARI_QUIC,
+    baseline: false,
+    ciphers: SAFARI260_TLS_CIPHERS,
+    groups: SAFARI_TLS_PQ_GROUPS,
+    sig_algs: SAFARI18_TLS_SIG_ALGS,
+    ext_order: SAFARI2601_TLS_EXT_ORDER,
+    raw_exts: SAFARI260_TLS_RAW_EXTS,
+    // The ticket is out of the order above; suppressing it as well keeps the
+    // typed extension out of any hello the encoder would otherwise complete.
+    suppress: &[EXT_SESSION_TICKET],
+    drop13: SAFARI_TLS_DROP13,
+    drop12: SAFARI_TLS_DROP12_NO_PADDING,
+    alpn: H2_AND_HTTP11,
+    padding_to: None,
+    grease: true,
+    permute_extensions: false,
+    ech: false,
+    priority_on_h1: false,
+    cert_compression: ZLIB,
+    key_share_groups: None,
+    pq: true,
+    legacy_versions: &[],
+    headers: Some(SAFARI2601_HEADERS),
+    h2: Some(&SAFARI260_H2),
+};
 // Safari 26.0 on iOS, as `curl_safari260_ios` sends it.
 //
 // The same release as the macOS row with four differences a middlebox can
@@ -349,7 +426,8 @@ pub(crate) const SAFARI260_IOS: TlsShape = TlsShape {
     code: "safari260ios",
     token: "SAFARI",
     label: "SAFARI 260 IOS",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: SAFARI_QUIC,
     baseline: false,
     ciphers: SAFARI_TLS_CIPHERS,
     groups: SAFARI_TLS_GROUPS,
@@ -384,7 +462,8 @@ pub(crate) const SAFARI184_IOS: TlsShape = TlsShape {
     code: "safari184ios",
     token: "SAFARI",
     label: "SAFARI 184 IOS",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: SAFARI_QUIC,
     baseline: false,
     ciphers: SAFARI_TLS_CIPHERS,
     groups: SAFARI_TLS_GROUPS,
@@ -432,7 +511,8 @@ pub(crate) const SAFARI180: TlsShape = TlsShape {
     code: "safari180",
     token: "SAFARI",
     label: "SAFARI 180",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: SAFARI_QUIC,
     baseline: false,
     ciphers: SAFARI_TLS_CIPHERS,
     groups: SAFARI_TLS_GROUPS,
@@ -463,7 +543,8 @@ pub(crate) const SAFARI172_IOS: TlsShape = TlsShape {
     code: "safari172ios",
     token: "SAFARI",
     label: "SAFARI 172 IOS",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: SAFARI_QUIC,
     baseline: false,
     ciphers: SAFARI_TLS_CIPHERS,
     groups: SAFARI_TLS_GROUPS,
@@ -499,7 +580,8 @@ pub(crate) const SAFARI170: TlsShape = TlsShape {
     code: "safari170",
     token: "SAFARI",
     label: "SAFARI 170",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: SAFARI_QUIC,
     baseline: false,
     ciphers: SAFARI_TLS_CIPHERS,
     groups: SAFARI_TLS_GROUPS,
@@ -525,7 +607,7 @@ pub(crate) const SAFARI170: TlsShape = TlsShape {
 
 // The `curl_safari155` shape — Safari 15.5 and 17.0, which send one hello.
 //
-// Taken from the `curl-impersonate v2.2.2` bundle (`.bat` wrapper
+// Taken from the `curl-impersonate v2.2.3` bundle (`.bat` wrapper
 // `curl_safari155`); `curl_safari170` sends the identical JA3, and so do
 // `curl_safari180`/`curl_safari184`, whose *JA4* differs by one signature
 // scheme (`ecdsa_sha1`, see [`SAFARI18_TLS_SIG_ALGS`]) — which is why 18.x
@@ -543,7 +625,8 @@ pub(crate) const SAFARI155: TlsShape = TlsShape {
     code: "safari155",
     token: "SAFARI",
     label: "SAFARI 155",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: SAFARI_QUIC,
     baseline: false,
     ciphers: SAFARI_TLS_CIPHERS,
     groups: SAFARI_TLS_GROUPS,
@@ -585,7 +668,8 @@ pub(crate) const SAFARI153: TlsShape = TlsShape {
     code: "safari153",
     token: "SAFARI",
     label: "SAFARI 153",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: SAFARI_QUIC,
     baseline: false,
     ciphers: SAFARI153_TLS_CIPHERS,
     groups: SAFARI_TLS_GROUPS,

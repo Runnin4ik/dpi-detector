@@ -1,12 +1,15 @@
 //! Test 2's QUIC column: one padded Initial per domain, and what answers it.
 //!
 //! The column asks the same host the TLS columns ask, on UDP 443, with one
-//! 1200-byte Initial whose `CRYPTO` frame carries a browser-shaped ClientHello:
+//! Initial whose `CRYPTO` frame carries a browser-shaped ClientHello:
 //! TLS 1.3 only, `h3` in ALPN, and the `quic_transport_parameters` extension
 //! every endpoint requires (RFC 9000 §7.3) — without it a server answers
 //! `TRANSPORT_PARAMETER_ERROR` and never starts the handshake. The shape is the
 //! run's own fingerprint, so what goes out is the hello the other columns send,
-//! minus the TCP record header.
+//! minus the TCP record header. The Initial's own header — the connection-ID
+//! lengths, the packet number, the size the datagram is padded to — comes from
+//! the same profile's record (`TlsShape::quic`), because those are the four
+//! numbers a censor reads off an Initial before it decrypts any of it.
 //!
 //! The Initial keys are derived from the connection ID this probe chose
 //! (RFC 9001 §5.2), so the reply is readable without any TLS state. What the
@@ -43,8 +46,9 @@ use crate::classify::{classify_connect_error_icmp, Detail, DpiStatus, ProbeStage
 use crate::config::AppConfig;
 use crate::net::bind::udp_socket;
 use crate::net::fingerprint::{
-    sig_algs, HelloVariant, TlsFingerprint, EXT_APPLICATION_SETTINGS,
-    EXT_APPLICATION_SETTINGS_NEW, EXT_SCT, EXT_SIGNATURE_ALGORITHMS, EXT_STATUS_REQUEST,
+    quic_shape, sig_algs, HelloVariant, QuicCidLen, QuicInitialPn, TlsFingerprint,
+    EXT_APPLICATION_SETTINGS, EXT_APPLICATION_SETTINGS_NEW, EXT_SCT, EXT_SIGNATURE_ALGORITHMS,
+    EXT_STATUS_REQUEST,
 };
 use crate::net::quic::{self, CryptoStream, Frame, ServerReply, SERVER_HELLO};
 use crate::net::tls::{hello_record_for, TlsProfile, TlsVersion};
@@ -95,10 +99,6 @@ const BROWSER_PARAMETERS: &[(u64, u64)] = &[
 
 /// Where a QUIC endpoint listens.
 const QUIC_PORT: u16 = 443;
-
-/// How many bytes a connection ID this probe generates has. Eight is what
-/// browsers use, and it keeps the reply's header small.
-const CID_LEN: usize = 8;
 
 /// The largest reply this probe will read. A server's Initial is 1200 bytes at
 /// most; the slack is for a coalesced Handshake packet in the same datagram.
@@ -305,11 +305,57 @@ fn signature_algorithms_for_quic(fingerprint: TlsFingerprint) -> Option<HelloVar
     Some(HelloVariant::ExtBody(EXT_SIGNATURE_ALGORITHMS, out))
 }
 
-/// A fresh connection ID.
-fn random_cid() -> [u8; CID_LEN] {
-    let mut cid = [0u8; CID_LEN];
+/// A fresh connection ID of the length the profile's record asks for.
+fn random_cid(len: usize) -> Vec<u8> {
+    let mut cid = vec![0u8; len];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut cid);
     cid
+}
+
+/// The destination connection ID length the impersonated client sends.
+///
+/// Chromium's is a fixed eight. Firefox's is Neqo's draw over one random byte,
+/// [`neqo_dcid_len`].
+fn drawn_dcid_len(len: QuicCidLen) -> usize {
+    match len {
+        QuicCidLen::Fixed(bytes) => usize::from(bytes),
+        QuicCidLen::FirefoxDraw => {
+            let mut v = [0u8; 1];
+            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut v);
+            neqo_dcid_len(v[0])
+        }
+    }
+}
+
+/// Neqo's connection-ID draw: `5 + (v & (v >> 4))`, floored at 8 — so 8..=20 and
+/// most often 8..=12, the formula the fork implements
+/// (`lexiforest/curl-impersonate#291`).
+fn neqo_dcid_len(v: u8) -> usize {
+    usize::from((5 + (v & (v >> 4))).max(8))
+}
+
+/// The packet number the impersonated client starts its first Initial at.
+///
+/// 0 is ngtcp2's default and Safari's own — what this column was measured with
+/// before the value became a record; Chromium starts at 1; Firefox draws one.
+fn first_packet_number(pn: QuicInitialPn) -> u64 {
+    match pn {
+        QuicInitialPn::Zero => 0,
+        QuicInitialPn::One => 1,
+        QuicInitialPn::NeqoRandom => {
+            let mut r = [0u8; 2];
+            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut r);
+            neqo_packet_number(r[0], r[1])
+        }
+    }
+}
+
+/// Neqo's packet-number draw, `(r0 & 0x1f) + ((r1 > 224 ? r1 - 224 : 0) << 5) +
+/// 1`: 1..=32 unless the second byte is above 224, and 1024 at the very most.
+/// A censor reads that number off the Initial before it decrypts any of it, so
+/// the draw is reproduced rather than flattened to a constant.
+fn neqo_packet_number(r0: u8, r1: u8) -> u64 {
+    u64::from(r0 & 0x1f) + (u64::from(r1.saturating_sub(224)) << 5) + 1
 }
 
 /// The verdict a domain's datagrams add up to.
@@ -496,8 +542,10 @@ async fn probe_addr(
     variant: Option<&HelloVariant>,
     retransmits_allowed: u32,
 ) -> Result<(DpiStatus, Detail), (DpiStatus, Detail)> {
-    let dcid = random_cid();
-    let scid = random_cid();
+    let shape = quic_shape(fingerprint);
+    let dcid = random_cid(drawn_dcid_len(shape.dcid_len));
+    let scid = random_cid(usize::from(shape.scid_len));
+    let datagram = usize::from(shape.initial_datagram);
     let keys = quic::InitialKeys::derive(&dcid)
         .map_err(|_| (DpiStatus::Err, Detail::Other("quic: key schedule".to_string())))?;
     // A name the resolver accepted but rustls refuses must become this row's
@@ -507,8 +555,9 @@ async fn probe_addr(
     crate::net::tls::server_name(sni)
         .map_err(|error| (DpiStatus::Err, Detail::Other(format!("bad SNI: {error}"))))?;
     let hello = quic_hello(fingerprint, sni, &scid, variant);
-    let mut flight = quic::client_initials(&keys, &dcid, &scid, &hello, 0)
-        .map_err(|error| (DpiStatus::Err, Detail::Other(error.to_string())))?;
+    let mut flight =
+        quic::client_initials(&keys, &dcid, &scid, &hello, first_packet_number(shape.initial_pn), datagram)
+            .map_err(|error| (DpiStatus::Err, Detail::Other(error.to_string())))?;
 
     let socket = udp_socket(&addr)
         .await
@@ -558,7 +607,7 @@ async fn probe_addr(
             break;
         }
         if retransmits < retransmits_allowed && !verdict.settled() && now >= next_retransmit {
-            flight = quic::client_initials(&keys, &dcid, &scid, &hello, next_pn)
+            flight = quic::client_initials(&keys, &dcid, &scid, &hello, next_pn, datagram)
                 .map_err(|error| (DpiStatus::Err, Detail::Other(error.to_string())))?;
             next_pn += flight.len() as u64;
             for datagram in &flight {
@@ -1003,6 +1052,79 @@ mod tests {
             probe_addr(silent_addr, "example.com", TlsFingerprint::Chrome107, timeout_dur, None, MAX_RETRANSMITS)
                 .await;
         assert_eq!(dropped, Err((DpiStatus::QuicDrop, Detail::QuicTimeout)));
+    }
+
+    /// The Initial's header is the profile's record and not this probe's habit:
+    /// a Chromium profile sends no source connection ID and pads its datagram to
+    /// 1250, a Firefox one sends a three-byte source ID and draws the
+    /// destination's length in 8..=20, and Safari sends the eight-byte pair at
+    /// the RFC's floor.
+    ///
+    /// These are the numbers a censor reads off an Initial before it decrypts
+    /// any of it — and the ClientHello's `initial_source_connection_id` has to
+    /// agree with the field (RFC 9000 §7.3), which is why the field is asserted
+    /// here on the wire and not only in the builder.
+    #[tokio::test]
+    async fn the_initial_header_is_the_profiles_own() {
+        for (fingerprint, scid_len, datagram) in [
+            (TlsFingerprint::Chrome146, 0usize, 1250usize),
+            (TlsFingerprint::Safari260, 8, 1200),
+            (TlsFingerprint::Firefox133, 3, 1200),
+        ] {
+            let server = tokio::net::UdpSocket::bind("127.0.0.1:0").await.expect("a local socket");
+            let addr = server.local_addr().expect("an address");
+            let sending = tokio::spawn(async move {
+                let _ = probe_addr(
+                    addr,
+                    "example.com",
+                    fingerprint,
+                    Duration::from_millis(200),
+                    None,
+                    MAX_RETRANSMITS,
+                )
+                .await;
+            });
+
+            let mut buf = vec![0u8; 2048];
+            let len = server.recv(&mut buf).await.expect("the probe's Initial");
+            sending.abort();
+
+            assert_eq!(len, datagram, "{fingerprint:?} pads to its record's target");
+            assert_eq!(buf[0] & 0xc0, 0xc0, "{fingerprint:?}: a long-header Initial");
+            let dcid_len = usize::from(buf[5]);
+            if fingerprint == TlsFingerprint::Firefox133 {
+                assert!((8..=20).contains(&dcid_len), "Neqo's draw is 8..=20, got {dcid_len}");
+            } else {
+                assert_eq!(dcid_len, 8, "{fingerprint:?}");
+            }
+            assert_eq!(usize::from(buf[6 + dcid_len]), scid_len, "{fingerprint:?}");
+        }
+    }
+
+    /// The two draws with the randomness taken out: both formulas are Neqo's, so
+    /// a value outside the range they can produce is a number a censor reads and
+    /// no real Firefox ever sends.
+    #[test]
+    fn the_drawn_lengths_and_packet_numbers_are_neqos() {
+        // `5 + (v & (v >> 4))`, floored at 8 — so the floor is reachable, and so
+        // is the 20.
+        assert_eq!(neqo_dcid_len(0x00), 8);
+        assert_eq!(neqo_dcid_len(0x08), 8, "5 + 0, floored");
+        assert_eq!(neqo_dcid_len(0x0f), 8, "the halves share no low bits");
+        assert_eq!(neqo_dcid_len(0xff), 20, "both nibbles at 15");
+        assert_eq!(neqo_dcid_len(0x80), 8);
+        assert_eq!(drawn_dcid_len(QuicCidLen::Fixed(8)), 8, "Chromium's fixed eight");
+        assert!((8..=20).contains(&drawn_dcid_len(QuicCidLen::FirefoxDraw)));
+
+        // `(r0 & 0x1f) + ((r1 > 224 ? r1 - 224 : 0) << 5) + 1`.
+        assert_eq!(neqo_packet_number(0x00, 0x00), 1);
+        assert_eq!(neqo_packet_number(0x00, 0xe0), 1, "224 contributes nothing");
+        assert_eq!(neqo_packet_number(0x1f, 0xe0), 32, "the low half at its ceiling");
+        assert_eq!(neqo_packet_number(0x00, 0xff), 993, "the high half at its largest");
+        assert_eq!(neqo_packet_number(0x1f, 0xff), 1024, "and the two together");
+        assert_eq!(first_packet_number(QuicInitialPn::Zero), 0, "ngtcp2's default");
+        assert_eq!(first_packet_number(QuicInitialPn::One), 1, "Chromium's");
+        assert!((1..=1024).contains(&first_packet_number(QuicInitialPn::NeqoRandom)));
     }
 
     /// The window the probe takes must outlast the probe's own ladder: seven

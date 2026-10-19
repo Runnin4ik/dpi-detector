@@ -13,7 +13,7 @@ use super::{
     EXT_ENCRYPTED_CLIENT_HELLO, EXT_EXTENDED_MASTER_SECRET, EXT_KEY_SHARE, EXT_PADDING,
     EXT_PSK_KEY_EXCHANGE_MODES, EXT_RECORD_SIZE_LIMIT, EXT_RENEGOTIATION_INFO, EXT_SCT,
     EXT_SERVER_NAME, EXT_SESSION_TICKET, EXT_SIGNATURE_ALGORITHMS, EXT_STATUS_REQUEST,
-    EXT_SUPPORTED_GROUPS, EXT_SUPPORTED_VERSIONS, H2_AND_HTTP11,
+    EXT_SUPPORTED_GROUPS, EXT_SUPPORTED_VERSIONS, FIREFOX_QUIC, H2_AND_HTTP11,
 };
 use super::TlsShape;
 
@@ -315,7 +315,8 @@ pub(crate) const FIREFOX147: TlsShape = TlsShape {
     code: "firefox147",
     token: "FIREFOX",
     label: "FIREFOX 147",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: FIREFOX_QUIC,
     baseline: false,
     ciphers: FIREFOX_TLS_CIPHERS,
     groups: FIREFOX_TLS_GROUPS,
@@ -338,11 +339,11 @@ pub(crate) const FIREFOX147: TlsShape = TlsShape {
     headers: Some(FIREFOX147_HEADERS),
     h2: Some(&FIREFOX_H2),
 };
-// Firefox 133, as `curl_firefox133` of curl-impersonate v2.2.2 sends it.
+// Firefox 133, as `curl_firefox133` of curl-impersonate v2.2.3 sends it.
 //
 // This used to follow uTLS `HelloFirefox_148` (the Xray/REALITY parrot). The
 // pinned version is now the one this repository's reference bundle
-// (`curl-impersonate v2.2.2`) actually sends, which differs from the uTLS
+// (`curl-impersonate v2.2.3`) actually sends, which differs from the uTLS
 // parrot in three extensions: 133 carries `session_ticket` (35) and
 // `psk_key_exchange_modes` (45), which uTLS's Firefox does not, and it has
 // no `signed_certificate_timestamp` (18). See
@@ -378,7 +379,8 @@ pub(crate) const FIREFOX133: TlsShape = TlsShape {
     code: "firefox133",
     token: "FIREFOX",
     label: "FIREFOX 133",
-    source: "curl-impersonate v2.2.2",
+    source: "curl-impersonate v2.2.3",
+    quic: FIREFOX_QUIC,
     baseline: false,
     ciphers: FIREFOX_TLS_CIPHERS,
     groups: FIREFOX_TLS_GROUPS,
@@ -435,6 +437,7 @@ pub(crate) const FIREFOX120: TlsShape = TlsShape {
     token: "FIREFOX",
     label: "FIREFOX 120",
     source: "uTLS v1.8.2 HelloFirefox_120",
+    quic: FIREFOX_QUIC,
     baseline: false,
     ciphers: FIREFOX_TLS_CIPHERS,
     // Firefox's pre-hybrid curve list, which Tor 14.5 also sends — the six
@@ -488,6 +491,7 @@ pub(crate) const FIREFOX105: TlsShape = TlsShape {
     token: "FIREFOX",
     label: "FIREFOX 105",
     source: "uTLS v1.8.2 HelloFirefox_105",
+    quic: FIREFOX_QUIC,
     baseline: false,
     ciphers: FIREFOX_TLS_CIPHERS,
     // The same six groups as [`TOR_TLS_GROUPS`], Firefox's pre-hybrid list.
@@ -530,6 +534,7 @@ pub(crate) const FIREFOX99: TlsShape = TlsShape {
     token: "FIREFOX",
     label: "FIREFOX 99",
     source: "uTLS v1.8.2 HelloFirefox_99",
+    quic: FIREFOX_QUIC,
     baseline: false,
     ciphers: FIREFOX99_TLS_CIPHERS,
     groups: TOR_TLS_GROUPS,
@@ -573,6 +578,7 @@ pub(crate) const FIREFOX65: TlsShape = TlsShape {
     token: "FIREFOX",
     label: "FIREFOX 65",
     source: "uTLS v1.8.2 HelloFirefox_65",
+    quic: FIREFOX_QUIC,
     baseline: false,
     ciphers: FIREFOX65_TLS_CIPHERS,
     groups: TOR_TLS_GROUPS,

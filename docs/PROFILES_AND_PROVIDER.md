@@ -76,6 +76,7 @@ module of its own.
 | No `Hpke` implementation in `rustls`'s ring provider | `net/hpke.rs` (RFC 9180, for ECH grease) stays; the only `impl Hpke` in the vendored rustls is `crypto/aws_lc_rs/hpke.rs` |
 | No raw AES block/ECB API (only `pub(super)` internals) | `net/quic.rs` keeps the `aes` crate for the RFC 9001 header protection |
 | No P-521 (group or verifier) | unchanged: P-521 is already listed as unimplemented in `net/fingerprint/tests.rs` |
+| No ML-DSA verifier (in 0.17.14 or in `main`) | visible on the wire since the curl-impersonate **v2.2.3** pin: `chrome150` advertises `mldsa44/65/87` (`0x0904`–`0x0906`), which is what moves that record's JA4 extension hash. The three are named in `net/fingerprint/tests.rs::UNIMPLEMENTED` — advertised because the list is the fingerprint, never used, and a peer that selects one ends the handshake |
 | No MD5 | irrelevant: JA3's digest is computed outside the probe path |
 | No AES-CCM, no X448/Ed448 | unused here |
 

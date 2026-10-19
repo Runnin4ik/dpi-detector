@@ -13,12 +13,12 @@ builder, the parsers, `--legend`, JSON, the config, test 6 — reads it.
 
 | Element | Where | What it describes |
 |---|---|---|
-| `TlsShape` + `SHAPES` | `crates/dpi-core/src/net/fingerprint/shapes/` (`mod.rs` — the struct and the table, one file per client family) | the shape: names, `source`, ciphers, groups, signature schemes, extension order, `raw_exts`, `suppress`, `drop13`/`drop12`, ALPN, `padding_to`, certificate compression, key shares, GREASE/ECH/shuffling |
+| `TlsShape` + `SHAPES` | `crates/dpi-core/src/net/fingerprint/shapes/` (`mod.rs` — the struct and the table, one file per client family) | the shape: names, `source`, ciphers, groups, signature schemes, extension order, `raw_exts`, `suppress`, `drop13`/`drop12`, ALPN, `padding_to`, certificate compression, key shares, GREASE/ECH/shuffling, and the QUIC Initial's own header (`quic`, a `QuicShape`) |
 | `HttpIdentity` | `.../fingerprint/identity.rs` | `User-Agent`, the set, the order and the **case** of header names |
 | `H2Fingerprint` | `.../fingerprint/h2.rs` | the preface: SETTINGS with order, connection window, pseudo-header order, priority |
 | `TlsFingerprint` | `.../fingerprint/mod.rs` | the variant, `code` (JSON and config), `token` (badge, Latin), `label` ("CHROME 133"), `parse`, `ALL`, `DEFAULT_SET` |
 | Pins and structural tests | `.../fingerprint/tests.rs` | JA3/JA4 against the source and the §4 gates |
-| The harness row | `tools/fingerprint/fingerprint.py` (`PROFILES`) | the code, the bundle wrapper and the fork's capture file — or `utls:HelloX` in place of the wrapper when the bundle does not wrap this client |
+| The harness row | `tools/fingerprint/fingerprint.py` (`PROFILES`) | the code, the bundle wrapper and the fork's capture file — or `utls:HelloX` in place of the wrapper when the bundle does not wrap this client, or `impersonate:<target>` when the *tarball* ships no script for a target the binary carries |
 
 The rules this rests on:
 
@@ -73,6 +73,17 @@ stop being transcription. In the harness such rows are marked `utls:HelloX` in
 `captures`, `echo`, `echo-diff`, `headers`, `headers-diff` and `flags` skip them,
 because there is nothing to compare against and they have no wrapper flags.
 
+A third case sits between the two: the bundle **wraps the client but the tarball
+does not ship the script**. The Windows build of v2.2.3 is exactly that — the
+fork's `bin/` carries `curl_chrome150` and `curl_safari2601`, and the tarball has
+neither (the Chrome 150 script was added in a PR merged after that release, and
+the Safari one has never been added; lexiforest/curl-impersonate#321). The target
+is still in the bundle, in the binary's own `--impersonate` table, which is all
+the fork's one-liner script runs. Such a row is written `impersonate:<target>` in
+`PROFILES`, every stage but `flags` applies to it — it has an HTTP layer — and the
+fork's capture of the release is the second reading. When a later release ships
+the script, the row goes back to naming it.
+
 Tools: `python tools/fingerprint/fingerprint.py flags <code>` (wrapper flags),
 `... versions` (JA4 and the mobility of each bundle version: where JA3 shuffles,
 where the padding coin lands), `... utls` (all profiles of the uTLS library against
@@ -86,7 +97,7 @@ is, a check of the spec against our record.
 
 The bundle is looked up through `$CURL_IMPERSONATE_DIR`, then in `~/Downloads`; the
 path can be set with `--bundle DIR`. The bundle directory name carries the version
-(`curl-impersonate-v2.2.2.x86_64-win32`) — `capture_ref()` takes the fork tag from
+(`curl-impersonate-v2.2.3.x86_64-win32`) — `capture_ref()` takes the fork tag from
 it, which is why the directory is not renamed.
 
 In a record, `source` names the release of the source: updating the source is a
@@ -112,6 +123,14 @@ deliberate revision of the pins, not a silent change of the shape.
    Behavioural traits (`grease`, `ech`, `permute_extensions`, `priority_on_h1`,
    `pq`, `key_share_groups`, `padding_to`) are record data too, not a per-family
    rule.
+   The QUIC Initial's header is record data of the same kind: `quic` names a
+   `QuicShape` — the packet number the client starts at, its destination and
+   source connection-ID lengths, and the size it pads the datagram to — and test
+   2's QUIC column sends exactly that header for the profile, so those four
+   numbers are the profile's, not the probe's. Reuse the family's constant
+   (`CHROMIUM_QUIC`, `FIREFOX_QUIC`, `SAFARI_QUIC`, `BASELINE_QUIC`) where the
+   client's values are the family's; a new one needs its own source, the way the
+   four in `shapes/mod.rs` carry theirs.
 4. **Register it**: a variant in `TlsFingerprint`, a row in `ALL`, `code`,
    `token`, `label`, and `parse` if needed. Decide about `DEFAULT_SET` — seven
    slots, each answering its own question (the baseline shape, the newest in each
@@ -152,9 +171,10 @@ measurement, not by declaration: a profile's hello is taken 24 times, so a drift
 extension *order* marks a shuffling shape, while a drifting *set* marks the padding
 coin; a wrapper with `--tls-key-shares-limit` explains its own key shares. Everything
 else is printed as `to look at` — only the list of intentional divergences in
-`tools/fingerprint/README.md` can rule on it. A full run goes over twenty-eight
-profiles: the nineteen bundle rows produce the same `13 clean, 6 explained by their
-own client, 0 to look at` as before, while the nine uTLS rows are judged by a single
+`tools/fingerprint/README.md` can rule on it. A full run goes over the
+thirty-three rows of `PROFILES`: the rows that were there before the v2.2.3 pin
+produce the same `13 clean, 6 explained by their own client, 0 to look at` as
+before, while the nine uTLS rows are judged by a single
 `hello` comparison — they have no wrapper flags, there is nothing to explain there,
 and all the list forgives is the GREASE body length in `firefox120` and the second
 key share of `chrome115pq` (§5).
@@ -196,7 +216,12 @@ will keep reporting". In short: the GREASE-ECH body is rebuilt on every connecti
 (the declared length is what gets compared), padding in `chrome123`/`chrome131android` is a
 per-connection coin (the shape has two keys), the extension order of Chrome 110+
 shuffles (JA4 matches, JA3 does not), and `tor145` has one key share more than the
-browser in the fork's capture — the record follows its own wrapper.
+browser in the fork's capture — the record follows its own wrapper. Two of the
+v2.2.3 rows carry a **provider gap** rather than a transcription choice, and both
+are named there in full: `chrome124` advertises the draft hybrid
+`X25519Kyber768Draft00` and shares X25519 alone, because this build has no group
+for the draft code point, and `chrome150` advertises the three ML-DSA schemes
+`ring` cannot verify.
 
 The nine records transcribed from uTLS specs have divergences of their own, and all four
 are named here so the reader does not have to look for them elsewhere:
@@ -218,7 +243,13 @@ are named here so the reader does not have to look for them elsewhere:
   hello is shorter than the original 1524 bytes and falls under the 512-byte padding
   threshold, which a real Chrome 115 never falls under, which is also why the record
   has no padding slot (the extension bodies and the set remain the capture's, and
-  only the key share body differs).
+  only the key share body differs). **`chrome124` is the same hole reached from a
+  bundle wrapper**: `curl_chrome124` leads its group list with the same draft
+  group and puts a 1216-byte share for it on the wire, so the record advertises
+  the group and shares X25519, and `hello-diff` reports `body key_share` and a
+  hello of about 560 bytes against the wrapper's 1719 — with the group list, the
+  extension set, the ciphers and the shuffle all matching, and JA4 (no group
+  list, no shares) equal to the wrapper's own key.
 * **No h2 preface at all.** All nine send HTTP/2 with hyper's default settings: the
   spec has no preface of its own, and inventing one is no longer transcription. The
   other records have their preface taken from the wrapper, and the difference is
@@ -241,8 +272,9 @@ as Chrome 133–146 in §1, not a divergence from the source.
   every TLS 1.3 suite with `quic: Some(…)` (`src/crypto/ring/tls13.rs`) — but
   nothing in this tree drives a QUIC handshake: the QUIC column hand-rolls one
   padded Initial and reads the reply without TLS state, so no h3 profile is
-  possible yet, regardless of `quinn`/`h3`. A record's `quic` flag
-  (`ClientHelloProfile::quic`, the patched hook) only empties `legacy_session_id`
+  possible yet, regardless of `quinn`/`h3`. The rustls profile's `quic` flag
+  (`ClientHelloProfile::quic`, the patched hook — not the `TlsShape::quic` header
+  record above) only empties `legacy_session_id`
   the way RFC 9001 §8.4 requires, which is what test 2's QUIC column needs — the
   handshake still does not run over QUIC. The order of work, if one takes this on:
   header protection per RFC 9001 §5.4 with the §A.2 test vectors, a transport
