@@ -558,7 +558,14 @@ pub fn classify_tls_error(
 
     // First try SSL-specific classification for alert/cert/spoof texts
     let (ssl_status, ssl_detail) = classify_ssl_error(err_msg, bytes_recv, stage);
-    if ssl_status != DpiStatus::Unknown {
+    // `Unknown` from the SSL pass is usually an absence — the connect pass and
+    // the stack table below still have a word for what it did not place — but
+    // the version-naming `PeerIncompatible` is `Unknown` on purpose: its message
+    // names no direction, and only the leg's own offer says which way the answer
+    // went (`probe::domains::resolve_peer_version_mismatch`). Dropping it here
+    // was measured on `megafon.ru` and `rzd.ru`, whose TLS 1.3 column read
+    // `UNKNOWN` with rustls's sentence instead of `NO TLS1.3`.
+    if ssl_status != DpiStatus::Unknown || ssl_detail == Detail::PeerVersionMismatch {
         return (ssl_status, ssl_detail);
     }
 
@@ -791,6 +798,27 @@ mod tests {
             ConnectionStage::TlsClientHelloSent,
         );
         assert_eq!(s, DpiStatus::TlsRst);
+    }
+
+    /// The version-naming answer is `Unknown` on purpose, and the connect pass
+    /// it runs through next must not swallow it: the direction is the leg's to
+    /// read (`probe::domains::resolve_peer_version_mismatch`), and losing the
+    /// detail here left the leg nothing to resolve. Measured on `megafon.ru` and
+    /// `rzd.ru`, whose TLS 1.3 column read `UNKNOWN` with the raw rustls
+    /// sentence — `TLS error: peer is incompatible: ServerTlsVersionIsDisabledByOurConfig`
+    /// — instead of the `NO TLS1.3` their 1.3-only re-ask earned.
+    #[test]
+    fn a_version_naming_answer_survives_the_connect_pass() {
+        let (s, d) = classify_tls_error(
+            ConnectionStage::TlsClientHelloSent,
+            0,
+            0,
+            "peer is incompatible: ServerTlsVersionIsDisabledByOurConfig",
+            false,
+            None,
+            None,
+        );
+        assert_eq!((s, d), (DpiStatus::Unknown, Detail::PeerVersionMismatch));
     }
 
     /// The HTTP half of "the bytes that came back are not a response": hyper's
