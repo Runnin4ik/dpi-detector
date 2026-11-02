@@ -239,6 +239,7 @@ mod tests {
             resolvers_total: 120,
             subst_sub: 43,
             subst_total: 44,
+            subst_kinds: Default::default(),
             fakeip_sub: 0,
             top_stub: None,
         };

@@ -92,14 +92,7 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
     // surfaces as its stage token (SYN DROP / TLS DROP), not a flat timeout.
     let addrs: Vec<std::net::SocketAddr> = timeout(timeout_dur, resolve_host(&host, port, timeout_dur))
         .await
-        .map_err(|_| DnsError::ConnectFault {
-            stage: ConnectStage::Resolve,
-            detail: "lookup timed out".to_string(),
-        })?
-        .map_err(|e| DnsError::ConnectFault {
-            stage: ConnectStage::Resolve,
-            detail: e.to_string(),
-        })?;
+        .map_err(|_| DnsError::connect_fault_text(ConnectStage::Resolve, "lookup timed out"))??;
     // Prefer IPv4 unless the user specifically requested IPv6; otherwise
     // take the first resolved address.
     let addr = addrs
@@ -107,20 +100,11 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
         .find(|a| a.is_ipv4())
         .copied()
         .or_else(|| addrs.first().copied())
-        .ok_or_else(|| DnsError::ConnectFault {
-            stage: ConnectStage::Resolve,
-            detail: "no address".to_string(),
-        })?;
+        .ok_or_else(|| DnsError::connect_fault_text(ConnectStage::Resolve, "no address"))?;
     let tcp = timeout(timeout_dur, crate::net::bind::tcp_connect(&addr))
         .await
-        .map_err(|_| DnsError::ConnectFault {
-            stage: ConnectStage::TcpConnect,
-            detail: "connect timed out".to_string(),
-        })?
-        .map_err(|e| DnsError::ConnectFault {
-            stage: ConnectStage::TcpConnect,
-            detail: e.to_string(),
-        })?;
+        .map_err(|_| DnsError::connect_fault_text(ConnectStage::TcpConnect, "connect timed out"))?
+        .map_err(|e| DnsError::connect_fault(ConnectStage::TcpConnect, &e))?;
     set_no_delay(&tcp);
 
     // DoH (RFC 8484) over the system roots, offering h2 first, then http/1.1.
@@ -133,14 +117,10 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
 
     let tls_stream = timeout(timeout_dur, connector.connect(server_name, tcp))
         .await
-        .map_err(|_| DnsError::ConnectFault {
-            stage: ConnectStage::TlsHandshake,
-            detail: "handshake timed out".to_string(),
+        .map_err(|_| {
+            DnsError::connect_fault_text(ConnectStage::TlsHandshake, "handshake timed out")
         })?
-        .map_err(|e| DnsError::ConnectFault {
-            stage: ConnectStage::TlsHandshake,
-            detail: e.to_string(),
-        })?;
+        .map_err(|e| DnsError::connect_fault(ConnectStage::TlsHandshake, &e))?;
     let alpn = tls_stream.get_ref().1.alpn_protocol();
     let is_h2 = alpn == Some(b"h2");
 
@@ -152,14 +132,10 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
             h2_builder(&BASELINE_H2).handshake::<_, Bytes>(tls_stream),
         )
         .await
-        .map_err(|_| DnsError::ConnectFault {
-            stage: ConnectStage::Connected,
-            detail: "HTTP/2 handshake timed out".to_string(),
+        .map_err(|_| {
+            DnsError::connect_fault_text(ConnectStage::Connected, "HTTP/2 handshake timed out")
         })?
-        .map_err(|e| DnsError::ConnectFault {
-            stage: ConnectStage::Connected,
-            detail: e.to_string(),
-        })?;
+        .map_err(|e| DnsError::connect_fault_text(ConnectStage::Connected, &e.to_string()))?;
         let ended = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&ended);
         tokio::spawn(async move {
@@ -172,14 +148,10 @@ pub(crate) async fn doh_connect(endpoint_url: &str, timeout_dur: Duration) -> Re
     } else {
         let (sender, conn) = timeout(timeout_dur, hyper::client::conn::http1::handshake(TokioIo::new(tls_stream)))
             .await
-            .map_err(|_| DnsError::ConnectFault {
-                stage: ConnectStage::Connected,
-                detail: "HTTP handshake timed out".to_string(),
+            .map_err(|_| {
+                DnsError::connect_fault_text(ConnectStage::Connected, "HTTP handshake timed out")
             })?
-            .map_err(|e| DnsError::ConnectFault {
-                stage: ConnectStage::Connected,
-                detail: e.to_string(),
-            })?;
+            .map_err(|e| DnsError::connect_fault_text(ConnectStage::Connected, &e.to_string()))?;
         tokio::spawn(async move {
             if let Err(err) = conn.await {
                 tracing::debug!("DoH HTTP/1 connection error: {:?}", err);

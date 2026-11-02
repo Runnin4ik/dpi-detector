@@ -25,8 +25,7 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 use crate::classify::{
-    classify_connect_error_full, classify_ssl_error, ConnectionStage, Detail, DpiStatus, ProbeStage,
-    StackKind,
+    classify_ssl_error, classify_tls_error, ConnectionStage, Detail, DpiStatus, ProbeStage, StackKind,
 };
 use crate::config::AppConfig;
 use crate::dns::resolve_host;
@@ -257,20 +256,20 @@ pub async fn check_domain_tls(
                 let (status, detail) = match tracked {
                     Some(verdict) => verdict,
                     None => {
-                        let (status, detail) = classify_connect_error_full(
+                        // The one entry point both tests use: the same function,
+                        // the same inputs (message, OS code, error kind), so a
+                        // handshake that fails the same way reads the same word
+                        // here and on a DNS endpoint.
+                        let (status, detail) = classify_tls_error(
+                            ConnectionStage::TlsClientHelloSent,
+                            0,
+                            0,
                             &msg,
+                            false,
                             e.raw_os_error(),
                             Some(e.kind()),
-                            0,
-                            ProbeStage::TlsHandshake,
                         );
-                        if status != DpiStatus::Unknown {
-                            (status, detail)
-                        } else {
-                            let (ssl_status, ssl_detail) =
-                                classify_ssl_error(&msg, 0, ConnectionStage::TlsClientHelloSent);
-                            resolve_peer_version_mismatch(ssl_status, ssl_detail, leg.offers_tls12())
-                        }
+                        resolve_peer_version_mismatch(status, detail, leg.offers_tls12())
                     }
                 };
 

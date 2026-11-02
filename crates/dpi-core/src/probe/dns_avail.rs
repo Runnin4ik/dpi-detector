@@ -8,8 +8,11 @@
 //! Two-phase UDP scheme: phase A probes trusted domains (liveness + ping),
 //! phase B probes forbidden domains only on live servers and compares UDP
 //! answers against the DoH/DoT truth. Silence on a forbidden domain counts
-//! as substitution, not unavailability. Egress resolvers are fingerprinted
-//! via `whoami.akamai.net` + Team Cymru org names.
+//! as substitution, not unavailability — one datagram is sent per query, so
+//! the query is retried once on a timeout — and the report prints the counts
+//! split by what came back instead (`STUB`, `NXDOMAIN`, `EMPTY`, `TIMEOUT`).
+//! Egress resolvers are fingerprinted via `whoami.akamai.net` + Team Cymru
+//! org names.
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -17,7 +20,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Semaphore};
 
-use crate::classify::{classify_connect_error_full, Detail, DpiStatus, ProbeStage};
+use crate::classify::{
+    classify_connect_error_full, classify_tls_error, ConnectionStage, Detail, DpiStatus, ProbeStage,
+};
 use crate::dns::doh::DohSession;
 use crate::dns::dot::DotSession;
 use crate::dns::socks::SocksProxyConfig;
@@ -122,7 +127,7 @@ impl FailReason {
 pub fn connect_fail(err: &DnsError) -> FailReason {
     match err {
         DnsError::Timeout => FailReason::timeout(),
-        DnsError::ConnectFault { stage, detail } => {
+        DnsError::ConnectFault { stage, detail, code, kind } => {
             // `resolve` is the one stage the classifier does not have — an
             // endpoint's name lookup is a DNS verdict, not a transport one — and
             // the only one `of_fault_stage` answers `None` for. No word can fall
@@ -131,21 +136,50 @@ pub fn connect_fail(err: &DnsError) -> FailReason {
             let Some(stage) = ProbeStage::of_fault_stage(*stage) else {
                 return FailReason { status: DpiStatus::DnsFail, detail: Detail::DnsError };
             };
-            let (status, classified) =
-                classify_connect_error_full(detail, None, None, 0, stage);
+            // The same classifier the domain test calls, with the same facts:
+            // the producer now keeps the OS code and error kind instead of
+            // reducing them to a message, which is what let a localized reset
+            // read as `UNKNOWN` here and as `TLS RST` there.
+            let (status, classified) = if stage == ProbeStage::TlsHandshake {
+                // `is_timeout` stays `false`: the classifier reads the code, the
+                // kind and the text itself, and its answer is the one the domain
+                // test gets from the same failure (`tls_handshake_timeout`), not
+                // a second spelling of it.
+                classify_tls_error(
+                    ConnectionStage::TlsClientHelloSent,
+                    0,
+                    0,
+                    detail,
+                    false,
+                    *code,
+                    *kind,
+                )
+            } else {
+                classify_connect_error_full(detail, *code, *kind, 0, stage)
+            };
             FailReason { status, detail: classified }
         }
+        // An answer, not a fault: the resolver said the name does not exist.
+        // `DpiStatus::NxDomain` is the vocabulary's own word for that (test 2
+        // badges a domain with it), and it keeps the endpoint out of the failure
+        // list, where `UNKNOWN` said the tool had no idea what happened. `3` is
+        // the same rcode the UDP path reads as an `NXDOMAIN` answer.
+        DnsError::NxDomain | DnsError::ServerFailure(3) => FailReason {
+            status: DpiStatus::NxDomain,
+            detail: Detail::Other(err.to_string()),
+        },
         // Non-staged errors (bad URL/SNI/length; HTTP status is handled by
         // callers): the message says which, the resolve markers are the only
         // ones that name a transport verdict of their own.
+        // A message with no stage and no code behind it: the classifier decides,
+        // the same one the other arms use. The local word list that used to live
+        // here (`"resolve"`, `"invalid"`, `"bad "`) guessed a `DNS FAIL` from our
+        // own phrasing — a config error read as a network verdict — and guessed
+        // `UNKNOWN` for every localized transport message.
         DnsError::Io(msg) => {
-            let m = msg.to_lowercase();
-            let status = if ["resolve", "no address", "invalid", "bad "].iter().any(|t| m.contains(t)) {
-                DpiStatus::DnsFail
-            } else {
-                DpiStatus::Unknown
-            };
-            FailReason { status, detail: Detail::Other(msg.clone()) }
+            let (status, detail) =
+                classify_connect_error_full(msg, None, None, 0, ProbeStage::TcpConnect);
+            FailReason { status, detail }
         }
         // Malformed packets, a server rcode, an HTTP status: none of them is a
         // transport verdict, so the status says so and the message identifies
@@ -216,6 +250,30 @@ pub enum DnsAnswer {
     NxDomain,
 }
 
+/// Every substituted answer of a run, split by what the server gave instead.
+///
+/// `total` is what the report prints as one number; the split is what turns
+/// that number into a diagnosis — a resolver that denies the name, one that
+/// answers `NOERROR` with no address, one that returns a stub address and one
+/// that says nothing are four different behaviours.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SubstKinds {
+    /// Answers that carried addresses, none of which the truth names.
+    pub stub: usize,
+    /// `NXDOMAIN` for a name the encrypted resolvers resolve.
+    pub nxdomain: usize,
+    /// `NOERROR` with no address record at all.
+    pub empty: usize,
+    /// No usable answer within the window: a lost packet or a garbled reply.
+    pub timeout: usize,
+}
+
+impl SubstKinds {
+    pub fn total(self) -> usize {
+        self.stub + self.nxdomain + self.empty + self.timeout
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DnsAvailStats {
     pub doh_ok: usize,
@@ -234,8 +292,14 @@ pub struct DnsAvailStats {
     pub no_ca_bundle: usize,
     pub hijacked_brands: Vec<String>,
     pub resolvers_total: usize,
+    /// UDP servers with at least one substituted answer, of any kind.
     pub subst_sub: usize,
+    /// UDP servers with at least one forbidden domain to judge.
     pub subst_total: usize,
+    /// Every substituted query, split by what the server answered instead.
+    /// Counted per query, not per server: one resolver can lose three domains
+    /// to three different behaviours.
+    pub subst_kinds: SubstKinds,
     /// The part of `subst_sub` that came back inside the fake-ip range: a proxy
     /// or VPN answering instead of the resolver.
     pub fakeip_sub: usize,
@@ -358,7 +422,18 @@ fn spawn_udp_queries(
         let tx = tx.clone();
         handles.push(tokio::spawn(async move {
             let _p = crate::probe::permit(&gate).await;
-            let r = crate::dns::udp::probe_udp_dns(server, &d, timeout_dur, socks_proxy.as_ref()).await;
+            let mut r =
+                crate::dns::udp::probe_udp_dns(server, &d, timeout_dur, socks_proxy.as_ref()).await;
+            // One retry, and only on the transport's own timeout:
+            // `probe_udp_dns` sends a single datagram, so one lost packet is
+            // indistinguishable from a resolver that says nothing — and the
+            // substitution count would read that loss as an answer that was
+            // replaced. A refusal (`NXDOMAIN`, a server failure) *is* an answer
+            // and is never retried; a silent resolver costs two windows.
+            if matches!(r, Err(DnsError::Timeout)) {
+                r = crate::dns::udp::probe_udp_dns(server, &d, timeout_dur, socks_proxy.as_ref())
+                    .await;
+            }
             match tx {
                 Some(tx) => {
                     let _ = tx.send((d, r)).await;
@@ -1030,19 +1105,84 @@ fn subst_counts_with(
     let mut judged = 0;
     let mut sub = 0;
     for d in &report.forbidden {
-        let t = match truth.get(d) {
-            Some(t) if !t.is_empty() => t,
-            _ => continue,
-        };
-        judged += 1;
-        if udp_ips(report, addr, name, d).intersection(t).next().is_none() {
-            sub += 1;
+        match verdict_of(report, truth, addr, name, d) {
+            Some(verdict) => {
+                judged += 1;
+                if verdict.substituted() {
+                    sub += 1;
+                }
+            }
+            // No truth for this domain on this network: nothing to compare,
+            // so the query is outside the judgement rather than a miss.
+            None => continue,
         }
     }
     (judged, sub)
 }
 
-fn fakeip_sub(report: &DnsAvailReport, addr: &str, name: &str) -> usize {
+/// What one UDP query for a forbidden domain came back with, against the
+/// measured truth. Every kind but `Matched` is a substitution: the server
+/// answered something that is not the measured answer, or answered nothing at
+/// all. The kinds exist so the report can say *what* the interception looks
+/// like — a resolver that denies the name, one that answers `NOERROR` with no
+/// address, one that hands out a stub address and one that stays silent are
+/// four different behaviours, and one number hides which one is in front of
+/// the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    Matched,
+    Stub,
+    NxDomain,
+    Empty,
+    Timeout,
+}
+
+impl Verdict {
+    /// Everything but a matching answer counts as a replaced answer.
+    pub fn substituted(self) -> bool {
+        !matches!(self, Verdict::Matched)
+    }
+}
+
+/// The verdict for one (server, forbidden domain) pair, `None` when the
+/// network measured no truth for that domain.
+fn verdict_of(
+    report: &DnsAvailReport,
+    truth: &HashMap<String, HashSet<IpAddr>>,
+    addr: &str,
+    name: &str,
+    domain: &str,
+) -> Option<Verdict> {
+    let t = match truth.get(domain) {
+        Some(t) if !t.is_empty() => t,
+        _ => return None,
+    };
+    let key = ProbeKey { kind: ProbeKind::Udp, addr: addr.to_string(), name: name.to_string() };
+    Some(match report.udp_answers.get(&(key, domain.to_string())) {
+        // `NOERROR` with no address: the name exists but its answer was taken
+        // away, which is what a DNS filter does instead of denying it.
+        Some(DnsAnswer::Ips(ips)) if ips.is_empty() => Verdict::Empty,
+        Some(DnsAnswer::Ips(ips)) => {
+            if ips.iter().any(|ip| t.contains(ip)) {
+                Verdict::Matched
+            } else {
+                Verdict::Stub
+            }
+        }
+        Some(DnsAnswer::NxDomain) => Verdict::NxDomain,
+        // No stored answer: the query timed out, or the reply did not parse.
+        // Both are "nothing usable came back", and the report names that
+        // TIMEOUT — the counts treat a lost packet and a garbled reply alike.
+        None => Verdict::Timeout,
+    })
+}
+
+/// How many of a server's answers for the forbidden domains came back inside
+/// the fake-ip range (`198.18.0.0/15`): a proxy or VPN answering in the
+/// resolver's place. Public because the table draws it as its own colour, and
+/// a second spelling of the range test at the call site is the bug that made
+/// this one necessary.
+pub fn fakeip_sub(report: &DnsAvailReport, addr: &str, name: &str) -> usize {
     let mut n = 0;
     for d in &report.forbidden {
         let ips = udp_ips(report, addr, name, d);
@@ -1162,6 +1302,7 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
     let mut subst_sub = 0;
     let mut subst_total = 0;
     let mut fakeip_count = 0;
+    let mut kinds = SubstKinds::default();
     let mut stub_counts: HashMap<IpAddr, usize> = HashMap::new();
     for (name, addrs) in &by_name {
         for a in addrs {
@@ -1180,15 +1321,27 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
                 fakeip_count += 1;
             }
             for d in &report.forbidden {
-                let t = match truth.get(d) {
-                    Some(t) if !t.is_empty() => t,
-                    _ => continue,
+                let Some(verdict) = verdict_of(report, &truth, a, name, d) else {
+                    continue;
                 };
                 let uips = udp_ips(report, a, name, d);
-                if !uips.is_empty() && uips.intersection(t).next().is_none() {
-                    for ip in uips {
-                        *stub_counts.entry(ip).or_insert(0) += 1;
+                // `-v` carries the comparison itself: a count says a row went
+                // red, only these two sets say what came back instead.
+                tracing::debug!(
+                    "UDP {name} {a} {d}: {uips:?} vs truth {:?}: {verdict:?}",
+                    truth.get(d)
+                );
+                match verdict {
+                    Verdict::Matched => {}
+                    Verdict::Stub => {
+                        kinds.stub += 1;
+                        for ip in uips {
+                            *stub_counts.entry(ip).or_insert(0) += 1;
+                        }
                     }
+                    Verdict::NxDomain => kinds.nxdomain += 1,
+                    Verdict::Empty => kinds.empty += 1,
+                    Verdict::Timeout => kinds.timeout += 1,
                 }
             }
         }
@@ -1218,6 +1371,7 @@ fn compute_stats(report: &DnsAvailReport, cfg: &AppConfig) -> DnsAvailStats {
         resolvers_total,
         subst_sub,
         subst_total,
+        subst_kinds: kinds,
         fakeip_sub: fakeip_count,
         top_stub,
     }
@@ -1290,6 +1444,190 @@ mod tests {
         assert_eq!(truth["blind.example"], HashSet::from([ip("198.51.100.7")]));
     }
 
+    /// Every answer that is not the measured one counts as a substitution,
+    /// and the run's own counts split by kind: a resolver that hands out a
+    /// stub address, one that denies the name, one that answers `NOERROR` with
+    /// no address and one that says nothing are four behaviours, and one
+    /// number hides which one is in front of the user.
+    #[test]
+    fn the_run_counts_each_kind_of_substitution() {
+        let addr = "192.0.2.53";
+        let name = "Quad9 (S)";
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let truth_ip = ip("203.0.113.7");
+        let udp_key = ProbeKey {
+            kind: ProbeKind::Udp,
+            addr: addr.to_string(),
+            name: name.to_string(),
+        };
+        let mut report = DnsAvailReport {
+            allowed: vec!["trusted.example".to_string()],
+            forbidden: vec![
+                "stub.example".to_string(),
+                "nx.example".to_string(),
+                "empty.example".to_string(),
+                "silent.example".to_string(),
+                "good.example".to_string(),
+            ],
+            udp_servers: vec![(addr.to_string(), name.to_string(), 53)],
+            ..DnsAvailReport::default()
+        };
+        // Alive: one trusted domain answered, which is what phase B waits for.
+        report
+            .raw
+            .insert(udp_key.clone(), HashMap::from([("trusted.example".to_string(), Some(1.0))]));
+        for domain in &report.forbidden {
+            report.doh_answers.insert(
+                (
+                    ProbeKey {
+                        kind: ProbeKind::DohWire,
+                        addr: "https://doh.example/dns-query".to_string(),
+                        name: "DoH".to_string(),
+                    },
+                    domain.clone(),
+                ),
+                DnsAnswer::Ips(vec![truth_ip]),
+            );
+        }
+        report.udp_answers.insert(
+            (udp_key.clone(), "stub.example".to_string()),
+            DnsAnswer::Ips(vec![ip("198.51.100.9")]),
+        );
+        report
+            .udp_answers
+            .insert((udp_key.clone(), "nx.example".to_string()), DnsAnswer::NxDomain);
+        report
+            .udp_answers
+            .insert((udp_key.clone(), "empty.example".to_string()), DnsAnswer::Ips(Vec::new()));
+        report
+            .udp_answers
+            .insert((udp_key, "good.example".to_string()), DnsAnswer::Ips(vec![truth_ip]));
+        // `silent.example` has no entry at all: the query timed out.
+
+        let stats = compute_stats(&report, &AppConfig::default());
+        assert_eq!((stats.subst_sub, stats.subst_total), (1, 1), "the server answered wrong");
+        assert_eq!(
+            (
+                stats.subst_kinds.stub,
+                stats.subst_kinds.nxdomain,
+                stats.subst_kinds.empty,
+                stats.subst_kinds.timeout,
+            ),
+            (1, 1, 1, 1)
+        );
+        assert_eq!(stats.subst_kinds.total(), 4);
+        assert_eq!(subst_counts(&report, addr, name), (5, 4));
+    }
+
+    /// The two consumers of the classifier read the same failure the same way.
+    ///
+    /// They used to disagree because the DNS side reduced an `io::Error` to its
+    /// message: a localized reset therefore read `UNKNOWN` on a DoT endpoint and
+    /// `TLS RST` on a domain. The producer now keeps the code and the kind, so
+    /// this table is the pin — every row is classified through test 2's entry
+    /// point and through test 1's, with the same inputs, and the verdicts must
+    /// be identical.
+    #[test]
+    fn a_dns_endpoint_and_a_domain_read_the_same_failure_alike() {
+        use crate::classify::{classify_tls_error, ConnectStage};
+        use ConnectionStage::TlsClientHelloSent;
+
+        let cases: [(&str, Option<i32>, Option<std::io::ErrorKind>); 6] = [
+            ("tls handshake eof", None, None),
+            // What `curl` reports as `Recv failure: Connection was reset`.
+            (
+                "Удаленный хост принудительно разорвал существующее подключение. (os error 10054)",
+                Some(10054),
+                Some(std::io::ErrorKind::ConnectionReset),
+            ),
+            (
+                "Удаленный хост принудительно разорвал существующее подключение.",
+                Some(10054),
+                None,
+            ),
+            ("received fatal alert: IllegalParameter", None, None),
+            ("handshake timed out", None, None),
+            ("an unrecognised transport failure", None, None),
+        ];
+
+        for (msg, code, kind) in cases {
+            let domain = classify_tls_error(TlsClientHelloSent, 0, 0, msg, false, code, kind);
+            let dns = connect_fail(&DnsError::ConnectFault {
+                stage: ConnectStage::TlsHandshake,
+                detail: msg.to_string(),
+                code,
+                kind,
+            });
+            assert_eq!(
+                (dns.status, dns.detail.code().into_owned()),
+                (domain.0, domain.1.code().into_owned()),
+                "{msg}"
+            );
+        }
+    }
+
+    /// A DoH/DoT handshake is a TLS event, so the report must read it with the
+    /// TLS classifier: the transport one alone left these at `UNKNOWN` with the
+    /// raw text. Each verdict here is one the vocabulary already has.
+    #[test]
+    fn a_handshake_fault_is_read_with_the_tls_vocabulary() {
+        use crate::classify::ConnectStage;
+        let fault = |detail: &str| {
+            connect_fail(&DnsError::connect_fault_text(ConnectStage::TlsHandshake, detail))
+        };
+        let eof = fault("tls handshake eof");
+        assert_eq!(
+            (eof.status, eof.detail.code().as_ref()),
+            (DpiStatus::TlsRst, "tcp_rst_on_client_hello")
+        );
+
+        // A reset Windows words in the system language, with the code std appends.
+        let reset = fault(
+            "Удаленный хост принудительно разорвал существующее подключение. (os error 10054)",
+        );
+        assert_eq!(
+            (reset.status, reset.detail.code().as_ref()),
+            (DpiStatus::TlsRst, "tls_rst_after_client_hello")
+        );
+
+        let alert = fault("received fatal alert: IllegalParameter");
+        assert_eq!(
+            (alert.status, alert.detail.code().as_ref()),
+            (DpiStatus::TlsAlert, "alert_illegal_parameter")
+        );
+
+        // The producers spell their own timeout; it is not a `TlsRst`.
+        let slow = fault("handshake timed out");
+        assert_eq!(slow.status, DpiStatus::TlsDropped);
+    }
+
+    /// A message nothing recognises is kept whole: the report quotes it back,
+    /// and the old 40-character cap cut it mid-word.
+    #[test]
+    fn an_unrecognised_message_is_kept_whole() {
+        use crate::classify::ConnectStage;
+        let message = "some transport failure no classifier has a needle for, long enough to be cut";
+        let reason =
+            connect_fail(&DnsError::connect_fault_text(ConnectStage::TlsHandshake, message));
+        assert_eq!(reason.status, DpiStatus::Unknown);
+        assert!(
+            matches!(&reason.detail, Detail::Other(text) if text.ends_with(message)),
+            "the whole sentence survives, not its first 40 characters: {:?}",
+            reason.detail
+        );
+    }
+
+    /// A resolver that answers `NXDOMAIN` answered: the endpoint is up and the
+    /// name is denied. `UNKNOWN` said neither — it said the tool did not know.
+    #[test]
+    fn an_nxdomain_answer_is_neither_unknown_nor_a_transport_failure() {
+        for err in [DnsError::NxDomain, DnsError::ServerFailure(3)] {
+            let reason = connect_fail(&err);
+            assert_eq!(reason.status, DpiStatus::NxDomain, "{err}");
+            assert_eq!(reason.status.display_label(), "NXDOMAIN");
+        }
+    }
+
     #[test]
     fn test_brand_sort() {
         assert_eq!(brand("AdGuard (F)"), "AdGuard");
@@ -1329,10 +1667,8 @@ mod tests {
     fn test_connect_fail_stage_and_detail() {
         use crate::classify::ConnectStage;
         use crate::dns::types::DnsError;
-        let fault = |stage: ConnectStage, detail: &str| DnsError::ConnectFault {
-            stage,
-            detail: detail.to_string(),
-        };
+        let fault =
+            |stage: ConnectStage, detail: &str| DnsError::connect_fault_text(stage, detail);
         let label = |e: &DnsError| connect_fail(e).label().to_string();
         assert_eq!(label(&DnsError::Timeout), "TIMEOUT");
         assert_eq!(label(&fault(ConnectStage::Resolve, "lookup failed")), "DNS FAIL");
@@ -1418,10 +1754,10 @@ mod tests {
         report.raw.insert(key(ProbeKind::Dot, "aborted"), HashMap::new());
         report.fail_reasons.insert(
             key(ProbeKind::Dot, "aborted"),
-            connect_fail(&DnsError::ConnectFault {
-                stage: ConnectStage::TlsHandshake,
-                detail: "invalid peer certificate: UnknownIssuer".to_string(),
-            }),
+            connect_fail(&DnsError::connect_fault_text(
+                ConnectStage::TlsHandshake,
+                "invalid peer certificate: UnknownIssuer",
+            )),
         );
 
         let failures = report.endpoint_failures();
@@ -1480,10 +1816,10 @@ mod tests {
         use crate::classify::ConnectStage;
         use crate::dns::types::DnsError;
         let key = |kind, addr: &str| ProbeKey { kind, addr: addr.to_string(), name: "P".to_string() };
-        let no_ca = connect_fail(&DnsError::ConnectFault {
-            stage: ConnectStage::TlsHandshake,
-            detail: "invalid peer certificate: UnknownIssuer".to_string(),
-        });
+        let no_ca = connect_fail(&DnsError::connect_fault_text(
+            ConnectStage::TlsHandshake,
+            "invalid peer certificate: UnknownIssuer",
+        ));
         let mut report = DnsAvailReport {
             forbidden: vec!["x.com".to_string()],
             doh_servers: vec![

@@ -67,23 +67,13 @@ impl DotSession {
             let addrs_vec: Vec<std::net::SocketAddr> =
                 timeout(timeout_dur, resolve_host(host, port, timeout_dur))
                     .await
-                    .map_err(|_| DnsError::ConnectFault {
-                        stage: ConnectStage::Resolve,
-                        detail: "lookup timed out".to_string(),
-                    })?
-                    .map_err(|e| DnsError::ConnectFault {
-                        stage: ConnectStage::Resolve,
-                        detail: e.to_string(),
-                    })?;
+                    .map_err(|_| DnsError::connect_fault_text(ConnectStage::Resolve, "lookup timed out"))??;
             let addr = addrs_vec
                 .iter()
                 .find(|a| a.is_ipv4())
                 .copied()
                 .or_else(|| addrs_vec.first().copied())
-                .ok_or_else(|| DnsError::ConnectFault {
-                    stage: ConnectStage::Resolve,
-                    detail: "no address".to_string(),
-                })?;
+                .ok_or_else(|| DnsError::connect_fault_text(ConnectStage::Resolve, "no address"))?;
             addr.ip().to_string()
         };
 
@@ -92,14 +82,10 @@ impl DotSession {
             .map_err(|e| DnsError::Io(format!("bad DoT address: {}", e)))?;
         let tcp = timeout(timeout_dur, crate::net::bind::tcp_connect(&addr))
             .await
-            .map_err(|_| DnsError::ConnectFault {
-                stage: ConnectStage::TcpConnect,
-                detail: "connect timed out".to_string(),
+            .map_err(|_| {
+                DnsError::connect_fault_text(ConnectStage::TcpConnect, "connect timed out")
             })?
-            .map_err(|e| DnsError::ConnectFault {
-                stage: ConnectStage::TcpConnect,
-                detail: e.to_string(),
-            })?;
+            .map_err(|e| DnsError::connect_fault(ConnectStage::TcpConnect, &e))?;
         set_no_delay(&tcp);
         let connector = TlsConnector::from(create_tls_config(&TlsProfile::verifying()));
         let server_name = ServerName::try_from(host.to_string())
@@ -114,14 +100,10 @@ impl DotSession {
 
         let tls = timeout(timeout_dur, connector.connect(server_name, tcp))
             .await
-            .map_err(|_| DnsError::ConnectFault {
-                stage: ConnectStage::TlsHandshake,
-                detail: "handshake timed out".to_string(),
+            .map_err(|_| {
+                DnsError::connect_fault_text(ConnectStage::TlsHandshake, "handshake timed out")
             })?
-            .map_err(|e| DnsError::ConnectFault {
-                stage: ConnectStage::TlsHandshake,
-                detail: e.to_string(),
-            })?;
+            .map_err(|e| DnsError::connect_fault(ConnectStage::TlsHandshake, &e))?;
         Ok(Self { tls, timeout_dur })
     }
 

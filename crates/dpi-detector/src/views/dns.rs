@@ -6,7 +6,7 @@ use dpi_core::classify::DpiStatus;
 use dpi_core::config::AppConfig;
 use crate::i18n::{Messages, detail_text, format_bidi};
 use dpi_core::probe::dns_avail::{
-    DnsAnswer, DnsAvailReport, ProbeKind, known_resolver, net24, org_label, subst_counts,
+    DnsAvailReport, ProbeKind, fakeip_sub, known_resolver, net24, org_label, subst_counts,
 };
 use std::net::IpAddr;
 
@@ -317,23 +317,21 @@ pub(crate) fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, 
             for a in udp_addrs {
                 let (judged, sub) = subst_counts(report, a, name);
                 if judged == 0 {
+                    // Nothing came back for any forbidden domain: no answer and
+                    // no substitute. The latency column already says the server
+                    // is alive, so this cell stays blank rather than red.
                     subst_lines.push(("—".to_string(), Color::DarkGrey));
                     continue;
                 }
-                // FakeIP check
-                let mut fake_n = 0;
-                for d in &report.forbidden {
-                    let key = dpi_core::probe::dns_avail::ProbeKey { kind: ProbeKind::Udp, addr: a.clone(), name: name.clone() };
-                    if let Some(DnsAnswer::Ips(ips)) = report.udp_answers.get(&(key, d.clone()))
-                        && !ips.is_empty() && ips.iter().any(|ip| dpi_core::probe::domains::fake_ip_type(ip) == dpi_core::probe::domains::FakeIpType::FakeIp)
-                    {
-                        fake_n += 1;
-                    }
-                }
-                let frac = format!("{}/{}", sub, report.forbidden.len());
+                let fake_n = fakeip_sub(report, a, name);
+                // `judged`, not the configured domain count: a domain the server
+                // never answered is not part of the fraction. Printing `sub/5`
+                // for three answered domains read as though two more answers
+                // had been replaced.
+                let frac = format!("{}/{}", sub, judged);
                 if fake_n > 0 {
                     subst_lines.push((frac, Color::Magenta));
-                } else if sub == report.forbidden.len() {
+                } else if sub == judged {
                     subst_lines.push((frac, Color::Red));
                 } else if sub == 0 {
                     subst_lines.push((frac, Color::Green));
@@ -425,10 +423,12 @@ pub(crate) fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, 
             Some(top) if top.parse::<std::net::IpAddr>().map(|ip| dpi_core::probe::domains::fake_ip_type(&ip) == dpi_core::probe::domains::FakeIpType::FakeIp).unwrap_or(false) => {
                 out.push_str(msg.dns_fakeip_warn);
                 out.push('\n');
+                out.push_str(&subst_breakdown(st.subst_kinds, msg));
             }
             _ => {
                 out.push_str(msg.dns_intercept_warn);
                 out.push('\n');
+                out.push_str(&subst_breakdown(st.subst_kinds, msg));
                 if let Some(top) = st.top_stub.as_deref() {
                     out.push_str(&format!("{}\n", msg.dns_stub_ip_label.replace("{}", top)));
                 }
@@ -442,9 +442,124 @@ pub(crate) fn render_dns_availability(report: &DnsAvailReport, cfg: &AppConfig, 
     out
 }
 
+/// The substitution counts under the table: one total, then the kinds that
+/// made it.
+///
+/// One number says how much was replaced, the split says how: a resolver that
+/// denies the name (`NXDOMAIN`), one that answers `NOERROR` with no address
+/// (`EMPTY`), one that hands out a stub address (`STUB`) and one that says
+/// nothing (`TIMEOUT`) are four different behaviours, and only the split says
+/// which one is in front of the user. A kind with no count is left out, so the
+/// lines always add up to the total; the tokens are Latin and stay untranslated
+/// (Rule 4).
+fn subst_breakdown(kinds: dpi_core::probe::dns_avail::SubstKinds, msg: &Messages) -> String {
+    let mut out = format!("{}\n", msg.dns_subst_total.replace("{}", &kinds.total().to_string()));
+    let bullet = asc("•");
+    for (label, count) in [
+        ("STUB", kinds.stub),
+        ("NXDOMAIN", kinds.nxdomain),
+        ("EMPTY", kinds.empty),
+        ("TIMEOUT", kinds.timeout),
+    ] {
+        if count == 0 {
+            continue;
+        }
+        out.push_str(&format!("  {bullet} \x1b[1m{count}\x1b[0m {label}\n"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The breakdown belongs under the table and must carry the same numbers
+    /// the rows carry: a resolver that denies the name, one that answers
+    /// `NOERROR` with no address and one that says nothing produce one red
+    /// column and three different lines here, which is the diagnosis.
+    #[test]
+    fn the_substitution_breakdown_sits_under_the_table() {
+        use dpi_core::probe::dns_avail::{DnsAnswer, DnsAvailReport, DnsAvailStats, ProbeKey, ProbeKind, SubstKinds};
+        use std::collections::HashMap;
+
+        let addr = "192.0.2.53";
+        let name = "Quad9 (S)";
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let key = ProbeKey { kind: ProbeKind::Udp, addr: addr.to_string(), name: name.to_string() };
+        let mut report = DnsAvailReport {
+            allowed: vec!["vk.ru".to_string()],
+            forbidden: vec![
+                "nx.example".to_string(),
+                "empty.example".to_string(),
+                "silent.example".to_string(),
+            ],
+            udp_servers: vec![(addr.to_string(), name.to_string(), 53)],
+            ..Default::default()
+        };
+        report
+            .raw
+            .insert(key.clone(), HashMap::from([("vk.ru".to_string(), Some(10.0))]));
+        for domain in &report.forbidden {
+            report.doh_answers.insert(
+                (
+                    ProbeKey {
+                        kind: ProbeKind::DohWire,
+                        addr: "https://doh.example/dns-query".to_string(),
+                        name: "DoH".to_string(),
+                    },
+                    domain.clone(),
+                ),
+                DnsAnswer::Ips(vec![ip("203.0.113.7")]),
+            );
+        }
+        report
+            .udp_answers
+            .insert((key.clone(), "nx.example".to_string()), DnsAnswer::NxDomain);
+        report
+            .udp_answers
+            .insert((key, "empty.example".to_string()), DnsAnswer::Ips(Vec::new()));
+        report.stats = DnsAvailStats {
+            subst_sub: 1,
+            subst_total: 1,
+            subst_kinds: SubstKinds { stub: 0, nxdomain: 1, empty: 1, timeout: 1 },
+            ..Default::default()
+        };
+
+        let out = crate::tui::backend::strip_ansi(&render_dns_availability(
+            &report,
+            &AppConfig::default(),
+            &crate::i18n::get_messages(crate::i18n::Language::Ru),
+        ));
+        let table = out.find("Domain Availability Check").or_else(|| out.find('│'));
+        let block = out.find("Суммарно подменено 3 UDP запросов:");
+        assert!(block.is_some(), "the breakdown is printed: {out}");
+        assert!(table < block, "and it sits under the table: {out}");
+        for line in ["1 NXDOMAIN", "1 EMPTY", "1 TIMEOUT"] {
+            assert!(out.contains(line), "missing {line}: {out}");
+        }
+    }
+
+
+    /// The breakdown under the table is read as a diagnosis, so its lines must
+    /// add up to the total it prints and a kind that never happened must not
+    /// appear as a zero: the reader is looking for *what* came back instead of
+    /// the measured answer, not for a fixed form.
+    #[test]
+    fn the_substitution_breakdown_lists_only_the_kinds_that_happened() {
+        use dpi_core::probe::dns_avail::SubstKinds;
+        let msg = crate::i18n::get_messages(crate::i18n::Language::Ru);
+        let kinds = SubstKinds { stub: 0, nxdomain: 30, empty: 20, timeout: 10 };
+        let text = crate::tui::backend::strip_ansi(&subst_breakdown(kinds, &msg));
+        assert!(text.starts_with("Суммарно подменено 60 UDP запросов:"), "{text}");
+        assert!(!text.contains("STUB"), "a kind with no count is left out: {text}");
+        for line in ["30 NXDOMAIN", "20 EMPTY", "10 TIMEOUT"] {
+            assert!(text.contains(line), "missing {line}: {text}");
+        }
+        assert!(
+            !subst_breakdown(SubstKinds::default(), &msg).contains("NXDOMAIN"),
+            "a run with nothing substituted prints no kinds"
+        );
+    }
     /// The endpoint table prints a port only when it is not the kind's default,
     /// and that default comes from the probe vocabulary — the same table the
     /// loader fills an absent port from. A copy of the table living here again

@@ -175,18 +175,12 @@ pub async fn resolve_host(
             servers.push(server);
         }
     }
-    let mut last_err = DnsError::ConnectFault {
-        stage: ConnectStage::Resolve,
-        detail: "no address".to_string(),
-    };
+    let mut last_err = DnsError::connect_fault_text(ConnectStage::Resolve, "no address");
     for server in servers {
         match timeout(timeout_dur, probe_udp_dns(server, host, timeout_dur, None)).await {
             Ok(Ok((ips, _))) => {
                 if ips.is_empty() {
-                    return Err(DnsError::ConnectFault {
-                        stage: ConnectStage::Resolve,
-                        detail: "no address".to_string(),
-                    });
+                    return Err(DnsError::connect_fault_text(ConnectStage::Resolve, "no address"));
                 }
                 cache_put(host, &ips, Instant::now());
                 return Ok(ips
@@ -196,10 +190,8 @@ pub async fn resolve_host(
             }
             Ok(Err(e)) => last_err = e,
             Err(_) => {
-                last_err = DnsError::ConnectFault {
-                    stage: ConnectStage::Resolve,
-                    detail: "fallback timed out".to_string(),
-                }
+                last_err =
+                    DnsError::connect_fault_text(ConnectStage::Resolve, "fallback timed out")
             }
         }
     }

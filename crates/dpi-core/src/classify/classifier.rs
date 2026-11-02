@@ -4,8 +4,16 @@ use super::detail::{AlertKind, Detail};
 use super::stack;
 use super::types::{ConnectionStage, DpiStatus, IcmpCode, ProbeStage};
 
+/// The message a report keeps for an event nothing classified.
+///
+/// Capped, because a report is read at a glance and an OS message can run to a
+/// paragraph — but capped far past a sentence: at 40 characters the Windows
+/// wording of a connection reset ("Удаленный хост принудительно разорвал
+/// существующее подключение") was cut mid-word, and the one line a person would
+/// quote back to prove the diagnosis was unreadable. Table cells wrap, so the
+/// wider cap costs layout nothing.
 fn short_detail(msg: &str) -> String {
-    let mut s: String = msg.chars().take(40).collect();
+    let mut s: String = msg.chars().take(120).collect();
     s = s.replace(['\n', '\r'], " ");
     s.trim().to_string()
 }
@@ -505,12 +513,22 @@ pub fn classify_connect_error(err: Option<&io::Error>, is_timeout: bool) -> (Dpi
 }
 
 /// Classifies a TLS / L7 error using the connection stage and byte counters.
+///
+/// The single entry point for both consumers: test 2's probe stream and test 1's
+/// DNS endpoints. `raw_os_error`/`kind` are the OS-level facts the message may
+/// not carry — Windows localizes it, and `WSAECONNRESET` reads
+/// "Удаленный хост принудительно разорвал …" — so a caller that has the
+/// `io::Error` passes them, and one that does not passes `None` rather than
+/// guessing from the text. They reach [`classify_connect_error_full`], which is
+/// the only place that keys on them.
 pub fn classify_tls_error(
     stage: ConnectionStage,
     bytes_sent: usize,
     bytes_recv: usize,
     err_msg: &str,
     is_timeout: bool,
+    raw_os_error: Option<i32>,
+    kind: Option<io::ErrorKind>,
 ) -> (DpiStatus, Detail) {
     if is_timeout {
         if stage == ConnectionStage::TlsClientHelloSent || (bytes_sent > 0 && bytes_recv == 0) {
@@ -545,7 +563,7 @@ pub fn classify_tls_error(
     }
 
     let (status, detail) =
-        classify_connect_error_full(err_msg, None, None, bytes_recv, stage_name);
+        classify_connect_error_full(err_msg, raw_os_error, kind, bytes_recv, stage_name);
 
     // A reset/EOF after ClientHello with zero bytes back is a DPI SNI RST,
     // even when the OS masks it as a generic error.
@@ -892,6 +910,8 @@ mod tests {
             0,
             observed,
             false,
+            None,
+            None,
         );
         assert_eq!((s, d.code().as_ref()), (DpiStatus::Unknown, "tls_decrypt_error"));
 

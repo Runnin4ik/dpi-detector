@@ -61,17 +61,56 @@ pub enum DnsError {
     #[error("network I/O error: {0}")]
     Io(String),
     /// A transport step failed before the exchange: `stage` is the place it
-    /// happened, `detail` the raw cause. The stage is a [`ConnectStage`] — a
-    /// closed vocabulary, not a hand-written word — so the classifier maps it
-    /// by variant and `--json` never sees it.
+    /// happened, `detail` the raw cause, and `code`/`kind` the OS-level facts the
+    /// message may not carry (Windows localizes it: `WSAECONNRESET` reads
+    /// "Удаленный хост принудительно разорвал …"). Those two are what the
+    /// classifier keys on, so keeping them is what makes a DNS endpoint's
+    /// failure read the same way a domain's does — one classifier, two callers,
+    /// identical inputs. `None` means the producer had no `io::Error` behind the
+    /// fault (a budget it measured itself). The stage is a [`ConnectStage`] — a
+    /// closed vocabulary, not a hand-written word — so the classifier maps it by
+    /// variant and `--json` never sees it.
     #[error("connection failed at stage {stage}: {detail}")]
-    ConnectFault { stage: ConnectStage, detail: String },
+    ConnectFault {
+        stage: ConnectStage,
+        detail: String,
+        code: Option<i32>,
+        kind: Option<std::io::ErrorKind>,
+    },
     #[error("query timeout")]
     Timeout,
     #[error("SOCKS5 error: {0}")]
     Socks5(String),
     #[error("DoH HTTP error: status {0}")]
     DohHttp(u16),
+}
+
+impl DnsError {
+    /// A fault built from the `io::Error` that raised it: the message goes to
+    /// the report, the code and kind to the classifier. Every producer that has
+    /// the error in hand uses this, so neither fact is dropped on the way to the
+    /// verdict — which is what kept the DNS test's classification apart from the
+    /// domain test's.
+    pub fn connect_fault(stage: ConnectStage, err: &std::io::Error) -> Self {
+        DnsError::ConnectFault {
+            stage,
+            detail: err.to_string(),
+            code: err.raw_os_error(),
+            kind: Some(err.kind()),
+        }
+    }
+
+    /// A fault with no `io::Error` behind it — a timeout or a missing address the
+    /// caller decided itself. `code`/`kind` stay `None`, so the classifier reads
+    /// the message and never invents an OS verdict.
+    pub fn connect_fault_text(stage: ConnectStage, detail: &str) -> Self {
+        DnsError::ConnectFault {
+            stage,
+            detail: detail.to_string(),
+            code: None,
+            kind: None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -92,7 +131,13 @@ mod tests {
         ] {
             assert_eq!(stage.as_str(), word);
             assert_eq!(
-                DnsError::ConnectFault { stage, detail: "x".to_string() }.to_string(),
+                DnsError::ConnectFault {
+                    stage,
+                    detail: "x".to_string(),
+                    code: None,
+                    kind: None,
+                }
+                .to_string(),
                 format!("connection failed at stage {word}: x")
             );
         }

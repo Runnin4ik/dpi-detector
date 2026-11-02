@@ -156,7 +156,11 @@ pub(crate) struct DnsAvailability {
     pub no_ca_bundle: usize,
     pub hijacked_brands: Vec<String>,
     pub resolvers_total: usize,
+    /// UDP servers with at least one substituted answer, of any kind — the
+    /// split behind the number is printed under the table (`STUB`, `NXDOMAIN`,
+    /// `EMPTY`, `TIMEOUT`).
     pub subst_sub: usize,
+    /// UDP servers with at least one forbidden domain to judge.
     pub subst_total: usize,
     /// Of the substituted UDP answers, how many came back inside the fake-ip
     /// range (198.18.0.0/15) — a proxy or VPN answering instead of the resolver.

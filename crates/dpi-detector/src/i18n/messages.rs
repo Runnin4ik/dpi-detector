@@ -199,6 +199,9 @@ pub(crate) struct Messages {
     pub dot_min: &'static str,
     pub udp_min: &'static str,
     pub real_udp_resolver: &'static str,
+    /// Header of the substitution column of the UDP table: what the resolver
+    /// answered instead of the measured address, and how many of the checked
+    /// domains that happened to.
     pub spoofing: &'static str,
     pub timeout_label: &'static str,
     pub egress_na: &'static str,
@@ -216,6 +219,10 @@ pub(crate) struct Messages {
     pub dns_truth_fallback_note: &'static str,
     pub dns_fakeip_warn: &'static str,
     pub dns_intercept_warn: &'static str,
+    /// Header of the substitution breakdown under the DNS table. `{}` is the
+    /// total number of substituted queries; the lines under it are the kinds
+    /// (`STUB`, `NXDOMAIN`, `EMPTY`, `TIMEOUT`), which stay untranslated.
+    pub dns_subst_total: &'static str,
     pub dns_stub_ip_label: &'static str,
     pub doh_recommendation: &'static str,
     pub non_socks_proxy_warn: &'static str,
