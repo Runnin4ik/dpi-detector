@@ -31,3 +31,24 @@ linker = "rust-lld"
 #                           for a nightly build.
 #   sccache, mold           no benefit at one codegen unit with fat LTO, and
 #                           mold is ELF-only while these rows link with rust-lld.
+
+# The C sources (`ring` is the only C in the graph) must sit on the same ISA
+# floor rustc's target spec gives the Rust sources, `x86-64`/SSE2. Nothing in
+# this repository sets `CFLAGS`, so a `cc` whose *default* is a newer level —
+# issue #44: the `ubuntu-26.04` release runner, GCC 15.2, compiled ring's
+# `OPENSSL_cpuid_setup` with AVX and everything else in the crate with AVX2 —
+# leaks post-baseline instructions into the artifact while the Rust half stays
+# baseline. The release binary then SIGILLs on the router-class CPUs the
+# linux-x86_64 row exists for (Celeron/Pentium J/N, Atom, `qemu64`/`kvm64` VMs),
+# and it does so before it can even report the missing feature: the CPU probe is
+# itself C, and its fallbacks (`x25519_public_from_private_generic_masked`) are
+# compiled with the same flags as the fast paths.
+#
+# `[env]` wins over an unset environment and yields to a variable set
+# explicitly, so a local build that deliberately wants another floor can still
+# override it. `-march=x86-64` is GCC/Clang spelling; the artifact row is GCC.
+# The runtime gate is `release.yml`'s qemu `-cpu Nehalem` smoke — a wrong flag
+# here fails that step instead of shipping.
+[env]
+CFLAGS_x86_64_unknown_linux_musl = "-march=x86-64"
+CFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64"

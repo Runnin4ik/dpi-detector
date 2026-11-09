@@ -409,6 +409,28 @@ jobs:
           "qemu-${{ matrix.qemu }}" "dist/${{ matrix.name }}" --version
           "qemu-${{ matrix.qemu }}" "dist/${{ matrix.name }}" --legend > /dev/null
 
+      # The x86_64 artifact is the row that runs on CPUs older than the runner,
+      # and the native smoke below cannot see an ISA leak: the runner has AVX2,
+      # so a C file compiled at the host compiler's default level starts there
+      # and SIGILLs on the router-class hardware the row exists for (issue #44:
+      # ring's `OPENSSL_cpuid_setup` carried AVX, and `--legend` — the cheapest
+      # run that builds ClientHellos and therefore key shares — died before
+      # printing). The C floor is pinned in `.cargo/config.toml`; this step is
+      # the gate that a wrong pin, a new C dependency or a mis-dispatched
+      # `#[target_feature]` path fails. `-cpu` names: Nehalem = SSE4.2 without
+      # AVX, SandyBridge = AVX without AVX2, Haswell = AVX2 (the control that
+      # must keep passing).
+      - name: Smoke the x86_64 artifact on CPUs without AVX2
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user
+          for cpu in Nehalem SandyBridge Haswell; do
+            echo "== qemu-x86_64 -cpu $cpu"
+            qemu-x86_64 -cpu "$cpu" "dist/${{ matrix.name }}" --version
+            qemu-x86_64 -cpu "$cpu" "dist/${{ matrix.name }}" --legend > /dev/null
+          done
+
       # The artifacts that ship are built by the two profiles nothing else runs
       # under — `release` (O3, thin LTO) and `release-router` (`-Oz`, fat LTO),
       # both `panic = "abort"` — and no job had ever started one: a binary that

@@ -55,7 +55,13 @@ a runner for the six-hour default.
    `cargo_args`, both MIPS rows' `cross_args`, and the
    `rustup toolchain install` step — move them together. Every built binary is
    smoke-tested by running it (`--version` and `--legend`); foreign architectures run
-   under `qemu-user`.
+   under `qemu-user`. The linux-x86_64 row additionally runs its artifact under
+   `qemu-x86_64 -cpu Nehalem`, `-cpu SandyBridge` and `-cpu Haswell`: those three are
+   the ISA levels the row is sold for, and a leak from the C compiler's default — the
+   CPU probe itself is C, so it must run on the oldest of them — or from a
+   mis-dispatched `#[target_feature]` path SIGILLs there and nowhere else. The C floor
+   is pinned in `.cargo/config.toml` (`CFLAGS_x86_64_unknown_linux_musl`), because
+   rustc's target spec only pins the Rust half.
 4. **Packing** — three rows are additionally compressed with UPX pinned to **4.2.4**: the
    5.x unpack stub needs `memfd_create`, i.e. Linux ≥ 3.17. Only router targets are packed
    (armv7, mipsel, mips); desktop builds are not — the gain there does not pay for the
