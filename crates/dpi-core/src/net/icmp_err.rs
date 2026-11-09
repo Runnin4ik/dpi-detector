@@ -235,22 +235,23 @@ mod tests {
         assert!(parse_icmp(&unreachable(8, 0, [203, 0, 113, 9])).is_none());
     }
 
-    /// A real one, captured on the router: the provider's filter answering a
-    /// connection to 194.41.112.143, with that SYN quoted inside. The leading
-    /// fourteen bytes of the capture are the Ethernet header, which a raw socket
-    /// never sees.
+    /// The provider's verdict in the shape a capture on the router showed: an
+    /// ICMP destination-unreachable quoting the SYN it answers, with the
+    /// Ethernet header a raw socket never sees left out. The addresses are the
+    /// documentation ones (RFC 5737); the capture itself carried the
+    /// operator's, which a fixture must not.
     #[test]
-    fn a_captured_provider_verdict_names_the_destination() {
-        let captured: &[u8] = &[
-            0x45, 0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x00, 0xfe, 0x01, 0xce, 0x27, 0x5e, 0xb5,
-            0x80, 0x2c, 0x64, 0x5a, 0xab, 0x61, // IPv4: 94.181.128.44 -> 100.90.171.97
-            0x03, 0x0d, 0x83, 0xd3, 0x00, 0x00, 0x00, 0x00, // ICMP: type 3, code 13
-            0x45, 0x70, 0x00, 0x3c, 0xb0, 0xe2, 0x40, 0x00, 0x7e, 0x06, 0x08, 0xf5, 0x64, 0x5a,
-            0xab, 0x61, 0xc2, 0x29, 0x70, 0x8f, // quoted IPv4: -> 194.41.112.143
-            0xf6, 0x95, 0x20, 0xfb, 0x1d, 0xc8, 0x43, 0xc6, // quoted TCP
+    fn a_provider_verdict_names_the_quoted_destination() {
+        let packet: &[u8] = &[
+            0x45, 0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x00, 0xfe, 0x01, 0x00, 0x00, 0xc0, 0x00,
+            0x02, 0x2c, 0xcb, 0x00, 0x71, 0x61, // IPv4: 192.0.2.44 -> 203.0.113.97
+            0x03, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ICMP: type 3, code 13
+            0x45, 0x70, 0x00, 0x3c, 0x00, 0x00, 0x40, 0x00, 0x7e, 0x06, 0x00, 0x00, 0xcb, 0x00,
+            0x71, 0x61, 0xc0, 0x00, 0x02, 0x8f, // quoted IPv4: 203.0.113.97 -> 192.0.2.143
+            0x12, 0x34, 0x01, 0xbb, 0x00, 0x00, 0x00, 0x00, // quoted TCP
         ];
-        let (dst, code) = parse_icmp(captured).unwrap();
-        assert_eq!(dst, Ipv4Addr::new(194, 41, 112, 143));
+        let (dst, code) = parse_icmp(packet).unwrap();
+        assert_eq!(dst, Ipv4Addr::new(192, 0, 2, 143));
         assert_eq!(code, IcmpCode::ADMIN_PROHIBITED);
     }
 

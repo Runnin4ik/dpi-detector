@@ -560,7 +560,7 @@ a browser's. It was not. The old `report()` decided with
 `any("Handshake" in line for line in server_frames)`, where `server_frames` was
 every QUIC packet not from `192.168.*` — Chrome's own background QUIC to Google
 included, and every other host Chrome opened in the same capture. The capture did
-hold a busy HTTP/3 conversation with `109.194.137.78`
+hold a busy HTTP/3 conversation with `192.0.2.78`
 (`whatsapp-cdn-shv-01-arn2.fbcdn.net`); that connection simply was not
 `www.whatsapp.com`.
 

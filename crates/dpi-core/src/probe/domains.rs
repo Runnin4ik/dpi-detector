@@ -510,7 +510,7 @@ fn suite_reask_verdict(reask: &TlsCheck, kind: StackKind) -> (DpiStatus, Detail)
 /// bounce on the same host — a normal redirect by every rule this tool has —
 /// while the same GET gets the blockpage, on a foreign host. Measured against a
 /// live lawfilter: HEAD `301 → https://<site>/`, GET
-/// `307 → http://lawfilter.ertelecom.ru/`.
+/// `307 → http://lawfilter.example.ru/`.
 ///
 /// The port is a parameter because test 2 checks 80 and a test cannot bind it.
 pub async fn check_http_injection(
@@ -2228,7 +2228,7 @@ mod tests {
         // redirect to a host that is not the site, and that must read as REDIR
         // rather than OK. This is the shape the live lawfilter answers with.
         let response =
-            b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://lawfilter.ertelecom.ru/\r\nContent-Length: 0\r\n\r\n";
+            b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://lawfilter.example.ru/\r\nContent-Length: 0\r\n\r\n";
         let (addr, _seen) = serve_once(response, None).await;
         let cfg = test_cfg(2.0);
         let check = check_http_injection("example.test", Some(addr.ip()), &cfg, &HashSet::new(), addr.port()).await;
