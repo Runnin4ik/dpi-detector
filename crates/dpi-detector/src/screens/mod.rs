@@ -52,12 +52,12 @@ mod tests {
     /// form brackets it — the two shapes the footers are built from.
     #[test]
     fn a_keycap_row_is_chips_or_brackets() {
-        let keys: &[Keycap] = &[("0-7", "tests", "46"), ("Q", "quit", "41")];
+        let keys: &[Keycap] = &[("0-8", "tests", "46"), ("Q", "quit", "41")];
         assert_eq!(
             keycap_row(Language::En, false, keys),
-            "\x1b[1;46;37m 0-7 \x1b[0m tests \x1b[1;41;37m Q \x1b[0m quit"
+            "\x1b[1;46;37m 0-8 \x1b[0m tests \x1b[1;41;37m Q \x1b[0m quit"
         );
-        assert_eq!(keycap_row(Language::En, true, keys), "[0-7] tests [Q] quit");
+        assert_eq!(keycap_row(Language::En, true, keys), "[0-8] tests [Q] quit");
         assert!(keycap_row(Language::En, true, &[]).is_empty());
     }
 }

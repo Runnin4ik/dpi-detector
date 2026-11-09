@@ -71,6 +71,10 @@ pub(crate) struct Results {
     pub telegram: Option<Telegram>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint_burst: Option<FingerprintBurst>,
+    /// Test 8: the signed media URL this run minted and what each address
+    /// answered with. Additive, so `SCHEMA_VERSION` stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ggc_speed: Option<GgcSpeed>,
 }
 
 /// `results.ggc`: the mapping the redirector answered, plus what this run
@@ -106,7 +110,7 @@ pub(crate) struct GgcReport {
 /// network, whose two rows are the pair the `GGC:` line reads.
 #[derive(Serialize)]
 pub(crate) struct GgcControl {
-    /// The host as probed (`r1.pniada-as.googlevideo.com`).
+    /// The host as probed (`r1.<cluster>.googlevideo.com`).
     pub host: String,
     /// Where the control sits, read by the same rule as the mapped node; the
     /// name is its fallback.
@@ -277,6 +281,62 @@ pub(crate) struct FingerprintBurst {
     pub domains: Vec<BurstDomain>,
 }
 
+/// Test 8: the URL the player would have been handed, and the bytes each
+/// address served of it.
+#[derive(Serialize)]
+pub(crate) struct GgcSpeed {
+    /// The delivery node's hostname: the URL names it and every address is
+    /// measured under it as SNI and `Host`.
+    pub host: String,
+    pub itag: u64,
+    /// The stream's own length, when the player endpoint named it. The range a
+    /// row asks for is bounded by it, so a short stream is not an error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_length: Option<u64>,
+    /// The block walk, when the operator enabled it. Absent when it did not.
+    pub scan: Option<GgcScan>,
+    pub nodes: Vec<GgcSpeedNode>,
+}
+
+/// Test 8's walk: which block was asked, how much of it, and how many
+/// addresses answered. `complete` is false when the time budget cut the walk
+/// short, so a low `nodes` is not read as "the block has no more".
+#[derive(Serialize)]
+pub(crate) struct GgcScan {
+    /// The block, as `192.0.2.0/24`.
+    pub prefix: String,
+    /// How many addresses the walk asked.
+    pub scanned: usize,
+    /// How many of them answered for the URL's hostname.
+    pub nodes: usize,
+    pub complete: bool,
+}
+
+/// One measured address. `mb_per_sec` is absent when nothing arrived: a zero
+/// would read as a slow node rather than as no measurement.
+#[derive(Serialize)]
+pub(crate) struct GgcSpeedNode {
+    pub address: Option<String>,
+    /// `url` or `mapped`: rule 5's token for where the address came from.
+    pub node: &'static str,
+    pub status: &'static str,
+    pub detail: Detail,
+    pub bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttfb_ms: Option<u64>,
+    pub ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mb_per_sec: Option<f64>,
+    /// The host a `3xx` pointed at. Absent when the answer was not a redirect;
+    /// only the host, because the rest of `Location` is a signed token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// The sibling name that resolved to this address (`rr1---<cluster>`).
+    /// Absent for the URL's node, the mapped node and the walked addresses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,38 +387,38 @@ mod tests {
         let report = GgcReport {
             mapping: GgcMapping {
                 client_ip: Some("203.0.113.7".parse().expect("an IPv4 address")),
-                cluster_id: "ertelecom-pez1".to_string(),
-                prefix: "85.249.20.0/22".to_string(),
+                cluster_id: "example-iar2".to_string(),
+                prefix: "198.51.100.0/22".to_string(),
                 is_local_ru: true,
             },
             placement: GgcPlacement::Local,
-            address: Some("109.194.137.76".to_string()),
-            asn: Some("41754".to_string()),
+            address: Some("192.0.2.76".to_string()),
+            asn: Some("64500".to_string()),
             org: None,
         };
         let text = serde_json::to_string(&report).expect("the payload serializes");
         for key in [
             r#""client_ip":"203.0.113.7""#,
-            r#""cluster_id":"ertelecom-pez1""#,
-            r#""prefix":"85.249.20.0/22""#,
+            r#""cluster_id":"example-iar2""#,
+            r#""prefix":"198.51.100.0/22""#,
             r#""is_local_ru":true"#,
             r#""placement":"local""#,
-            r#""address":"109.194.137.76""#,
-            r#""asn":"41754""#,
+            r#""address":"192.0.2.76""#,
+            r#""asn":"64500""#,
         ] {
             assert!(text.contains(key), "{key} missing from {text}");
         }
         assert!(!text.contains("org"), "an unfilled org is absent, not null: {text}");
 
         let control = GgcControl {
-            host: "r1.pniada-as.googlevideo.com".to_string(),
+            host: "r1.control-example.googlevideo.com".to_string(),
             placement: GgcPlacement::Global,
-            address: Some("172.217.152.129".to_string()),
+            address: Some("203.0.113.129".to_string()),
             asn: Some("15169".to_string()),
             org: Some("GOOGLE".to_string()),
         };
         let text = serde_json::to_string(&control).expect("the control serializes");
         assert!(text.contains(r#""placement":"global""#), "{text}");
-        assert!(text.contains(r#""host":"r1.pniada-as.googlevideo.com""#), "{text}");
+        assert!(text.contains(r#""host":"r1.control-example.googlevideo.com""#), "{text}");
     }
 }

@@ -22,6 +22,7 @@ use dpi_core::dns::udp::probe_udp_dns;
 use crate::i18n::{legend_text, Language, Messages};
 use dpi_core::net::fingerprint::{HelloVariant, TlsFingerprint};
 use dpi_core::net::netinfo::{detect_bypass_tools, fetch_public_ips, get_system_dns, is_tun_name};
+use dpi_core::probe::ggc_speed::{measure, mint, named_targets, scan_cluster, SpeedNode, SpeedTarget};
 use dpi_core::probe::burst::{
     answered_status, burst_targets, BurstAlpn, BurstObserver, BurstProfileReport, BurstSettings,
     BurstTarget, BurstTlsVersion, BURST_DEFAULT_ATTEMPTS, BURST_DEFAULT_LAUNCH_GAP_MS,
@@ -30,7 +31,7 @@ use dpi_core::probe::burst::{
 use dpi_core::dns::cymru::{fetch_ip_cymru, IpCymruInfo};
 use dpi_core::net::ggc::{
     candidate_ggc_host, fetch_ggc_mapping, gather_node_facts, node_name_is_local_ru, placement,
-    GGC_CONTROL_HOSTS, GgcMapping, GgcNodeFacts, GgcPlacement,
+    GgcMapping, GgcNodeFacts, GgcPlacement,
 };
 use dpi_core::probe::domains::{
     check_domains, collect_stub_ips, domain_stats, IpFamily,
@@ -44,7 +45,7 @@ use tokio::sync::Semaphore;
 
 use crate::args::CliArgs;
 use crate::render::{
-    render_banner, render_burst_table,
+    render_banner, render_burst_table, render_ggc_speed,
     render_dns_availability, render_dns_endpoints, render_dns_resolve_notes, render_domain_table, render_intercept_notice, render_netinfo_panel, render_summary, render_tcp_table, render_telegram,
     render_whitelist, LiveProgress,
     NetFamilyInfo, NetInfoData, NetTtlb, Spinner, SummaryData,
@@ -1022,15 +1023,15 @@ pub(crate) async fn run_test_suite(
         }
 
         // The node's address is what places it, not its name. The name is a
-        // convention: it read `pniada-as` as a foreign PoP while that address is
-        // Google's own network, and it would read an operator's own cache as
+        // convention: it read a locally named Google PoP as a foreign node, and
+        // it would read an operator's own cache as
         // foreign whenever the operator named the cluster something the tables
         // do not carry. The address is resolved and looked up through the same
         // Cymru path test 0 uses for this run's own address, and only when the
         // mapping named a node — the pair is what the row explains.
         if let Some(host) = ggc_host.as_deref() {
             let controls = async {
-                for candidate in GGC_CONTROL_HOSTS.iter().copied() {
+                for candidate in &cfg.ggc_control_hosts {
                     let facts = gather_node_facts(candidate, &cfg.cymru_doh_servers, GGC_NODE_FACTS_BUDGET).await;
                     // Only what answered is a control: a name that did not
                     // resolve has no row to read the node against.
@@ -1174,7 +1175,8 @@ pub(crate) async fn run_test_suite(
         // The node the redirector named rides in the same target list, with the
         // measured control beside it: test 2 is where the mapping becomes a
         // measurement instead of a note, and the pair is what the row shows.
-        let targets = with_ggc_target(domains, &ggc_extra_targets(ggc_host.as_deref(), GGC_CONTROL_HOSTS));
+        let controls: Vec<&str> = cfg.ggc_control_hosts.iter().map(String::as_str).collect();
+        let targets = with_ggc_target(domains, &ggc_extra_targets(ggc_host.as_deref(), &controls));
         if !args.json {
             emitter.emit(&format!(
                 "\n{}  {}: {} | {}: {} | {}: {}s\n\n",
@@ -1472,6 +1474,114 @@ pub(crate) async fn run_test_suite(
         }
     }
 
+    // ── Test 8: the delivery node's throughput ──
+    if tests.speed {
+        let gate = std::sync::Arc::new(Semaphore::new(concurrency.max(1)));
+        match mint(cfg, &gate).await {
+            Ok(source) => {
+                let mut targets = Vec::with_capacity(2);
+                let family = IpFamily::from_config(&cfg.ip_version);
+                if let Some(ip) = dpi_core::probe::domains::resolve_ip(&source.host, family).await {
+                    targets.push(SpeedTarget {
+                        host: source.host.clone(),
+                        address: Some(ip),
+                        node: SpeedNode::UrlNode,
+                        name: None,
+                    });
+                }
+                // The cluster the redirector names is the second address of the
+                // same hostname: a node of another network answers 400, so only
+                // an address of this cluster can be measured under the URL's
+                // own SNI. The mapping has its own budget, the same 5 s the
+                // diagnostic line above it gets.
+                if let Some(mapping) = fetch_ggc_mapping(Duration::from_secs(5)).await {
+                    let node_host = candidate_ggc_host(&mapping.cluster_id);
+                    if let Some(ip) = dpi_core::probe::domains::resolve_ip(&node_host, family).await {
+                        let already = targets.first().and_then(|t| t.address) == Some(ip);
+                        if !already {
+                            targets.push(SpeedTarget {
+                                host: source.host.clone(),
+                                address: Some(ip),
+                                node: SpeedNode::MappedCluster,
+                                name: None,
+                            });
+                        }
+                    }
+                }
+                // The steering named one node; its siblings answer to the same
+                // cluster under other indexes (`rr1---…`, `rr2---…`). Resolving
+                // them costs a handful of DNS queries and no traffic to the
+                // addresses, so it runs before the walk — which then skips
+                // whatever the names already found.
+                for target in named_targets(&source, family).await {
+                    if !targets.iter().any(|known| known.address == target.address) {
+                        targets.push(target);
+                    }
+                }
+                // The walk asks the rest of the node's block: the signed URL
+                // is bound to the cluster, not to an address, so a node of
+                // this cluster serves it and a node of another network
+                // answers 400. Off unless the operator set GGC_SCAN_PREFIX —
+                // it is a scan, and a scan is theirs to ask for.
+                let mut scan = None;
+                if cfg.ggc_scan_prefix > 0
+                    && let Some(base) = targets.first().and_then(|target| target.address)
+                {
+                    let skip: Vec<std::net::IpAddr> = targets
+                        .iter()
+                        .filter_map(|target| target.address)
+                        .collect();
+                    scan = scan_cluster(cfg, &source, base, cfg.ggc_scan_prefix, &skip, &gate).await;
+                    if let Some(report) = &scan {
+                        targets.extend(report.targets.iter().cloned());
+                    }
+                }
+                let mut rows = Vec::with_capacity(targets.len());
+                for target in &targets {
+                    rows.push((target.clone(), measure(cfg, &source, target, &gate).await));
+                }
+                if !args.json {
+                    emitter.emit(&render_ggc_speed(&source, &rows, scan.as_ref(), msg));
+                } else {
+                    results.ggc_speed = Some(crate::json::GgcSpeed {
+                        host: source.host.clone(),
+                        itag: source.itag,
+                        content_length: source.content_length,
+                        scan: scan.as_ref().map(|report| crate::json::GgcScan {
+                            prefix: report.prefix.clone(),
+                            scanned: report.scanned,
+                            nodes: report.targets.len(),
+                            complete: report.complete,
+                        }),
+                        nodes: rows
+                            .iter()
+                            .map(|(target, attempt)| crate::json::GgcSpeedNode {
+                                address: target.address.map(|a| a.to_string()),
+                                node: target.node.token(),
+                                status: attempt.status.as_str(),
+                                detail: attempt.detail.clone(),
+                                bytes: attempt.bytes,
+                                ttfb_ms: attempt.ttfb_ms,
+                                ms: attempt.ms,
+                                mb_per_sec: attempt.mb_per_sec(),
+                                location: attempt.location_host.clone(),
+                                name: target.name.clone(),
+                            })
+                            .collect(),
+                    });
+                }
+            }
+            Err(error) => {
+                // No URL means no measurement at all; the run says why and
+                // carries on, the same way a dead mapping endpoint does.
+                tracing::warn!("GGC speed: {error}");
+                if !args.json {
+                    emitter.emit(&format!("{}: {error}\n", msg.ggc_speed_unavailable));
+                }
+            }
+        }
+    }
+
     // ── Test 7: legend ──
     if tests.legend && !args.json {
         print_out(&legend_text(lang, msg));
@@ -1581,8 +1691,8 @@ mod tests {
     fn ggc_mismatch_is_only_true_when_both_addresses_differ() {
         let mapping = |ip: Option<&str>| GgcMapping {
             client_ip: ip.map(|s| s.parse::<IpAddr>().unwrap()),
-            cluster_id: "ertelecom-pez1".to_string(),
-            prefix: "85.249.20.0/22".to_string(),
+            cluster_id: "example-iar2".to_string(),
+            prefix: "198.51.100.0/22".to_string(),
             is_local_ru: true,
         };
         let run = "203.0.113.7".parse::<Ipv4Addr>().unwrap();
@@ -1604,8 +1714,8 @@ mod tests {
     #[test]
     fn the_control_node_rides_beside_the_mapped_one_once_each() {
         let domains = vec!["youtube.com".to_string()];
-        let node = "r1.ertelecom-pez1.googlevideo.com";
-        let control = GGC_CONTROL_HOSTS[0];
+        let node = "r1.mts-msk1.googlevideo.com";
+        let control = "r1.control-example.googlevideo.com";
 
         assert_eq!(
             with_ggc_target(&domains, &[node, control]),
@@ -1631,9 +1741,10 @@ mod tests {
     /// it against, which is the mapping's `unknown` case.
     #[test]
     fn the_control_is_added_only_beside_a_named_node() {
-        let node = "r1.ertelecom-pez1.googlevideo.com";
-        assert_eq!(ggc_extra_targets(Some(node), GGC_CONTROL_HOSTS), vec![node, GGC_CONTROL_HOSTS[0]]);
-        assert_eq!(ggc_extra_targets(None, GGC_CONTROL_HOSTS), Vec::<&str>::new());
+        let node = "r1.mts-msk1.googlevideo.com";
+        let control = "r1.control-example.googlevideo.com";
+        assert_eq!(ggc_extra_targets(Some(node), &[control]), vec![node, control]);
+        assert_eq!(ggc_extra_targets(None, &[control]), Vec::<&str>::new());
     }
 
     /// The line's two readings of a node: by the address when the ASN is known
@@ -1647,8 +1758,8 @@ mod tests {
 
         // Address known: the placement and the AS.
         assert_eq!(
-            ggc_node_text(Some("41754"), GgcPlacement::Local, false, &msg),
-            "local cache, AS41754"
+            ggc_node_text(Some("64500"), GgcPlacement::Local, false, &msg),
+            "local cache, AS64500"
         );
         assert_eq!(
             ggc_node_text(Some("15169"), GgcPlacement::Global, true, &msg),
@@ -1671,27 +1782,27 @@ mod tests {
     fn the_pair_is_placed_by_address_and_falls_back_by_name() {
         let mapping = GgcMapping {
             client_ip: Some("203.0.113.7".parse().expect("an IPv4 address")),
-            cluster_id: "ertelecom-pez1".to_string(),
-            prefix: "85.249.20.0/22".to_string(),
+            cluster_id: "example-iar2".to_string(),
+            prefix: "198.51.100.0/22".to_string(),
             is_local_ru: true,
         };
         let node = GgcNodeFacts {
-            host: "r1.ertelecom-pez1.googlevideo.com".to_string(),
-            address: Some("109.194.137.76".parse().expect("an IPv4 address")),
-            asn: Some("41754".to_string()),
-            org: Some("ERTH-PENZA-AS".to_string()),
+            host: "r1.mts-msk1.googlevideo.com".to_string(),
+            address: Some("192.0.2.76".parse().expect("an IPv4 address")),
+            asn: Some("64500".to_string()),
+            org: Some("PROVIDER-AS".to_string()),
         };
         let control = GgcNodeFacts {
-            host: GGC_CONTROL_HOSTS[0].to_string(),
-            address: Some("172.217.152.129".parse().expect("an IPv4 address")),
+            host: "r1.control-example.googlevideo.com".to_string(),
+            address: Some("203.0.113.129".parse().expect("an IPv4 address")),
             asn: Some("15169".to_string()),
             org: Some("GOOGLE".to_string()),
         };
 
         // Both answered and the run's own AS is known: the addresses decide —
         // the node is in the run's own AS, the control in Google's network.
-        assert_eq!(node_placement(Some(&mapping), Some(&node), Some("41754")), GgcPlacement::Local);
-        assert_eq!(node_placement(None, Some(&control), Some("41754")), GgcPlacement::Global);
+        assert_eq!(node_placement(Some(&mapping), Some(&node), Some("64500")), GgcPlacement::Local);
+        assert_eq!(node_placement(None, Some(&control), Some("64500")), GgcPlacement::Global);
         // The run's own ASN missing — test 0 out of the run: Google's AS still
         // places the control, because that fact needs no second side, while the
         // node's AS alone says nothing and the mapping's name verdict stands.
@@ -1700,17 +1811,18 @@ mod tests {
         // No facts at all (nothing resolved, or the deadline ran out): the
         // mapping's verdict for the node, the control's own host name for the
         // control — and the control's name is not local, so it stays unplaced.
-        assert_eq!(node_placement(Some(&mapping), None, Some("41754")), GgcPlacement::Local);
-        assert_eq!(node_placement(None, None, Some("41754")), GgcPlacement::Other);
+        assert_eq!(node_placement(Some(&mapping), None, Some("64500")), GgcPlacement::Local);
+        assert_eq!(node_placement(None, None, Some("64500")), GgcPlacement::Other);
     }
 
     /// The control's name is not local, so its placement is the address's answer
-    /// and not the name's: the measured node is in Google's own network, which
-    /// the tables cannot read out of `pniada-as`.
+    /// and not the name's: the control is in Google's own network, which the
+    /// tables cannot read out of its name.
     #[test]
     fn the_control_is_placed_by_its_address_not_its_name() {
-        assert!(!node_name_is_local_ru(GGC_CONTROL_HOSTS[0]));
-        assert_eq!(placement(Some("15169"), Some("41754"), node_name_is_local_ru(GGC_CONTROL_HOSTS[0])), GgcPlacement::Global);
+        let control = "r1.control-example.googlevideo.com";
+        assert!(!node_name_is_local_ru(control));
+        assert_eq!(placement(Some("15169"), Some("64500"), node_name_is_local_ru(control)), GgcPlacement::Global);
     }
 
     /// The screen-skip rule is driven by a table, so the table has to name every

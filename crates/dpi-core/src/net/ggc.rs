@@ -43,8 +43,8 @@ pub const REPORT_MAPPING_URL: &str = "https://redirector.googlevideo.com/report_
 /// provider's own network — the shape a cache inside an ISP takes. A cache
 /// rented in a foreign datacentre is named after its PoP instead
 /// ([`RU_AIRPORTS`], `fra16s48`), so a name carrying one of these is the
-/// domestic case regardless of the city in it (`vimpelcom-iar2` is Irkutsk
-/// inside Beeline's network, not a window abroad).
+/// domestic case regardless of the city in it (`mts-msk1` is an operator's
+/// own cache, not a window abroad).
 const RU_OPERATORS: &[&str] = &[
     "rostelecom",
     "vimpelcom",
@@ -79,9 +79,9 @@ const RU_AIRPORTS: &[&str] = &[
 pub struct GgcMapping {
     /// The address the endpoint steered, when the line named one.
     pub client_ip: Option<IpAddr>,
-    /// The cache node's cluster id (`vimpelcom-iar2`, `fra16s48`).
+    /// The cache node's cluster id (`mts-msk1`, `fra16s48`).
     pub cluster_id: String,
-    /// The address block that block gets served (`85.249.20.0/22`).
+    /// The address block that block gets served (`198.51.100.0/22`).
     pub prefix: String,
     /// The cluster sits in a Russian operator's network or a Russian city.
     pub is_local_ru: bool,
@@ -94,25 +94,9 @@ pub fn candidate_ggc_host(cluster_id: &str) -> String {
 }
 
 /// The AS of Google's own network. A node inside it is a PoP over transit from
-/// this run, however the node is named — `pniada-as` is exactly such a name,
-/// which is why the name alone cannot be the answer.
+/// this run, however the node is named, which is why the name alone cannot be
+/// the answer.
 pub const GGC_GOOGLE_ASN: &str = "15169";
-
-/// The control nodes test 2 probes beside the one the mapping named, so the pair
-/// stands in two rows and the `GGC:` line can say what the difference between
-/// them is.
-///
-/// Measured on this machine: `r1.pniada-as.googlevideo.com` is 172.217.152.129,
-/// `AS15169 / 172.217.128.0/19 / US` — Google's own network — while the node
-/// this address is steered to (`r1.ertelecom-pez1.googlevideo.com`,
-/// 109.194.137.76) sits in `AS41754 / 109.194.128.0/20 / RU`, the run's own
-/// provider. The `r1.<cluster>` namespace is not enumerable: of the names tried,
-/// `fra16s48`, `ams16s48`, `lhr16s48`, `mad16s48`, `led`, `goj`, `mts`,
-/// `megafon` and `vimpelcom` have no A record at all — only the calling
-/// address's own cluster answers. So this one measured name is the control and a
-/// second one would be a guess. The Google-owned `manifest` and `redirector`
-/// hosts are rows of the shipped list already, so they need no entry here.
-pub const GGC_CONTROL_HOSTS: &[&str] = &["r1.pniada-as.googlevideo.com"];
 
 /// Where a delivery node sits relative to this run's own network.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -135,9 +119,10 @@ pub enum GgcPlacement {
 /// The address is a fact and the name is a convention, which is why the name is
 /// only the fallback: an AS Team Cymru answered for the address this run reached
 /// is the path the packets take, while the cluster id is a naming scheme —
-/// `pniada-as`, in Google's own network, is in neither table and would read as a
-/// foreign PoP by accident, and an operator that names its own cache something
-/// the tables do not carry would read as foreign while being next door.
+/// a node inside Google's network can be named after the local provider and
+/// would read as a foreign PoP by accident, and an operator that names its own
+/// cache something the tables do not carry would read as foreign while being
+/// next door.
 ///
 /// So when both sides of the comparison are known the address decides outright:
 /// the run's own AS is `Local`, [`GGC_GOOGLE_ASN`] is `Global`, and any third AS
@@ -300,7 +285,7 @@ fn is_russian_cluster(cluster_id: &str) -> bool {
 }
 
 /// Whether `name` leads one of `id`'s `-`/`_`/`.`-separated tokens, the id's own
-/// shape for both an operator and an airport code (`vimpelcom-iar2`, `led`).
+/// shape for both an operator and an airport code (`mts-msk1`, `led`).
 fn leads_a_token(id: &str, name: &str) -> bool {
     id.split(['-', '_', '.']).any(|token| leads_with(token, name))
 }
@@ -350,11 +335,11 @@ mod tests {
     /// delivery path is domestic and a breakage in it is not a transit problem.
     #[test]
     fn test_russian_operator_cluster_is_local() {
-        let mapping = parse_report_mapping("85.249.22.12 => vimpelcom-iar2 (85.249.20.0/22)\n")
+        let mapping = parse_report_mapping("198.51.100.12 => mts-msk1 (198.51.100.0/22)\n")
             .expect("the real line shape parses");
-        assert_eq!(mapping.client_ip, Some("85.249.22.12".parse().expect("an IPv4 address")));
-        assert_eq!(mapping.cluster_id, "vimpelcom-iar2");
-        assert_eq!(mapping.prefix, "85.249.20.0/22");
+        assert_eq!(mapping.client_ip, Some("198.51.100.12".parse().expect("an IPv4 address")));
+        assert_eq!(mapping.cluster_id, "mts-msk1");
+        assert_eq!(mapping.prefix, "198.51.100.0/22");
         assert!(mapping.is_local_ru);
     }
 
@@ -447,8 +432,8 @@ mod tests {
     #[test]
     fn test_candidate_host_is_the_cache_node() {
         assert_eq!(
-            candidate_ggc_host("vimpelcom-iar2"),
-            "r1.vimpelcom-iar2.googlevideo.com"
+            candidate_ggc_host("mts-msk1"),
+            "r1.mts-msk1.googlevideo.com"
         );
         assert_eq!(candidate_ggc_host("fra16s48"), "r1.fra16s48.googlevideo.com");
     }
@@ -456,18 +441,18 @@ mod tests {
     /// The address decides when it can: the run's own AS is the cache next door
     /// and Google's AS is the transit case, with the name outvoted in both
     /// directions. Pins the failure the name heuristic alone had — it read the
-    /// node by convention, so `pniada-as` (Google's own network) and an
+    /// node by convention, so a locally named Google PoP and an
     /// operator's unusually named cache would each come out the wrong way.
     #[test]
     fn test_placement_reads_the_address_when_both_asns_are_known() {
         // The measured pair of this machine: the node in the run's own
         // provider's AS, the control in Google's own network.
-        assert_eq!(placement(Some("41754"), Some("41754"), false), GgcPlacement::Local);
-        assert_eq!(placement(Some(GGC_GOOGLE_ASN), Some("41754"), true), GgcPlacement::Global);
+        assert_eq!(placement(Some("64500"), Some("64500"), false), GgcPlacement::Local);
+        assert_eq!(placement(Some(GGC_GOOGLE_ASN), Some("64500"), true), GgcPlacement::Global);
         // An AS of its own is neither: the name reading it disagrees with is
         // exactly what this rule replaced.
-        assert_eq!(placement(Some("8359"), Some("41754"), true), GgcPlacement::Other);
-        assert_eq!(placement(Some("8359"), Some("41754"), false), GgcPlacement::Other);
+        assert_eq!(placement(Some("8359"), Some("64500"), true), GgcPlacement::Other);
+        assert_eq!(placement(Some("8359"), Some("64500"), false), GgcPlacement::Other);
         // The rule's order, pinned: the same-AS case is read first, so a run
         // that itself sits in Google's network reads its node as next door and
         // not as transit.
@@ -481,10 +466,10 @@ mod tests {
     /// node is not a third placement.
     #[test]
     fn test_placement_falls_back_to_the_name_when_an_asn_is_missing() {
-        assert_eq!(placement(None, Some("41754"), true), GgcPlacement::Local);
-        assert_eq!(placement(None, Some("41754"), false), GgcPlacement::Other);
-        assert_eq!(placement(Some("41754"), None, true), GgcPlacement::Local);
-        assert_eq!(placement(Some("41754"), None, false), GgcPlacement::Other);
+        assert_eq!(placement(None, Some("64500"), true), GgcPlacement::Local);
+        assert_eq!(placement(None, Some("64500"), false), GgcPlacement::Other);
+        assert_eq!(placement(Some("64500"), None, true), GgcPlacement::Local);
+        assert_eq!(placement(Some("64500"), None, false), GgcPlacement::Other);
         assert_eq!(placement(None, None, true), GgcPlacement::Local);
         assert_eq!(placement(None, None, false), GgcPlacement::Other);
         // Google's AS is a fact about the node alone, so it needs no second
@@ -501,27 +486,12 @@ mod tests {
     /// read, and a suffix that only ends the same way is not one either.
     #[test]
     fn test_control_name_is_not_a_russian_cluster() {
-        assert!(!node_name_is_local_ru("r1.pniada-as.googlevideo.com"));
+        assert!(!node_name_is_local_ru("r1.control-example.googlevideo.com"));
         assert!(!node_name_is_local_ru("r1.fra16s48.googlevideo.com"));
-        assert!(node_name_is_local_ru("r1.ertelecom-pez1.googlevideo.com"));
-        assert!(node_name_is_local_ru("r1.vimpelcom-iar2.googlevideo.com"));
+        assert!(node_name_is_local_ru("r1.mts-msk1.googlevideo.com"));
+        assert!(node_name_is_local_ru("r1.megafon-msk1.googlevideo.com"));
         assert!(!node_name_is_local_ru("manifest.googlevideo.com"));
         assert!(!node_name_is_local_ru("r1.led.googlevideo.com.evil.example"));
-    }
-
-    /// The control list is the shipped pair's other half: one node, shaped like
-    /// the nodes test 2 probes, in no name table — the measured one. A list that
-    /// grew a second, unmeasured name would be a control nothing measured.
-    #[test]
-    fn test_control_list_holds_one_measured_node() {
-        assert_eq!(GGC_CONTROL_HOSTS.len(), 1);
-        assert_eq!(GGC_CONTROL_HOSTS[0], "r1.pniada-as.googlevideo.com");
-        // A node host of the same shape the mapping names (`candidate_ggc_host`):
-        // the control is a row like ours, not a redirector or a manifest host.
-        assert_eq!(GGC_CONTROL_HOSTS[0], candidate_ggc_host("pniada-as"));
-        assert!(!node_name_is_local_ru(GGC_CONTROL_HOSTS[0]));
-        // The AS the rule keys on is Google's own network, not a nearby number.
-        assert_eq!(GGC_GOOGLE_ASN, "15169");
     }
 
     /// The wire token of each placement, which `--json` readers key on.

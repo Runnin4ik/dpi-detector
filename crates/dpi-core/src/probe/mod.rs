@@ -11,6 +11,7 @@ pub mod dns_avail;
 pub mod tcp16;
 pub mod domains;
 pub mod burst;
+pub mod ggc_speed;
 pub mod quic;
 pub mod telegram;
 pub mod whitelist;

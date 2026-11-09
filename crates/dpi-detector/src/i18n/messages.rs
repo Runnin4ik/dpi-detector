@@ -294,6 +294,21 @@ pub(crate) struct Messages {
     pub report_saved: &'static str,
     pub report_save_fail: &'static str,
     pub invalid_tests_flag: &'static str,
+    pub ggc_speed_title: &'static str,
+    pub ggc_speed_unavailable: &'static str,
+    pub ggc_field_address: &'static str,
+    pub ggc_field_node: &'static str,
+    pub ggc_field_status: &'static str,
+    pub ggc_field_rate: &'static str,
+    pub ggc_node_url: &'static str,
+    pub ggc_node_mapped: &'static str,
+    pub ggc_node_scan: &'static str,
+    pub ggc_node_named: &'static str,
+    /// The walk's line under test 8's table: `{}` is the block, `{}` how many
+    /// addresses were asked, `{}` how many answered.
+    pub ggc_scan_summary: &'static str,
+    /// Appended in parentheses when the walk stopped at its budget.
+    pub ggc_scan_partial: &'static str,
     pub invalid_concurrency_flag: &'static str,
     pub tui_unavailable: &'static str,
     pub unavailable_ascii: &'static str,

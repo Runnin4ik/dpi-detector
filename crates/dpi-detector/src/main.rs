@@ -39,11 +39,12 @@ use render::{
 use dpi_core::dns::resolve_host;
 use dpi_core::net::netinfo::{nfqws2, Family, Intercept};
 
-/// Which tests a run turns on, parsed from the selection string (digits 0–7).
+/// Which tests a run turns on, parsed from the selection string (digits 0–8).
 ///
 /// Named fields on purpose: the tuple this replaced had nine `bool`s, and swapping
 /// two of them at a call site compiled silently. Test digits: 0 netinfo, 1 DNS,
-/// 2 domains, 3 TCP, 4 white-SNI, 5 Telegram, 6 fingerprint/burst, 7 legend.
+/// 2 domains, 3 TCP, 4 white-SNI, 5 Telegram, 6 fingerprint/burst, 7 legend,
+/// 8 GGC node speed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct TestSelection {
     pub net: bool,
@@ -53,6 +54,7 @@ pub(crate) struct TestSelection {
     pub sni: bool,
     pub telegram: bool,
     pub burst: bool,
+    pub speed: bool,
     pub legend: bool,
     /// Only the legend was asked for: the run prints the legend and nothing else.
     pub only_legend: bool,
@@ -69,11 +71,19 @@ impl TestSelection {
             sni: has('4'),
             telegram: has('5'),
             burst: has('6'),
+            speed: has('8'),
             legend: has('7'),
             only_legend: false,
         };
         sel.only_legend = sel.legend
-            && !(sel.net || sel.dns || sel.domains || sel.tcp || sel.sni || sel.telegram || sel.burst);
+            && !(sel.net
+                || sel.dns
+                || sel.domains
+                || sel.tcp
+                || sel.sni
+                || sel.telegram
+                || sel.burst
+                || sel.speed);
         sel
     }
 }
@@ -374,8 +384,8 @@ async fn run() {
     // Validators: an invalid flag prints its message and exits with status 2.
     if let Some(ref t) = args.tests {
         let valid = !t.is_empty()
-            && t.chars().all(|c| ('0'..='7').contains(&c) || c == ',' || c == ' ')
-            && t.chars().any(|c| ('0'..='7').contains(&c));
+            && t.chars().all(|c| ('0'..='8').contains(&c) || c == ',' || c == ' ')
+            && t.chars().any(|c| ('0'..='8').contains(&c));
         if !valid {
             eprintln!("{}", msg.invalid_tests_flag.replace("{}", t));
             std::process::exit(2);
@@ -552,7 +562,7 @@ async fn run() {
         return;
     }
     let mut tests_str = if let Some(ref t) = args.tests {
-        t.chars().filter(|c| ('0'..='7').contains(c)).collect::<String>()
+        t.chars().filter(|c| ('0'..='8').contains(c)).collect::<String>()
     } else if !args.domain.is_empty() || args.domains.is_some() {
         "2".to_string()
     } else if args.tcp16.is_some() {
@@ -1056,7 +1066,7 @@ mod tests {
     #[test]
     fn test_selection_flags_with_commas_and_spaces() {
         let raw = "1, 2, 3";
-        let normalized: String = raw.chars().filter(|c| ('0'..='7').contains(c)).collect();
+        let normalized: String = raw.chars().filter(|c| ('0'..='8').contains(c)).collect();
         let sel = TestSelection::parse(&normalized);
         assert_eq!(
             sel,

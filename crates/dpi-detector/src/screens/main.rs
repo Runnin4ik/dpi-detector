@@ -666,7 +666,7 @@ fn hotkey_row(msg: &Messages, lang: Language, plain: bool) -> String {
     super::keycap_row(lang, plain, &[
         ("↑↓/WS", msg.menu_hw_row, "46"),
         ("←→/AD", msg.menu_hw_change, "46"),
-        ("0-7", msg.menu_hw_tests, "46"),
+        ("0-8", msg.menu_hw_tests, "46"),
         ("Enter", msg.menu_hw_start, "42"),
         ("Q", msg.menu_hw_quit, "41"),
     ])

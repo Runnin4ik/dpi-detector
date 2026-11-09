@@ -3,6 +3,7 @@
 
 pub(crate) mod banner;
 pub(crate) mod burst;
+pub(crate) mod ggc_speed;
 pub(crate) mod dns;
 pub(crate) mod domains;
 pub(crate) mod netinfo;

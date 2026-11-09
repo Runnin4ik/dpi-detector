@@ -11,6 +11,7 @@ pub(crate) use crate::tui::progress::{LiveProgress, Spinner};
 pub(crate) use crate::tui::widgets::{asc, frame_repaint, panel_to_string, strip_ansi_len, BOX_WIDTH};
 pub(crate) use crate::views::banner::{render_banner, render_fingerprint_header, render_intercept_notice};
 pub(crate) use crate::views::burst::render_burst_table;
+pub(crate) use crate::views::ggc_speed::render_ggc_speed;
 pub(crate) use crate::views::dns::{render_dns_availability, render_dns_endpoints};
 pub(crate) use crate::views::domains::{render_dns_resolve_notes, render_domain_table};
 pub(crate) use crate::views::netinfo::{render_netinfo_panel, NetFamilyInfo, NetInfoData, NetTtlb};

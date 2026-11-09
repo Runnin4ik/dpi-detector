@@ -13,7 +13,7 @@ smaller, clearer or cheaper. Such a change MUST land as ONE commit with code, te
 
 Terms overloaded here — read from context:
 
-- `test`: diagnostic 0–6 (`--tests 2`), NOT unit test (`cargo test`). "test 2 is broken" = the diagnostic.
+- `test`: diagnostic 0–6 and 8 (`--tests 2`), NOT unit test (`cargo test`); `7` is the legend. "test 2 is broken" = the diagnostic.
 - `profile`: censorship region (`--profile ru|ir|cn|global`), build profile (`--profile release-local|release-router`), TLS fingerprint (`--fingerprint chrome146`, 30 total).
 
 ## Architecture & Data Flow
@@ -34,9 +34,9 @@ core, no `anyhow`, no `unwrap()` outside tests. Logs: `tracing` (`WARN`; `-v` �
 ## Key Directories
 
 - `crates/dpi-core/src/classify/` — `types.rs` (`DpiStatus`, 39 variants, `ConnectionStage`), `detail.rs` (`Detail`, `AlertKind`, `StackKind`), `classifier.rs` (error ⇒ verdict), `stream.rs` (`DpiProbeStream`).
-- `crates/dpi-core/src/net/` — `tcp.rs`, `tls.rs` (`TlsProfile`, cert verifier), `fingerprint/` (30 profiles: `shapes/`, `identity.rs`, `h2.rs`, `variant.rs`), `http.rs` (the h1/h2 sender with the fingerprint on it), `http_client.rs` (the control-plane GET: the public-IP echo and the release manifest), `connector.rs` (`DpiTlsConnector`), `ja3.rs`/`ja4.rs`, `pq_kx.rs`, `quic.rs` (the RFC 9000 Initial: header protection, the `CRYPTO` stream, the RFC 9001 §5.2 keys), `cert_compression.rs`, `hpke.rs`, `follow_up.rs`, `bind.rs`, `sysinfo/`, `netinfo.rs` (a re-export facade over the last three, nine consumers in the binary).
+- `crates/dpi-core/src/net/` — `tcp.rs`, `tls.rs` (`TlsProfile`, cert verifier), `fingerprint/` (33 profiles: `shapes/`, `identity.rs`, `h2.rs`, `variant.rs`), `http.rs` (the h1/h2 sender with the fingerprint on it), `http_client.rs` (the control-plane GET: the public-IP echo and the release manifest), `connector.rs` (`DpiTlsConnector`), `ja3.rs`/`ja4.rs`, `pq_kx.rs`, `quic.rs` (the RFC 9000 Initial: header protection, the `CRYPTO` stream, the RFC 9001 §5.2 keys), `cert_compression.rs`, `hpke.rs`, `follow_up.rs`, `bind.rs`, `sysinfo/`, `netinfo.rs` (a re-export facade over the last three, nine consumers in the binary).
 - `crates/dpi-core/src/dns/` — `wire.rs` (RFC 1035), `udp.rs`, `doh.rs`, `dot.rs`, `socks.rs`, `resolve.rs`, `cymru.rs` (Team Cymru ASN/org over DoH TXT).
-- `crates/dpi-core/src/probe/` — one module per test: `dns_avail.rs` (1), `domains.rs` (2), `tcp16.rs` (3), `whitelist.rs` (4), `telegram.rs` (5), `burst.rs` (6), and nothing else — the transport those tests drive lives in `net/` and `dns/`. `quic.rs` sits beside them as test 2's QUIC column: the probe's own Initial and the reply's classification, not a test of its own.
+- `crates/dpi-core/src/probe/` — one module per test: `dns_avail.rs` (1), `domains.rs` (2), `tcp16.rs` (3), `whitelist.rs` (4), `telegram.rs` (5), `burst.rs` (6), `ggc_speed.rs` (8), and nothing else — the transport those tests drive lives in `net/` and `dns/`. `quic.rs` sits beside them as test 2's QUIC column: the probe's own Initial and the reply's classification, not a test of its own.
 - `crates/dpi-core/src/config.rs` — `AppConfig` (`config.yml` schema), `ConfigWarning`, embedded data lists.
 - `crates/dpi-detector/src/i18n/` — ONLY location for user-facing strings.
 - `crates/dpi-detector/src/tui/` — terminal backend, widgets, width math, key input and the live progress line. `views/` — one renderer per test, drawn with those widgets. `screens/` — the interactive menus, which render reports and therefore sit *above* `views/`: one direction, `screens → views → tui`.

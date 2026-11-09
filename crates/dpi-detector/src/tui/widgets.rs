@@ -544,11 +544,11 @@ mod tests {
     fn repaint_leaves_no_tail_of_a_longer_frame() {
         let fa = vec![
             "  ╭─ Параметры и выбор тестов ─╮".to_string(),
-            "  ↑↓/WS  Peymayesh │ ←→/AD  Taghir │ 0-7  Test ha │ Enter  Shoroo │ Q  Khorooj".to_string(),
+            "  ↑↓/WS  Peymayesh │ ←→/AD  Taghir │ 0-8  Test ha │ Enter  Shoroo │ Q  Khorooj".to_string(),
         ];
         let en = vec![
             "  ╭─ Parameters & test selection ─╮".to_string(),
-            "  ↑↓/WS  row │ ←→/AD  change │ 0-7  tests │ Enter  start │ Q  quit".to_string(),
+            "  ↑↓/WS  row │ ←→/AD  change │ 0-8  tests │ Enter  start │ Q  quit".to_string(),
         ];
 
         let mut screen = Screen::new(80);

@@ -27,6 +27,21 @@ pub const DEFAULT_USER_AGENT: &str =
 fn d_user_agent() -> String {
     DEFAULT_USER_AGENT.to_string()
 }
+
+/// The video test 8 mints its signed URL for. A public, long-lived upload, so
+/// the diagnostic answers on any line; `GGC_SPEED_VIDEO_ID` lets an operator
+/// point it at something regional without editing the build.
+fn d_ggc_speed_video_id() -> String {
+    "dQw4w9WgXcQ".to_string()
+}
+
+/// Test 8's cluster walk: the prefix length of the block around the URL
+/// node's address, or 0 for no walk. Off by default — walking a block means
+/// connecting to addresses the operator may not own, so it is a decision the
+/// operator makes rather than a diagnostic that happens by itself.
+fn d_ggc_scan_prefix() -> u8 {
+    0
+}
 fn d_dns_check_timeout() -> f64 { 5.0 }
 fn d_dns_availability_timeout() -> f64 { 10.0 }
 fn d_dns_egress_concurrency() -> usize { 10 }
@@ -337,6 +352,28 @@ pub struct AppConfig {
     /// behaviour) or `firefox` (Firefox-shaped, for fingerprint A/B runs).
     #[serde(default = "d_tls_fingerprint")]
     pub tls_fingerprint: String,
+    /// The video test 8 asks the player endpoint for: its signed media URL is
+    /// what the GGC throughput row measures. A public upload by default.
+    #[serde(default = "d_ggc_speed_video_id")]
+    pub ggc_speed_video_id: String,
+    /// The block test 8 walks around the URL node's address: `20` or `24`
+    /// (the prefix length), `0` for no walk. Off by default — see
+    /// `d_ggc_scan_prefix`.
+    #[serde(default = "d_ggc_scan_prefix")]
+    pub ggc_scan_prefix: u8,
+    /// Test 2's control nodes: hostnames of the shape
+    /// `r1.<cluster>.googlevideo.com` that resolve to a node inside Google's
+    /// own network on the operator's line. Empty by default — the name is a
+    /// fact about the line, so the operator names their own and the repository
+    /// carries none. Test 2 adds them beside the node the mapping named, so
+    /// the pair can be compared: the node in the operator's AS, the control in
+    /// Google's (`GGC_GOOGLE_ASN`). The `r1.<cluster>` namespace is not
+    /// enumerable — of the names tried, the PoP names (`fra16s48`,
+    /// `ams16s48`, `lhr16s48`, `mad16s48`, `led`, `goj`) have no A record at
+    /// all — so only the calling address's own cluster answers, and a control
+    /// name cannot be shipped.
+    #[serde(default)]
+    pub ggc_control_hosts: Vec<String>,
     #[serde(default)]
     pub proxy_url: Option<String>,
     /// Legacy alias: CLI --proxy writes here; holds the same value as proxy_url.
@@ -497,6 +534,9 @@ impl Default for AppConfig {
             max_concurrent: d_max_concurrent(),
             ip_version: d_ip_version(),
             tls_fingerprint: d_tls_fingerprint(),
+            ggc_speed_video_id: d_ggc_speed_video_id(),
+            ggc_scan_prefix: d_ggc_scan_prefix(),
+            ggc_control_hosts: Vec::new(),
             proxy_url: None,
             proxy: None,
             timeout: d_timeout(),
@@ -556,6 +596,7 @@ const KNOWN_KEYS: &[&str] = &[
     "MAX_CONCURRENT", "IP_VERSION", "TLS_FINGERPRINT", "PROXY_URL", "TIMEOUT",
     "POOL_TIMEOUT", "STUB_IPS_TIMEOUT", "TCP_BLOCK_MIN_KB", "TCP_BLOCK_MAX_KB",
     "FAT_DEFAULT_SNI", "FAT_CONNECT_TIMEOUT", "FAT_READ_TIMEOUT", "USER_AGENT",
+    "GGC_SPEED_VIDEO_ID", "GGC_SCAN_PREFIX", "GGC_CONTROL_HOSTS",
     "WSAECONNRESET", "WSAECONNREFUSED", "WSAETIMEDOUT", "WSAENETUNREACH",
     "WSAEHOSTUNREACH", "WSAECONNABORTED", "DNS_CHECK_TIMEOUT", "DNS_AVAILABILITY_TIMEOUT",
     "DNS_CHECK_DOMAINS", "DNS_TRUTH_FALLBACK", "DNS_UDP_SERVERS",
@@ -654,7 +695,8 @@ fn sanitize_mapping(mapping: &mut serde_yaml::Mapping, warnings: &mut Vec<Config
             // built-in default survives and `user_agent_for` falls back to the
             // fingerprint's own UA. A valid value still wins over that default.
             "USER_AGENT" => v.as_str().is_some_and(valid_header_value),
-            "FAT_DEFAULT_SNI" | "TELEGRAM_MEDIA_URL" | "TELEGRAM_UPLOAD_IP" => {
+            "FAT_DEFAULT_SNI" | "TELEGRAM_MEDIA_URL" | "TELEGRAM_UPLOAD_IP"
+            | "GGC_SPEED_VIDEO_ID" => {
                 v.as_str().is_some()
             }
             "PROXY_URL" | "ASN_CACHE_FILE" => v.is_null() || v.as_str().is_some(),
